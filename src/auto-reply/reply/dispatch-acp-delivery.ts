@@ -30,6 +30,7 @@ type AcpDispatchDeliveryState = {
 };
 
 export type AcpDispatchDeliveryCoordinator = {
+  startReplyLifecycle: () => Promise<void>;
   deliver: (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
@@ -65,7 +66,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     toolMessageByCallId: new Map(),
   };
 
-  const ensureReplyLifecycleStarted = async () => {
+  const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
       return;
     }
@@ -127,7 +128,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
 
     if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
-      await ensureReplyLifecycleStarted();
+      await startReplyLifecycleOnce();
     }
 
     const ttsPayload = await maybeApplyTtsToPayload({
@@ -186,6 +187,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
 
   return {
+    startReplyLifecycle: startReplyLifecycleOnce,
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,

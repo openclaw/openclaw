@@ -10,7 +10,7 @@ describe("acp stream settings", () => {
   it("resolves stable defaults", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
     expect(settings.deliveryMode).toBe("final_only");
-    expect(settings.hiddenBoundarySeparator).toBe("newline");
+    expect(settings.hiddenBoundarySeparator).toBe("paragraph");
     expect(settings.repeatSuppression).toBe(true);
     expect(settings.maxTurnChars).toBe(24_000);
     expect(settings.maxMetaEventsPerTurn).toBe(64);

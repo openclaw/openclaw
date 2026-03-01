@@ -574,7 +574,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]?.text).toContain("Tool Call");
   });
 
-  it("inserts a newline boundary before visible text after hidden tool updates by default", async () => {
+  it("inserts a paragraph boundary before visible text after hidden tool updates by default", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -610,7 +610,7 @@ describe("createAcpReplyProjector", () => {
       .filter((entry) => entry.kind === "block")
       .map((entry) => entry.text ?? "")
       .join("");
-    expect(combinedText).toBe("fallback.\nI don't");
+    expect(combinedText).toBe("fallback.\n\nI don't");
   });
 
   it("supports hiddenBoundarySeparator=space", async () => {

@@ -103,6 +103,20 @@ function setReadyAcpResolution() {
   });
 }
 
+function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
+  return createAcpTestConfig({
+    acp: {
+      enabled: true,
+      stream: {
+        tagVisibility: {
+          tool_call: true,
+          tool_call_update: true,
+        },
+      },
+    },
+  });
+}
+
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
@@ -202,7 +216,7 @@ describe("tryDispatchAcpReply", () => {
         SessionKey: "agent:codex-acp:session-1",
         BodyForAgent: "run tool",
       }),
-      cfg: createAcpTestConfig(),
+      cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       sessionKey: "agent:codex-acp:session-1",
       inboundAudio: false,
@@ -262,7 +276,7 @@ describe("tryDispatchAcpReply", () => {
         SessionKey: "agent:codex-acp:session-1",
         BodyForAgent: "run tool",
       }),
-      cfg: createAcpTestConfig(),
+      cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       sessionKey: "agent:codex-acp:session-1",
       inboundAudio: false,
@@ -279,7 +293,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
   });
 
-  it("starts reply lifecycle only when visible projected output is emitted", async () => {
+  it("starts reply lifecycle when ACP turn starts, including hidden-only turns", async () => {
     setReadyAcpResolution();
     const onReplyStart = vi.fn();
     const { dispatcher } = createDispatcher();
@@ -314,7 +328,7 @@ describe("tryDispatchAcpReply", () => {
       recordProcessed: vi.fn(),
       markIdle: vi.fn(),
     });
-    expect(onReplyStart).not.toHaveBeenCalled();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
 
     managerMocks.runTurn.mockImplementationOnce(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
@@ -340,7 +354,68 @@ describe("tryDispatchAcpReply", () => {
       recordProcessed: vi.fn(),
       markIdle: vi.fn(),
     });
+    expect(onReplyStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts reply lifecycle once per turn when output is delivered", async () => {
+    setReadyAcpResolution();
+    const onReplyStart = vi.fn();
+
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "visible", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "visible",
+      }),
+      cfg: createAcpTestConfig(),
+      dispatcher: createDispatcher().dispatcher,
+      sessionKey: "agent:codex-acp:session-1",
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      onReplyStart,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start reply lifecycle for empty ACP prompt", async () => {
+    setReadyAcpResolution();
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "   ",
+      }),
+      cfg: createAcpTestConfig(),
+      dispatcher,
+      sessionKey: "agent:codex-acp:session-1",
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      onReplyStart,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(onReplyStart).not.toHaveBeenCalled();
   });
 
   it("surfaces ACP policy errors as final error replies", async () => {
