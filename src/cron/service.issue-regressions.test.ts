@@ -1327,12 +1327,14 @@ describe("Cron issue regressions", () => {
   it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
     vi.useRealTimers();
     const abortController = new AbortController();
-    const runHeartbeatOnce = vi.fn(
-      async (): Promise<HeartbeatRunResult> => ({
+    let now = 0;
+    const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
+      now += 5;
+      return {
         status: "skipped",
         reason: "requests-in-flight",
-      }),
-    );
+      };
+    });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const mainJob: CronJob = {
@@ -1351,7 +1353,7 @@ describe("Cron issue regressions", () => {
       cronEnabled: true,
       storePath: "/tmp/openclaw-cron-abort-test/jobs.json",
       log: noopLogger,
-      nowMs: () => Date.now(),
+      nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce,
