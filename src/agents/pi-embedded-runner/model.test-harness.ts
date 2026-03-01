@@ -25,6 +25,27 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
+export const OPENAI_TEMPLATE_MODEL = {
+  id: "gpt-5.2-codex",
+  name: "GPT-5.2 Codex",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+  contextWindow: 272000,
+  maxTokens: 128000,
+};
+
+export function mockOpenAITemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai",
+    modelId: "gpt-5.2-codex",
+    templateModel: OPENAI_TEMPLATE_MODEL,
+  });
+}
+
 export function mockOpenAICodexTemplateModel(): void {
   mockDiscoveredModel({
     provider: "openai-codex",
@@ -41,6 +62,20 @@ export function buildOpenAICodexForwardCompatExpectation(
     id,
     api: "openai-codex-responses",
     baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    contextWindow: 272000,
+    maxTokens: 128000,
+  };
+}
+
+export function buildOpenAIForwardCompatExpectation(
+  id: string = "gpt-5.3-codex",
+): Partial<typeof OPENAI_TEMPLATE_MODEL> & { provider: string; id: string } {
+  return {
+    provider: "openai",
+    id,
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
     reasoning: true,
     contextWindow: 272000,
     maxTokens: 128000,

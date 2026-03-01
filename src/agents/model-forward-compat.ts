@@ -48,7 +48,7 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai", "openai-codex", "github-copilot"]);
 
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
@@ -76,12 +76,17 @@ function resolveOpenAICodexGpt53FallbackModel(
     } as Model<Api>);
   }
 
+  const api = normalizedProvider === "openai" ? "openai-responses" : "openai-codex-responses";
+  const baseUrl =
+    normalizedProvider === "openai"
+      ? "https://api.openai.com/v1"
+      : "https://chatgpt.com/backend-api";
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
-    api: "openai-codex-responses",
+    api,
     provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
+    baseUrl,
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
