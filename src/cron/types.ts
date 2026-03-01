@@ -56,6 +56,13 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronFailureAlert = {
+  after?: number;
+  channel?: CronMessageChannel;
+  to?: string;
+  cooldownMs?: number;
+};
+
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
   | {
@@ -102,6 +109,8 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
+  lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
@@ -128,6 +137,7 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  failureAlert?: CronFailureAlert | false;
   state: CronJobState;
 };
 
