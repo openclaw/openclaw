@@ -23,7 +23,7 @@ Docs: https://docs.openclaw.ai
 - Sandbox/mkdirp boundary checks: allow directory-safe boundary validation for existing in-boundary subdirectories, preventing false `cannot create directories` failures in sandbox write mode. (#30610) Thanks @glitch418x.
 - Android/Voice screen TTS: stream assistant speech via ElevenLabs WebSocket in Talk Mode, stop cleanly on speaker mute/barge-in, and ignore stale out-of-order stream events. (#29521) Thanks @gregmousseau.
 - Web UI/Cron: include configured agent model defaults/fallbacks in cron model suggestions so scheduled-job model autocomplete reflects configured models. (#29709) Thanks @Sid-Qin.
-- Cron/Delivery: disable the agent messaging tool when `delivery.mode` is `"none"` so cron output is not sent to Telegram or other channels. (#21808)
+- Cron/Delivery: disable the agent messaging tool when `delivery.mode` is `"none"` so cron output is not sent to Telegram or other channels. (#21808) Thanks @lailoo.
 - CLI/Cron: clarify `cron list` output by renaming `Agent` to `Agent ID` and adding a `Model` column for isolated agent-turn jobs. (#26259)
 - Feishu/Reply media attachments: send Feishu reply `mediaUrl`/`mediaUrls` payloads as attachments alongside text/streamed replies in the reply dispatcher, including legacy fallback when `mediaUrls` is empty. (#28959)
 - Slack/User-token resolution: normalize Slack account user-token sourcing through resolved account metadata (`SLACK_USER_TOKEN` env + config) so monitor reads, Slack actions, directory lookups, onboarding allow-from resolution, and capabilities probing consistently use the effective user token. (#28103) Thanks @Glucksberg.
