@@ -155,13 +155,14 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
       merged[key] !== undefined &&
       merged[key].startsWith("{") &&
       !value.includes("\n") &&
-      !/^[|>][+-]?\d*$/.test(value)
+      !/^[|>][+-]?\d*$/.test(value) &&
+      value.includes(":")
     ) {
       // YAML misinterpreted an unquoted colon as a nested key and produced
       // a JSON object; prefer the line-parsed plain string instead.
-      // Skip when the line-parsed value is a block scalar indicator
-      // (|, >, |-, |+, >-, >+, |2, >2-, etc.) since YAML correctly
-      // handled those.
+      // Only applies when the line-parsed value itself contains a colon
+      // (the symptom of the YAML mis-parse). This avoids overwriting
+      // legitimate YAML-parsed objects (e.g. nested mappings).
       merged[key] = value;
     }
   }

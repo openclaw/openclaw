@@ -103,6 +103,21 @@ description: |-
     expect(result.description).toBe("{json-ish text here}");
   });
 
+  it("preserves nested YAML mappings as JSON objects", () => {
+    const content = `---
+name: nested-test
+metadata:
+  openclaw:
+    events:
+      - command:new
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("nested-test");
+    const parsed = JSON.parse(result.metadata ?? "");
+    expect(parsed.openclaw?.events).toEqual(["command:new"]);
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
