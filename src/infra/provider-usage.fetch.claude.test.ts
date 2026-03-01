@@ -58,7 +58,7 @@ describe("fetchClaudeUsage", () => {
     const weekReset = "2026-01-12T00:00:00Z";
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
-      expect(headers.Authorization).toBe("Bearer token");
+      expect(headers["x-api-key"]).toBe("token");
       expect(headers["anthropic-beta"]).toBe("oauth-2025-04-20");
 
       return makeResponse(200, {

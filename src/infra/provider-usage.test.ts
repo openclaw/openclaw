@@ -271,7 +271,7 @@ describe("provider usage loading", () => {
         const mockFetch = createProviderUsageFetch(async (url, init) => {
           if (url.includes("api.anthropic.com/api/oauth/usage")) {
             const headers = (init?.headers ?? {}) as Record<string, string>;
-            expect(headers.Authorization).toBe("Bearer token-1");
+            expect(headers["x-api-key"]).toBe("token-1");
             return makeResponse(200, {
               five_hour: {
                 utilization: 20,
