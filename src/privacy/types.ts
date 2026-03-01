@@ -68,6 +68,62 @@ export type PrivacyConfig = {
   };
 
   /**
+   * Controls whether image/audio/video attachments are sent to LLM providers.
+   *
+   * Media files (images, audio, video) are sent as base64-encoded blobs or
+   * binary uploads and cannot be redacted the way text can.  The options here
+   * let you either block them outright or strip EXIF metadata before upload.
+   */
+  media?: {
+    /**
+     * Drop all image/audio/video attachments before they are sent to the LLM
+     * or TTS provider.  The user's text message is still sent; only the media
+     * payload is discarded.
+     * Default: false.
+     */
+    blockAttachments?: boolean;
+
+    /**
+     * Log a warning to stderr whenever a media attachment is dropped due to
+     * the blockAttachments policy.
+     * Default: true.
+     */
+    warnOnBlock?: boolean;
+  };
+
+  /**
+   * Controls encryption of session transcripts stored on disk.
+   *
+   * Session JSONL files contain the full conversation history.  When
+   * `atRest.enabled = true`, OpenClaw will encrypt these files using
+   * AES-256-GCM with a key derived from the provided passphrase.
+   *
+   * NOTE: The inference provider still receives plaintext — this only
+   * protects data *at rest* on this machine.
+   */
+  atRest?: {
+    /**
+     * Enable at-rest encryption of session transcript files.
+     * Default: false.
+     */
+    enabled?: boolean;
+
+    /**
+     * PBKDF2 passphrase used to derive the AES-256-GCM encryption key.
+     * Must be set when `enabled = true`.
+     * ⚠ Use an env-var reference: `${OPENCLAW_ENCRYPTION_KEY}` rather than a
+     * literal value to keep the key out of the config file.
+     */
+    passphrase?: string;
+
+    /**
+     * Number of PBKDF2 iterations (higher = slower but stronger).
+     * Default: 210_000 (OWASP recommended minimum for SHA-256 PBKDF2).
+     */
+    pbkdf2Iterations?: number;
+  };
+
+  /**
    * Controls how much host-identifying information appears in the system
    * prompt Runtime line that OpenClaw injects into every LLM call.
    */

@@ -132,7 +132,7 @@ export type EmbeddedPiSubscribeContext = {
  */
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
-  "runId" | "onBlockReplyFlush" | "onAgentEvent" | "onToolResult"
+  "runId" | "onBlockReplyFlush" | "onAgentEvent" | "onToolResult" | "config"
 >;
 
 export type ToolHandlerState = Pick<

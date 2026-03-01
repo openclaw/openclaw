@@ -572,6 +572,24 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          // Privacy: block image/media attachments before they reach the LLM provider.
+          const embeddedPrivacy = params.config?.privacy;
+          const embeddedImages =
+            embeddedPrivacy?.enabled && embeddedPrivacy.media?.blockAttachments
+              ? (() => {
+                  if (
+                    params.images &&
+                    params.images.length > 0 &&
+                    embeddedPrivacy.media.warnOnBlock !== false
+                  ) {
+                    process.stderr.write(
+                      `[privacy] dropped ${params.images.length} image attachment(s) — privacy.media.blockAttachments=true\n`,
+                    );
+                  }
+                  return undefined;
+                })()
+              : params.images;
+
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -596,7 +614,7 @@ export async function runEmbeddedPiAgent(
             config: params.config,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
-            images: params.images,
+            images: embeddedImages,
             disableTools: params.disableTools,
             provider,
             modelId,

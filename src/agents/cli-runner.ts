@@ -146,8 +146,23 @@ export async function runCliAgent(params: {
   let imagePaths: string[] | undefined;
   let cleanupImages: (() => Promise<void>) | undefined;
   let prompt = params.prompt;
-  if (params.images && params.images.length > 0) {
-    const imagePayload = await writeCliImages(params.images);
+
+  // Privacy: block image attachments if configured
+  const cliPrivacy = params.config?.privacy;
+  const cliImages =
+    cliPrivacy?.enabled && cliPrivacy.media?.blockAttachments
+      ? (() => {
+          if (params.images && params.images.length > 0 && cliPrivacy.media.warnOnBlock !== false) {
+            process.stderr.write(
+              `[privacy] dropped ${params.images.length} image attachment(s) — privacy.media.blockAttachments=true\n`,
+            );
+          }
+          return undefined;
+        })()
+      : params.images;
+
+  if (cliImages && cliImages.length > 0) {
+    const imagePayload = await writeCliImages(cliImages);
     imagePaths = imagePayload.paths;
     cleanupImages = imagePayload.cleanup;
     if (!backend.imageArg) {
