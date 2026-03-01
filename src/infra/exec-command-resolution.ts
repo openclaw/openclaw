@@ -60,6 +60,16 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
   }
   const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  // On Linux, common system binaries (ufw, iptables, etc.) live in /usr/sbin
+  // or /sbin which may not be in the user's PATH. Append them as fallbacks so
+  // security audit and other system checks can locate these tools (#30361).
+  if (process.platform === "linux") {
+    for (const sbin of ["/usr/sbin", "/sbin"]) {
+      if (!entries.includes(sbin)) {
+        entries.push(sbin);
+      }
+    }
+  }
   const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
   const extensions =
     process.platform === "win32"
