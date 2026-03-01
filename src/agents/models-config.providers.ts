@@ -415,7 +415,7 @@ function resolveApiKeyFromProfiles(params: {
     }
     if (cred.type === "api_key") {
       if (cred.key?.trim()) {
-        return cred.key;
+        return normalizeApiKeyConfig(cred.key);
       }
       const keyRef = coerceSecretRef(cred.keyRef);
       if (keyRef?.source === "env" && keyRef.id.trim()) {
@@ -425,7 +425,7 @@ function resolveApiKeyFromProfiles(params: {
     }
     if (cred.type === "token") {
       if (cred.token?.trim()) {
-        return cred.token;
+        return normalizeApiKeyConfig(cred.token);
       }
       const tokenRef = coerceSecretRef(cred.tokenRef);
       if (tokenRef?.source === "env" && tokenRef.id.trim()) {

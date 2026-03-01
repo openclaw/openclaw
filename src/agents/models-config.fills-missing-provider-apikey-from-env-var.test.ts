@@ -88,6 +88,70 @@ describe("models-config", () => {
       }
     });
   });
+
+  it("fills missing provider.apiKey from auth profile ${ENV} template", async () => {
+    await withTempHome(async () => {
+      const prevKey = process.env.MINIMAX_API_KEY;
+      process.env.MINIMAX_API_KEY = "sk-minimax-from-auth-profile";
+      try {
+        const agentDir = resolveOpenClawAgentDir();
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(agentDir, "auth-profiles.json"),
+          JSON.stringify(
+            {
+              version: 1,
+              profiles: {
+                "minimax:default": {
+                  type: "api_key",
+                  provider: "minimax",
+                  key: "${MINIMAX_API_KEY}",
+                },
+              },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.io/anthropic",
+                api: "anthropic-messages",
+                models: [
+                  {
+                    id: "MiniMax-M2.1",
+                    name: "MiniMax M2.1",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg, agentDir);
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+      } finally {
+        if (prevKey === undefined) {
+          delete process.env.MINIMAX_API_KEY;
+        } else {
+          process.env.MINIMAX_API_KEY = prevKey;
+        }
+      }
+    });
+  });
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       const agentDir = resolveOpenClawAgentDir();
