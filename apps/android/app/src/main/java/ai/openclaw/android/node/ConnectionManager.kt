@@ -7,6 +7,7 @@ import ai.openclaw.android.gateway.GatewayClientInfo
 import ai.openclaw.android.gateway.GatewayConnectOptions
 import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.gateway.GatewayTlsParams
+import ai.openclaw.android.protocol.OpenClawCapability
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.VoiceWakeMode
 
@@ -15,8 +16,6 @@ class ConnectionManager(
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
   private val voiceWakeMode: () -> VoiceWakeMode,
-  private val motionActivityAvailable: () -> Boolean,
-  private val motionPedometerAvailable: () -> Boolean,
   private val smsAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
@@ -74,20 +73,28 @@ class ConnectionManager(
     }
   }
 
-  private fun runtimeFlags(): NodeRuntimeFlags =
-    NodeRuntimeFlags(
+  fun buildInvokeCommands(): List<String> =
+    InvokeCommandRegistry.advertisedCommands(
       cameraEnabled = cameraEnabled(),
       locationEnabled = locationMode() != LocationMode.Off,
       smsAvailable = smsAvailable(),
-      voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
-      motionActivityAvailable = motionActivityAvailable(),
-      motionPedometerAvailable = motionPedometerAvailable(),
       debugBuild = BuildConfig.DEBUG,
     )
 
-  fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())
-
-  fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
+  fun buildCapabilities(): List<String> =
+    buildList {
+      add(OpenClawCapability.Canvas.rawValue)
+      add(OpenClawCapability.Screen.rawValue)
+      add(OpenClawCapability.Device.rawValue)
+      if (cameraEnabled()) add(OpenClawCapability.Camera.rawValue)
+      if (smsAvailable()) add(OpenClawCapability.Sms.rawValue)
+      if (voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission()) {
+        add(OpenClawCapability.VoiceWake.rawValue)
+      }
+      if (locationMode() != LocationMode.Off) {
+        add(OpenClawCapability.Location.rawValue)
+      }
+    }
 
   fun resolvedVersionName(): String {
     val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }

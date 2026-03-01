@@ -337,8 +337,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
+    accountId: deliveryPlan.accountId,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -522,11 +522,8 @@ export async function runCronIsolatedAgentTurn(params: {
           bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
           runId: cronSession.sessionEntry.sessionId,
-          // Only enforce an explicit message target when the cron delivery target
-          // was successfully resolved. When resolution fails the agent should not
-          // be blocked by a target it cannot satisfy (#27898).
-          requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
-          disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
+          requireExplicitMessageTarget: true,
+          disableMessageTool: deliveryRequested,
           abortSignal,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,

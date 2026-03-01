@@ -90,11 +90,6 @@ class DeviceHandlerTest {
         "backgroundLocation",
         "sms",
         "notificationListener",
-        "notifications",
-        "photos",
-        "contacts",
-        "calendar",
-        "motion",
         "screenCapture",
       )
     for (key in expected) {

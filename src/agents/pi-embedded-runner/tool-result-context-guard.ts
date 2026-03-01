@@ -200,14 +200,23 @@ function truncateToolResultToChars(msg: AgentMessage, maxChars: number): AgentMe
     return msg;
   }
 
-  const estimatedChars = estimateMessageChars(msg);
-  if (estimatedChars <= maxChars) {
-    return msg;
-  }
-
   const rawText = getToolResultText(msg);
   if (!rawText) {
+    // No text content: use weighted estimate to decide whether to replace with notice
+    // (handles image-only or details-only results whose raw text length is zero).
+    const estimatedChars = estimateMessageChars(msg);
+    if (estimatedChars <= maxChars) {
+      return msg;
+    }
     return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  }
+
+  // For text content, compare raw lengths — truncateTextToBudget operates on raw
+  // char counts, so using the raw length avoids a weighted-vs-raw mismatch that
+  // causes no-ops when the weighted estimate exceeds maxChars but the raw text
+  // is already within budget (#24872).
+  if (rawText.length <= maxChars) {
+    return msg;
   }
 
   const truncatedText = truncateTextToBudget(rawText, maxChars);
@@ -370,6 +379,19 @@ function enforceToolResultContextBudgetInPlace(params: {
       messages,
       compactBeforeIndex,
       contextBudgetChars,
+    });
+  }
+
+  // Last resort: if truncating trailing results was still insufficient (e.g. the user
+  // message alone exceeds the budget), compact them too.  The agent loses its latest
+  // tool outputs, but this is better than sending a request the provider will reject
+  // with a context-limit error (#24872).
+  currentChars = estimateContextChars(messages);
+  if (currentChars > contextBudgetChars) {
+    compactExistingToolResultsInPlace({
+      messages,
+      charsNeeded: currentChars - contextBudgetChars,
+      compactBeforeIndex: messages.length,
     });
   }
 }

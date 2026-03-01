@@ -438,4 +438,56 @@ describe("installToolResultContextGuard", () => {
     expect(text1).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(text2).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
+
+  it("compacts trailing tool results as last resort when truncation alone is insufficient (#24872)", async () => {
+    // contextWindowTokens=1000 → budget=3000 (1000*4*0.75).
+    // User message alone (3200 chars) exceeds the budget, so truncating the trailing
+    // tool result to the minimum still leaves context over budget.  The guard must
+    // fall back to compacting the trailing result to minimise the overage.
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(3_200)),
+      makeToolResult("call_trail", "x".repeat(400)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    // Trailing result must have been compacted (last-resort path) because even
+    // truncating it to the minimum notice still leaves context over budget.
+    const trailText = getToolResultText(contextForNextCall[1]);
+    expect(trailText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  });
+
+  it("uses raw text length for truncation guard to avoid no-ops from weighted-estimate mismatch (#24872)", async () => {
+    // contextWindowTokens=1000 → budget=3000, maxSingleToolResultChars=1000.
+    // A 600-char tool result has a weighted estimate of 1200 (> 1000 limit), but
+    // its raw text (600) is already within the raw limit.  The per-result enforcement
+    // must NOT truncate it (which would be a no-op anyway) — the budget is met once
+    // the overall context is checked.
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // User fits well within budget; the tool result raw text (600) is under maxSingleToolResultChars
+    const contextForNextCall = [
+      makeUser("u".repeat(100)),
+      makeToolResult("call_ok", "x".repeat(600)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    // Tool result should NOT be truncated — its raw text fits within the raw budget.
+    const text = getToolResultText(contextForNextCall[1]);
+    expect(text.length).toBe(600);
+    expect(text).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  });
 });

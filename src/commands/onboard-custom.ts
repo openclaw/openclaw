@@ -19,7 +19,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
-const VERIFY_TIMEOUT_MS = 30_000;
+const VERIFY_TIMEOUT_MS = 10000;
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
@@ -217,14 +217,6 @@ function resolveAliasError(params: {
   return `Alias ${normalized} already points to ${existingKey}.`;
 }
 
-function buildAzureOpenAiHeaders(apiKey: string) {
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers["api-key"] = apiKey;
-  }
-  return headers;
-}
-
 function buildOpenAiHeaders(apiKey: string) {
   const headers: Record<string, string> = {};
   if (apiKey) {
@@ -325,32 +317,15 @@ async function requestOpenAiVerification(params: {
     modelId: params.modelId,
     endpointPath: "chat/completions",
   });
-  const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
-  const headers = isBaseUrlAzureUrl
-    ? buildAzureOpenAiHeaders(params.apiKey)
-    : buildOpenAiHeaders(params.apiKey);
-  if (isBaseUrlAzureUrl) {
-    return await requestVerification({
-      endpoint,
-      headers,
-      body: {
-        messages: [{ role: "user", content: "Hi" }],
-        max_completion_tokens: 5,
-        stream: false,
-      },
-    });
-  } else {
-    return await requestVerification({
-      endpoint,
-      headers,
-      body: {
-        model: params.modelId,
-        messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
-        stream: false,
-      },
-    });
-  }
+  return await requestVerification({
+    endpoint,
+    headers: buildOpenAiHeaders(params.apiKey),
+    body: {
+      model: params.modelId,
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 1024,
+    },
+  });
 }
 
 async function requestAnthropicVerification(params: {
@@ -374,9 +349,8 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 1,
+      max_tokens: 1024,
       messages: [{ role: "user", content: "Hi" }],
-      stream: false,
     },
   });
 }

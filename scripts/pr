@@ -1512,7 +1512,7 @@ merge_run() {
   local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
 
   cat > .local/merge-body.txt <<EOF_BODY
-Merged via squash.
+Merged via /review-pr -> /prepare-pr -> /merge-pr.
 
 Prepared head SHA: $PREP_HEAD_SHA
 Co-authored-by: $contrib <$contrib_coauthor_email>

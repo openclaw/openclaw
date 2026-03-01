@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
-import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 
 const dockerMocks = vi.hoisted(() => ({
@@ -86,6 +85,16 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
   };
 }
 
+function envEntriesFromDockerArgs(args: string[]): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "-e" && typeof args[i + 1] === "string") {
+      values.push(args[i + 1]);
+    }
+  }
+  return values;
+}
+
 describe("ensureSandboxBrowser create args", () => {
   beforeEach(() => {
     BROWSER_BRIDGES.clear();
@@ -142,12 +151,13 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(true),
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const createArgs = dockerMocks.execDocker.mock.calls.find(
+      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
+    )?.[0] as string[] | undefined;
 
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
-    expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
+    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
@@ -164,46 +174,13 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(false),
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    const createArgs = dockerMocks.execDocker.mock.calls.find(
+      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
+    )?.[0] as string[] | undefined;
+    const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
     expect(envEntries.some((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="))).toBe(
       false,
     );
     expect(result?.noVncUrl).toBeUndefined();
-  });
-
-  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "none";
-
-    await ensureSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
-
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-
-    expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
-  });
-
-  it("keeps the main workspace writable when workspaceAccess is rw", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "rw";
-
-    await ensureSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
-
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-
-    expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace");
-    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
   });
 });
