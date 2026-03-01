@@ -189,7 +189,7 @@ function resolveFailureAlert(
   job: CronJob,
 ): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
-  const jobConfig = job.failureAlert && job.failureAlert !== false ? job.failureAlert : undefined;
+  const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
   if (job.failureAlert === false) {
     return null;

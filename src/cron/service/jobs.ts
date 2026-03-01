@@ -663,7 +663,7 @@ function mergeCronFailureAlert(
   if (patch === undefined) {
     return existing;
   }
-  const base = existing && existing !== false ? existing : {};
+  const base = existing === false || existing === undefined ? {} : existing;
   const next: CronFailureAlert = { ...base };
 
   if ("after" in patch) {

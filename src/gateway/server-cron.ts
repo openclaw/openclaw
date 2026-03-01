@@ -9,12 +9,12 @@ import {
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
@@ -232,11 +232,8 @@ export function buildGatewayCronService(params: {
         channel,
         to,
       });
-      if (target.error) {
+      if (!target.ok) {
         throw target.error;
-      }
-      if (!target.to) {
-        throw new Error("cron failure alert target is missing");
       }
       await deliverOutboundPayloads({
         cfg: runtimeConfig,
