@@ -638,6 +638,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
     const mediaPayload = buildAgentMediaPayload(mediaList);
+    const commandBody = rawText.trim();
     const inboundHistory =
       historyKey && historyLimit > 0
         ? (channelHistories.get(historyKey) ?? []).map((entry) => ({
@@ -651,7 +652,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       BodyForAgent: bodyText,
       InboundHistory: inboundHistory,
       RawBody: bodyText,
-      CommandBody: bodyText,
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
       From:
         kind === "direct"
           ? `mattermost:${senderId}`

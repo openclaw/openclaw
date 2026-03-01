@@ -611,13 +611,15 @@ export async function prepareSlackMessage(params: {
           timestamp: entry.timestamp,
         }))
       : undefined;
+  const commandBody = textForCommandDetection.trim();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: rawBody,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
-    CommandBody: rawBody,
+    CommandBody: commandBody,
+    BodyForCommands: commandBody,
     From: slackFrom,
     To: slackTo,
     SessionKey: sessionKey,
