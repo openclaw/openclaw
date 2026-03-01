@@ -22,7 +22,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 type CallGatewayBaseOptions = {
@@ -136,7 +136,7 @@ export function buildGatewayConnectionDetails(
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const url = urlOverride || remoteUrl || localUrl;
-  const localSourceLabel = bindMode === "tailnet" ? "local tailnet" : "local loopback";
+  const localSourceLabel = isLoopbackHost(localHost) ? "local loopback" : "local tailnet";
   const urlSource = urlOverride
     ? "cli --url"
     : remoteUrl
