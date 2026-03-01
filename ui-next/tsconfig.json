@@ -15,7 +15,9 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "baseUrl": "."
+    "baseUrl": ".",
+    "allowJs": true,
+    "incremental": true
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

@@ -32,6 +32,7 @@
   --animate-slide-in: slide-in 300ms ease-out;
   --animate-slide-in-left: slide-in-left 300ms ease-out;
   --animate-slide-in-up: slide-in-up 200ms ease-out;
+  --animate-shimmer: shimmer 2s linear infinite;
 }
 
 @keyframes glow-pulse {

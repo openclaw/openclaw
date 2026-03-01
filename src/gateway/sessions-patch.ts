@@ -3,7 +3,12 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -271,15 +276,22 @@ export async function applySessionsPatchToStore(params: {
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
-        cfg,
-        catalog,
+      // Resolve the model ref (supports aliases and provider/model syntax)
+      // but skip the config allowlist — allow any model that exists in the catalog.
+      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: resolvedDefault.provider });
+      const resolved = resolveModelRefFromString({
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+        aliasIndex,
       });
-      if ("error" in resolved) {
-        return invalid(resolved.error);
+      if (!resolved) {
+        return invalid(`invalid model: ${trimmed}`);
+      }
+      // Verify the model exists in the catalog
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      const inCatalog = catalog.some((entry) => modelKey(entry.provider, entry.id) === key);
+      if (!inCatalog) {
+        return invalid(`model not found in catalog: ${key}`);
       }
       const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&

@@ -317,12 +317,23 @@ export async function createModelSelectionState(params: {
     allowedModelKeys = allowed.allowedKeys;
   }
 
+  // Build a set of all catalog model keys for permissive validation.
+  // We allow any model in the catalog (not just the config allowlist) so that
+  // users can switch to any model their provider offers via the UI model selector.
+  const catalogKeys = new Set(
+    (modelCatalog ?? []).map((entry) => modelKey(entry.provider, entry.id)),
+  );
+
   if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
     const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
     const overrideModel = sessionEntry.modelOverride?.trim();
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      // Only reset if the model is not in the allowlist AND not in the catalog.
+      // This allows users to switch to any catalog model via the UI.
+      const isInAllowlist = allowedModelKeys.size === 0 || allowedModelKeys.has(key);
+      const isInCatalog = catalogKeys.has(key);
+      if (!isInAllowlist && !isInCatalog) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -353,7 +364,10 @@ export async function createModelSelectionState(params: {
   if (storedOverride?.model && !skipStoredOverride) {
     const candidateProvider = storedOverride.provider || defaultProvider;
     const key = modelKey(candidateProvider, storedOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    // Accept model if it's in the allowlist OR exists in the catalog
+    const isInAllowlist = allowedModelKeys.size === 0 || allowedModelKeys.has(key);
+    const isInCatalog = catalogKeys.has(key);
+    if (isInAllowlist || isInCatalog) {
       provider = candidateProvider;
       model = storedOverride.model;
     }

@@ -15,6 +15,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -124,7 +125,11 @@ export function handleMessageUpdate(
   if (next) {
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
-    const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
+    // Strip downgraded tool call text ([Historical context: ...], [Tool Call: ...], etc.)
+    // that leaks through when models echo back replayed history.
+    const parsedFull = parseReplyDirectives(
+      stripTrailingDirective(stripDowngradedToolCallText(next)),
+    );
     const cleanedText = parsedFull.text;
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);

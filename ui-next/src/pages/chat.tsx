@@ -38,6 +38,9 @@ import {
   VolumeOff,
   Zap,
   Minimize2,
+  Pause,
+  Play,
+  ListPlus,
 } from "lucide-react";
 import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
@@ -61,6 +64,7 @@ import { useToast } from "@/components/ui/custom/toast";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useChat } from "@/hooks/use-chat";
+import { useDynamicPlaceholder } from "@/hooks/use-dynamic-placeholder";
 import { useGateway } from "@/hooks/use-gateway";
 import { loadSettings, saveSettings } from "@/lib/storage";
 import { cn } from "@/lib/utils";
@@ -70,16 +74,12 @@ import {
   getMessageImages,
   type ChatMessage,
   type SessionEntry,
+  type DraftAttachment,
 } from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 
-// ─── Attachment Types ───
-
-type Attachment = {
-  file: File;
-  preview: string;
-  id: string;
-};
+/** Stable empty array for zustand selector fallback (avoids infinite re-render). */
+const EMPTY_ATTACHMENTS: DraftAttachment[] = [];
 
 let attachmentIdCounter = 0;
 
@@ -664,14 +664,53 @@ function ChatMessageBubble({
   );
 }
 
+// ─── Animated Placeholder ───
+
+function AnimatedPlaceholder({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  const [displayed, setDisplayed] = useState(text);
+  const [fadeState, setFadeState] = useState<"in" | "out">("in");
+  const prevTextRef = useRef(text);
+
+  // Crossfade on text change
+  useEffect(() => {
+    if (text === prevTextRef.current) {
+      return;
+    }
+    // Fade out, swap text, fade in
+    setFadeState("out");
+    const timer = setTimeout(() => {
+      setDisplayed(text);
+      prevTextRef.current = text;
+      setFadeState("in");
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [text]);
+
+  return (
+    <span
+      className={cn(
+        "text-base md:text-sm select-none transition-all duration-300 ease-in-out",
+        fadeState === "out" ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0",
+        isStreaming
+          ? "animate-shimmer bg-gradient-to-r from-primary/40 via-primary/70 to-primary/40 bg-[length:200%_100%] bg-clip-text text-transparent"
+          : "text-primary/40",
+      )}
+    >
+      {displayed}
+    </span>
+  );
+}
+
 // ─── Streaming Bubble ───
 
 function StreamingBubble({
   content,
   isGroupFirst = true,
+  paused = false,
 }: {
   content: string;
   isGroupFirst?: boolean;
+  paused?: boolean;
 }) {
   return (
     <div className={cn("animate-slide-in-left flex gap-3 px-4", isGroupFirst ? "py-2" : "py-1")}>
@@ -684,10 +723,21 @@ function StreamingBubble({
       )}
       <div className="max-w-[90%] md:max-w-[85%]">
         {content ? (
-          <div className="bg-card/40 text-foreground border border-border/60 rounded-2xl rounded-bl-sm px-6 py-5 shadow-sm backdrop-blur-md">
+          <div
+            className={cn(
+              "bg-card/40 text-foreground border border-border/60 rounded-2xl rounded-bl-sm px-6 py-5 shadow-sm backdrop-blur-md",
+              paused && "border-chart-5/40",
+            )}
+          >
             <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
               <Markdown>{content}</Markdown>
             </div>
+            {paused && (
+              <div className="flex items-center gap-1.5 mt-3 pt-2 border-t border-border/40 text-[10px] text-chart-5/80 font-mono">
+                <Pause className="h-2.5 w-2.5" />
+                Paused
+              </div>
+            )}
           </div>
         ) : (
           <div className="bg-card/40 border border-border/60 rounded-2xl rounded-bl-sm px-6 py-6 shadow-sm flex items-center gap-2">
@@ -1145,6 +1195,8 @@ export function ChatPage() {
   const {
     sendMessage,
     abortRun,
+    startQueue,
+    stopQueue,
     switchSession,
     resetSession,
     deleteSession,
@@ -1156,13 +1208,25 @@ export function ChatPage() {
   const messages = useChatStore((s) => s.messages);
   const messagesLoading = useChatStore((s) => s.messagesLoading);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  const isPaused = useChatStore((s) => s.isPaused);
   const isSendPending = useChatStore((s) => s.isSendPending);
   const streamContent = useChatStore((s) => s.streamContent);
   const activeSessionKey = useChatStore((s) => s.activeSessionKey);
   const sessions = useChatStore((s) => s.sessions);
+  const messageQueue = useChatStore((s) => s.messageQueue);
+  const isQueueRunning = useChatStore((s) => s.isQueueRunning);
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+  const placeholder = useDynamicPlaceholder();
 
-  const [inputValue, setInputValue] = useState("");
+  // Draft state from store (survives navigation)
+  const inputValue = useChatStore((s) => s.drafts[s.activeSessionKey]?.inputValue ?? "");
+  const setInputValue = useCallback((valOrFn: string | ((prev: string) => string)) => {
+    const store = useChatStore.getState();
+    const key = store.activeSessionKey;
+    const prev = store.drafts[key]?.inputValue ?? "";
+    const next = typeof valOrFn === "function" ? valOrFn(prev) : valOrFn;
+    store.setDraftInput(key, next);
+  }, []);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const [chatSidebarCollapsed, setChatSidebarCollapsedRaw] = useState(
@@ -1535,8 +1599,15 @@ export function ChatPage() {
     setInputValue((prev) => prev.replace(/^> \[Re: #\d+\][\s\S]*?\n\n/, ""));
   }, []);
 
-  // Attachment state for image paste / file picker
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Attachment state from store (survives navigation)
+  // IMPORTANT: stable empty ref to avoid infinite re-render (Object.is([], []) === false)
+  const attachments = useChatStore(
+    (s) => s.drafts[s.activeSessionKey]?.attachments ?? EMPTY_ATTACHMENTS,
+  );
+  const setAttachments = useCallback((atts: DraftAttachment[]) => {
+    const store = useChatStore.getState();
+    store.setDraftAttachments(store.activeSessionKey, atts);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addAttachments = useCallback(async (files: File[]) => {
@@ -1544,16 +1615,31 @@ export function ChatPage() {
     if (imageFiles.length === 0) {
       return;
     }
-    const newAttachments: Attachment[] = [];
+    const newAttachments: DraftAttachment[] = [];
     for (const file of imageFiles) {
       const preview = await readFileAsDataUrl(file);
-      newAttachments.push({ file, preview, id: `att-${++attachmentIdCounter}` });
+      newAttachments.push({
+        id: `att-${++attachmentIdCounter}`,
+        preview,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+      });
     }
-    setAttachments((prev) => [...prev, ...newAttachments]);
+    const store = useChatStore.getState();
+    const key = store.activeSessionKey;
+    const prev = store.drafts[key]?.attachments ?? [];
+    store.setDraftAttachments(key, [...prev, ...newAttachments]);
   }, []);
 
   const removeAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    const store = useChatStore.getState();
+    const key = store.activeSessionKey;
+    const prev = store.drafts[key]?.attachments ?? [];
+    store.setDraftAttachments(
+      key,
+      prev.filter((a) => a.id !== id),
+    );
   }, []);
 
   // Handle paste events to detect images
@@ -1706,12 +1792,13 @@ export function ChatPage() {
     }
   }, [isConnected, loadModels]);
 
-  // Switch model for current session
+  // Switch model for current session (sends provider/model format for unambiguous resolution)
   const handleModelSwitch = useCallback(
-    async (modelId: string) => {
+    async (modelId: string, provider?: string) => {
       setModelSelectorOpen(false);
+      const modelRef = provider ? `${provider}/${modelId}` : modelId;
       try {
-        await sendRpc("sessions.patch", { key: activeSessionKey, model: modelId });
+        await sendRpc("sessions.patch", { key: activeSessionKey, model: modelRef });
         // Reload sessions to pick up the model change
         const result = await sendRpc<{ sessions: { key: string; model?: string }[] }>(
           "sessions.list",
@@ -1774,6 +1861,14 @@ export function ChatPage() {
   // Resolve display model: session-specific model first, else first model in list
   // When neither matches, we still show activeSession?.model as raw text in the status bar
   const displayModel = activeModel ?? null;
+
+  // Filter models to only show those from the active session's provider
+  const activeProvider =
+    (activeSession?.modelProvider as string | undefined) ?? displayModel?.provider;
+  const filteredModels = useMemo(
+    () => (activeProvider ? models.filter((m) => m.provider === activeProvider) : models),
+    [models, activeProvider],
+  );
 
   // Context window usage — gateway sends flat fields (inputTokens/outputTokens)
   const tokenUsed =
@@ -1860,7 +1955,7 @@ export function ChatPage() {
             type: "image",
             source: {
               type: "base64",
-              media_type: att.file.type,
+              media_type: att.fileType,
               data: base64,
             },
           });
@@ -1869,8 +1964,7 @@ export function ChatPage() {
       } else {
         await sendMessage(inputValue);
       }
-      setInputValue("");
-      setAttachments([]);
+      useChatStore.getState().clearDraft(activeSessionKey);
       setReplyTo(null);
     } catch {
       toast("Failed to send message", "error");
@@ -1911,21 +2005,30 @@ export function ChatPage() {
   const [isCompacting, setIsCompacting] = useState(false);
   const handleCompact = useCallback(async () => {
     if (!activeSessionKey || isCompacting) {
+      console.warn("[compact] no active session or already compacting", {
+        activeSessionKey,
+        isCompacting,
+      });
       return;
     }
     setIsCompacting(true);
     try {
-      const res = await sendRpc<{ compacted?: boolean }>("sessions.compact", {
-        key: activeSessionKey,
-      });
+      const res = await sendRpc<{ compacted?: boolean; reason?: string; kept?: number }>(
+        "sessions.compact",
+        { key: activeSessionKey, maxLines: 100 },
+      );
+      console.log("[compact] response:", res);
       if (res?.compacted) {
         toast("Session compacted", "success");
-        await loadHistory(activeSessionKey);
+        await loadHistory();
       } else {
-        toast("Nothing to compact", "default");
+        const detail =
+          res?.reason ?? (res?.kept ? `${res.kept} lines, under threshold` : undefined);
+        toast(detail ? `Nothing to compact (${detail})` : "Nothing to compact", "success");
       }
-    } catch {
-      toast("Failed to compact session", "error");
+    } catch (err) {
+      console.error("[compact] error:", err);
+      toast(`Failed to compact: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setIsCompacting(false);
     }
@@ -1953,7 +2056,7 @@ export function ChatPage() {
       {/* Session details injected into Shell header via portal */}
       {headerPortal &&
         createPortal(
-          <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground overflow-hidden">
+          <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground min-w-0">
             {/* Session title */}
             <span
               className="truncate max-w-[180px] sm:max-w-[260px] text-foreground/80 font-medium"
@@ -1979,16 +2082,26 @@ export function ChatPage() {
               </>
             )}
 
-            {/* Model chip */}
+            {/* Model chip — clickable to open model selector */}
             {activeSession?.model && (
               <>
                 <Separator orientation="vertical" className="h-3.5" />
-                <span className="hidden sm:flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-primary/5 border border-primary/10 text-primary/70">
+                <button
+                  ref={modelSelectorRef}
+                  onClick={() => setModelSelectorOpen((prev) => !prev)}
+                  className="hidden sm:flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-md bg-primary/5 border border-primary/10 text-primary/70 hover:bg-primary/10 hover:text-primary transition-colors cursor-pointer"
+                >
                   <Bot className="h-2.5 w-2.5" />
                   <span className="truncate max-w-[120px]">
                     {displayModel?.name ?? activeSession.model.split("/").pop()}
                   </span>
-                </span>
+                  <ChevronDown
+                    className={cn(
+                      "h-2 w-2 shrink-0 opacity-50 transition-transform",
+                      modelSelectorOpen && "rotate-180",
+                    )}
+                  />
+                </button>
               </>
             )}
 
@@ -2035,8 +2148,10 @@ export function ChatPage() {
                   onClick={handleCompact}
                   disabled={isCompacting}
                   className={cn(
-                    "flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-muted/60 transition-colors shrink-0",
-                    isCompacting && "opacity-50 cursor-wait",
+                    "flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors shrink-0",
+                    isCompacting
+                      ? "opacity-50 cursor-wait"
+                      : "hover:bg-primary/15 hover:text-primary cursor-pointer",
                   )}
                   title="Compact session — trim old messages to free context"
                 >
@@ -2048,6 +2163,95 @@ export function ChatPage() {
           </div>,
           headerPortal,
         )}
+
+      {/* Model selector dropdown — portalled to body to escape header overflow clipping */}
+      {modelSelectorOpen &&
+        createPortal(
+          <div
+            ref={modelDropdownRef}
+            className="fixed z-[9999]"
+            style={(() => {
+              const rect = modelSelectorRef.current?.getBoundingClientRect();
+              if (!rect) {
+                return { top: 0, left: 0 };
+              }
+              return { top: rect.bottom + 4, left: rect.left };
+            })()}
+          >
+            <div className="w-72 sm:w-80 rounded-xl border border-border bg-popover shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top">
+              <div className="max-h-80 overflow-y-auto">
+                {filteredModels.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    No models available
+                  </div>
+                ) : (
+                  Object.entries(groupModelsByProvider(filteredModels)).map(
+                    ([provider, providerModels]) => (
+                      <div key={provider}>
+                        <div className="sticky top-0 bg-popover px-3 py-1.5 border-b border-border/50">
+                          <span
+                            className={cn(
+                              "text-[10px] font-mono uppercase tracking-wider",
+                              providerColor(provider),
+                            )}
+                          >
+                            {provider}
+                          </span>
+                        </div>
+                        {providerModels.map((model) => {
+                          const isSelected = model.id === activeSession?.model;
+                          const isAllowed = model.allowed !== false;
+                          return (
+                            <button
+                              key={model.id}
+                              onClick={() => handleModelSwitch(model.id, model.provider)}
+                              className={cn(
+                                "flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-secondary/40 transition-colors",
+                                isSelected && "bg-primary/5",
+                                !isAllowed && "opacity-50",
+                              )}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-sm font-mono truncate">{model.name}</span>
+                                  {model.reasoning && (
+                                    <span title="Reasoning">
+                                      <Brain className="h-3 w-3 text-chart-5 shrink-0" />
+                                    </span>
+                                  )}
+                                  {model.input?.includes("image") && (
+                                    <span title="Vision">
+                                      <Image className="h-3 w-3 text-chart-2 shrink-0" />
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[10px] font-mono text-muted-foreground truncate">
+                                    {model.id}
+                                  </span>
+                                  {model.contextWindow && (
+                                    <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                                      {formatContextWindow(model.contextWindow)} ctx
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              {isSelected && (
+                                <Check className="h-3.5 w-3.5 text-primary shrink-0" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
       <div className="flex h-full bg-background overflow-hidden">
         {/* Desktop Sidebar */}
         <div
@@ -2149,6 +2353,7 @@ export function ChatPage() {
                         (messages[messages.length - 1].role !== "assistant" &&
                           messages[messages.length - 1].role !== "tool")
                       }
+                      paused={isPaused}
                     />
                   )}
                   <div ref={scrollToRef} className="h-4" />
@@ -2189,32 +2394,6 @@ export function ChatPage() {
                   )}
                 />
                 <span>{isConnected ? "Connected" : "Disconnected"}</span>
-                <span className="text-border/60">|</span>
-                {/* Model selector trigger */}
-                <button
-                  ref={modelSelectorRef}
-                  onClick={() => setModelSelectorOpen((prev) => !prev)}
-                  className="flex items-center gap-1 text-foreground/50 hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <span className="truncate max-w-[200px]">
-                    {displayModel
-                      ? `${displayModel.provider}: ${displayModel.name}`
-                      : activeSession?.model
-                        ? activeSession.model.replace("/", ": ")
-                        : "default"}
-                  </span>
-                  {displayModel?.reasoning && (
-                    <span title="Reasoning">
-                      <Brain className="h-2.5 w-2.5 text-chart-5 shrink-0" />
-                    </span>
-                  )}
-                  <ChevronDown
-                    className={cn(
-                      "h-2.5 w-2.5 shrink-0 opacity-50 transition-transform",
-                      modelSelectorOpen && "rotate-180",
-                    )}
-                  />
-                </button>
               </div>
 
               {/* Hidden file input for Paperclip button */}
@@ -2226,6 +2405,94 @@ export function ChatPage() {
                 className="hidden"
                 onChange={handleFileSelect}
               />
+
+              {/* ─── Queue Panel ─── */}
+              {messageQueue.length > 0 && (
+                <div className="mb-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40 bg-muted/30">
+                    <span className="text-[11px] font-mono text-muted-foreground">
+                      Queue ({messageQueue.length})
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {isQueueRunning ? (
+                        <button
+                          onClick={stopQueue}
+                          className="text-[10px] px-2 py-0.5 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors font-medium"
+                        >
+                          Stop
+                        </button>
+                      ) : (
+                        <button
+                          onClick={startQueue}
+                          disabled={!isConnected}
+                          className="text-[10px] px-2 py-0.5 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium disabled:opacity-40"
+                        >
+                          Run All
+                        </button>
+                      )}
+                      <button
+                        onClick={() => useChatStore.getState().clearQueue()}
+                        className="text-[10px] px-2 py-0.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-32 overflow-y-auto">
+                    {messageQueue.map((item, i) => (
+                      <div
+                        key={item.id}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-1.5 text-xs group",
+                          item.status === "sending" && "bg-primary/5",
+                          i < messageQueue.length - 1 && "border-b border-border/20",
+                        )}
+                      >
+                        <span className="text-[10px] font-mono text-muted-foreground/60 w-4 shrink-0 text-center">
+                          {item.status === "sending" ? (
+                            <RefreshCw className="h-3 w-3 animate-spin text-primary" />
+                          ) : (
+                            i + 1
+                          )}
+                        </span>
+                        <span className="flex-1 truncate text-foreground/80">
+                          {typeof item.content === "string" ? item.content : "[multimodal]"}
+                        </span>
+                        {/* Move up */}
+                        {i > 0 && item.status !== "sending" && (
+                          <button
+                            onClick={() => useChatStore.getState().reorderQueue(i, i - 1)}
+                            className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
+                            title="Move up"
+                          >
+                            <ArrowUp className="h-3 w-3" />
+                          </button>
+                        )}
+                        {/* Move down */}
+                        {i < messageQueue.length - 1 && item.status !== "sending" && (
+                          <button
+                            onClick={() => useChatStore.getState().reorderQueue(i, i + 1)}
+                            className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5"
+                            title="Move down"
+                          >
+                            <ArrowDown className="h-3 w-3" />
+                          </button>
+                        )}
+                        {/* Remove */}
+                        {item.status !== "sending" && (
+                          <button
+                            onClick={() => useChatStore.getState().removeFromQueue(item.id)}
+                            className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5 text-destructive"
+                            title="Remove"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <PromptInput
                 value={inputValue}
@@ -2259,7 +2526,7 @@ export function ChatPage() {
                       <div key={att.id} className="relative shrink-0 group/att">
                         <img
                           src={att.preview}
-                          alt={att.file.name}
+                          alt={att.fileName}
                           className="h-12 w-12 rounded-lg object-cover border border-border/60"
                         />
                         <button
@@ -2282,12 +2549,20 @@ export function ChatPage() {
                   </div>
                 )}
 
-                <div onPaste={handlePaste}>
+                <div onPaste={handlePaste} className="relative">
                   <PromptInputTextarea
-                    placeholder={isConnected ? "Ask me anything..." : "Connecting to gateway..."}
                     disabled={!isConnected}
-                    className="text-base min-h-[56px] px-4 py-4 md:text-sm placeholder:text-muted-foreground/60"
+                    className="text-base min-h-[56px] px-4 py-4 md:text-sm"
                   />
+                  {/* Animated placeholder overlay */}
+                  {!inputValue && (
+                    <div
+                      className="absolute inset-0 pointer-events-none flex items-start px-4 py-4"
+                      aria-hidden
+                    >
+                      <AnimatedPlaceholder text={placeholder} isStreaming={isStreaming} />
+                    </div>
+                  )}
                 </div>
 
                 {/* Internal Toolbar */}
@@ -2303,10 +2578,7 @@ export function ChatPage() {
                     >
                       <Paperclip className="h-4 w-4" />
                     </Button>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {/* Tool display mode toggle */}
+                    {/* Tool display mode toggle — left side near paperclip */}
                     <button
                       onClick={() =>
                         setToolDisplayMode((prev) =>
@@ -2338,6 +2610,9 @@ export function ChatPage() {
                             : "Hidden"}
                       </span>
                     </button>
+                  </div>
+
+                  <div className="flex items-center gap-2">
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -2391,118 +2666,107 @@ export function ChatPage() {
                       )}
                     </button>
                     <PromptInputActions>
-                      {isStreaming ? (
-                        <Button
-                          variant="default"
-                          size="icon-xs"
-                          onClick={abortRun}
-                          aria-label="Stop generating"
-                          className="h-8 w-8 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-md transform hover:scale-105 transition-all"
-                        >
-                          <Square className="h-3.5 w-3.5 fill-current" />
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="default"
-                          size="icon-xs"
-                          onClick={handleSubmit}
-                          disabled={
-                            (!inputValue.trim() && attachments.length === 0) || !isConnected
+                      <div className="flex items-center gap-1">
+                        {/* Queue button — always visible; enqueues current input or shows queue count */}
+                        <button
+                          onClick={() => {
+                            const content = inputValue.trim();
+                            if (!content) {
+                              return;
+                            }
+                            useChatStore.getState().enqueueMessage(content);
+                            setInputValue("");
+                          }}
+                          disabled={!inputValue.trim() && attachments.length === 0}
+                          aria-label={
+                            messageQueue.length > 0
+                              ? `Queue (${messageQueue.length})`
+                              : "Add to queue"
                           }
-                          aria-label="Send message"
+                          title={
+                            messageQueue.length > 0
+                              ? `${messageQueue.length} in queue`
+                              : "Add to queue"
+                          }
                           className={cn(
-                            "h-8 w-8 rounded-full shadow-md transition-all duration-200",
-                            inputValue.trim() || attachments.length > 0
-                              ? "bg-primary text-primary-foreground transform hover:scale-105"
-                              : "bg-muted text-muted-foreground",
+                            "relative h-8 w-8 rounded-full flex items-center justify-center shadow-md transition-all duration-200",
+                            inputValue.trim()
+                              ? "bg-sky-600 text-white transform hover:scale-105 hover:bg-sky-500"
+                              : "bg-sky-600/15 text-sky-400/30 border border-sky-600/20",
                           )}
                         >
-                          <ArrowUp className="h-4 w-4" />
-                        </Button>
-                      )}
+                          <ListPlus className="h-4 w-4" />
+                          {messageQueue.length > 0 && (
+                            <span className="absolute -top-1 -right-1 h-4 min-w-4 px-0.5 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center shadow-sm">
+                              {messageQueue.length}
+                            </span>
+                          )}
+                        </button>
+
+                        {/* Streaming controls: pause/resume + stop */}
+                        {isStreaming && (
+                          <>
+                            <button
+                              onClick={() => {
+                                const store = useChatStore.getState();
+                                if (store.isPaused) {
+                                  store.resumeStream();
+                                } else {
+                                  store.pauseStream();
+                                }
+                              }}
+                              aria-label={isPaused ? "Resume output" : "Pause output"}
+                              title={isPaused ? "Resume output" : "Pause output"}
+                              className={cn(
+                                "h-8 w-8 rounded-full flex items-center justify-center shadow-md transition-all transform hover:scale-105",
+                                isPaused
+                                  ? "bg-amber-500 text-white hover:bg-amber-400"
+                                  : "bg-amber-500/80 text-white hover:bg-amber-500",
+                              )}
+                            >
+                              {isPaused ? (
+                                <Play className="h-3.5 w-3.5 fill-current" />
+                              ) : (
+                                <Pause className="h-3.5 w-3.5 fill-current" />
+                              )}
+                            </button>
+                            <button
+                              onClick={abortRun}
+                              aria-label="Stop generating"
+                              title="Stop generating"
+                              className="h-8 w-8 rounded-full flex items-center justify-center bg-destructive text-destructive-foreground hover:bg-destructive/90 shadow-md transform hover:scale-105 transition-all"
+                            >
+                              <Square className="h-3.5 w-3.5 fill-current" />
+                            </button>
+                          </>
+                        )}
+
+                        {/* Send button — always visible when not streaming */}
+                        {!isStreaming && (
+                          <button
+                            onClick={handleSubmit}
+                            disabled={
+                              (!inputValue.trim() && attachments.length === 0) || !isConnected
+                            }
+                            aria-label="Send message"
+                            title="Send message"
+                            className={cn(
+                              "h-8 w-8 rounded-full flex items-center justify-center shadow-md transition-all duration-200",
+                              inputValue.trim() || attachments.length > 0
+                                ? "bg-primary text-primary-foreground transform hover:scale-105"
+                                : "bg-primary/15 text-primary/30 border border-primary/20",
+                            )}
+                          >
+                            <ArrowUp className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </PromptInputActions>
                   </div>
                 </div>
               </PromptInput>
 
-              {/* Model Selector Dropdown — rendered after PromptInput to sit above its backdrop-blur stacking context */}
-              {modelSelectorOpen && (
-                <div
-                  ref={modelDropdownRef}
-                  className="absolute -top-5 left-1/2 -translate-x-1/2 z-[200] pt-4"
-                >
-                  <div className="w-72 sm:w-80 rounded-xl border border-border bg-popover shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top">
-                    <div className="max-h-80 overflow-y-auto">
-                      {models.length === 0 ? (
-                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                          No models available
-                        </div>
-                      ) : (
-                        Object.entries(
-                          groupModelsByProvider(models.filter((m) => m.allowed !== false)),
-                        ).map(([provider, providerModels]) => (
-                          <div key={provider}>
-                            <div className="sticky top-0 bg-popover px-3 py-1.5 border-b border-border/50">
-                              <span
-                                className={cn(
-                                  "text-[10px] font-mono uppercase tracking-wider",
-                                  providerColor(provider),
-                                )}
-                              >
-                                {provider}
-                              </span>
-                            </div>
-                            {providerModels.map((model) => {
-                              const isSelected = model.id === activeSession?.model;
-                              return (
-                                <button
-                                  key={model.id}
-                                  onClick={() => handleModelSwitch(model.id)}
-                                  className={cn(
-                                    "flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-secondary/40 transition-colors",
-                                    isSelected && "bg-primary/5",
-                                  )}
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-sm font-mono truncate">
-                                        {model.name}
-                                      </span>
-                                      {model.reasoning && (
-                                        <span title="Reasoning">
-                                          <Brain className="h-3 w-3 text-chart-5 shrink-0" />
-                                        </span>
-                                      )}
-                                      {model.input?.includes("image") && (
-                                        <span title="Vision">
-                                          <Image className="h-3 w-3 text-chart-2 shrink-0" />
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center gap-2 mt-0.5">
-                                      <span className="text-[10px] font-mono text-muted-foreground truncate">
-                                        {model.id}
-                                      </span>
-                                      {model.contextWindow && (
-                                        <span className="text-[10px] font-mono text-muted-foreground shrink-0">
-                                          {formatContextWindow(model.contextWindow)} ctx
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {isSelected && (
-                                    <Check className="h-3.5 w-3.5 text-primary shrink-0" />
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* Model dropdown is now in the session header */}
 
               <div className="text-center mt-2 text-[10px] text-muted-foreground/40 font-mono">
                 AI Operator can make mistakes. Please verify important information.

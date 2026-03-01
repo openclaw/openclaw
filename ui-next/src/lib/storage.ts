@@ -21,12 +21,13 @@ const KEY = "openclaw.control.settings.v1";
 
 export function loadSettings(): UiSettings {
   const defaultUrl = (() => {
-    // In dev mode (Vite dev server), connect to the gateway on its default port
-    if (import.meta.env.DEV) {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      return `${proto}://${location.hostname}:18789`;
-    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
+    if (import.meta.env.DEV) {
+      // In dev mode, proxy through the Vite dev server to avoid cross-origin
+      // self-signed cert issues. The /gw-ws path is forwarded to the gateway.
+      return `${proto}://${location.host}/gw-ws`;
+    }
+    // In production the UI is served by the gateway itself — same origin.
     return `${proto}://${location.host}`;
   })();
 
@@ -54,10 +55,18 @@ export function loadSettings(): UiSettings {
     }
     const parsed = JSON.parse(raw) as Partial<UiSettings>;
     return {
-      gatewayUrl:
-        typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
-          ? parsed.gatewayUrl.trim()
-          : defaults.gatewayUrl,
+      gatewayUrl: (() => {
+        const saved =
+          typeof parsed.gatewayUrl === "string" && parsed.gatewayUrl.trim()
+            ? parsed.gatewayUrl.trim()
+            : defaults.gatewayUrl;
+        // In dev mode, migrate stale direct-to-gateway URLs to the Vite proxy
+        // path so the browser never makes a cross-origin WSS connection.
+        if (import.meta.env.DEV && /^wss?:\/\/[^/]+:18789\/?$/.test(saved)) {
+          return defaults.gatewayUrl;
+        }
+        return saved;
+      })(),
       token: typeof parsed.token === "string" ? parsed.token : defaults.token,
       password: typeof parsed.password === "string" ? parsed.password : defaults.password,
       sessionKey:

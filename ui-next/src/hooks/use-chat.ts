@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import { generateUUID } from "@/lib/uuid";
-import { useChatStore, type ChatMessage, type SessionEntry } from "@/store/chat-store";
+import {
+  useChatStore,
+  type ChatMessage,
+  type ChatState,
+  type SessionEntry,
+} from "@/store/chat-store";
 import { useGatewayStore } from "@/store/gateway-store";
 
 type SendRpc = <T = unknown>(method: string, params?: unknown) => Promise<T>;
@@ -33,7 +38,19 @@ export function useChat(sendRpc: SendRpc) {
       if (seq !== sessionsSeqRef.current) {
         return;
       }
-      store.setSessions(result?.sessions ?? []);
+      const sessions = result?.sessions ?? [];
+      store.setSessions(sessions);
+
+      // Normalize activeSessionKey to match the canonical key format returned by
+      // the gateway (e.g. "main" → "agent:main:main").  This ensures the UI can
+      // look up the active session and display its model override correctly.
+      const currentKey = store.activeSessionKey;
+      if (currentKey && !sessions.find((s) => s.key === currentKey)) {
+        const canonical = sessions.find((s) => s.key.endsWith(`:${currentKey}`));
+        if (canonical) {
+          store.setActiveSessionKey(canonical.key);
+        }
+      }
     } catch (err) {
       if (seq !== sessionsSeqRef.current) {
         return;
@@ -142,12 +159,19 @@ export function useChat(sendRpc: SendRpc) {
       }
 
       try {
-        await sendRpc("chat.send", {
+        const res = await sendRpc<{ runId?: string }>("chat.send", {
           sessionKey: activeSessionKey,
           message,
           attachments,
           idempotencyKey: generateUUID(),
         });
+        // Capture runId immediately so abort works before the first delta event
+        if (res?.runId) {
+          const s = useChatStore.getState();
+          if (!s.streamRunId) {
+            s.startStream(res.runId);
+          }
+        }
       } catch (err) {
         console.error("[chat] send failed:", err);
         // Clear the pending typing indicator on failure
@@ -163,16 +187,25 @@ export function useChat(sendRpc: SendRpc) {
     [sendRpc, isConnected, activeSessionKey],
   );
 
-  // Abort current run
+  // Abort current run (works with or without a known runId).
+  // Also stops the queue so it doesn't auto-send the next item.
   const abortRun = useCallback(async () => {
-    const store = useChatStore.getState();
-    if (!store.streamRunId) {
+    if (!activeSessionKey) {
       return;
+    }
+    const store = useChatStore.getState();
+    // Stop queue on abort — user must explicitly restart
+    if (store.isQueueRunning) {
+      store.setQueueRunning(false);
+    }
+    // Clear streaming UI immediately for responsive feel
+    if (store.isStreaming || store.isSendPending) {
+      store.finalizeStream(store.streamRunId ?? "", store.streamContent || undefined);
     }
     try {
       await sendRpc("chat.abort", {
         sessionKey: activeSessionKey,
-        runId: store.streamRunId,
+        runId: store.streamRunId ?? undefined,
       });
     } catch (err) {
       console.error("[chat] abort failed:", err);
@@ -222,6 +255,87 @@ export function useChat(sendRpc: SendRpc) {
     [sendRpc, loadSessions],
   );
 
+  // ─── Queue executor ───
+  // Subscribe to streaming state: when a run finishes and the queue is running,
+  // auto-send the next message after a short delay.
+  const queueTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const unsub = useChatStore.subscribe((state: ChatState, prev: ChatState) => {
+      // Detect stream completion: was streaming → no longer streaming
+      const justFinished = prev.isStreaming && !state.isStreaming;
+      if (!justFinished) {
+        return;
+      }
+      if (!state.isQueueRunning) {
+        return;
+      }
+      if (state.messageQueue.length === 0) {
+        // Queue drained
+        state.setQueueRunning(false);
+        return;
+      }
+
+      // Small delay to let UI settle and avoid race conditions
+      queueTimerRef.current = setTimeout(() => {
+        const s = useChatStore.getState();
+        if (!s.isQueueRunning || s.isStreaming || s.isSendPending) {
+          return;
+        }
+
+        const next = s.dequeueNext();
+        if (!next) {
+          s.setQueueRunning(false);
+          return;
+        }
+
+        // Remove the item from the queue now that we're sending it
+        s.removeFromQueue(next.id);
+
+        // Send via the same sendMessage path
+        sendMessage(next.content).catch((err) => {
+          console.error("[queue] failed to send queued message:", err);
+          useChatStore.getState().setQueueRunning(false);
+        });
+      }, 500);
+    });
+
+    return () => {
+      unsub();
+      if (queueTimerRef.current) {
+        clearTimeout(queueTimerRef.current);
+      }
+    };
+  }, [sendMessage]);
+
+  // Start queue execution — if not currently streaming, send the first item now
+  const startQueue = useCallback(() => {
+    const store = useChatStore.getState();
+    if (store.messageQueue.length === 0) {
+      return;
+    }
+    store.setQueueRunning(true);
+
+    // If idle (not streaming), kick off the first item immediately
+    if (!store.isStreaming && !store.isSendPending) {
+      const next = store.dequeueNext();
+      if (!next) {
+        return;
+      }
+      store.removeFromQueue(next.id);
+      sendMessage(next.content).catch((err) => {
+        console.error("[queue] failed to start queue:", err);
+        useChatStore.getState().setQueueRunning(false);
+      });
+    }
+    // If currently streaming, the useEffect subscriber above will pick up the next
+    // item when the current run completes.
+  }, [sendMessage]);
+
+  const stopQueue = useCallback(() => {
+    useChatStore.getState().setQueueRunning(false);
+  }, []);
+
   // Auto-load sessions when connected
   useEffect(() => {
     loadSessions();
@@ -235,6 +349,8 @@ export function useChat(sendRpc: SendRpc) {
   return {
     sendMessage,
     abortRun,
+    startQueue,
+    stopQueue,
     loadSessions,
     loadHistory,
     switchSession,

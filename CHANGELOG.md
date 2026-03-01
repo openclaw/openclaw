@@ -4,6 +4,45 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.2.15
+
+> Fork-specific changes. Upstream sync base: `v2026.2.12`.
+
+### Model Catalog & Selection
+
+- **feat(models)**: add Gemini 3 Pro (high/low reasoning), Gemini 3 Flash, Claude Sonnet 4.5, Claude Opus 4.5 (Thinking), GPT-OSS 120B to antigravity provider catalog.
+- **feat(models)**: allow `gpt-oss` prefix through the live model filter.
+- **feat(models)**: users can now select any catalog model via UI without config allowlist changes; session model override validated against full catalog instead of restrictive allowlist.
+
+### Control UI (ui-next) — Features
+
+- **feat(chat)**: message queue with Run All / Stop controls for batch sequential execution.
+- **feat(chat)**: pause/resume streaming output — buffer deltas while paused, flush on resume.
+- **feat(chat)**: draft persistence — input text and pasted attachments survive session navigation (Zustand-backed per-session drafts).
+- **feat(chat)**: dynamic input placeholder with contextual status (idle tips, sending, streaming, queue running, paused).
+- **feat(dev)**: Vite WebSocket proxy (`/gw-ws`) eliminates cross-origin self-signed cert issues in dev mode.
+
+### Control UI (ui-next) — Bug Fixes
+
+- **fix(chat)**: `[Historical context: ...]` markers no longer leak into streaming chat UI (filter added to streaming delta path in `pi-embedded-subscribe.handlers.messages`).
+- **fix(chat)**: session key normalization (`main` → `agent:main:main`) — model override display persists correctly across gateway restarts.
+- **fix(chat)**: clear stale `isStreaming` / `isSendPending` on WebSocket disconnect, preventing stuck UI state.
+- **fix(chat)**: GatewayProvider no longer re-renders on every store update (switched to `getState()` snapshots in event handlers).
+- **fix(chat)**: queue Run All button no longer incorrectly disabled during streaming.
+
+### Docs
+
+- **docs**: added Matrix multi-agent implementation proposal (25-agent org design).
+- **docs**: restructured local embeddings memory proposal into QMD implementation guide.
+
+### Config
+
+- **chore**: `.gitignore` — added `ui-next/.next/`, `next-env.d.ts`, `*.tsbuildinfo`.
+- **chore**: TypeScript — enabled `allowJs` and `incremental` for faster rebuilds.
+- **chore**: CSS — added shimmer animation keyframe.
+
+---
+
 ## [Operator1] 2026.2.10
 
 > Fork-specific changes. Upstream sync base: `v2026.2.9`.

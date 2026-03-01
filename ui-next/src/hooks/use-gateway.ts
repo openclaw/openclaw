@@ -84,12 +84,13 @@ export const GatewayContext = createContext<GatewayContextValue | null>(null);
  */
 export function useGatewayConnection(): GatewayContextValue {
   const clientRef = useRef<GatewayBrowserClient | null>(null);
-  const store = useGatewayStore();
 
   useEffect(() => {
     applyUrlParams();
     const settings = loadSettings();
-    store.setConnectionStatus("connecting");
+    // Use getState() instead of subscribing to the whole store — avoids
+    // unnecessary re-renders of the provider component on every store update.
+    useGatewayStore.getState().setConnectionStatus("connecting");
 
     const client = new GatewayBrowserClient({
       url: settings.gatewayUrl,
@@ -98,23 +99,35 @@ export function useGatewayConnection(): GatewayContextValue {
       clientName: "openclaw-control-ui",
       mode: "webchat",
       onHello: (hello) => {
-        store.applySnapshot(hello);
+        useGatewayStore.getState().applySnapshot(hello);
       },
       onClose: ({ code, reason }) => {
+        const store = useGatewayStore.getState();
         // 1012 = Service Restart (expected during config saves)
         if (code !== 1012) {
           store.setLastError(`disconnected (${code}): ${reason || "no reason"}`);
         }
         store.setConnectionStatus("disconnected");
+        // Clear stale streaming state — the run is gone if the connection dropped
+        const chatState = useChatStore.getState();
+        if (chatState.isStreaming || chatState.isSendPending) {
+          chatState.finalizeStream(
+            chatState.streamRunId ?? "",
+            chatState.streamContent || undefined,
+          );
+          chatState.setSendPending(false);
+        }
       },
       onEvent: (evt: GatewayEventFrame) => {
-        store.pushEvent(evt.event, evt.payload);
+        useGatewayStore.getState().pushEvent(evt.event, evt.payload);
         handleEvent(evt);
       },
       onGap: ({ expected, received }) => {
-        store.setLastError(
-          `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`,
-        );
+        useGatewayStore
+          .getState()
+          .setLastError(
+            `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`,
+          );
       },
     });
 
@@ -124,10 +137,8 @@ export function useGatewayConnection(): GatewayContextValue {
     return () => {
       client.stop();
       clientRef.current = null;
-      store.reset();
+      useGatewayStore.getState().reset();
     };
-    // Run once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendRpc = useCallback(<T = unknown>(method: string, params?: unknown): Promise<T> => {

@@ -56,5 +56,16 @@ export default defineConfig({
     host: true,
     port: 5174,
     strictPort: true,
+    proxy: {
+      // Proxy WebSocket connections to the gateway so the browser only talks
+      // to the Vite dev server origin — no cross-origin cert issues.
+      "/gw-ws": {
+        target: "https://localhost:18789",
+        ws: true,
+        secure: false, // accept the gateway's self-signed cert
+        rewriteWsOrigin: true,
+        rewrite: (p) => p.replace(/^\/gw-ws/, ""),
+      },
+    },
   },
 });

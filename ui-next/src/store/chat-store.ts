@@ -46,6 +46,26 @@ export type SessionEntry = {
   [key: string]: unknown;
 };
 
+export type QueuedMessage = {
+  id: string;
+  content: string | ChatMessageContent[];
+  status: "pending" | "sending";
+  addedAt: number;
+};
+
+export type DraftAttachment = {
+  id: string;
+  preview: string; // data URL
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+};
+
+export type SessionDraft = {
+  inputValue: string;
+  attachments: DraftAttachment[];
+};
+
 export type ChatState = {
   // Session management
   activeSessionKey: string;
@@ -61,11 +81,23 @@ export type ChatState = {
   streamRunId: string | null;
   streamContent: string;
 
+  // Pause-display: UI pauses rendering deltas while backend continues
+  isPaused: boolean;
+  /** Content buffered while paused (flushed on resume) */
+  pauseBuffer: string;
+
   // Send-pending state (typing indicator before server acks)
   isSendPending: boolean;
 
+  // Message queue (batch execution)
+  messageQueue: QueuedMessage[];
+  isQueueRunning: boolean;
+
   // Thinking level from history
   thinkingLevel: string;
+
+  // Per-session drafts (input text + attachments preserved across navigation)
+  drafts: Record<string, SessionDraft>;
 
   // Actions
   setActiveSessionKey: (key: string) => void;
@@ -84,7 +116,27 @@ export type ChatState = {
   finalizeStream: (runId: string, text?: string) => void;
   streamError: (runId: string, errorMessage?: string) => void;
 
+  // Pause-display actions
+  pauseStream: () => void;
+  resumeStream: () => void;
+
+  // Queue actions
+  enqueueMessage: (content: string | ChatMessageContent[]) => void;
+  removeFromQueue: (id: string) => void;
+  reorderQueue: (fromIndex: number, toIndex: number) => void;
+  clearQueue: () => void;
+  setQueueRunning: (running: boolean) => void;
+  /** Shift the first pending item to 'sending' and return it, or null if empty. */
+  dequeueNext: () => QueuedMessage | null;
+
   setThinkingLevel: (level: string) => void;
+
+  // Draft actions
+  getDraft: (sessionKey: string) => SessionDraft;
+  setDraftInput: (sessionKey: string, value: string) => void;
+  setDraftAttachments: (sessionKey: string, attachments: DraftAttachment[]) => void;
+  clearDraft: (sessionKey: string) => void;
+
   reset: () => void;
 };
 
@@ -128,6 +180,8 @@ export function getMessageImages(msg: ChatMessage): Array<{ url: string; alt?: s
   return images;
 }
 
+const emptyDraft: SessionDraft = { inputValue: "", attachments: [] };
+
 const initialState = {
   activeSessionKey: "main",
   sessions: [] as SessionEntry[],
@@ -137,11 +191,16 @@ const initialState = {
   isStreaming: false,
   streamRunId: null as string | null,
   streamContent: "",
+  isPaused: false,
+  pauseBuffer: "",
   isSendPending: false,
+  messageQueue: [] as QueuedMessage[],
+  isQueueRunning: false,
   thinkingLevel: "off",
+  drafts: {} as Record<string, SessionDraft>,
 };
 
-export const useChatStore = create<ChatState>((set) => ({
+export const useChatStore = create<ChatState>((set, get) => ({
   ...initialState,
 
   setActiveSessionKey: (key) => set({ activeSessionKey: key }),
@@ -169,12 +228,18 @@ export const useChatStore = create<ChatState>((set) => ({
       isSendPending: false,
       streamRunId: runId,
       streamContent: "",
+      isPaused: false,
+      pauseBuffer: "",
     }),
 
   updateStreamDelta: (runId, text) =>
     set((state) => {
       if (state.streamRunId !== runId) {
         return state;
+      }
+      // When paused, buffer the latest text but don't update visible content
+      if (state.isPaused) {
+        return { pauseBuffer: text };
       }
       return { streamContent: text };
     }),
@@ -184,7 +249,8 @@ export const useChatStore = create<ChatState>((set) => ({
       if (state.streamRunId !== runId) {
         return state;
       }
-      const finalText = text ?? state.streamContent;
+      // Use buffered content if paused, otherwise latest stream/provided text
+      const finalText = text ?? (state.isPaused ? state.pauseBuffer : state.streamContent);
       const newMessages = finalText.trim()
         ? [
             ...state.messages,
@@ -203,6 +269,8 @@ export const useChatStore = create<ChatState>((set) => ({
         isSendPending: false,
         streamRunId: null,
         streamContent: "",
+        isPaused: false,
+        pauseBuffer: "",
       };
     }),
 
@@ -224,10 +292,104 @@ export const useChatStore = create<ChatState>((set) => ({
         isSendPending: false,
         streamRunId: null,
         streamContent: "",
+        isPaused: false,
+        pauseBuffer: "",
       };
     }),
 
+  pauseStream: () =>
+    set((state) => {
+      if (!state.isStreaming) {
+        return state;
+      }
+      // Snapshot current content into buffer so deltas accumulate there
+      return { isPaused: true, pauseBuffer: state.streamContent };
+    }),
+
+  resumeStream: () =>
+    set((state) => {
+      if (!state.isPaused) {
+        return state;
+      }
+      // Flush buffered content back to visible stream
+      return { isPaused: false, streamContent: state.pauseBuffer, pauseBuffer: "" };
+    }),
+
+  // Queue actions
+  enqueueMessage: (content) =>
+    set((state) => ({
+      messageQueue: [
+        ...state.messageQueue,
+        { id: generateUUID(), content, status: "pending" as const, addedAt: Date.now() },
+      ],
+    })),
+
+  removeFromQueue: (id) =>
+    set((state) => ({
+      messageQueue: state.messageQueue.filter((m) => m.id !== id),
+    })),
+
+  reorderQueue: (fromIndex, toIndex) =>
+    set((state) => {
+      const queue = [...state.messageQueue];
+      const [item] = queue.splice(fromIndex, 1);
+      if (!item) {
+        return state;
+      }
+      queue.splice(toIndex, 0, item);
+      return { messageQueue: queue };
+    }),
+
+  clearQueue: () => set({ messageQueue: [], isQueueRunning: false }),
+
+  setQueueRunning: (running) => set({ isQueueRunning: running }),
+
+  dequeueNext: () => {
+    const state = get();
+    const next = state.messageQueue.find((m: QueuedMessage) => m.status === "pending");
+    if (!next) {
+      return null;
+    }
+    set({
+      messageQueue: state.messageQueue.map((m: QueuedMessage) =>
+        m.id === next.id ? { ...m, status: "sending" as const } : m,
+      ),
+    });
+    return next;
+  },
+
   setThinkingLevel: (level) => set({ thinkingLevel: level }),
+
+  // Draft actions
+  getDraft: (sessionKey) => get().drafts[sessionKey] ?? emptyDraft,
+
+  setDraftInput: (sessionKey, value) =>
+    set((state) => ({
+      drafts: {
+        ...state.drafts,
+        [sessionKey]: {
+          ...(state.drafts[sessionKey] ?? emptyDraft),
+          inputValue: value,
+        },
+      },
+    })),
+
+  setDraftAttachments: (sessionKey, attachments) =>
+    set((state) => ({
+      drafts: {
+        ...state.drafts,
+        [sessionKey]: {
+          ...(state.drafts[sessionKey] ?? emptyDraft),
+          attachments,
+        },
+      },
+    })),
+
+  clearDraft: (sessionKey) =>
+    set((state) => {
+      const { [sessionKey]: _, ...rest } = state.drafts;
+      return { drafts: rest };
+    }),
 
   reset: () => set(initialState),
 }));
