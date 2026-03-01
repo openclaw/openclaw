@@ -511,16 +511,73 @@ class MemoryStore:
 def build_memory_tools() -> list[dict]:
     """构建 memory 工具定义。
 
-    这些工具会被添加到 s04 的 TOOLS_OPENAI 中，
-    每个 Agent 在调用时会独立操作自己的 MemoryStore。
+    【参考】OpenClaw src/agents/tools/memory-tool.ts
+
+    memory_search 和 memory_get 是两个**读工具**，允许 Agent 访问内存。
+    内存**写入**（对标原始 OpenClaw）可以通过：
+    1. bash 工具直接编辑 MEMORY.md / memory/*.md
+    2. memory_write 工具（教学简化版，此处提供）
+
+    这些工具会被添加到 s04 的 TOOLS_OPENAI 中。
     """
     return [
         {
+            "name": "memory_search",
+            "description": (
+                "Mandatory recall step: semantically search MEMORY.md + memory/*.md before "
+                "answering questions about prior work, decisions, dates, people, preferences, "
+                "or todos. Returns relevant snippets with source paths and relevance scores. "
+                "Use memory_get after to read the full context from specific lines if needed."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Max number of results to return. Default 5.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "memory_get",
+            "description": (
+                "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines. "
+                "Use after memory_search to pull only the needed lines and keep context small. "
+                "Paths must be workspace-relative (e.g., 'MEMORY.md', 'memory/2026-02-28.md')."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to memory file.",
+                    },
+                    "from": {
+                        "type": "integer",
+                        "description": "Starting line number (1-indexed). Optional.",
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of lines to read. Optional.",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+        # 【教学简化】内存写入工具，在原始 OpenClaw 中这通常通过 bash 工具完成
+        {
             "name": "memory_write",
             "description": (
-                "Write a memory to persistent storage. Use this to remember important "
-                "information the user shares: preferences, facts, decisions, names, dates. "
-                "Each memory is timestamped and categorized."
+                "Write a memory entry to persistent storage (for learning purposes). "
+                "Use this to remember important information the user shares: preferences, "
+                "facts, decisions, names, dates. Each entry is timestamped and categorized. "
+                "Note: In production OpenClaw, memory is written via bash/file tools directly."
             ),
             "input_schema": {
                 "type": "object",
@@ -538,29 +595,6 @@ def build_memory_tools() -> list[dict]:
                     },
                 },
                 "required": ["content"],
-            },
-        },
-        {
-            "name": "memory_search",
-            "description": (
-                "Search through stored memories using keyword matching. "
-                "Use this before answering questions about prior conversations, "
-                "user preferences, past decisions, or any previously discussed topics. "
-                "Returns relevant memory snippets with source paths and relevance scores."
-            ),
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query.",
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Max number of results to return. Default 5.",
-                    },
-                },
-                "required": ["query"],
             },
         },
     ]
@@ -586,7 +620,7 @@ def handle_memory_tool(
     """处理 memory 工具调用。
 
     参数:
-        tool_name: 工具名称 ("memory_write" 或 "memory_search")
+        tool_name: 工具名称 ("memory_write", "memory_search", "memory_get")
         params: 工具参数
         agent_id: 调用该工具的 Agent ID
         memory_root: 该 Agent 的 memory 根目录
@@ -596,7 +630,73 @@ def handle_memory_tool(
     """
     store = get_memory_store(agent_id, memory_root)
 
-    if tool_name == "memory_write":
+    if tool_name == "memory_search":
+        query = params.get("query", "")
+        top_k = params.get("top_k", 5)
+        if not query.strip():
+            return json.dumps({"results": [], "error": "Empty query"})
+        results = store.search_memory(query, top_k=top_k)
+        return json.dumps({
+            "results": results,
+            "total_found": len(results),
+        })
+
+    elif tool_name == "memory_get":
+        path = params.get("path", "")
+        from_line = params.get("from")
+        lines = params.get("lines")
+
+        if not path.strip():
+            return json.dumps({"error": "Path required", "path": path, "text": ""})
+
+        # 安全检查：只允许读取 MEMORY.md 和 memory/ 目录下的文件
+        if not (path == "MEMORY.md" or path.startswith("memory/")):
+            return json.dumps({
+                "error": f"Access denied: path must be MEMORY.md or under memory/",
+                "path": path,
+                "text": ""
+            })
+
+        # 构建完整路径
+        full_path = memory_root / path
+
+        if not full_path.exists():
+            return json.dumps({
+                "error": f"File not found: {path}",
+                "path": path,
+                "text": ""
+            })
+
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            lines_list = content.split("\n")
+
+            # 处理行范围
+            if from_line is not None:
+                # 1-indexed to 0-indexed
+                start_idx = max(0, from_line - 1)
+                if lines is not None:
+                    end_idx = start_idx + lines
+                else:
+                    end_idx = len(lines_list)
+                selected_lines = lines_list[start_idx:end_idx]
+                selected_text = "\n".join(selected_lines)
+            else:
+                selected_text = content
+
+            return json.dumps({
+                "path": path,
+                "text": selected_text,
+                "lines": len(selected_lines) if from_line is not None else len(lines_list),
+            })
+        except Exception as e:
+            return json.dumps({
+                "error": f"Failed to read file: {str(e)}",
+                "path": path,
+                "text": ""
+            })
+
+    elif tool_name == "memory_write":
         content = params.get("content", "")
         category = params.get("category", "general")
         if not content.strip():
@@ -606,17 +706,6 @@ def handle_memory_tool(
             "status": "saved",
             "path": path,
             "category": category,
-        })
-
-    elif tool_name == "memory_search":
-        query = params.get("query", "")
-        top_k = params.get("top_k", 5)
-        if not query.strip():
-            return json.dumps({"results": [], "error": "Empty query"})
-        results = store.search_memory(query, top_k=top_k)
-        return json.dumps({
-            "results": results,
-            "total_found": len(results),
         })
 
     else:
@@ -630,15 +719,20 @@ def handle_memory_tool(
 def build_agent_system_prompt(agent: AgentWithSoulMemory, base_prompt: str) -> str:
     """构建完整的 Agent system prompt，融合 soul + base + memory。
 
+    【参考】OpenClaw src/agents/system-prompt.ts
+
     分层结构:
-      [SOUL.md 内容]           <-- 人格定义（最高优先级）
+      [SOUL.md 内容]                    <-- 人格定义（最高优先级）
       ---
-      [Base system prompt]     <-- 功能说明
+      [Base system prompt]              <-- 功能说明
+      ## Memory Recall                  <-- 强制性回忆步骤说明
+      Before answering about prior...
+      use memory_search + memory_get
       ---
-      ## Evergreen Memory      <-- 常驻记忆
+      ## Evergreen Memory               <-- 常驻记忆（供参考）
       [MEMORY.md 内容]
       ---
-      ## Recent Memory Context <-- 近期记忆摘要
+      ## Recent Memory Context          <-- 近期记忆摘要
       [最近 3 天的记忆片段]
 
     参数:
@@ -652,16 +746,29 @@ def build_agent_system_prompt(agent: AgentWithSoulMemory, base_prompt: str) -> s
     soul_system = SoulSystem(agent.soul_path)
     prompt = soul_system.build_system_prompt(base_prompt)
 
+    # 添加内存回忆指示（强制性步骤）
+    prompt += (
+        "\n\n---\n\n"
+        "## Memory Recall (Mandatory Step)\n"
+        "Before answering anything about prior work, decisions, dates, people, preferences, "
+        "or todos:\n"
+        "1. Call memory_search to semantically query MEMORY.md + memory/*.md\n"
+        "2. Use memory_get to read specific lines if you need more context\n"
+        "3. If low confidence after search, tell the user you checked memory\n"
+        "4. To update permanent facts, edit MEMORY.md via bash tool\n"
+        "5. To log today's context, use memory_write or bash to append to memory/YYYY-MM-DD.md\n"
+    )
+
     # 加载该 Agent 的常驻记忆
     memory_store = get_memory_store(agent.id, agent.memory_root)
     evergreen = memory_store.load_evergreen()
     if evergreen:
-        prompt += f"\n\n---\n\n## Evergreen Memory\n\n{evergreen}"
+        prompt += f"\n\n---\n\n## Evergreen Memory (Reference)\n\n{evergreen}"
 
     # 加载近期记忆摘要 (最近 3 天)
     recent = memory_store.get_recent_memories(days=3)
     if recent:
-        prompt += "\n\n---\n\n## Recent Memory Context\n"
+        prompt += "\n\n---\n\n## Recent Memory Context (Awareness Only)\n"
         for entry in recent:
             snippet = entry["content"][:500]
             prompt += f"\n### {entry['date']}\n{snippet}\n"
