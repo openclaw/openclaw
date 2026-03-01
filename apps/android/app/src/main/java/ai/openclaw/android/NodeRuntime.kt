@@ -290,6 +290,8 @@ class NodeRuntime(context: Context) {
   private var nodeStatusText: String = "Offline"
   private var nodeOfflineSinceMs: Long? = null
   private var lastNodeRepairAttemptMs: Long = 0L
+  private var operatorOfflineSinceMs: Long? = null
+  private var lastOperatorRepairAttemptMs: Long = 0L
   private val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
   private var lastNetworkRepairAttemptElapsedMs: Long = 0L
   private var networkCallbackRegistered = false
@@ -314,6 +316,8 @@ class NodeRuntime(context: Context) {
       onConnected = { name, remote, mainSessionKey ->
         operatorConnected = true
         operatorStatusText = "Connected"
+        operatorOfflineSinceMs = null
+        lastOperatorRepairAttemptMs = 0L
         _lastGatewayConnectedAtMs.value = System.currentTimeMillis()
         _lastGatewayError.value = null
         _serverName.value = name
@@ -332,6 +336,7 @@ class NodeRuntime(context: Context) {
       onDisconnected = { message ->
         operatorConnected = false
         operatorStatusText = message
+        operatorOfflineSinceMs = System.currentTimeMillis()
         nodeOfflineSinceMs = null
         lastNodeRepairAttemptMs = 0L
         _lastGatewayDisconnectedAtMs.value = System.currentTimeMillis()
@@ -522,16 +527,33 @@ class NodeRuntime(context: Context) {
   }
 
   private fun onNetworkChanged(reason: String) {
-    if (connectedEndpoint == null) return
+    if (connectedEndpoint == null) {
+      Log.d("OpenClawNode", "network changed ($reason): no cached endpoint, skip")
+      return
+    }
+    if (!hasUsableNetwork()) {
+      Log.d("OpenClawNode", "network changed ($reason): no usable network, skip")
+      return
+    }
     val now = SystemClock.elapsedRealtime()
-    if (now - lastNetworkRepairAttemptElapsedMs < 12_000L) return
+    val sinceLastMs = now - lastNetworkRepairAttemptElapsedMs
+    if (sinceLastMs < 12_000L) {
+      Log.d("OpenClawNode", "network changed ($reason): throttled (${sinceLastMs}ms since last attempt)")
+      return
+    }
     lastNetworkRepairAttemptElapsedMs = now
 
     scope.launch(Dispatchers.IO) {
       delay(1_500)
       if (connectedEndpoint == null) return@launch
-      if (operatorConnected && _nodeConnected.value) return@launch
-      Log.i("OpenClawNode", "network changed ($reason): refreshing gateway session")
+      if (operatorConnected && _nodeConnected.value) {
+        Log.d("OpenClawNode", "network changed ($reason): already healthy after settle, skip")
+        return@launch
+      }
+      Log.i(
+        "OpenClawNode",
+        "network changed ($reason): refreshing gateway session opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
+      )
       refreshGatewayConnection()
     }
   }
@@ -548,20 +570,96 @@ class NodeRuntime(context: Context) {
     }
   }
 
+  private fun hasUsableNetwork(): Boolean {
+    val manager = connectivityManager ?: return true
+    return runCatching {
+      val active = manager.activeNetwork ?: return false
+      val capabilities = manager.getNetworkCapabilities(active) ?: return false
+      capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }.getOrDefault(true)
+  }
+
+  fun hasCachedEndpointForRecovery(): Boolean = connectedEndpoint != null
+
+  fun hasUsableNetworkForRecovery(): Boolean = hasUsableNetwork()
+
+  suspend fun serviceHeartbeatProbeHealthy(reason: String = "fgs_probe"): Boolean {
+    if (connectedEndpoint == null) return false
+    if (!hasUsableNetwork()) return false
+
+    val operatorOk =
+      runCatching {
+        operatorSession.request("config.get", "{}", timeoutMs = 4_000)
+        true
+      }.getOrElse {
+        Log.w("OpenClawNode", "service probe ($reason): operator RPC failed", it)
+        false
+      }
+    if (!operatorOk) return false
+
+    val nodeOk =
+      runCatching {
+        nodeSession.sendNodeEvent(event = "service.heartbeat.probe", payloadJson = null)
+      }.getOrElse {
+        Log.w("OpenClawNode", "service probe ($reason): node event probe threw", it)
+        false
+      }
+    if (!nodeOk) {
+      Log.w(
+        "OpenClawNode",
+        "service probe ($reason): node event probe failed opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
+      )
+      return false
+    }
+    return true
+  }
+
+  fun requestServiceHeartbeatReconnect(reason: String = "fgs_heartbeat") {
+    if (connectedEndpoint == null) return
+    Log.i(
+      "OpenClawNode",
+      "service heartbeat reconnect ($reason): opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
+    )
+    refreshGatewayConnection()
+  }
+
   private suspend fun repairNodeSessionIfNeeded() {
-    if (!operatorConnected || _nodeConnected.value) {
+    val endpoint = connectedEndpoint ?: return
+    if (!hasUsableNetwork()) return
+
+    val now = System.currentTimeMillis()
+
+    if (!operatorConnected) {
+      if (operatorOfflineSinceMs == null) operatorOfflineSinceMs = now
+      nodeOfflineSinceMs = null
+      lastNodeRepairAttemptMs = 0L
+
+      val operatorOfflineForMs = now - (operatorOfflineSinceMs ?: now)
+      val sinceOperatorRepairMs = now - lastOperatorRepairAttemptMs
+      if (operatorOfflineForMs < 12_000L || sinceOperatorRepairMs < 30_000L) return
+
+      lastOperatorRepairAttemptMs = now
+      Log.i(
+        "OpenClawNode",
+        "repair loop: operator offline ${operatorOfflineForMs}ms -> full reconnect (nodeConnected=${_nodeConnected.value})",
+      )
+      refreshGatewayConnection()
+      return
+    }
+
+    operatorOfflineSinceMs = null
+    lastOperatorRepairAttemptMs = 0L
+
+    if (_nodeConnected.value) {
       nodeOfflineSinceMs = null
       lastNodeRepairAttemptMs = 0L
       return
     }
 
-    val endpoint = connectedEndpoint ?: return
-    val now = System.currentTimeMillis()
     if (nodeOfflineSinceMs == null) nodeOfflineSinceMs = now
-
     val offlineForMs = now - (nodeOfflineSinceMs ?: now)
-    if (offlineForMs < 25_000L) return
-    if (now - lastNodeRepairAttemptMs < 30_000L) return
+    val sinceNodeRepairMs = now - lastNodeRepairAttemptMs
+    if (offlineForMs < 25_000L || sinceNodeRepairMs < 30_000L) return
 
     lastNodeRepairAttemptMs = now
     nodeStatusText = "Reconnecting node session..."
@@ -570,6 +668,10 @@ class NodeRuntime(context: Context) {
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
+    Log.i(
+      "OpenClawNode",
+      "repair loop: node offline ${offlineForMs}ms -> node reconnect (operatorConnected=$operatorConnected)",
+    )
     nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
     nodeSession.reconnect()
   }
@@ -803,6 +905,14 @@ class NodeRuntime(context: Context) {
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    if (!value) return
+    if (connectedEndpoint == null) return
+    if (operatorConnected && _nodeConnected.value) return
+    Log.i(
+      "OpenClawNode",
+      "foreground resume: triggering network repair check opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
+    )
+    onNetworkChanged("foreground_resume")
   }
 
   fun setDisplayName(value: String) {
@@ -907,6 +1017,10 @@ class NodeRuntime(context: Context) {
         _lastGatewayError.value = "Failed: no cached gateway endpoint"
         return
       }
+    Log.i(
+      "OpenClawNode",
+      "refreshGatewayConnection: endpoint=${endpoint.stableId} opConnected=$operatorConnected nodeConnected=${_nodeConnected.value}",
+    )
     _gatewayReconnectAttempts.value = _gatewayReconnectAttempts.value + 1
     operatorStatusText = "Connecting…"
     updateStatus()

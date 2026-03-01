@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -17,14 +19,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
+  private var reconnectHeartbeatJob: Job? = null
   private var lastRequiresMic = false
   private var didStartForeground = false
+  private var heartbeatOfflineSinceElapsedMs: Long = 0L
+  private var heartbeatLastAttemptElapsedMs: Long = 0L
+  private var heartbeatBackoffMs: Long = RECONNECT_HEARTBEAT_INTERVAL_MS
 
   override fun onCreate() {
     super.onCreate()
@@ -61,6 +69,18 @@ class NodeForegroundService : Service() {
           )
         }
       }
+
+    reconnectHeartbeatJob =
+      scope.launch(Dispatchers.IO) {
+        while (isActive) {
+          delay(RECONNECT_HEARTBEAT_INTERVAL_MS)
+          runCatching {
+            runReconnectHeartbeat(runtime)
+          }.onFailure {
+            Log.w("OpenClawNode", "service reconnect heartbeat failed", it)
+          }
+        }
+      }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,11 +97,59 @@ class NodeForegroundService : Service() {
 
   override fun onDestroy() {
     notificationJob?.cancel()
+    reconnectHeartbeatJob?.cancel()
     scope.cancel()
     super.onDestroy()
   }
 
   override fun onBind(intent: Intent?) = null
+
+  private suspend fun runReconnectHeartbeat(runtime: NodeRuntime) {
+    if (!runtime.hasCachedEndpointForRecovery()) {
+      heartbeatOfflineSinceElapsedMs = 0L
+      heartbeatLastAttemptElapsedMs = 0L
+      heartbeatBackoffMs = RECONNECT_HEARTBEAT_INTERVAL_MS
+      return
+    }
+
+    if (!runtime.hasUsableNetworkForRecovery()) {
+      return
+    }
+
+    val operatorConnected = runtime.isConnected.value
+    val nodeConnected = runtime.nodeConnected.value
+    val probeHealthy = runtime.serviceHeartbeatProbeHealthy(reason = "fgs_heartbeat")
+    if (probeHealthy) {
+      heartbeatOfflineSinceElapsedMs = 0L
+      heartbeatLastAttemptElapsedMs = 0L
+      heartbeatBackoffMs = RECONNECT_HEARTBEAT_INTERVAL_MS
+      return
+    }
+
+    val now = SystemClock.elapsedRealtime()
+    if (heartbeatOfflineSinceElapsedMs == 0L) {
+      heartbeatOfflineSinceElapsedMs = now
+      Log.i(
+        "OpenClawNode",
+        "service heartbeat: unhealthy detected opConnected=$operatorConnected nodeConnected=$nodeConnected",
+      )
+      return
+    }
+
+    val offlineForMs = now - heartbeatOfflineSinceElapsedMs
+    val sinceLastAttemptMs = now - heartbeatLastAttemptElapsedMs
+    if (offlineForMs < RECONNECT_HEARTBEAT_GRACE_MS) return
+    if (heartbeatLastAttemptElapsedMs != 0L && sinceLastAttemptMs < heartbeatBackoffMs) return
+
+    heartbeatLastAttemptElapsedMs = now
+    val backoffUsedMs = heartbeatBackoffMs
+    heartbeatBackoffMs = (heartbeatBackoffMs * 2).coerceAtMost(RECONNECT_HEARTBEAT_MAX_BACKOFF_MS)
+    Log.i(
+      "OpenClawNode",
+      "service heartbeat reconnect: offlineFor=${offlineForMs}ms backoff=${backoffUsedMs}ms opConnected=$operatorConnected nodeConnected=$nodeConnected",
+    )
+    runtime.requestServiceHeartbeatReconnect(reason = "fgs_heartbeat")
+  }
 
   private fun ensureChannel() {
     val mgr = getSystemService(NotificationManager::class.java)
@@ -162,6 +230,9 @@ class NodeForegroundService : Service() {
   companion object {
     private const val CHANNEL_ID = "connection"
     private const val NOTIFICATION_ID = 1
+    private const val RECONNECT_HEARTBEAT_INTERVAL_MS = 15_000L
+    private const val RECONNECT_HEARTBEAT_GRACE_MS = 20_000L
+    private const val RECONNECT_HEARTBEAT_MAX_BACKOFF_MS = 120_000L
 
     private const val ACTION_STOP = "ai.openclaw.android.action.STOP"
 
