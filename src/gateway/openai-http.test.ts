@@ -167,6 +167,14 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         await expectAgentSessionKeyMatch({
+          body: { model: "gpt-4", messages: [{ role: "user", content: "hi" }] },
+          headers: { "x-openclaw-agent-id": "beta" },
+          matcher: /^agent:beta:/,
+        });
+      }
+
+      {
+        await expectAgentSessionKeyMatch({
           body: {
             model: "openclaw:beta",
             messages: [{ role: "user", content: "hi" }],
