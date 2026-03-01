@@ -483,6 +483,16 @@ export function renderApp(state: AppViewState) {
                 timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
                 deliveryToSuggestions,
                 onFormChange: (patch) => {
+                  // Skip update if no values actually changed (prevents infinite render loops
+                  // when input events fire with the same value, e.g. focusing an empty field)
+                  const hasChange = Object.keys(patch).some(
+                    (k) =>
+                      (patch as Record<string, unknown>)[k] !==
+                      (state.cronForm as Record<string, unknown>)[k],
+                  );
+                  if (!hasChange) {
+                    return;
+                  }
                   state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
                   state.cronFieldErrors = validateCronForm(state.cronForm);
                 },
