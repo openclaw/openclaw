@@ -203,13 +203,12 @@ function normalizeUnion(
     // Only primitive unions without literals are supported
     // Mixed primitive-plus-literal unions (e.g., number | {const: "auto"}) are not supported
     // because the UI renders them as number inputs and cannot surface literal options
+    // Note: Keep anyOf/oneOf fields for primitive unions as UI needs them for rendering
     return {
       schema: {
         ...schema,
         nullable,
-        // Clear union fields to avoid contradictory schema
-        anyOf: undefined,
-        oneOf: undefined,
+        // Clear allOf only to avoid confusion with anyOf/oneOf
         allOf: undefined,
       },
       unsupportedPaths: [],
