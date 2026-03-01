@@ -2,6 +2,7 @@ import com.android.build.api.variant.impl.VariantOutputImpl
 
 plugins {
   id("com.android.application")
+  id("org.jlleitschuh.gradle.ktlint")
   id("org.jetbrains.kotlin.plugin.compose")
   id("org.jetbrains.kotlin.plugin.serialization")
 }
@@ -92,6 +93,15 @@ kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     allWarningsAsErrors.set(true)
+  }
+}
+
+ktlint {
+  android.set(true)
+  ignoreFailures.set(false)
+  filter {
+    exclude("**/build/**")
+    exclude("**/*.kts")
   }
 }
 
