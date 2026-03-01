@@ -905,7 +905,10 @@ export async function minimaxTTS(params: {
 
   try {
     const normalizedBase = baseUrl.trim().replace(/\/+$/, "") || DEFAULT_MINIMAX_BASE_URL;
-    const url = `${normalizedBase}/v1/t2a_v2`;
+    // Strip trailing /v1 if present to avoid /v1/v1/t2a_v2 when the user
+    // configures a versioned base URL (e.g. https://api.minimax.io/v1).
+    const base = normalizedBase.replace(/\/v1$/, "");
+    const url = `${base}/v1/t2a_v2`;
 
     const body: Record<string, unknown> = {
       model,
