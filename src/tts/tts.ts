@@ -319,8 +319,11 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    local: raw.local?.command
-      ? { command: raw.local.command, args: raw.local.args ?? [] }
+    local: raw.local?.command?.trim()
+      ? {
+          command: raw.local.command.trim(),
+          args: raw.local.args?.map((arg) => arg.trim()).filter(Boolean) ?? [],
+        }
       : undefined,
   };
 }
