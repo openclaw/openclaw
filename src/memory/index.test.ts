@@ -98,6 +98,7 @@ describe("memory index", () => {
     model?: string;
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
+    minScore?: number;
     hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
   }): TestCfg {
     return {
@@ -112,7 +113,7 @@ describe("memory index", () => {
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: true },
             query: {
-              minScore: 0,
+              minScore: params.minScore ?? 0,
               hybrid: params.hybrid ?? { enabled: false },
             },
             cache: params.cacheEnabled ? { enabled: true } : undefined,
@@ -353,6 +354,25 @@ describe("memory index", () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const status = manager.status();
+    if (!status.fts?.available) {
+      return;
+    }
+
+    await manager.sync({ reason: "test" });
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+  });
+
+  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
     const manager = await getPersistentManager(cfg);
 
