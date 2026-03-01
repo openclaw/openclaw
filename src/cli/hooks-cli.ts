@@ -87,7 +87,9 @@ function resolveHookForToggle(
     );
   }
   if (opts?.requireEligible && !hook.eligible) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+    // Surface the most specific reason so users understand why enable was rejected
+    const reason = hook.events.length === 0 ? "no events defined" : "missing requirements";
+    throw new Error(`Hook "${hookName}" is not eligible (${reason})`);
   }
   return hook;
 }
@@ -433,6 +435,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
           eligible: eligible.map((h) => h.name),
           notEligible: notEligible.map((h) => ({
             name: h.name,
+            events: h.events,
             missing: h.missing,
           })),
         },
