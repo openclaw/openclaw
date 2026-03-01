@@ -476,6 +476,11 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
+    (state.profiles as Map<string, unknown>).set("openclaw", {
+      profile: { name: "openclaw" },
+      running: { pid: 1234, proc: { on: vi.fn() } },
+      lastTargetId: null,
+    });
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
@@ -516,6 +521,11 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
+    (state.profiles as Map<string, unknown>).set("openclaw", {
+      profile: { name: "openclaw" },
+      running: { pid: 1234, proc: { on: vi.fn() } },
+      lastTargetId: null,
+    });
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
@@ -699,6 +709,11 @@ describe("browser server-context tab selection state", () => {
 
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
+    (state.profiles as Map<string, unknown>).set("openclaw", {
+      profile: { name: "openclaw" },
+      running: { pid: 1234, proc: { on: vi.fn() } },
+      lastTargetId: null,
+    });
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
