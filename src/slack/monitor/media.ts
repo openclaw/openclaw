@@ -108,6 +108,11 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
+const SLACK_MEDIA_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
+
 /**
  * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
  * `"slack_audio"` but are served with a `video/*` MIME type (e.g. `video/mp4`,
@@ -218,6 +223,7 @@ export async function resolveSlackMedia(params: {
           fetchImpl,
           filePathHint: file.name,
           maxBytes: params.maxBytes,
+          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
         if (fetched.buffer.byteLength > params.maxBytes) {
           return null;
@@ -297,6 +303,7 @@ export async function resolveSlackAttachmentContent(params: {
           url: imageUrl,
           fetchImpl,
           maxBytes: params.maxBytes,
+          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
         if (fetched.buffer.byteLength <= params.maxBytes) {
           const saved = await saveMediaBuffer(
