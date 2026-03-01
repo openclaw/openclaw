@@ -119,14 +119,14 @@ describe("callGateway url resolution", () => {
       gateway: { mode: "local", bind: "tailnet", tls: { enabled: true } },
       tailnetIp: "100.64.0.1",
       lanIp: undefined,
-      expectedUrl: "wss://100.64.0.1:18800",
+      expectedUrl: "wss://127.0.0.1:18800",
     },
     {
       label: "tailnet without TLS",
       gateway: { mode: "local", bind: "tailnet" },
       tailnetIp: "100.64.0.1",
       lanIp: undefined,
-      expectedUrl: "ws://100.64.0.1:18800",
+      expectedUrl: "ws://127.0.0.1:18800",
     },
     {
       label: "tailnet without discovered tailnet IP",
@@ -276,34 +276,21 @@ describe("buildGatewayConnectionDetails", () => {
     {
       label: "tailnet",
       gateway: { mode: "local", bind: "tailnet" },
-      hasTailnetIp: true,
-      expectedUrl: "ws://100.64.0.9:18800",
-      expectedSource: "local tailnet",
-    },
-    {
-      label: "tailnet fallback to loopback when no tailnet IP is discovered",
-      gateway: { mode: "local", bind: "tailnet" },
-      hasTailnetIp: false,
       expectedUrl: "ws://127.0.0.1:18800",
       expectedSource: "local loopback",
     },
-  ])(
-    "resolves local URL for bind mode ($label)",
-    ({ gateway, hasTailnetIp, expectedUrl, expectedSource }) => {
-      loadConfig.mockReturnValue({ gateway });
-      resolveGatewayPort.mockReturnValue(18800);
-      pickPrimaryTailnetIPv4.mockReturnValue(
-        gateway.bind === "tailnet" && hasTailnetIp !== false ? "100.64.0.9" : undefined,
-      );
-      pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
+  ])("resolves local URL for bind mode ($label)", ({ gateway, expectedUrl, expectedSource }) => {
+    loadConfig.mockReturnValue({ gateway });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(gateway.bind === "tailnet" ? "100.64.0.9" : undefined);
+    pickPrimaryLanIPv4.mockReturnValue("10.0.0.5");
 
-      const details = buildGatewayConnectionDetails();
+    const details = buildGatewayConnectionDetails();
 
-      expect(details.url).toBe(expectedUrl);
-      expect(details.urlSource).toBe(expectedSource);
-      expect(details.bindDetail).toBe(`Bind: ${gateway.bind}`);
-    },
-  );
+    expect(details.url).toBe(expectedUrl);
+    expect(details.urlSource).toBe(expectedSource);
+    expect(details.bindDetail).toBe(`Bind: ${gateway.bind}`);
+  });
 
   it("prefers remote url when configured", () => {
     loadConfig.mockReturnValue({

@@ -64,31 +64,23 @@ describe("resolveGatewayConnection", () => {
 
   it.each([
     {
-      label: "tailnet with discovered tailnet IP",
+      label: "tailnet",
       bind: "tailnet",
       setup: () => pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1"),
-      expectedUrl: "ws://100.64.0.1:18800",
-    },
-    {
-      label: "tailnet without discovered tailnet IP",
-      bind: "tailnet",
-      setup: () => pickPrimaryTailnetIPv4.mockReturnValue(undefined),
-      expectedUrl: "ws://127.0.0.1:18800",
     },
     {
       label: "lan",
       bind: "lan",
       setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
-      expectedUrl: "ws://127.0.0.1:18800",
     },
-  ])("resolves local host when bind is $label", ({ bind, setup, expectedUrl }) => {
+  ])("uses loopback host when local bind is $label", ({ bind, setup }) => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
     resolveGatewayPort.mockReturnValue(18800);
     setup();
 
     const result = resolveGatewayConnection({});
 
-    expect(result.url).toBe(expectedUrl);
+    expect(result.url).toBe("ws://127.0.0.1:18800");
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN for local mode", () => {
