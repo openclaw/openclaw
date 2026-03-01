@@ -18,7 +18,9 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginHttpHandler,
+  OpenClawPluginHttpHandlerRegistration,
   OpenClawPluginHttpRouteHandler,
+  OpenClawPluginHttpRouteRegistration,
   OpenClawPluginHookOptions,
   ProviderPlugin,
   OpenClawPluginService,
@@ -52,6 +54,7 @@ export type PluginCliRegistration = {
 export type PluginHttpRegistration = {
   pluginId: string;
   handler: OpenClawPluginHttpHandler;
+  requireAuth: boolean;
   source: string;
 };
 
@@ -59,6 +62,7 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  requireAuth: boolean;
   source?: string;
 };
 
@@ -288,19 +292,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.gatewayMethods.push(trimmed);
   };
 
-  const registerHttpHandler = (record: PluginRecord, handler: OpenClawPluginHttpHandler) => {
+  const registerHttpHandler = (
+    record: PluginRecord,
+    handlerEntry: OpenClawPluginHttpHandler | OpenClawPluginHttpHandlerRegistration,
+  ) => {
+    const normalized =
+      typeof handlerEntry === "function"
+        ? { handler: handlerEntry, requireAuth: true }
+        : { handler: handlerEntry.handler, requireAuth: handlerEntry.requireAuth ?? true };
     record.httpHandlers += 1;
     registry.httpHandlers.push({
       pluginId: record.id,
-      handler,
+      handler: normalized.handler,
+      requireAuth: normalized.requireAuth,
       source: record.source,
     });
   };
 
-  const registerHttpRoute = (
-    record: PluginRecord,
-    params: { path: string; handler: OpenClawPluginHttpRouteHandler },
-  ) => {
+  const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteRegistration) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
       pushDiagnostic({
@@ -325,6 +334,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      requireAuth: params.requireAuth ?? true,
       source: record.source,
     });
   };

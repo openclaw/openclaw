@@ -12,6 +12,7 @@ export function registerPluginHttpRoute(params: {
   path?: string | null;
   fallbackPath?: string | null;
   handler: PluginHttpRouteHandler;
+  requireAuth?: boolean;
   pluginId?: string;
   source?: string;
   accountId?: string;
@@ -39,6 +40,7 @@ export function registerPluginHttpRoute(params: {
   const entry: PluginHttpRouteRegistration = {
     path: normalizedPath,
     handler: params.handler,
+    requireAuth: params.requireAuth ?? true,
     pluginId: params.pluginId,
     source: params.source,
   };

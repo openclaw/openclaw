@@ -290,6 +290,7 @@ export async function monitorLineProvider(
     path: normalizedPath,
     pluginId: "line",
     accountId: resolvedAccountId,
+    requireAuth: false,
     log: (msg) => logVerbose(msg),
     handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
   });

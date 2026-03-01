@@ -195,10 +195,21 @@ export type OpenClawPluginHttpHandler = (
   res: ServerResponse,
 ) => Promise<boolean> | boolean;
 
+export type OpenClawPluginHttpHandlerRegistration = {
+  handler: OpenClawPluginHttpHandler;
+  requireAuth?: boolean;
+};
+
 export type OpenClawPluginHttpRouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,
 ) => Promise<void> | void;
+
+export type OpenClawPluginHttpRouteRegistration = {
+  path: string;
+  handler: OpenClawPluginHttpRouteHandler;
+  requireAuth?: boolean;
+};
 
 export type OpenClawPluginCliContext = {
   program: Command;
@@ -261,8 +272,10 @@ export type OpenClawPluginApi = {
     handler: InternalHookHandler,
     opts?: OpenClawPluginHookOptions,
   ) => void;
-  registerHttpHandler: (handler: OpenClawPluginHttpHandler) => void;
-  registerHttpRoute: (params: { path: string; handler: OpenClawPluginHttpRouteHandler }) => void;
+  registerHttpHandler: (
+    handler: OpenClawPluginHttpHandler | OpenClawPluginHttpHandlerRegistration,
+  ) => void;
+  registerHttpRoute: (params: OpenClawPluginHttpRouteRegistration) => void;
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
