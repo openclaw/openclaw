@@ -170,7 +170,9 @@ export function detectMacCloudSyncedStateDir(
     return null;
   }
 
-  const homedir = deps?.homedir ?? resolveRequiredHomeDir(process.env, os.homedir);
+  // Cloud-sync roots should always be anchored to the OS account home on macOS.
+  // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
+  const homedir = deps?.homedir ?? os.homedir();
   const roots = [
     {
       storage: "iCloud Drive" as const,
