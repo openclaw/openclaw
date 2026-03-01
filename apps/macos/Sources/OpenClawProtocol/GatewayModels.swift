@@ -534,6 +534,7 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
@@ -561,6 +562,7 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
         label: String?,
@@ -587,6 +589,7 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
@@ -615,6 +618,7 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
@@ -2537,60 +2541,6 @@ public struct CronAddParams: Codable, Sendable {
         case payload
         case delivery
         case failurealert = "failureAlert"
-    }
-}
-
-public struct CronRunsParams: Codable, Sendable {
-    public let scope: AnyCodable?
-    public let id: String?
-    public let jobid: String?
-    public let limit: Int?
-    public let offset: Int?
-    public let statuses: [AnyCodable]?
-    public let status: AnyCodable?
-    public let deliverystatuses: [AnyCodable]?
-    public let deliverystatus: AnyCodable?
-    public let query: String?
-    public let sortdir: AnyCodable?
-
-    public init(
-        scope: AnyCodable?,
-        id: String?,
-        jobid: String?,
-        limit: Int?,
-        offset: Int?,
-        statuses: [AnyCodable]?,
-        status: AnyCodable?,
-        deliverystatuses: [AnyCodable]?,
-        deliverystatus: AnyCodable?,
-        query: String?,
-        sortdir: AnyCodable?)
-    {
-        self.scope = scope
-        self.id = id
-        self.jobid = jobid
-        self.limit = limit
-        self.offset = offset
-        self.statuses = statuses
-        self.status = status
-        self.deliverystatuses = deliverystatuses
-        self.deliverystatus = deliverystatus
-        self.query = query
-        self.sortdir = sortdir
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case scope
-        case id
-        case jobid = "jobId"
-        case limit
-        case offset
-        case statuses
-        case status
-        case deliverystatuses = "deliveryStatuses"
-        case deliverystatus = "deliveryStatus"
-        case query
-        case sortdir = "sortDir"
     }
 }
 
