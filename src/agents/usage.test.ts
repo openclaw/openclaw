@@ -148,6 +148,15 @@ describe("derivePromptTokens", () => {
     const promptTokens = derivePromptTokens({});
     expect(promptTokens).toBeUndefined();
   });
+
+  it("ignores negative values when deriving prompt tokens", () => {
+    const promptTokens = derivePromptTokens({
+      input: -50,
+      cacheRead: 20,
+      cacheWrite: -10,
+    });
+    expect(promptTokens).toBe(20);
+  });
 });
 
 describe("deriveSessionTotalTokens", () => {

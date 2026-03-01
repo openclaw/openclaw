@@ -1,6 +1,7 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { asFiniteNonNegativeNumber } from "../agents/usage.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -53,6 +54,17 @@ const buildFlags = (entry?: SessionEntry): string[] => {
     flags.push(`id:${sessionId}`);
   }
   return flags;
+};
+
+const sanitizeStoredTokenCount = (value: unknown): number | undefined => {
+  const nonNegative = asFiniteNonNegativeNumber(value);
+  if (nonNegative !== undefined) {
+    return nonNegative;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value < 0) {
+    return 0;
+  }
+  return undefined;
 };
 
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
@@ -154,6 +166,10 @@ export async function getStatusSummary(
             : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
         const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const inputTokens = sanitizeStoredTokenCount(entry?.inputTokens);
+        const outputTokens = sanitizeStoredTokenCount(entry?.outputTokens);
+        const cacheRead = sanitizeStoredTokenCount(entry?.cacheRead);
+        const cacheWrite = sanitizeStoredTokenCount(entry?.cacheWrite);
 
         return {
           agentId,
@@ -168,10 +184,10 @@ export async function getStatusSummary(
           elevatedLevel: entry?.elevatedLevel,
           systemSent: entry?.systemSent,
           abortedLastRun: entry?.abortedLastRun,
-          inputTokens: entry?.inputTokens,
-          outputTokens: entry?.outputTokens,
-          cacheRead: entry?.cacheRead,
-          cacheWrite: entry?.cacheWrite,
+          inputTokens,
+          outputTokens,
+          cacheRead,
+          cacheWrite,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,

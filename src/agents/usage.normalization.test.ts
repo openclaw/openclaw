@@ -34,6 +34,35 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("ignores negative primary fields and falls back to non-negative aliases", () => {
+    const usage = normalizeUsage({
+      input: -79_714,
+      prompt_tokens: 4_478,
+      output_tokens: 1_736,
+      prompt_tokens_details: { cached_tokens: 111_131 },
+      total_tokens: 117_345,
+    });
+    expect(usage).toEqual({
+      input: 4478,
+      output: 1736,
+      cacheRead: 111_131,
+      cacheWrite: undefined,
+      total: 117_345,
+    });
+  });
+
+  it("drops fully negative usage payloads", () => {
+    expect(
+      normalizeUsage({
+        input: -1,
+        output: -2,
+        cacheRead: -3,
+        cacheWrite: -4,
+        total: -5,
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

@@ -2,7 +2,11 @@ import { setCliSessionId } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import {
+  asFiniteNonNegativeNumber,
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+} from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
@@ -77,10 +81,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   next.abortedLastRun = result.meta.aborted ?? false;
   if (hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
+    const input = asFiniteNonNegativeNumber(usage.input) ?? 0;
+    const output = asFiniteNonNegativeNumber(usage.output) ?? 0;
+    const cacheRead = asFiniteNonNegativeNumber(usage.cacheRead) ?? 0;
+    const cacheWrite = asFiniteNonNegativeNumber(usage.cacheWrite) ?? 0;
+    const normalizedUsage = {
+      ...usage,
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+    };
     const totalTokens = deriveSessionTotalTokens({
-      usage,
+      usage: normalizedUsage,
       contextTokens,
       promptTokens,
     });
@@ -93,8 +106,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    next.cacheRead = cacheRead;
+    next.cacheWrite = cacheWrite;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

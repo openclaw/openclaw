@@ -9,7 +9,12 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
+import {
+  asFiniteNonNegativeNumber,
+  derivePromptTokens,
+  normalizeUsage,
+  type UsageLike,
+} from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -175,6 +180,17 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
+const sanitizeStoredTokenCount = (value: unknown): number | undefined => {
+  const nonNegative = asFiniteNonNegativeNumber(value);
+  if (nonNegative !== undefined) {
+    return nonNegative;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value < 0) {
+    return 0;
+  }
+  return undefined;
+};
+
 export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
@@ -334,10 +350,11 @@ const formatCacheLine = (
     (typeof cacheRead === "number" ? cacheRead : 0) +
     (typeof cacheWrite === "number" ? cacheWrite : 0) +
     (typeof input === "number" ? input : 0);
-  const hitRate =
+  const rawHitRate =
     totalInput > 0 && typeof cacheRead === "number"
       ? Math.round((cacheRead / totalInput) * 100)
       : 0;
+  const hitRate = Math.max(0, Math.min(100, rawHitRate));
 
   return `🗄️ Cache: ${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };
@@ -455,11 +472,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  let inputTokens = entry?.inputTokens;
-  let outputTokens = entry?.outputTokens;
-  let cacheRead = entry?.cacheRead;
-  let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  let inputTokens = sanitizeStoredTokenCount(entry?.inputTokens);
+  let outputTokens = sanitizeStoredTokenCount(entry?.outputTokens);
+  let cacheRead = sanitizeStoredTokenCount(entry?.cacheRead);
+  let cacheWrite = sanitizeStoredTokenCount(entry?.cacheWrite);
+  let totalTokens =
+    sanitizeStoredTokenCount(entry?.totalTokens) ?? (inputTokens ?? 0) + (outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).

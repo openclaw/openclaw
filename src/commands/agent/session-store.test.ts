@@ -63,4 +63,46 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted?.acp).toBeDefined();
     expect(staleInMemory[sessionKey]?.acp).toBeDefined();
   });
+
+  it("sanitizes negative usage before persisting session token fields", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:main:test:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {};
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "custom-provider",
+      defaultModel: "claude-sonnet-4-6-thinking",
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            provider: "custom-provider",
+            model: "claude-sonnet-4-6-thinking",
+            usage: {
+              input: -79_714,
+              output: 1_736,
+              cacheRead: 111_131,
+              cacheWrite: 0,
+              total: 4_478,
+            },
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.inputTokens).toBe(0);
+    expect(persisted?.outputTokens).toBe(1736);
+    expect(persisted?.cacheRead).toBe(111_131);
+    expect(persisted?.cacheWrite).toBe(0);
+    expect(persisted?.totalTokensFresh).toBe(true);
+  });
 });

@@ -42,6 +42,21 @@ function createUnknownUsageSessionStore() {
   };
 }
 
+function createOverflowCacheSessionStore() {
+  return {
+    "+1000": {
+      updatedAt: Date.now() - 60_000,
+      inputTokens: -79_714,
+      outputTokens: 1_736,
+      cacheRead: 196_000,
+      cacheWrite: 0,
+      totalTokens: 4_478,
+      contextTokens: 200_000,
+      model: "pi:opus",
+    },
+  };
+}
+
 function createChannelIssueCollector(channel: string) {
   return (accounts: Array<Record<string, unknown>>) =>
     accounts
@@ -76,6 +91,18 @@ function createErrorChannelPlugin(params: { id: string; label: string; docsPath:
 async function withUnknownUsageStore(run: () => Promise<void>) {
   const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
   mocks.loadSessionStore.mockReturnValue(createUnknownUsageSessionStore());
+  try {
+    await run();
+  } finally {
+    if (originalLoadSessionStore) {
+      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+    }
+  }
+}
+
+async function withOverflowCacheStore(run: () => Promise<void>) {
+  const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+  mocks.loadSessionStore.mockReturnValue(createOverflowCacheSessionStore());
   try {
     await run();
   } finally {
@@ -371,6 +398,28 @@ describe("statusCommand", () => {
       await statusCommand({}, runtime as never);
       const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
       expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
+    });
+  });
+
+  it("clamps cache hit rate in formatted output", async () => {
+    await withOverflowCacheStore(async () => {
+      runtimeLogMock.mockClear();
+      await statusCommand({}, runtime as never);
+      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
+      expect(logs.some((line) => line.includes("4377% cached"))).toBe(false);
+      expect(logs.some((line) => line.includes("4376% cached"))).toBe(false);
+    });
+  });
+
+  it("sanitizes negative session token fields in JSON output", async () => {
+    await withOverflowCacheStore(async () => {
+      runtimeLogMock.mockClear();
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      expect(payload.sessions.recent[0].inputTokens).toBe(0);
+      expect(payload.sessions.recent[0].outputTokens).toBe(1736);
+      expect(payload.sessions.recent[0].cacheRead).toBe(196000);
     });
   });
 

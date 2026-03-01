@@ -19,10 +19,26 @@ export const formatTokensCompact = (
     "totalTokens" | "contextTokens" | "percentUsed" | "cacheRead" | "cacheWrite"
   >,
 ) => {
-  const used = sess.totalTokens;
-  const ctx = sess.contextTokens;
-  const cacheRead = sess.cacheRead;
-  const cacheWrite = sess.cacheWrite;
+  const used =
+    typeof sess.totalTokens === "number" &&
+    Number.isFinite(sess.totalTokens) &&
+    sess.totalTokens >= 0
+      ? sess.totalTokens
+      : null;
+  const ctx =
+    typeof sess.contextTokens === "number" &&
+    Number.isFinite(sess.contextTokens) &&
+    sess.contextTokens > 0
+      ? sess.contextTokens
+      : null;
+  const cacheRead =
+    typeof sess.cacheRead === "number" && Number.isFinite(sess.cacheRead) && sess.cacheRead >= 0
+      ? sess.cacheRead
+      : 0;
+  const cacheWrite =
+    typeof sess.cacheWrite === "number" && Number.isFinite(sess.cacheWrite) && sess.cacheWrite >= 0
+      ? sess.cacheWrite
+      : 0;
 
   let result = "";
   if (used == null) {
@@ -35,12 +51,10 @@ export const formatTokensCompact = (
   }
 
   // Add cache hit rate if there are cached reads
-  if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+  if (cacheRead > 0) {
+    const total = used ?? cacheRead + cacheWrite;
+    const rawHitRate = total > 0 ? Math.round((cacheRead / total) * 100) : 0;
+    const hitRate = Math.max(0, Math.min(100, rawHitRate));
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 

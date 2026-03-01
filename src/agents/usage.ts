@@ -76,6 +76,24 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   return value;
 };
 
+export const asFiniteNonNegativeNumber = (value: unknown): number | undefined => {
+  const num = asFiniteNumber(value);
+  if (num === undefined || num < 0) {
+    return undefined;
+  }
+  return num;
+};
+
+const pickFirstFiniteNonNegative = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    const num = asFiniteNonNegativeNumber(value);
+    if (num !== undefined) {
+      return num;
+    }
+  }
+  return undefined;
+};
+
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
@@ -90,27 +108,33 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  const input = asFiniteNumber(
-    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+  const input = pickFirstFiniteNonNegative(
+    raw.input,
+    raw.inputTokens,
+    raw.input_tokens,
+    raw.promptTokens,
+    raw.prompt_tokens,
   );
-  const output = asFiniteNumber(
-    raw.output ??
-      raw.outputTokens ??
-      raw.output_tokens ??
-      raw.completionTokens ??
-      raw.completion_tokens,
+  const output = pickFirstFiniteNonNegative(
+    raw.output,
+    raw.outputTokens,
+    raw.output_tokens,
+    raw.completionTokens,
+    raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(
-    raw.cacheRead ??
-      raw.cache_read ??
-      raw.cache_read_input_tokens ??
-      raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+  const cacheRead = pickFirstFiniteNonNegative(
+    raw.cacheRead,
+    raw.cache_read,
+    raw.cache_read_input_tokens,
+    raw.cached_tokens,
+    raw.prompt_tokens_details?.cached_tokens,
   );
-  const cacheWrite = asFiniteNumber(
-    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
+  const cacheWrite = pickFirstFiniteNonNegative(
+    raw.cacheWrite,
+    raw.cache_write,
+    raw.cache_creation_input_tokens,
   );
-  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = pickFirstFiniteNonNegative(raw.total, raw.totalTokens, raw.total_tokens);
 
   if (
     input === undefined &&
@@ -139,9 +163,9 @@ export function derivePromptTokens(usage?: {
   if (!usage) {
     return undefined;
   }
-  const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
+  const input = asFiniteNonNegativeNumber(usage.input) ?? 0;
+  const cacheRead = asFiniteNonNegativeNumber(usage.cacheRead) ?? 0;
+  const cacheWrite = asFiniteNonNegativeNumber(usage.cacheWrite) ?? 0;
   const sum = input + cacheRead + cacheWrite;
   return sum > 0 ? sum : undefined;
 }
