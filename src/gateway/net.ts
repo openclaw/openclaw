@@ -199,8 +199,8 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
     return true;
   }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
+  const tailnetIPv6 = normalizeIp(pickPrimaryTailnetIPv6());
+  if (tailnetIPv6 && normalized === tailnetIPv6) {
     return true;
   }
   return false;
