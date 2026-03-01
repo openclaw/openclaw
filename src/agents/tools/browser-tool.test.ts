@@ -523,3 +523,43 @@ describe("browser tool external content wrapping", () => {
     });
   });
 });
+
+describe("browser tool act stale target recovery", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("retries chrome act once without targetId when tab id is stale", async () => {
+    browserActionsMocks.browserAct
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      profile: "chrome",
+      request: {
+        action: "click",
+        targetId: "stale-tab",
+        ref: "btn-1",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ targetId: "stale-tab", action: "click", ref: "btn-1" }),
+      expect.objectContaining({ profile: "chrome" }),
+    );
+    expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.not.objectContaining({ targetId: expect.anything() }),
+      expect.objectContaining({ profile: "chrome" }),
+    );
+    expect(result?.details).toMatchObject({ ok: true });
+  });
+});
