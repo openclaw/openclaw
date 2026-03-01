@@ -1,5 +1,6 @@
 plugins {
   id("com.android.test")
+  id("org.jlleitschuh.gradle.ktlint")
 }
 
 android {
@@ -26,6 +27,15 @@ kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     allWarningsAsErrors.set(true)
+  }
+}
+
+ktlint {
+  android.set(true)
+  ignoreFailures.set(false)
+  filter {
+    exclude("**/build/**")
+    exclude("**/*.kts")
   }
 }
 
