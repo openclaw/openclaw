@@ -10,6 +10,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { stripLeadingInboundMetadata } from "../strip-inbound-meta.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -86,7 +87,14 @@ export function scheduleFollowupDrain(
             title: "[Queued messages while agent was busy]",
             items,
             summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            renderItem: (item, idx) => {
+              // Strip leading inbound metadata blocks (Conversation info, Sender, etc.)
+              // before embedding each queued prompt in the batch.  The model should never
+              // see raw metadata envelopes — they only belong in the per-message context
+              // and cause the model to echo them verbatim when batched (issue #30405).
+              const cleanPrompt = stripLeadingInboundMetadata(item.prompt);
+              return `---\nQueued #${idx + 1}\n${cleanPrompt}`.trim();
+            },
           });
           await runFollowup({
             prompt,
