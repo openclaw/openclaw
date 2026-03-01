@@ -134,7 +134,7 @@ describe("models-config", () => {
     });
   });
 
-  it("preserves non-empty agent apiKey/baseUrl for matching providers in merge mode", async () => {
+  it("preserves non-empty agent apiKey but refreshes baseUrl from config in merge mode", async () => {
     await withTempHome(async () => {
       const agentDir = resolveOpenClawAgentDir();
       await fs.mkdir(agentDir, { recursive: true });
@@ -164,6 +164,59 @@ describe("models-config", () => {
             custom: {
               baseUrl: "https://config.example/v1",
               apiKey: "CONFIG_KEY",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "config-model",
+                  name: "Config model",
+                  input: ["text"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 2048,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; baseUrl?: string }>;
+      }>();
+      expect(parsed.providers.custom?.apiKey).toBe("AGENT_KEY");
+      expect(parsed.providers.custom?.baseUrl).toBe("https://config.example/v1");
+    });
+  });
+
+  it("preserves existing baseUrl when config does not provide one", async () => {
+    await withTempHome(async () => {
+      const agentDir = resolveOpenClawAgentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://agent.example/v1",
+                apiKey: "AGENT_KEY",
+                api: "openai-responses",
+                models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
               api: "openai-responses",
               models: [
                 {

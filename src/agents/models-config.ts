@@ -167,7 +167,11 @@ export async function ensureOpenClawModelsJson(
           if (typeof existing.apiKey === "string" && existing.apiKey) {
             preserved.apiKey = existing.apiKey;
           }
-          if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+          const newBaseUrl =
+            typeof (newEntry as { baseUrl?: unknown }).baseUrl === "string"
+              ? ((newEntry as { baseUrl?: string }).baseUrl ?? "").trim()
+              : "";
+          if (typeof existing.baseUrl === "string" && existing.baseUrl && !newBaseUrl) {
             preserved.baseUrl = existing.baseUrl;
           }
           mergedProviders[key] = { ...newEntry, ...preserved };
