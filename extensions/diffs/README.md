@@ -54,6 +54,35 @@ Useful options:
 - `ttlSeconds`: artifact lifetime
 - `baseUrl`: override the gateway base URL used in the returned viewer link
 
+## Plugin Defaults
+
+Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          defaults: {
+            fontFamily: "Fira Code",
+            fontSize: 15,
+            layout: "unified",
+            wordWrap: true,
+            background: true,
+            theme: "dark",
+            mode: "both",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Explicit tool parameters still win over these defaults.
+
 ## Example Agent Prompts
 
 Open in canvas:
@@ -122,3 +151,4 @@ diff --git a/src/example.ts b/src/example.ts
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Artifacts are ephemeral and stored in the local temp directory.
 - PNG rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
+- Diff rendering is powered by [Diffs](https://diffs.com).
