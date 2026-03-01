@@ -124,7 +124,6 @@ export async function deliverReplies(params: {
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
       const chunks = chunkText(reply.text || "");
-      let sentTextChunk = false;
       for (let i = 0; i < chunks.length; i += 1) {
         const chunk = chunks[i];
         if (!chunk) {
@@ -132,20 +131,22 @@ export async function deliverReplies(params: {
         }
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
+        // In "first" mode, only the first chunk should carry the reply reference.
+        const chunkReplyToId =
+          replyToMode === "all" || !hasReplied ? replyToMessageIdForPayload : undefined;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId: replyToMessageIdForPayload,
-          replyQuoteText,
+          replyToMessageId: chunkReplyToId,
+          replyQuoteText: !hasReplied ? replyQuoteText : undefined,
           thread,
           textMode: "html",
           plainText: chunk.text,
           linkPreview,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
-        sentTextChunk = true;
+        if (chunkReplyToId && !hasReplied) {
+          hasReplied = true;
+        }
         markDelivered();
-      }
-      if (replyToMessageIdForPayload && !hasReplied && sentTextChunk) {
-        hasReplied = true;
       }
       continue;
     }
@@ -287,20 +288,22 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
+          const chunkReplyToId =
+            replyToMode === "all" || !hasReplied ? replyToMessageIdForPayload : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdForPayload,
+            replyToMessageId: chunkReplyToId,
             thread,
             textMode: "html",
             plainText: chunk.text,
             linkPreview,
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
+          if (chunkReplyToId && !hasReplied) {
+            hasReplied = true;
+          }
           markDelivered();
         }
         pendingFollowUpText = undefined;
-      }
-      if (replyToMessageIdForPayload && !hasReplied) {
-        hasReplied = true;
       }
     }
   }
