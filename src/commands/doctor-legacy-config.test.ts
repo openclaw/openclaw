@@ -33,7 +33,7 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
   });
 
   it("normalizes slack boolean streaming aliases to enum and native streaming", () => {
-    const res = normalizeLegacyConfigValues({
+    const res = normalizeCompatibilityConfigValues({
       channels: {
         slack: {
           streaming: false,
