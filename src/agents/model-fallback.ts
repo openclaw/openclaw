@@ -214,7 +214,16 @@ function resolveFallbackCandidates(params: {
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
-    addCandidate({ provider: primary.provider, model: primary.model }, false);
+    // Don't add the hardcoded default (anthropic/claude-opus-4-5) as a last-resort candidate
+    // when the user has configured other providers. This prevents anthropic from silently
+    // appearing in the fallback chain when the user only uses e.g. ollama.
+    const isHardcodedDefault =
+      primary.provider === DEFAULT_PROVIDER && primary.model === DEFAULT_MODEL;
+    const hasOtherProviders =
+      candidates.length > 0 && candidates.some((c) => c.provider !== DEFAULT_PROVIDER);
+    if (!(isHardcodedDefault && hasOtherProviders)) {
+      addCandidate({ provider: primary.provider, model: primary.model }, false);
+    }
   }
 
   return candidates;
