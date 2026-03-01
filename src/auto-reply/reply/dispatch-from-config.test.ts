@@ -41,6 +41,9 @@ const acpMocks = vi.hoisted(() => ({
 const sessionBindingMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
+const messageActionMocks = vi.hoisted(() => ({
+  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -142,6 +145,9 @@ vi.mock("../../tts/tts.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
 }));
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+}));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 const { resetInboundDedupe } = await import("./inbound-dedupe.js");
@@ -207,6 +213,8 @@ describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetInboundDedupe();
+    mocks.routeReply.mockReset();
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
@@ -222,6 +230,8 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.upsertAcpSessionMeta.mockReset();
     acpMocks.upsertAcpSessionMeta.mockResolvedValue(null);
     acpMocks.requireAcpRuntimeBackend.mockReset();
+    messageActionMocks.runMessageAction.mockReset();
+    messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
     ttsMocks.state.synthesizeFinalAudio = false;
@@ -1160,6 +1170,306 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("edits ACP tool lifecycle updates in place when channel edit is available", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      {
+        type: "tool_call",
+        tag: "tool_call",
+        toolCallId: "call-1",
+        status: "in_progress",
+        title: "Run command",
+        text: "Run command (in_progress)",
+      },
+      {
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        title: "Run command",
+        text: "Run command (completed)",
+      },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    mocks.routeReply
+      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "final-msg-1" });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:thread-1",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "run tool",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(messageActionMocks.runMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "edit",
+        params: expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:thread-1",
+          messageId: "tool-msg-1",
+        }),
+      }),
+    );
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("falls back to new ACP tool message when edit action fails", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
+    const runtime = createAcpRuntime([
+      {
+        type: "tool_call",
+        tag: "tool_call",
+        toolCallId: "call-2",
+        status: "in_progress",
+        title: "Run command",
+        text: "Run command (in_progress)",
+      },
+      {
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "call-2",
+        status: "completed",
+        title: "Run command",
+        text: "Run command (completed)",
+      },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    mocks.routeReply
+      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
+      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" })
+      .mockResolvedValueOnce({ ok: true, messageId: "final-msg-2" });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:thread-1",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "run tool",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(messageActionMocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("falls back to new ACP tool message when first tool send has no message id", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      {
+        type: "tool_call",
+        tag: "tool_call",
+        toolCallId: "call-3",
+        status: "in_progress",
+        title: "Run command",
+        text: "Run command (in_progress)",
+      },
+      {
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "call-3",
+        status: "completed",
+        title: "Run command",
+        text: "Run command (completed)",
+      },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    mocks.routeReply
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-3-fallback" })
+      .mockResolvedValueOnce({ ok: true, messageId: "final-msg-3" });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:thread-1",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "run tool",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(messageActionMocks.runMessageAction).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("starts ACP typing lifecycle only when visible output is projected", async () => {
+    setNoAbort();
+    const hiddenRuntime = createAcpRuntime([
+      {
+        type: "status",
+        tag: "usage_update",
+        text: "usage updated: 10/100",
+        used: 10,
+        size: 100,
+      },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: hiddenRuntime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const onReplyStart = vi.fn();
+    const hiddenCtx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "hidden-only",
+      MessageSid: "acp-hidden-1",
+    });
+    await dispatchReplyFromConfig({
+      ctx: hiddenCtx,
+      cfg,
+      dispatcher,
+      replyOptions: { onReplyStart },
+    });
+    expect(onReplyStart).not.toHaveBeenCalled();
+
+    acpManagerTesting.resetAcpSessionManagerForTests();
+
+    const visibleRuntime = createAcpRuntime([
+      {
+        type: "text_delta",
+        text: "visible output",
+      },
+      { type: "done" },
+    ]);
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: visibleRuntime,
+    });
+    const visibleCtx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "visible",
+      MessageSid: "acp-visible-1",
+    });
+    await dispatchReplyFromConfig({
+      ctx: visibleCtx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyOptions: { onReplyStart },
+    });
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {
