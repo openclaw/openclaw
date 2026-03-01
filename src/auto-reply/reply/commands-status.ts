@@ -106,7 +106,10 @@ export async function buildStatusReply(params: {
         }
       }
     } catch {
-      usageLine = null;
+      const sourceProfile = sessionEntry?.authProfileOverride?.trim();
+      usageLine = sourceProfile
+        ? `📊 Usage unavailable for active profile (${sourceProfile})`
+        : "📊 Usage unavailable for active profile";
     }
   }
   const queueSettings = resolveQueueSettings({
