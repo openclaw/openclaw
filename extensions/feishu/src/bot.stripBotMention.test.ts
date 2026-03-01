@@ -75,7 +75,18 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     );
   });
 
-  it("xml-escapes special characters in mention name", () => {
+  it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_user_1 hi", [
+        { key: "@_user_1", name: "$& the user", id: { open_id: "ou_x" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    // $ is preserved literally (no $& pattern substitution); & is not escaped in tag body
+    expect(ctx.content).toBe('<at user_id="ou_x">$& the user</at> hi');
+  });
+
+  it("escapes < and > in mention name to protect tag structure", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_user_1 test", [
         { key: "@_user_1", name: "<script>", id: { open_id: "ou_x" } },

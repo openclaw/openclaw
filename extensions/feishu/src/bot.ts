@@ -480,21 +480,16 @@ function normalizeMentions(
   if (!mentions || mentions.length === 0) return text;
 
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const xmlEscaped = (value: string) =>
-    value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;");
+  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let result = text;
 
   for (const mention of mentions) {
     const mentionId = mention.id.open_id || mention.id.user_id;
     const replacement = mentionId
-      ? `<at user_id="${mentionId}">${xmlEscaped(mention.name)}</at>`
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
       : `@${mention.name}`;
 
-    result = result.replace(new RegExp(escaped(mention.key), "g"), replacement).trim();
+    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
 
   return result;
