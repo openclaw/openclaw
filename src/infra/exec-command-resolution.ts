@@ -58,8 +58,22 @@ function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS
     const candidate = path.resolve(base, expanded);
     return isExecutableFile(candidate) ? candidate : undefined;
   }
-  const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  let envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
+
+  // Linux fallback: append /usr/sbin, /sbin, and /usr/local/sbin if not already in PATH
+  // Many Linux distributions (especially Debian/Ubuntu) don't include sbin paths in
+  // default user PATH. This affects security audit tools like `ufw`, `iptables`, `ss`, etc.
+  // These paths are appended (not prepended) so user PATH entries always take priority.
+  if (process.platform === "linux") {
+    const sbinPaths = ["/usr/sbin", "/sbin", "/usr/local/sbin"];
+    for (const sbin of sbinPaths) {
+      if (!entries.includes(sbin)) {
+        entries.push(sbin);
+      }
+    }
+  }
+
   const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
   const extensions =
     process.platform === "win32"
