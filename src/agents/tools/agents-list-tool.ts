@@ -8,6 +8,7 @@ import {
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
+import { createAgentToAgentPolicy } from "./sessions-access.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const AgentsListToolSchema = Type.Object({});
@@ -46,13 +47,22 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-      const allowAny = allowAgents.some((value) => value.trim() === "*");
+      const allowAgentsRaw = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+      const hasExplicitAllowAgents = Array.isArray(allowAgentsRaw);
+      const allowAgents = hasExplicitAllowAgents ? allowAgentsRaw : [];
+      let allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
           .filter((value) => value.trim() && value.trim() !== "*")
           .map((value) => normalizeAgentId(value)),
       );
+      const routingAllowRaw = Array.isArray(cfg.tools?.agentToAgent?.allow)
+        ? cfg.tools.agentToAgent.allow
+        : [];
+      const routingAllow = routingAllowRaw
+        .map((value) => String(value ?? "").trim())
+        .filter((value) => value.length > 0);
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
 
       const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
       const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
@@ -65,11 +75,36 @@ export function createAgentsListTool(opts?: {
         configuredNameMap.set(normalizeAgentId(entry.id), name);
       }
 
+      if (!hasExplicitAllowAgents && a2aPolicy.enabled && routingAllow.length > 0) {
+        allowAny = routingAllow.includes("*");
+        for (const id of configuredIds) {
+          if (id !== requesterAgentId && a2aPolicy.isAllowed(requesterAgentId, id)) {
+            allowSet.add(id);
+          }
+        }
+        for (const pattern of routingAllow) {
+          if (pattern === "*" || pattern.includes("*")) {
+            continue;
+          }
+          const id = normalizeAgentId(pattern);
+          if (id !== requesterAgentId && a2aPolicy.isAllowed(requesterAgentId, id)) {
+            allowSet.add(id);
+          }
+        }
+      }
+
       const allowed = new Set<string>();
       allowed.add(requesterAgentId);
       if (allowAny) {
         for (const id of configuredIds) {
-          allowed.add(id);
+          if (
+            hasExplicitAllowAgents ||
+            (a2aPolicy.enabled &&
+              routingAllow.length > 0 &&
+              a2aPolicy.isAllowed(requesterAgentId, id))
+          ) {
+            allowed.add(id);
+          }
         }
       } else {
         for (const id of allowSet) {

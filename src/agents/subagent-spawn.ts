@@ -17,6 +17,7 @@ import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
+import { createAgentToAgentPolicy } from "./tools/sessions-access.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -252,20 +253,39 @@ export async function spawnSubagentDirect(
   );
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = targetAgentId.toLowerCase();
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
-      return {
-        status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
-      };
+    const allowAgentsRaw = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents;
+    const hasExplicitAllowAgents = Array.isArray(allowAgentsRaw);
+    if (hasExplicitAllowAgents) {
+      const allowAny = allowAgentsRaw.some((value) => value.trim() === "*");
+      const normalizedTargetId = targetAgentId.toLowerCase();
+      const allowSet = new Set(
+        allowAgentsRaw
+          .filter((value) => value.trim() && value.trim() !== "*")
+          .map((value) => normalizeAgentId(value).toLowerCase()),
+      );
+      if (!allowAny && !allowSet.has(normalizedTargetId)) {
+        const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+        return {
+          status: "forbidden",
+          error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        };
+      }
+    } else {
+      const routingAllowRaw = Array.isArray(cfg.tools?.agentToAgent?.allow)
+        ? cfg.tools.agentToAgent.allow
+        : [];
+      const routingAllow = routingAllowRaw
+        .map((value) => String(value ?? "").trim())
+        .filter((value) => value.length > 0);
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const fallbackEnabled = a2aPolicy.enabled && routingAllow.length > 0;
+      if (!fallbackEnabled || !a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
+        const allowedText = fallbackEnabled ? routingAllow.join(", ") : "none";
+        return {
+          status: "forbidden",
+          error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+        };
+      }
     }
   }
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;

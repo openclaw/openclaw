@@ -134,4 +134,36 @@ describe("agents_list", () => {
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
   });
+
+  it("falls back to tools.agentToAgent.allow when subagents.allowAgents is unset", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "coder", "tester"],
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", name: "Main" },
+          { id: "coder", name: "Coder" },
+          { id: "tester", name: "Tester" },
+          { id: "mkt", name: "Marketing" },
+        ],
+      },
+    };
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call5", {});
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: false,
+    });
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "tester"]);
+  });
 });
