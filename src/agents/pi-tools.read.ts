@@ -881,6 +881,95 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   } as const;
 }
 
+function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly !== false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow reads anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        return await fs.readFile(resolved);
+      },
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        await fs.access(resolved);
+      },
+      detectImageMimeType: async (absolutePath: string) => {
+        const resolved = path.resolve(absolutePath);
+        const buffer = await fs.readFile(resolved);
+        const mime = await detectMime({ buffer, filePath: resolved });
+        return mime && mime.startsWith("image/") ? mime : undefined;
+      },
+    } as const;
+  }
+
+  // When workspaceOnly is true (default), enforce workspace boundary
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      const opened = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      try {
+        return await opened.handle.readFile();
+      } finally {
+        await opened.handle.close().catch(() => {});
+      }
+    },
+    access: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+          throw createFsAccessError("EACCES", absolutePath);
+        }
+        throw error;
+      }
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      const opened = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      try {
+        const buffer = await opened.handle.readFile();
+        const mime = await detectMime({ buffer, filePath: absolutePath });
+        return mime && mime.startsWith("image/") ? mime : undefined;
+      } finally {
+        await opened.handle.close().catch(() => {});
+      }
+    },
+  } as const;
+}
+
+export function createHostWorkspaceReadTool(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    modelContextWindowTokens?: number;
+    imageSanitization?: ImageSanitizationLimits;
+  },
+) {
+  const base = createReadTool(root, {
+    operations: createHostReadOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: options?.modelContextWindowTokens,
+    imageSanitization: options?.imageSanitization,
+  });
+}
+
 function toRelativePathInRoot(
   root: string,
   candidate: string,
