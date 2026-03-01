@@ -86,7 +86,7 @@ describe("sanitizeSessionMessagesImages", () => {
     ] as unknown as AgentMessage[];
 
     const out = await sanitizeSessionMessagesImages(input, "test");
-    const assistant = out[0] as { content?: Array<Record<string, unknown>> };
+    const assistant = out[0] as unknown as { content?: Array<Record<string, unknown>> };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
     expect(toolCall).toBeTruthy();
     expect("input" in (toolCall ?? {})).toBe(false);

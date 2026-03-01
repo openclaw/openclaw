@@ -3,6 +3,7 @@ node_modules
 .env
 docker-compose.extra.yml
 dist
+!packages/iris-agent-core/dist/
 pnpm-lock.yaml
 bun.lock
 bun.lockb

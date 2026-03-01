@@ -245,6 +245,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "@mariozechner/pi-agent-core": "workspace:*",
       "hono": "4.11.10",
       "fast-xml-parser": "5.3.6",
       "request": "npm:@cypress/request@3.0.10",
