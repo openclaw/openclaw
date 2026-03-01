@@ -57,6 +57,9 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+
+
+
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
     cfg,
@@ -141,6 +144,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }),
     );
   const statusReactionsEnabled = shouldAckReaction();
+  const statusReactionsIntermediateEnabled =
+    discordConfig?.statusReactions !== false && cfg.messages?.statusReactions?.enabled !== false;
   const discordAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
@@ -673,7 +678,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
     onReplyStart: async () => {
       await typingCallbacks.onReplyStart();
-      await statusReactions.setThinking();
+      if (statusReactionsIntermediateEnabled) {
+        await statusReactions.setThinking();
+      }
     },
   });
 
@@ -717,10 +724,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           : undefined,
         onModelSelected,
         onReasoningStream: async () => {
-          await statusReactions.setThinking();
+          if (statusReactionsIntermediateEnabled) {
+            await statusReactions.setThinking();
+          }
         },
         onToolStart: async (payload) => {
-          await statusReactions.setTool(payload.name);
+          if (statusReactionsIntermediateEnabled) {
+            await statusReactions.setTool(payload.name);
+          }
         },
       },
     });
@@ -741,10 +752,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       markDispatchIdle();
     }
     if (statusReactionsEnabled) {
-      if (dispatchError) {
-        await statusReactions.setError();
-      } else {
-        await statusReactions.setDone();
+      if (statusReactionsIntermediateEnabled) {
+        if (dispatchError) {
+          await statusReactions.setError();
+        } else {
+          await statusReactions.setDone();
+        }
       }
       if (removeAckAfterReply) {
         void (async () => {
