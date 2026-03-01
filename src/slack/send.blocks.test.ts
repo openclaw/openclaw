@@ -4,6 +4,52 @@ import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.
 installSlackBlockTestMocks();
 const { sendMessageSlack } = await import("./send.js");
 
+describe("sendMessageSlack NO_REPLY guard", () => {
+  it("suppresses NO_REPLY text before any Slack API call", async () => {
+    const client = createSlackSendTestClient();
+    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", async () => {
+    const client = createSlackSendTestClient();
+    const result = await sendMessageSlack("channel:C123", "  NO_REPLY  ", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(result.messageId).toBe("suppressed");
+  });
+
+  it("does not suppress substantive text containing NO_REPLY", async () => {
+    const client = createSlackSendTestClient();
+    await sendMessageSlack("channel:C123", "This is not a NO_REPLY situation", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalled();
+  });
+
+  it("does not suppress NO_REPLY when blocks are attached", async () => {
+    const client = createSlackSendTestClient();
+    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
+      token: "xoxb-test",
+      client,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "content" } }],
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalled();
+    expect(result.messageId).toBe("171234.567");
+  });
+});
+
 describe("sendMessageSlack blocks", () => {
   it("posts blocks with fallback text when message is empty", async () => {
     const client = createSlackSendTestClient();

@@ -77,6 +77,7 @@ describe("registerPreActionHooks", () => {
     program.command("status").action(async () => {});
     program.command("doctor").action(async () => {});
     program.command("completion").action(async () => {});
+    program.command("secrets").action(async () => {});
     program.command("update").action(async () => {});
     program.command("channels").action(async () => {});
     program.command("directory").action(async () => {});
@@ -155,7 +156,7 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips config guard for doctor and completion commands", async () => {
+  it("skips config guard for doctor, completion, and secrets commands", async () => {
     await runCommand({
       parseArgv: ["doctor"],
       processArgv: ["node", "openclaw", "doctor"],
@@ -163,6 +164,10 @@ describe("registerPreActionHooks", () => {
     await runCommand({
       parseArgv: ["completion"],
       processArgv: ["node", "openclaw", "completion"],
+    });
+    await runCommand({
+      parseArgv: ["secrets"],
+      processArgv: ["node", "openclaw", "secrets"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
