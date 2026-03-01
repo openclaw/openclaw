@@ -1,0 +1,4 @@
+.openclaw/
+bak_*/
+memory/
+*.bak_*
