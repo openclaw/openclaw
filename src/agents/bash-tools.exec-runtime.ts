@@ -237,8 +237,11 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  const queued = enqueueSystemEvent(summary, { sessionKey });
+  if (!queued) {
+    return;
+  }
+  requestHeartbeatNow({ reason: "exec-event", sessionKey });
 }
 
 export function createApprovalSlug(id: string) {
@@ -263,8 +266,11 @@ export function emitExecSystemEvent(
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event" });
+  const queued = enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
+  if (!queued) {
+    return;
+  }
+  requestHeartbeatNow({ reason: "exec-event", sessionKey });
 }
 
 export async function runExecProcess(opts: {

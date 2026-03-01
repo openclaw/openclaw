@@ -18,6 +18,7 @@ describe("heartbeat-reason", () => {
     expect(resolveHeartbeatReasonKind("interval")).toBe("interval");
     expect(resolveHeartbeatReasonKind("manual")).toBe("manual");
     expect(resolveHeartbeatReasonKind("exec-event")).toBe("exec-event");
+    expect(resolveHeartbeatReasonKind("exec:abc:exit")).toBe("exec-event");
     expect(resolveHeartbeatReasonKind("wake")).toBe("wake");
     expect(resolveHeartbeatReasonKind("cron:job-1")).toBe("cron");
     expect(resolveHeartbeatReasonKind("hook:wake")).toBe("hook");

@@ -571,8 +571,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      requestHeartbeatNow({ reason: "exec-event" });
+      const queued = enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: runId ? `exec:${runId}` : "exec",
+      });
+      if (queued) {
+        requestHeartbeatNow({ reason: "exec-event", sessionKey });
+      }
       return;
     }
     case "push.apns.register": {
