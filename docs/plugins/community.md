@@ -45,7 +45,7 @@ Use this format when adding entries:
 
 ## Listed plugins
 
-- **Manifest** — Observability plugin for OpenClaw — traces, metrics, and cost tracking for your AI agent
+- **Manifest** — Open-source alternative to OpenRouter
   npm: `manifest`
   repo: `https://github.com/mnfst/manifest`
   install: `openclaw plugins install manifest`
