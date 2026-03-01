@@ -41,7 +41,8 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: () => ({ agents: { defaults: {} }, session: {} }),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
+vi.mock("../../routing/session-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../routing/session-key.js")>()),
   normalizeMainKey: () => null,
 }));
 
