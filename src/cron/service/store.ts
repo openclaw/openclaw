@@ -109,7 +109,7 @@ function copyTopLevelAgentTurnFields(
 ) {
   let mutated = false;
 
-  const copyTrimmedString = (field: "model" | "thinking") => {
+  const copyTrimmedString = (field: "model" | "thinking" | "criticSpec") => {
     const existing = payload[field];
     if (typeof existing === "string" && existing.trim()) {
       return;
@@ -122,6 +122,7 @@ function copyTopLevelAgentTurnFields(
   };
   copyTrimmedString("model");
   copyTrimmedString("thinking");
+  copyTrimmedString("criticSpec");
 
   if (
     typeof payload.timeoutSeconds !== "number" &&
@@ -137,6 +138,15 @@ function copyTopLevelAgentTurnFields(
     typeof raw.allowUnsafeExternalContent === "boolean"
   ) {
     payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
+    mutated = true;
+  }
+
+  if (
+    typeof payload.criticThreshold !== "number" &&
+    typeof raw.criticThreshold === "number" &&
+    Number.isFinite(raw.criticThreshold)
+  ) {
+    payload.criticThreshold = Math.min(1, Math.max(0, raw.criticThreshold));
     mutated = true;
   }
 
@@ -187,6 +197,12 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
   if ("allowUnsafeExternalContent" in raw) {
     delete raw.allowUnsafeExternalContent;
+  }
+  if ("criticSpec" in raw) {
+    delete raw.criticSpec;
+  }
+  if ("criticThreshold" in raw) {
+    delete raw.criticThreshold;
   }
   if ("message" in raw) {
     delete raw.message;
@@ -317,6 +333,8 @@ export async function ensureLoaded(
       "thinking" in raw ||
       "timeoutSeconds" in raw ||
       "allowUnsafeExternalContent" in raw ||
+      "criticSpec" in raw ||
+      "criticThreshold" in raw ||
       "message" in raw ||
       "text" in raw ||
       "deliver" in raw ||

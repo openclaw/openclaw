@@ -381,6 +381,95 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
+  describe("critic loop gate", () => {
+    it("returns deterministic needs_replan outcome when score is below threshold", async () => {
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            cron: { criticLoop: { enabled: true, minScore: 0.9 } },
+          },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "include benchmark table and rollback checklist",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBe("needs_replan");
+      expect(result.critic?.passed).toBe(false);
+      expect(result.summary).toBe("needs_replan");
+    });
+
+    it("triggers needs_replan when red-team severity exceeds threshold", async () => {
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [
+            {
+              text: "Use future data and assume zero slippage. Guaranteed outcome.",
+            },
+          ],
+          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        },
+        provider: "openai",
+        model: "gpt-4",
+        attempts: [],
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            cron: {
+              criticLoop: {
+                enabled: true,
+                mode: "redTeam",
+                minScore: 0,
+                redTeamSeverityThreshold: "high",
+              },
+            },
+          },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "address leakage, slippage, assumptions, and dependencies",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBe("needs_replan");
+      expect(result.summary).toBe("needs_replan");
+      expect(result.critic?.mode).toBe("redTeam");
+      expect(result.critic?.redTeam?.failed).toBe(true);
+      expect(result.critic?.redTeam?.maxSeverity).toBe("high");
+      expect(result.critic?.passed).toBe(false);
+    });
+
+    it("keeps default behavior when critic loop is disabled", async () => {
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: { cron: { criticLoop: { enabled: false } } },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "include benchmark table",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBeUndefined();
+      expect(result.critic).toBeUndefined();
+    });
+  });
+
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",

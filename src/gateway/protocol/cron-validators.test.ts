@@ -26,6 +26,36 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);
   });
 
+  it("accepts agentTurn critic-loop payload fields", () => {
+    expect(
+      validateCronAddParams({
+        name: "critic-run",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Do work",
+          criticSpec: "Include rollback and verification steps",
+          criticThreshold: 0.75,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        name: "critic-run-invalid-threshold",
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Do work",
+          criticThreshold: 1.2,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
