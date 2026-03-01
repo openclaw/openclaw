@@ -67,6 +67,183 @@ jobs:
               },
             ];
 
+<<<<<<< HEAD
+=======
+            const maintainerTeam = "maintainer";
+            const pingWarningMessage =
+              "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
+            const mentionRegex = /@([A-Za-z0-9-]+)/g;
+            const maintainerCache = new Map();
+            const normalizeLogin = (login) => login.toLowerCase();
+            const bugSubtypeLabelSpecs = {
+              regression: {
+                color: "D93F0B",
+                description: "Behavior that previously worked and now fails",
+              },
+              "bug:crash": {
+                color: "B60205",
+                description: "Process/app exits unexpectedly or hangs",
+              },
+              "bug:behavior": {
+                color: "D73A4A",
+                description: "Incorrect behavior without a crash",
+              },
+            };
+            const bugTypeToLabel = {
+              "Regression (worked before, now fails)": "regression",
+              "Crash (process/app exits or hangs)": "bug:crash",
+              "Behavior bug (incorrect output/state without crash)": "bug:behavior",
+            };
+            const bugSubtypeLabels = Object.keys(bugSubtypeLabelSpecs);
+
+            const extractIssueFormValue = (body, field) => {
+              if (!body) {
+                return "";
+              }
+              const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(
+                `(?:^|\\n)###\\s+${escapedField}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|$)`,
+                "i",
+              );
+              const match = body.match(regex);
+              if (!match) {
+                return "";
+              }
+              for (const line of match[1].split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed) {
+                  return trimmed;
+                }
+              }
+              return "";
+            };
+
+            const ensureLabelExists = async (name, color, description) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            };
+
+            const syncBugSubtypeLabel = async (issue, labelSet) => {
+              if (!labelSet.has("bug")) {
+                return;
+              }
+
+              const selectedBugType = extractIssueFormValue(issue.body ?? "", "Bug type");
+              const targetLabel = bugTypeToLabel[selectedBugType];
+              if (!targetLabel) {
+                return;
+              }
+
+              const targetSpec = bugSubtypeLabelSpecs[targetLabel];
+              await ensureLabelExists(targetLabel, targetSpec.color, targetSpec.description);
+
+              for (const subtypeLabel of bugSubtypeLabels) {
+                if (subtypeLabel === targetLabel) {
+                  continue;
+                }
+                if (!labelSet.has(subtypeLabel)) {
+                  continue;
+                }
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: subtypeLabel,
+                  });
+                  labelSet.delete(subtypeLabel);
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+
+              if (!labelSet.has(targetLabel)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [targetLabel],
+                });
+                labelSet.add(targetLabel);
+              }
+            };
+
+            const isMaintainer = async (login) => {
+              if (!login) {
+                return false;
+              }
+              const normalized = normalizeLogin(login);
+              if (maintainerCache.has(normalized)) {
+                return maintainerCache.get(normalized);
+              }
+              let isMember = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: maintainerTeam,
+                  username: normalized,
+                });
+                isMember = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+              maintainerCache.set(normalized, isMember);
+              return isMember;
+            };
+
+            const countMaintainerMentions = async (body, authorLogin) => {
+              if (!body) {
+                return 0;
+              }
+              const normalizedAuthor = authorLogin ? normalizeLogin(authorLogin) : "";
+              if (normalizedAuthor && (await isMaintainer(normalizedAuthor))) {
+                return 0;
+              }
+
+              const haystack = body.toLowerCase();
+              const teamMention = `@${context.repo.owner.toLowerCase()}/${maintainerTeam}`;
+              if (haystack.includes(teamMention)) {
+                return 3;
+              }
+
+              const mentions = new Set();
+              for (const match of body.matchAll(mentionRegex)) {
+                mentions.add(normalizeLogin(match[1]));
+              }
+              if (normalizedAuthor) {
+                mentions.delete(normalizedAuthor);
+              }
+
+              let count = 0;
+              for (const login of mentions) {
+                if (await isMaintainer(login)) {
+                  count += 1;
+                }
+              }
+              return count;
+            };
+
+>>>>>>> ff563eef0 (Issues: unify bug form and subtype auto-labeling (openclaw#30733) thanks @Takhoffman)
             const triggerLabel = "trigger-response";
             const target = context.payload.issue ?? context.payload.pull_request;
             if (!target) {
@@ -79,6 +256,68 @@ jobs:
                 .filter((name) => typeof name === "string"),
             );
 
+<<<<<<< HEAD
+=======
+            const issue = context.payload.issue;
+            const pullRequest = context.payload.pull_request;
+            const comment = context.payload.comment;
+            if (comment) {
+              const authorLogin = comment.user?.login ?? "";
+              if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
+                return;
+              }
+
+              const commentBody = comment.body ?? "";
+              const responses = [];
+              const mentionCount = await countMaintainerMentions(commentBody, authorLogin);
+              if (mentionCount >= 3) {
+                responses.push(pingWarningMessage);
+              }
+
+              const commentHaystack = commentBody.toLowerCase();
+              const commentRule = rules.find((item) =>
+                (item.commentTriggers ?? []).some((trigger) =>
+                  commentHaystack.includes(trigger),
+                ),
+              );
+              if (commentRule) {
+                responses.push(commentRule.message);
+              }
+
+              if (responses.length > 0) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: target.number,
+                  body: responses.join("\n\n"),
+                });
+              }
+              return;
+            }
+
+            if (issue) {
+              const action = context.payload.action;
+              if (action === "opened" || action === "edited") {
+                const issueText = `${issue.title ?? ""}\n${issue.body ?? ""}`.trim();
+                const authorLogin = issue.user?.login ?? "";
+                const mentionCount = await countMaintainerMentions(
+                  issueText,
+                  authorLogin,
+                );
+                if (mentionCount >= 3) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: pingWarningMessage,
+                  });
+                }
+
+                await syncBugSubtypeLabel(issue, labelSet);
+              }
+            }
+
+>>>>>>> ff563eef0 (Issues: unify bug form and subtype auto-labeling (openclaw#30733) thanks @Takhoffman)
             const hasTriggerLabel = labelSet.has(triggerLabel);
             if (hasTriggerLabel) {
               labelSet.delete(triggerLabel);
