@@ -274,7 +274,16 @@ export function registerCronAddCommand(cron: Command) {
                     typeof opts.channel === "string" && opts.channel.trim()
                       ? opts.channel.trim()
                       : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  to: (() => {
+                    const toRaw = typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined;
+                    if (!toRaw) return undefined;
+                    // Auto-add group: prefix for Feishu group chat IDs (oc_xxx)
+                    const channelRaw = typeof opts.channel === "string" && opts.channel.trim() ? opts.channel.trim().toLowerCase() : "";
+                    if (channelRaw === "feishu" && toRaw.toLowerCase().startsWith("oc_") && !toRaw.toLowerCase().startsWith("group:") && !toRaw.toLowerCase().startsWith("chat:")) {
+                      return "chat:" + toRaw;
+                    }
+                    return toRaw;
+                  })(),
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
