@@ -24,8 +24,9 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
-  // JSON mode omits the human-readable channel table, so skip expensive plugin preloading.
-  loadPlugins: (argv) => !hasFlag(argv, "--json"),
+  // Status runs security audit with channel checks in both text and JSON output,
+  // so plugin registry must be ready for consistent findings.
+  loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
