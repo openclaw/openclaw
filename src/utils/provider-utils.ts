@@ -31,5 +31,10 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
+  // Handle iflow/GLM-4.6 (Alibaba)
+  if (normalized.includes("iflow")) {
+    return true;
+  }
+
   return false;
 }
