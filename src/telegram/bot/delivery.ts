@@ -12,7 +12,7 @@ import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
-import { withTelegramApiErrorLogging } from "../api-logging.js";
+import { withTelegramApiErrorLogging, withTelegramApiRetry } from "../api-logging.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -557,7 +557,7 @@ async function sendTelegramText(
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {
-    const res = await withTelegramApiErrorLogging({
+    const res = await withTelegramApiRetry({
       operation: "sendMessage",
       runtime,
       fn: () =>
@@ -566,6 +566,7 @@ async function sendTelegramText(
           ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
           ...baseParams,
         }),
+      maxAttempts: 3,
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
     return res.message_id;
@@ -579,7 +580,7 @@ async function sendTelegramText(
     return await sendPlainFallback();
   }
   try {
-    const res = await withTelegramApiErrorLogging({
+    const res = await withTelegramApiRetry({
       operation: "sendMessage",
       runtime,
       shouldLog: (err) => {
@@ -593,6 +594,7 @@ async function sendTelegramText(
           ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
           ...baseParams,
         }),
+      maxAttempts: 3,
     });
     runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
     return res.message_id;
