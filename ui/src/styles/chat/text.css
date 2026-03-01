@@ -207,16 +207,6 @@
   background: rgba(0, 0, 0, 0.04);
 }
 
-:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
-  background: rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-:root[data-theme="light"] .chat-text :where(pre) {
-  background: rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-}
-
 .chat-text :where(hr) {
   border: none;
   border-top: 1px solid var(--border);
