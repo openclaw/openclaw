@@ -55,6 +55,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     kick: "none",
     ban: "none",
     "set-presence": "none",
+    "download-file": "none",
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
