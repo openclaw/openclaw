@@ -105,11 +105,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
         return;
       }
-      const items = models.map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: `${model.provider}/${model.id}`,
-        description: model.name && model.name !== model.id ? model.name : "",
-      }));
+      const currentModelValue =
+        state.sessionInfo.modelProvider && state.sessionInfo.model
+          ? `${state.sessionInfo.modelProvider}/${state.sessionInfo.model}`
+          : null;
+      const items = models.map((model) => {
+        const value = `${model.provider}/${model.id}`;
+        const isCurrent = value === currentModelValue;
+        return {
+          value,
+          label: isCurrent ? `✓ ${value}` : value,
+          description: model.name && model.name !== model.id ? model.name : "",
+        };
+      });
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {
