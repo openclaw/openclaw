@@ -67,6 +67,7 @@ export type FollowupRun = {
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
+    modelReasoningEffort?: string;
     elevatedLevel?: ElevatedLevel;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
     bashElevated?: {

@@ -362,8 +362,16 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  configOverrides?: string[];
 }): string[] {
   const args: string[] = [...params.baseArgs];
+  // Provider CLI config overrides (e.g., Codex -c key=value).
+  const overrides = params.configOverrides ?? [];
+  if (overrides.length > 0 && params.backend.configArg) {
+    for (const ov of overrides) {
+      args.push(params.backend.configArg, ov);
+    }
+  }
   if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }

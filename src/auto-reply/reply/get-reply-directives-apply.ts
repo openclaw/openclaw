@@ -203,6 +203,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasThinkDirective ||
     directives.hasVerboseDirective ||
     directives.hasReasoningDirective ||
+    directives.hasReasoningEffortDirective ||
     directives.hasElevatedDirective ||
     directives.hasExecDirective ||
     directives.hasModelDirective ||

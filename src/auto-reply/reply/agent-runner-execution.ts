@@ -217,6 +217,10 @@ export async function runAgentTurnWithFallback(params: {
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
+                  configOverrides:
+                    provider === "openai-codex" && params.followupRun.run.modelReasoningEffort
+                      ? [`model_reasoning_effort=${params.followupRun.run.modelReasoningEffort}`]
+                      : undefined,
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,

@@ -4,6 +4,7 @@ export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
+export type ReasoningEffortLevel = "none" | "low" | "medium" | "high" | "xhigh";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
 
 function normalizeProviderId(provider?: string | null): string {
@@ -222,6 +223,30 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
   }
   if (["stream", "streaming", "draft", "live"].includes(key)) {
     return "stream";
+  }
+  return undefined;
+}
+
+// Reasoning effort is a provider-side compute budget knob (OpenAI Codex supports this).
+export function normalizeReasoningEffort(raw?: string | null): ReasoningEffortLevel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["none", "off", "no"].includes(key)) {
+    return "none";
+  }
+  if (["low", "light", "basic"].includes(key)) {
+    return "low";
+  }
+  if (["mid", "med", "medium", "balanced", "default"].includes(key)) {
+    return "medium";
+  }
+  if (["high", "deep", "hard"].includes(key)) {
+    return "high";
+  }
+  if (["xhigh", "x-high", "x_high", "max", "maximum", "extreme"].includes(key)) {
+    return "xhigh";
   }
   return undefined;
 }

@@ -85,6 +85,8 @@ export type CliBackendConfig = {
   imageArg?: string;
   /** How to pass multiple images. */
   imageMode?: "repeat" | "list";
+  /** Flag used to pass config overrides (e.g. Codex -c key=value). */
+  configArg?: string;
   /** Serialize runs for this CLI. */
   serialize?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */

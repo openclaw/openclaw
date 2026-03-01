@@ -96,6 +96,7 @@ export type SessionEntry = {
   thinkingLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
+  modelReasoningEffort?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
   execHost?: string;
