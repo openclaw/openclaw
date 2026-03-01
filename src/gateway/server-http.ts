@@ -32,6 +32,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -451,6 +452,7 @@ export function createHooksRequestHandler(
 export function createGatewayHttpServer(opts: {
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
@@ -468,6 +470,7 @@ export function createGatewayHttpServer(opts: {
   const {
     canvasHost,
     clients,
+    chatAbortControllers,
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
@@ -555,6 +558,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            chatAbortControllers,
           })
         ) {
           return;

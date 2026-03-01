@@ -125,10 +125,12 @@ export async function createGatewayRuntimeState(params: {
   }
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   for (const host of bindHosts) {
     const httpServer = createGatewayHttpServer({
       canvasHost,
       clients,
+      chatAbortControllers,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
       controlUiRoot: params.controlUiRoot,
@@ -187,7 +189,6 @@ export async function createGatewayRuntimeState(params: {
   const chatDeltaSentAt = chatRunState.deltaSentAt;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const toolEventRecipients = createToolEventRecipientRegistry();
 
   return {

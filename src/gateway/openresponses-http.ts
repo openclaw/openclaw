@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
@@ -32,6 +33,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { resolveChatRunExpiresAtMs, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -52,6 +54,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -242,6 +245,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   deps: ReturnType<typeof createDefaultDeps>;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommand(
     {
@@ -255,6 +259,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: "webchat",
       bestEffortDeliver: false,
+      abortSignal: params.abortSignal,
     },
     defaultRuntime,
     params.deps,
@@ -444,6 +449,26 @@ export async function handleOpenResponsesHttpRequest(
   const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const runAbortController = new AbortController();
+  const timeoutMs = resolveAgentTimeoutMs({});
+  const startedAtMs = Date.now();
+  if (opts.chatAbortControllers) {
+    opts.chatAbortControllers.set(responseId, {
+      controller: runAbortController,
+      // OpenResponses is HTTP-first and does not register in websocket chatRunState.
+      // Keep sessionId scoped to runId for maintenance/cleanup compatibility.
+      sessionId: responseId,
+      sessionKey,
+      startedAtMs,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now: startedAtMs, timeoutMs }),
+    });
+  }
+  const unregisterAbortController = () => {
+    const active = opts.chatAbortControllers?.get(responseId);
+    if (active?.controller === runAbortController) {
+      opts.chatAbortControllers?.delete(responseId);
+    }
+  };
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
@@ -460,6 +485,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: runAbortController.signal,
       });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -525,6 +551,8 @@ export async function handleOpenResponsesHttpRequest(
         error: { code: "api_error", message: "internal error" },
       });
       sendJson(res, 500, response);
+    } finally {
+      unregisterAbortController();
     }
     return true;
   }
@@ -555,6 +583,7 @@ export async function handleOpenResponsesHttpRequest(
     const usage = finalUsage;
 
     closed = true;
+    unregisterAbortController();
     unsubscribe();
 
     writeSseEvent(res, {
@@ -678,6 +707,8 @@ export async function handleOpenResponsesHttpRequest(
 
   req.on("close", () => {
     closed = true;
+    runAbortController.abort();
+    unregisterAbortController();
     unsubscribe();
   });
 
@@ -692,6 +723,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         deps,
+        abortSignal: runAbortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);

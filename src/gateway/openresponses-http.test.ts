@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
-import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
+import {
+  agentCommand,
+  connectReq,
+  getFreePort,
+  installGatewayTestHooks,
+  rpcReq,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -511,6 +518,118 @@ describe("OpenResponses HTTP API (e2e)", () => {
       }
     } finally {
       // shared server
+    }
+  });
+
+  it("registers OpenResponses runs so chat.abort can stop in-flight requests", async () => {
+    const port = enabledPort;
+    const sessionKey = "agent:main:openresponses-abort-test";
+    let observedAbortSignal: AbortSignal | undefined;
+
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const abortSignal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+      observedAbortSignal = abortSignal;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("timeout waiting for chat.abort"));
+        }, 5_000);
+        const done = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        if (abortSignal?.aborted) {
+          done();
+          return;
+        }
+        abortSignal?.addEventListener("abort", done, { once: true });
+      });
+      return {
+        payloads: [{ text: "aborted" }],
+        meta: { stopReason: "aborted", aborted: true },
+      };
+    }) as never);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+      headers: { origin: `http://127.0.0.1:${port}` },
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+      ws.once("open", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.once("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    const connectRes = await connectReq(ws, { token: "secret", device: null });
+    expect(connectRes.ok).toBe(true);
+    try {
+      const response = await postResponses(
+        port,
+        {
+          stream: true,
+          model: "openclaw",
+          input: "count forever",
+        },
+        { "x-openclaw-session-key": sessionKey },
+      );
+      expect(response.status).toBe(200);
+      expect(response.body).toBeTruthy();
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let streamBuffer = "";
+      let runId: string | undefined;
+      const deadline = Date.now() + 5_000;
+
+      while (!runId && Date.now() < deadline) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        streamBuffer += decoder.decode(chunk.value, { stream: true });
+        const parsedEvents = parseSseEvents(streamBuffer);
+        for (const event of parsedEvents) {
+          if (event.event !== "response.created") {
+            continue;
+          }
+          const parsed = JSON.parse(event.data) as {
+            response?: { id?: string };
+          };
+          const candidate = parsed.response?.id;
+          if (typeof candidate === "string" && candidate.startsWith("resp_")) {
+            runId = candidate;
+            break;
+          }
+        }
+      }
+
+      expect(runId).toMatch(/^resp_/);
+      const abortRes = await rpcReq<{
+        ok?: boolean;
+        aborted?: boolean;
+        runIds?: string[];
+      }>(ws, "chat.abort", { sessionKey, runId });
+      expect(abortRes.ok).toBe(true);
+      expect(abortRes.payload?.ok).toBe(true);
+      expect(abortRes.payload?.aborted).toBe(true);
+      expect(abortRes.payload?.runIds).toContain(runId);
+      expect(observedAbortSignal?.aborted).toBe(true);
+
+      // Drain stream to avoid open keepalive sockets in parallel test workers.
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        streamBuffer += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(streamBuffer).toContain("[DONE]");
+    } finally {
+      ws.close();
     }
   });
 
