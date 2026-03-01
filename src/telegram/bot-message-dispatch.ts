@@ -18,6 +18,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -430,6 +431,7 @@ export const dispatchTelegramMessage = async ({
     },
   });
 
+  let dispatchError: unknown = undefined;
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -597,6 +599,11 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    // Capture error to handle gracefully; will be processed after cleanup
+    dispatchError = err;
+    deliveryState.markNonSilentFailure();
+    runtime.error?.(danger(`telegram dispatch failed: ${formatErrorMessage(err)}`));
   } finally {
     // Must stop() first to flush debounced content before clear() wipes state.
     const streamCleanupStates = new Map<
@@ -649,10 +656,13 @@ export const dispatchTelegramMessage = async ({
   const deliverySummary = deliveryState.snapshot();
   if (
     !deliverySummary.delivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
+    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0 || dispatchError)
   ) {
+    const fallbackText = dispatchError
+      ? "⚠️ Service temporarily unavailable. Please try again in a moment."
+      : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+      replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;

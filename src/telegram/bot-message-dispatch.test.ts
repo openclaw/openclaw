@@ -1589,14 +1589,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
+    deliverReplies.mockResolvedValue({ delivered: true });
 
-    await expect(dispatchWithContext({ context: createContext() })).rejects.toThrow(
-      "dispatcher exploded",
-    );
+    // Dispatcher throws, but error is caught and graceful fallback is sent
+    await dispatchWithContext({ context: createContext() });
 
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).not.toHaveBeenCalled();
+    // Fallback should be delivered with error message instead of crashing
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    const fallbackCall = deliverReplies.mock.calls[0];
+    expect(fallbackCall[0]?.replies[0]?.text).toContain("Service temporarily unavailable");
   });
 
   it("supports concurrent dispatches with independent previews", async () => {
