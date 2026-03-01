@@ -561,15 +561,59 @@ describe("sessions", () => {
     });
   });
 
-  it("rejects absolute sessionFile paths outside agent sessions directories", () => {
+  it("falls back when structural cross-root path traverses after sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: path.join(unsafe, "passwd") },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+      );
+    });
+  });
+
+  it("falls back when structural cross-root path nests under sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const nested = path.join(
+        originalBase,
+        "agents",
+        "bot2",
+        "sessions",
+        "nested",
+        "sess-1.jsonl",
+      );
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: nested },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+      );
+    });
+  });
+
+  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", () => {
     withStateDir(path.resolve("/home/user/.openclaw"), () => {
-      expect(() =>
-        resolveSessionFilePath(
-          "sess-1",
-          { sessionFile: path.resolve("/etc/passwd") },
-          { agentId: "bot1" },
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: path.resolve("/etc/passwd") },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(
+          path.resolve("/home/user/.openclaw"),
+          "agents",
+          "bot1",
+          "sessions",
+          "sess-1.jsonl",
         ),
-      ).toThrow(/within sessions directory/);
+      );
     });
   });
 

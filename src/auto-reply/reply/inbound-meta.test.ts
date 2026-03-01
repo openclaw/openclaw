@@ -57,6 +57,24 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["sender_id"]).toBeUndefined();
   });
 
+  it("does not include per-turn flags in system metadata", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      ReplyToBody: "quoted",
+      ForwardedFrom: "sender",
+      ThreadStarterBody: "starter",
+      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+      WasMentioned: true,
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["flags"]).toBeUndefined();
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -127,6 +145,36 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("+15551234567");
   });
 
+  it("includes formatted timestamp in conversation info when provided", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-ts",
+      Timestamp: Date.UTC(2026, 1, 15, 13, 35),
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
+  });
+
+  it("omits invalid timestamps instead of throwing", () => {
+    expect(() =>
+      buildInboundUserContextPrefix({
+        ChatType: "group",
+        MessageSid: "msg-with-bad-ts",
+        Timestamp: 1e20,
+      } as TemplateContext),
+    ).not.toThrow();
+
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-with-bad-ts",
+      Timestamp: 1e20,
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["timestamp"]).toBeUndefined();
+  });
+
   it("includes message_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
@@ -181,6 +229,25 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender_id"]).toBe("289522496");
+  });
+
+  it("includes dynamic per-turn flags in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      WasMentioned: true,
+      ReplyToBody: "quoted",
+      ForwardedFrom: "sender",
+      ThreadStarterBody: "starter",
+      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["is_group_chat"]).toBe(true);
+    expect(conversationInfo["was_mentioned"]).toBe(true);
+    expect(conversationInfo["has_reply_context"]).toBe(true);
+    expect(conversationInfo["has_forwarded_context"]).toBe(true);
+    expect(conversationInfo["has_thread_starter"]).toBe(true);
+    expect(conversationInfo["history_count"]).toBe(1);
   });
 
   it("trims sender_id in conversation info", () => {

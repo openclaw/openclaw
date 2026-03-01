@@ -9,6 +9,7 @@ function createHarness(params?: {
   resetSession?: ReturnType<typeof vi.fn>;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
+  isConnected?: boolean;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -27,6 +28,7 @@ function createHarness(params?: {
     state: {
       currentSessionKey: "agent:main:main",
       activeChatRunId: null,
+      isConnected: params?.isConnected ?? true,
       sessionInfo: {},
     } as never,
     deliverDefault: false,
@@ -125,5 +127,18 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
+  it("reports disconnected status and skips gateway send when offline", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
+      isConnected: false,
+    });
+
+    await handleCommand("/context");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 });

@@ -1,19 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
+} from "../infra/exec-approvals.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
-export type ExecApprovalRequestPayload = {
-  command: string;
-  cwd?: string | null;
-  host?: string | null;
-  security?: string | null;
-  ask?: string | null;
-  agentId?: string | null;
-  resolvedPath?: string | null;
-  sessionKey?: string | null;
-};
+export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord = {
   id: string;
@@ -151,6 +145,21 @@ export class ExecApprovalManager {
   getSnapshot(recordId: string): ExecApprovalRecord | null {
     const entry = this.pending.get(recordId);
     return entry?.record ?? null;
+  }
+
+  consumeAllowOnce(recordId: string): boolean {
+    const entry = this.pending.get(recordId);
+    if (!entry) {
+      return false;
+    }
+    const record = entry.record;
+    if (record.decision !== "allow-once") {
+      return false;
+    }
+    // One-time approvals must be consumed atomically so the same runId
+    // cannot be replayed during the resolved-entry grace window.
+    record.decision = undefined;
+    return true;
   }
 
   /**

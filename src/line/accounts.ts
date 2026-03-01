@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
 } from "../routing/account-id.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import type {
   LineConfig,
   LineAccountConfig,
@@ -104,10 +105,12 @@ export function resolveLineAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedLineAccount {
-  const { cfg, accountId = DEFAULT_ACCOUNT_ID } = params;
+  const cfg = params.cfg;
+  const accountId = normalizeSharedAccountId(params.accountId);
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
-  const accountConfig = accountId !== DEFAULT_ACCOUNT_ID ? accounts?.[accountId] : undefined;
+  const accountConfig =
+    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
 
   const { token, tokenSource } = resolveToken({
     accountId,

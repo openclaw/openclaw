@@ -328,6 +328,12 @@
   animation: none;
 }
 
+.statusDot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  animation: none;
+}
+
 /* ===========================================
    Buttons - Tactile with personality
    =========================================== */

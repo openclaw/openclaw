@@ -44,7 +44,7 @@ describe("applyAuthChoiceMiniMax", () => {
 
   async function readAuthProfiles(agentDir: string) {
     return await readAuthProfilesForAgent<{
-      profiles?: Record<string, { key?: string }>;
+      profiles?: Record<string, { key?: string; keyRef?: { source: string; id: string } }>;
     }>(agentDir);
   }
 
@@ -126,7 +126,7 @@ describe("applyAuthChoiceMiniMax", () => {
     },
   );
 
-  it("uses env token for minimax-api-key-cn when confirmed", async () => {
+  it("uses env token for minimax-api-key-cn as plaintext by default", async () => {
     const agentDir = await setupTempState();
     process.env.MINIMAX_API_KEY = "mm-env-token";
     delete process.env.MINIMAX_OAUTH_TOKEN;
@@ -155,6 +155,36 @@ describe("applyAuthChoiceMiniMax", () => {
 
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["minimax-cn:default"]?.key).toBe("mm-env-token");
+    expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("uses env token for minimax-api-key-cn as keyRef in ref mode", async () => {
+    const agentDir = await setupTempState();
+    process.env.MINIMAX_API_KEY = "mm-env-token";
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const text = vi.fn(async () => "should-not-be-used");
+    const confirm = vi.fn(async () => true);
+
+    const result = await applyAuthChoiceMiniMax({
+      authChoice: "minimax-api-key-cn",
+      config: {},
+      prompter: createMinimaxPrompter({ text, confirm }),
+      runtime: createExitThrowingRuntime(),
+      setDefaultModel: true,
+      opts: {
+        secretInputMode: "ref",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    const parsed = await readAuthProfiles(agentDir);
+    expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MINIMAX_API_KEY",
+    });
+    expect(parsed.profiles?.["minimax-cn:default"]?.key).toBeUndefined();
   });
 
   it("uses minimax-api-lightning default model", async () => {

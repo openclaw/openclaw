@@ -53,6 +53,24 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
+function toSnakeCaseKey(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
+function readParamRaw(params: Record<string, unknown>, key: string): unknown {
+  if (Object.hasOwn(params, key)) {
+    return params[key];
+  }
+  const snakeKey = toSnakeCaseKey(key);
+  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+    return params[snakeKey];
+  }
+  return undefined;
+}
+
 export function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -69,7 +87,7 @@ export function readStringParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -92,7 +110,7 @@ export function readStringOrNumberParam(
   options: { required?: boolean; label?: string } = {},
 ): string | undefined {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
   }
@@ -114,7 +132,7 @@ export function readNumberParam(
   options: { required?: boolean; label?: string; integer?: boolean } = {},
 ): number | undefined {
   const { required = false, label = key, integer = false } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     value = raw;
@@ -152,7 +170,7 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
     const values = raw
       .filter((entry) => typeof entry === "string")

@@ -11,6 +11,7 @@ import { validateLineSignature } from "./signature.js";
 import { isLineWebhookVerificationRequest, parseLineWebhookBody } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
+const LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES = 4 * 1024;
 const LINE_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 export async function readLineWebhookRequestBody(
@@ -54,8 +55,18 @@ export function createLineNodeWebhookHandler(params: {
     }
 
     try {
-      const rawBody = await readBody(req, maxBodyBytes);
-      const signature = req.headers["x-line-signature"];
+      const signatureHeader = req.headers["x-line-signature"];
+      const signature =
+        typeof signatureHeader === "string"
+          ? signatureHeader
+          : Array.isArray(signatureHeader)
+            ? signatureHeader[0]
+            : undefined;
+      const hasSignature = typeof signature === "string" && signature.trim().length > 0;
+      const bodyLimit = hasSignature
+        ? maxBodyBytes
+        : Math.min(maxBodyBytes, LINE_WEBHOOK_UNSIGNED_MAX_BODY_BYTES);
+      const rawBody = await readBody(req, bodyLimit);
 
       // Parse once; we may need it for verification requests and for event processing.
       const body = parseLineWebhookBody(rawBody);
@@ -63,7 +74,7 @@ export function createLineNodeWebhookHandler(params: {
       // LINE webhook verification sends POST {"events":[]} without a
       // signature header. Return 200 so the LINE Developers Console
       // "Verify" button succeeds.
-      if (!signature || typeof signature !== "string") {
+      if (!hasSignature) {
         if (isLineWebhookVerificationRequest(body)) {
           logVerbose("line: webhook verification request (empty events, no signature) - 200 OK");
           res.statusCode = 200;

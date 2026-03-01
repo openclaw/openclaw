@@ -13,6 +13,13 @@ export type ModelSelectedContext = {
   thinkLevel: string | undefined;
 };
 
+export type TypingPolicy =
+  | "auto"
+  | "user_message"
+  | "system_event"
+  | "internal_webchat"
+  | "heartbeat";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -27,6 +34,10 @@ export type GetReplyOptions = {
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
   isHeartbeat?: boolean;
+  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  typingPolicy?: TypingPolicy;
+  /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
+  suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
   /** If true, suppress tool error warning payloads for this run. */
@@ -66,6 +77,9 @@ export type ReplyPayload = {
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   isError?: boolean;
+  /** Marks this payload as a reasoning/thinking block. Channels that do not
+   *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
+  isReasoning?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

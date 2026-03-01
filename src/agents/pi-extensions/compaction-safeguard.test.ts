@@ -37,6 +37,67 @@ function stubSessionManager(): ExtensionContext["sessionManager"] {
   return stub;
 }
 
+function createAnthropicModelFixture(overrides: Partial<Model<Api>> = {}): Model<Api> {
+  return {
+    id: "claude-opus-4-5",
+    name: "Claude Opus 4.5",
+    provider: "anthropic",
+    api: "anthropic" as const,
+    baseUrl: "https://api.anthropic.com",
+    contextWindow: 200000,
+    maxTokens: 4096,
+    reasoning: false,
+    input: ["text"] as const,
+    cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+    ...overrides,
+  };
+}
+
+type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
+const createCompactionHandler = () => {
+  let compactionHandler: CompactionHandler | undefined;
+  const mockApi = {
+    on: vi.fn((event: string, handler: CompactionHandler) => {
+      if (event === "session_before_compact") {
+        compactionHandler = handler;
+      }
+    }),
+  } as unknown as ExtensionAPI;
+  compactionSafeguardExtension(mockApi);
+  expect(compactionHandler).toBeDefined();
+  return compactionHandler as CompactionHandler;
+};
+
+const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
+  preparation: {
+    messagesToSummarize: [
+      { role: "user", content: params.messageText, timestamp: Date.now() },
+    ] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: params.tokensBefore,
+    fileOps: {
+      read: [],
+      edited: [],
+      written: [],
+    },
+  },
+  customInstructions: "",
+  signal: new AbortController().signal,
+});
+
+const createCompactionContext = (params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  getApiKeyMock: ReturnType<typeof vi.fn>;
+}) =>
+  ({
+    model: undefined,
+    sessionManager: params.sessionManager,
+    modelRegistry: {
+      getApiKey: params.getApiKeyMock,
+    },
+  }) as unknown as Partial<ExtensionContext>;
+
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
     const messages: AgentMessage[] = [
@@ -272,18 +333,7 @@ describe("compaction-safeguard runtime registry", () => {
 
   it("stores and retrieves model from runtime (fallback for compact.ts workflow)", () => {
     const sm = {};
-    const model: Model<Api> = {
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      provider: "anthropic",
-      api: "anthropic" as const,
-      baseUrl: "https://api.anthropic.com",
-      contextWindow: 200000,
-      maxTokens: 4096,
-      reasoning: false,
-      input: ["text"] as const,
-      cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-    };
+    const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sm, { model });
     const retrieved = getCompactionSafeguardRuntime(sm);
     expect(retrieved?.model).toEqual(model);
@@ -298,18 +348,7 @@ describe("compaction-safeguard runtime registry", () => {
 
   it("stores and retrieves combined runtime values", () => {
     const sm = {};
-    const model: Model<Api> = {
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      provider: "anthropic",
-      api: "anthropic" as const,
-      baseUrl: "https://api.anthropic.com",
-      contextWindow: 200000,
-      maxTokens: 4096,
-      reasoning: false,
-      input: ["text"] as const,
-      cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-    };
+    const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sm, {
       maxHistoryShare: 0.6,
       contextWindowTokens: 200000,
@@ -329,81 +368,29 @@ describe("compaction-safeguard extension model fallback", () => {
     // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
     // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.
     const sessionManager = stubSessionManager();
-    const model: Model<Api> = {
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      provider: "anthropic",
-      api: "anthropic" as const,
-      baseUrl: "https://api.anthropic.com",
-      contextWindow: 200000,
-      maxTokens: 4096,
-      reasoning: false,
-      input: ["text"] as const,
-      cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-    };
+    const model = createAnthropicModelFixture();
 
     // Set up runtime with model (mimics buildEmbeddedExtensionPaths behavior)
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
-    let compactionHandler: CompactionHandler | undefined;
-
-    // Create a minimal mock ExtensionAPI that captures the handler
-    const mockApi = {
-      on: vi.fn((event: string, handler: CompactionHandler) => {
-        if (event === "session_before_compact") {
-          compactionHandler = handler;
-        }
-      }),
-    } as unknown as ExtensionAPI;
-
-    // Register the extension
-    compactionSafeguardExtension(mockApi);
-
-    // Verify handler was registered
-    expect(compactionHandler).toBeDefined();
-
-    // Now trigger the handler with mock data
-    const mockEvent = {
-      preparation: {
-        messagesToSummarize: [
-          { role: "user", content: "test message", timestamp: Date.now() },
-        ] as AgentMessage[],
-        turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 1000,
-        fileOps: {
-          read: [],
-          edited: [],
-          written: [],
-        },
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "test message",
+      tokensBefore: 1000,
+    });
 
     const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const mockContext = {
-      model: undefined, // ctx.model is undefined (simulates compact.ts workflow)
+    const mockContext = createCompactionContext({
       sessionManager,
-      modelRegistry: {
-        getApiKey: getApiKeyMock, // No API key, should use fallback
-      },
-    } as unknown as Partial<ExtensionContext>;
+      getApiKeyMock,
+    });
 
     // Call the handler and wait for result
-    // oxlint-disable-next-line typescript/no-non-null-assertion
-    const result = (await compactionHandler!(mockEvent, mockContext)) as {
-      compaction?: { summary?: string; firstKeptEntryId?: string };
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
     };
-    const compactionResult = result?.compaction;
 
-    // Verify that compaction returned a result (even with null API key, should use fallback)
-    expect(compactionResult).toBeDefined();
-    expect(compactionResult?.summary).toBeDefined();
-    expect(compactionResult?.summary).toContain("Summary unavailable");
-    expect(compactionResult?.firstKeptEntryId).toBe("entry-1");
+    expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
     // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
@@ -414,67 +401,86 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
-  it("returns fallback summary when both ctx.model and runtime.model are undefined", async () => {
+  it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
 
-    type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
-    let compactionHandler: CompactionHandler | undefined;
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "test",
+      tokensBefore: 500,
+    });
 
-    const mockApi = {
-      on: vi.fn((event: string, handler: CompactionHandler) => {
-        if (event === "session_before_compact") {
-          compactionHandler = handler;
-        }
-      }),
-    } as unknown as ExtensionAPI;
+    const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
 
-    compactionSafeguardExtension(mockApi);
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
 
-    expect(compactionHandler).toBeDefined();
+    expect(result).toEqual({ cancel: true });
 
+    // Verify early return: getApiKey should NOT have been called when both models are missing
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("compaction-safeguard double-compaction guard", () => {
+  it("cancels compaction when there are no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
     const mockEvent = {
       preparation: {
-        messagesToSummarize: [
-          { role: "user", content: "test", timestamp: Date.now() },
-        ] as AgentMessage[],
+        messagesToSummarize: [] as AgentMessage[],
         turnPrefixMessages: [] as AgentMessage[],
         firstKeptEntryId: "entry-1",
-        tokensBefore: 500,
-        fileOps: {
-          read: [],
-          edited: [],
-          written: [],
-        },
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
       },
       customInstructions: "",
       signal: new AbortController().signal,
     };
 
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const mockContext = {
-      model: undefined, // ctx.model is undefined
+    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
+    const mockContext = createCompactionContext({
       sessionManager,
-      modelRegistry: {
-        getApiKey: getApiKeyMock, // Should NOT be called (early return)
-      },
-    } as unknown as Partial<ExtensionContext>;
+      getApiKeyMock,
+    });
 
-    // oxlint-disable-next-line typescript/no-non-null-assertion
-    const result = (await compactionHandler!(mockEvent, mockContext)) as {
-      compaction?: { summary?: string; firstKeptEntryId?: string };
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
     };
-    const compactionResult = result?.compaction;
-
-    expect(compactionResult).toBeDefined();
-    expect(compactionResult?.summary).toBe(
-      "Summary unavailable due to context limits. Older messages were truncated.",
-    );
-    expect(compactionResult?.firstKeptEntryId).toBe("entry-1");
-
-    // Verify early return: getApiKey should NOT have been called when both models are missing
+    expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues when messages include real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 1500,
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
   });
 });

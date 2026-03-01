@@ -430,8 +430,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", or "gemini"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -463,6 +463,15 @@ export type ToolsConfig = {
         /** Gemini API key (defaults to GEMINI_API_KEY env var). */
         apiKey?: string;
         /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        model?: string;
+      };
+      /** Kimi-specific configuration (used when provider="kimi"). */
+      kimi?: {
+        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
       };
     };

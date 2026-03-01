@@ -1,0 +1,36 @@
+plugins {
+  id("com.android.test")
+}
+
+android {
+  namespace = "ai.openclaw.android.benchmark"
+  compileSdk = 36
+
+  defaultConfig {
+    minSdk = 31
+    targetSdk = 36
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "DEBUGGABLE,EMULATOR"
+  }
+
+  targetProjectPath = ":app"
+  experimentalProperties["android.experimental.self-instrumenting"] = true
+
+  compileOptions {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+  }
+}
+
+kotlin {
+  compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    allWarningsAsErrors.set(true)
+  }
+}
+
+dependencies {
+  implementation("androidx.benchmark:benchmark-macro-junit4:1.4.1")
+  implementation("androidx.test.ext:junit:1.2.1")
+  implementation("androidx.test.uiautomator:uiautomator:2.4.0-alpha06")
+}

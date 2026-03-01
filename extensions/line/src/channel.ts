@@ -1,5 +1,6 @@
 import {
   buildChannelConfigSchema,
+  buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
@@ -595,17 +596,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       return issues;
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      tokenSource: snapshot.tokenSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: snapshot.mode ?? null,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
@@ -660,7 +651,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
       ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-      return getLineRuntime().channel.line.monitorLineProvider({
+      const monitor = await getLineRuntime().channel.line.monitorLineProvider({
         channelAccessToken: token,
         channelSecret: secret,
         accountId: account.accountId,
@@ -669,6 +660,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
         abortSignal: ctx.abortSignal,
         webhookPath: account.config.webhookPath,
       });
+
+      return monitor;
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const envToken = process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() ?? "";

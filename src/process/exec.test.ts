@@ -101,16 +101,17 @@ describe("runCommandWithTimeout", () => {
           "let count = 0;",
           'const ticker = setInterval(() => { process.stdout.write(".");',
           "count += 1;",
-          "if (count === 2) {",
+          "if (count === 6) {",
           "clearInterval(ticker);",
           "process.exit(0);",
           "}",
-          "}, 40);",
+          "}, 200);",
         ].join(" "),
       ],
       {
-        timeoutMs: 5_000,
-        noOutputTimeoutMs: 500,
+        timeoutMs: 7_000,
+        // Keep a generous idle budget; CI event-loop stalls can exceed 450ms.
+        noOutputTimeoutMs: 900,
       },
     );
 
@@ -118,7 +119,7 @@ describe("runCommandWithTimeout", () => {
     expect(result.code ?? 0).toBe(0);
     expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout.length).toBeGreaterThanOrEqual(3);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(7);
   });
 
   it("reports global timeout termination when overall timeout elapses", async () => {

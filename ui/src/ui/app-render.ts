@@ -62,8 +62,10 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { resolveConfiguredCronModelSuggestions } from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -136,6 +138,16 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  const openClawVersion =
+    (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
+    state.updateAvailable?.currentVersion ||
+    t("common.na");
+  const availableUpdate =
+    state.updateAvailable &&
+    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
+      ? state.updateAvailable
+      : null;
+  const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -167,6 +179,7 @@ export function renderApp(state: AppViewState) {
     new Set(
       [
         ...state.cronModelSuggestions,
+        ...resolveConfiguredCronModelSuggestions(configValue),
         ...state.cronJobs
           .map((job) => {
             if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
@@ -232,6 +245,11 @@ export function renderApp(state: AppViewState) {
         </div>
         <div class="topbar-status">
           <div class="pill">
+            <span class="statusDot ${versionStatusClass}"></span>
+            <span>${t("common.version")}</span>
+            <span class="mono">${openClawVersion}</span>
+          </div>
+          <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
             <span>${t("common.health")}</span>
             <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
@@ -274,8 +292,8 @@ export function renderApp(state: AppViewState) {
             <a
               class="nav-item nav-item--external"
               href="https://docs.openclaw.ai"
-              target="_blank"
-              rel="noreferrer"
+              target=${EXTERNAL_LINK_TARGET}
+              rel=${buildExternalLinkRel()}
               title="${t("common.docs")} (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
@@ -286,10 +304,10 @@ export function renderApp(state: AppViewState) {
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
-          state.updateAvailable
+          availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
+              <strong>Update available:</strong> v${availableUpdate.latestVersion}
+              (running v${availableUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}

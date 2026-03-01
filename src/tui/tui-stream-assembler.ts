@@ -13,6 +13,8 @@ type RunStreamState = {
   displayText: string;
 };
 
+type BoundaryDropMode = "off" | "streamed-only" | "streamed-or-incoming";
+
 function extractTextBlocksAndSignals(message: unknown): {
   textBlocks: string[];
   sawNonTextContentBlocks: boolean;
@@ -75,6 +77,29 @@ function isDroppedBoundaryTextBlockSubset(params: {
   return finalTextBlocks.every((block, index) => streamedTextBlocks[suffixStart + index] === block);
 }
 
+function shouldPreserveBoundaryDroppedText(params: {
+  boundaryDropMode: BoundaryDropMode;
+  streamedSawNonTextContentBlocks: boolean;
+  incomingSawNonTextContentBlocks: boolean;
+  streamedTextBlocks: string[];
+  nextContentBlocks: string[];
+}) {
+  if (params.boundaryDropMode === "off") {
+    return false;
+  }
+  const sawEligibleNonTextContent =
+    params.boundaryDropMode === "streamed-or-incoming"
+      ? params.streamedSawNonTextContentBlocks || params.incomingSawNonTextContentBlocks
+      : params.streamedSawNonTextContentBlocks;
+  if (!sawEligibleNonTextContent) {
+    return false;
+  }
+  return isDroppedBoundaryTextBlockSubset({
+    streamedTextBlocks: params.streamedTextBlocks,
+    finalTextBlocks: params.nextContentBlocks,
+  });
+}
+
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
@@ -97,7 +122,7 @@ export class TuiStreamAssembler {
     state: RunStreamState,
     message: unknown,
     showThinking: boolean,
-    opts?: { protectBoundaryDrops?: boolean },
+    opts?: { boundaryDropMode?: BoundaryDropMode },
   ) {
     const thinkingText = extractThinkingFromMessage(message);
     const contentText = extractContentFromMessage(message);
@@ -108,15 +133,16 @@ export class TuiStreamAssembler {
     }
     if (contentText) {
       const nextContentBlocks = textBlocks.length > 0 ? textBlocks : [contentText];
-      const shouldPreserveBoundaryDroppedText =
-        opts?.protectBoundaryDrops === true &&
-        (state.sawNonTextContentBlocks || sawNonTextContentBlocks) &&
-        isDroppedBoundaryTextBlockSubset({
-          streamedTextBlocks: state.contentBlocks,
-          finalTextBlocks: nextContentBlocks,
-        });
+      const boundaryDropMode = opts?.boundaryDropMode ?? "off";
+      const shouldKeepStreamedBoundaryText = shouldPreserveBoundaryDroppedText({
+        boundaryDropMode,
+        streamedSawNonTextContentBlocks: state.sawNonTextContentBlocks,
+        incomingSawNonTextContentBlocks: sawNonTextContentBlocks,
+        streamedTextBlocks: state.contentBlocks,
+        nextContentBlocks,
+      });
 
-      if (!shouldPreserveBoundaryDroppedText) {
+      if (!shouldKeepStreamedBoundaryText) {
         state.contentText = contentText;
         state.contentBlocks = nextContentBlocks;
       }
@@ -137,7 +163,9 @@ export class TuiStreamAssembler {
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
     const state = this.getOrCreateRun(runId);
     const previousDisplayText = state.displayText;
-    this.updateRunState(state, message, showThinking, { protectBoundaryDrops: true });
+    this.updateRunState(state, message, showThinking, {
+      boundaryDropMode: "streamed-or-incoming",
+    });
 
     if (!state.displayText || state.displayText === previousDisplayText) {
       return null;
@@ -151,7 +179,9 @@ export class TuiStreamAssembler {
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
-    this.updateRunState(state, message, showThinking);
+    this.updateRunState(state, message, showThinking, {
+      boundaryDropMode: "streamed-only",
+    });
     const finalComposed = state.displayText;
     const shouldKeepStreamedText =
       streamedSawNonTextContentBlocks &&

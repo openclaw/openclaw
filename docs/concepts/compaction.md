@@ -22,6 +22,7 @@ Compaction **persists** in the session’s JSONL history.
 ## Configuration
 
 Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
 
 ## Auto-compaction (default on)
 
@@ -53,6 +54,18 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 - **Session pruning**: trims old **tool results** only, **in-memory**, per request.
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
+
+## OpenAI server-side compaction
+
+OpenClaw also supports OpenAI Responses server-side compaction hints for
+compatible direct OpenAI models. This is separate from local OpenClaw
+compaction and can run alongside it.
+
+- Local compaction: OpenClaw summarizes and persists into session JSONL.
+- Server-side compaction: OpenAI compacts context on the provider side when
+  `store` + `context_management` are enabled.
+
+See [OpenAI provider](/providers/openai) for model params and overrides.
 
 ## Tips
 

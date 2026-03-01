@@ -1,11 +1,17 @@
-export type ModelApi =
-  | "openai-completions"
-  | "openai-responses"
-  | "anthropic-messages"
-  | "google-generative-ai"
-  | "github-copilot"
-  | "bedrock-converse-stream"
-  | "ollama";
+import type { SecretInput } from "./types.secrets.js";
+
+export const MODEL_APIS = [
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+  "github-copilot",
+  "bedrock-converse-stream",
+  "ollama",
+] as const;
+
+export type ModelApi = (typeof MODEL_APIS)[number];
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
@@ -43,9 +49,10 @@ export type ModelDefinitionConfig = {
 
 export type ModelProviderConfig = {
   baseUrl: string;
-  apiKey?: string;
+  apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];

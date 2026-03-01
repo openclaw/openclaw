@@ -76,6 +76,19 @@ describe("runBootOnce", () => {
     });
   };
 
+  const expectMainSessionRestored = (params: {
+    storePath: string;
+    sessionKey: string;
+    expectedSessionId?: string;
+  }) => {
+    const restored = loadSessionStore(params.storePath, { skipCache: true });
+    if (params.expectedSessionId === undefined) {
+      expect(restored[params.sessionKey]).toBeUndefined();
+      return;
+    }
+    expect(restored[params.sessionKey]?.sessionId).toBe(params.expectedSessionId);
+  };
+
   it("skips when BOOT.md is missing", async () => {
     await withBootWorkspace({}, async (workspaceDir) => {
       await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
@@ -226,8 +239,7 @@ describe("runBootOnce", () => {
         status: "ran",
       });
 
-      const restored = loadSessionStore(storePath, { skipCache: true });
-      expect(restored[sessionKey]?.sessionId).toBe(existingSessionId);
+      expectMainSessionRestored({ storePath, sessionKey, expectedSessionId: existingSessionId });
     });
   });
 
@@ -242,8 +254,7 @@ describe("runBootOnce", () => {
         status: "ran",
       });
 
-      const restored = loadSessionStore(storePath, { skipCache: true });
-      expect(restored[sessionKey]).toBeUndefined();
+      expectMainSessionRestored({ storePath, sessionKey });
     });
   });
 });

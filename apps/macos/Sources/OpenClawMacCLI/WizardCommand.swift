@@ -280,19 +280,17 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let scopesValue = scopes.joined(separator: ",")
-        let payloadParts = [
-            "v2",
-            identity.deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            self.token ?? "",
-            connectNonce,
-        ]
-        let payload = payloadParts.joined(separator: "|")
+        let payload = GatewayDeviceAuthPayload.buildV3(
+            deviceId: identity.deviceId,
+            clientId: clientId,
+            clientMode: clientMode,
+            role: role,
+            scopes: scopes,
+            signedAtMs: signedAtMs,
+            token: self.token,
+            nonce: connectNonce,
+            platform: platform,
+            deviceFamily: "Mac")
         if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
            let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
         {
