@@ -23,14 +23,15 @@ describe("acpx plugin config parsing", () => {
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
+    const command = "/home/user/repos/acpx/dist/cli.js";
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command: "/home/user/repos/acpx/dist/cli.js",
+        command,
       },
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(resolved.command).toBe("/home/user/repos/acpx/dist/cli.js");
+    expect(resolved.command).toBe(path.resolve(command));
     expect(resolved.expectedVersion).toBeUndefined();
     expect(resolved.allowPluginLocalInstall).toBe(false);
   });
@@ -62,15 +63,16 @@ describe("acpx plugin config parsing", () => {
   });
 
   it("accepts exact expectedVersion override", () => {
+    const command = "/home/user/repos/acpx/dist/cli.js";
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command: "/home/user/repos/acpx/dist/cli.js",
+        command,
         expectedVersion: "0.1.99",
       },
       workspaceDir: "/tmp/workspace",
     });
 
-    expect(resolved.command).toBe("/home/user/repos/acpx/dist/cli.js");
+    expect(resolved.command).toBe(path.resolve(command));
     expect(resolved.expectedVersion).toBe("0.1.99");
     expect(resolved.allowPluginLocalInstall).toBe(false);
   });
