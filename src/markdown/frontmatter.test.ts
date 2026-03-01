@@ -91,6 +91,18 @@ description: |
     expect(result.description).toBe("{json-ish text here}");
   });
 
+  it("preserves YAML block scalars with chomping indicators starting with {", () => {
+    const content = `---
+name: chomp-test
+description: |-
+  {json-ish text here}
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("chomp-test");
+    expect(result.description).toBe("{json-ish text here}");
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
