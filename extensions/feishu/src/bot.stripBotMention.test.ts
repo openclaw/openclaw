@@ -1,38 +1,87 @@
 import { describe, expect, it } from "vitest";
-import { stripBotMention, type FeishuMessageEvent } from "./bot.js";
+import { parseFeishuMessageEvent } from "./bot.js";
 
-type Mentions = FeishuMessageEvent["message"]["mentions"];
+function makeEvent(
+  text: string,
+  mentions?: Array<{ key: string; name: string; id: { open_id?: string; user_id?: string } }>,
+) {
+  return {
+    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: "p2p",
+      message_type: "text",
+      content: JSON.stringify({ text }),
+      mentions,
+    },
+  };
+}
 
-describe("stripBotMention", () => {
+const BOT_OPEN_ID = "ou_bot";
+
+describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
   it("returns original text when mentions are missing", () => {
-    expect(stripBotMention("hello world", undefined)).toBe("hello world");
+    const ctx = parseFeishuMessageEvent(makeEvent("hello world", undefined) as any, BOT_OPEN_ID);
+    expect(ctx.content).toBe("hello world");
   });
 
-  it("strips mention name and key for normal mentions", () => {
-    const mentions: Mentions = [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }];
-    expect(stripBotMention("@Bot hello @_bot_1", mentions)).toBe("hello");
+  it("replaces mention key with <at> tag using open_id", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_bot_1 hello", [
+        { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("treats mention.name regex metacharacters as literal text", () => {
-    const mentions: Mentions = [{ key: "@_bot_1", name: ".*", id: { open_id: "ou_bot" } }];
-    expect(stripBotMention("@NotBot hello", mentions)).toBe("@NotBot hello");
+  it("falls back to user_id when open_id is absent", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_user_1 hi", [
+        { key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('<at user_id="uid_alice">Alice</at> hi');
   });
 
-  it("treats mention.key regex metacharacters as literal text", () => {
-    const mentions: Mentions = [{ key: ".*", name: "Bot", id: { open_id: "ou_bot" } }];
-    expect(stripBotMention("hello world", mentions)).toBe("hello world");
+  it("falls back to plain @name when no id is present", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_unknown hey", [{ key: "@_unknown", name: "Nobody", id: {} }]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("@Nobody hey");
   });
 
-  it("trims once after all mention replacements", () => {
-    const mentions: Mentions = [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }];
-    expect(stripBotMention("  @_bot_1 hello   ", mentions)).toBe("hello");
+  it("treats mention key regex metacharacters as literal text", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("hello world", [{ key: ".*", name: "Bot", id: { open_id: "ou_bot" } }]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("hello world");
   });
 
-  it("strips multiple mentions in one pass", () => {
-    const mentions: Mentions = [
-      { key: "@_bot_1", name: "Bot One", id: { open_id: "ou_bot_1" } },
-      { key: "@_bot_2", name: "Bot Two", id: { open_id: "ou_bot_2" } },
-    ];
-    expect(stripBotMention("@Bot One @_bot_1 hi @Bot Two @_bot_2", mentions)).toBe("hi");
+  it("normalizes multiple mentions in one pass", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_bot_1 hi @_user_2", [
+        { key: "@_bot_1", name: "Bot One", id: { open_id: "ou_bot_1" } },
+        { key: "@_user_2", name: "User Two", id: { open_id: "ou_user_2" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe(
+      '<at user_id="ou_bot_1">Bot One</at> hi <at user_id="ou_user_2">User Two</at>',
+    );
+  });
+
+  it("xml-escapes special characters in mention name", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_user_1 test", [
+        { key: "@_user_1", name: "<script>", id: { open_id: "ou_x" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
   });
 });
