@@ -23,9 +23,6 @@ export class GatewayDrainingError extends Error {
   }
 }
 
-// Set while gateway is draining for restart; new enqueues are rejected.
-let gatewayDraining = false;
-
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -49,8 +46,34 @@ type LaneState = {
   generation: number;
 };
 
-const lanes = new Map<string, LaneState>();
-let nextTaskId = 1;
+type CommandQueueRuntimeState = {
+  // Set while gateway is draining for restart; new enqueues are rejected.
+  gatewayDraining: boolean;
+  lanes: Map<string, LaneState>;
+  nextTaskId: number;
+};
+
+const COMMAND_QUEUE_RUNTIME_STATE_KEY = "__openclawCommandQueueRuntimeStateV1__";
+
+function resolveCommandQueueRuntimeState(): CommandQueueRuntimeState {
+  const globalRuntime = globalThis as typeof globalThis & {
+    [COMMAND_QUEUE_RUNTIME_STATE_KEY]?: CommandQueueRuntimeState;
+  };
+  const existing = globalRuntime[COMMAND_QUEUE_RUNTIME_STATE_KEY];
+  if (existing) {
+    return existing;
+  }
+  const created: CommandQueueRuntimeState = {
+    gatewayDraining: false,
+    lanes: new Map<string, LaneState>(),
+    nextTaskId: 1,
+  };
+  globalRuntime[COMMAND_QUEUE_RUNTIME_STATE_KEY] = created;
+  return created;
+}
+
+const runtimeState = resolveCommandQueueRuntimeState();
+const lanes = runtimeState.lanes;
 
 function getLaneState(lane: string): LaneState {
   const existing = lanes.get(lane);
@@ -105,7 +128,7 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = nextTaskId++;
+        const taskId = runtimeState.nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
         void (async () => {
@@ -148,7 +171,7 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  gatewayDraining = true;
+  runtimeState.gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -166,7 +189,7 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  if (gatewayDraining) {
+  if (runtimeState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = lane.trim() || CommandLane.Main;
@@ -242,7 +265,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
-  gatewayDraining = false;
+  runtimeState.gatewayDraining = false;
   const lanesToDrain: string[] = [];
   for (const state of lanes.values()) {
     state.generation += 1;

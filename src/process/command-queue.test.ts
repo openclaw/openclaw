@@ -94,6 +94,46 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("shares lane concurrency across duplicate module instances", async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const moduleA = (await import(
+      /* @vite-ignore */ `./command-queue.js?dup-a-${suffix}`
+    )) as typeof import("./command-queue.js");
+    const moduleB = (await import(
+      /* @vite-ignore */ `./command-queue.js?dup-b-${suffix}`
+    )) as typeof import("./command-queue.js");
+
+    moduleA.resetAllLanes();
+    moduleB.resetAllLanes();
+
+    const lane = `cross-instance-${suffix}`;
+    moduleA.setCommandLaneConcurrency(lane, 2);
+
+    const firstDeferred = createDeferred();
+    const secondDeferred = createDeferred();
+    let firstStarted = false;
+    let secondStarted = false;
+
+    const first = moduleB.enqueueCommandInLane(lane, async () => {
+      firstStarted = true;
+      await firstDeferred.promise;
+    });
+    const second = moduleB.enqueueCommandInLane(lane, async () => {
+      secondStarted = true;
+      await secondDeferred.promise;
+    });
+
+    await vi.waitFor(() => {
+      expect(firstStarted).toBe(true);
+      expect(secondStarted).toBe(true);
+    });
+    expect(moduleB.getActiveTaskCount()).toBeGreaterThanOrEqual(2);
+
+    firstDeferred.resolve();
+    secondDeferred.resolve();
+    await Promise.all([first, second]);
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 
