@@ -36,16 +36,19 @@ export async function listInvoices(
   const values: unknown[] = [];
   let idx = 1;
   if (params.status) {
-    conditions.push(`status = $${idx++}`);
+    conditions.push(`i.status = $${idx++}`);
     values.push(params.status);
   }
   if (params.customer_id) {
-    conditions.push(`customer_id = $${idx++}`);
+    conditions.push(`i.customer_id = $${idx++}`);
     values.push(params.customer_id);
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pg.query(
-    `SELECT * FROM erp.invoices ${where} ORDER BY created_at DESC LIMIT $${idx}`,
+    `SELECT i.*, c.name AS customer_name
+     FROM erp.invoices i
+     LEFT JOIN erp.contacts c ON i.customer_id = c.id
+     ${where} ORDER BY i.created_at DESC LIMIT $${idx}`,
     [...values, params.limit ?? 50],
   );
   return result.rows;

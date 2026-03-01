@@ -125,7 +125,8 @@ export async function listOrders(
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pg.query(
-    `SELECT o.*, c.name AS customer_name, o.line_items AS items
+    `SELECT o.*, c.name AS customer_name, o.line_items AS items,
+            COALESCE(jsonb_array_length(o.line_items), 0) AS item_count
      FROM erp.orders o
      LEFT JOIN erp.contacts c ON o.customer_id = c.id
      ${where} ORDER BY o.created_at DESC LIMIT $${idx}`,

@@ -22,7 +22,7 @@ const columns: Column<Order>[] = [
   {
     key: "items",
     header: "Items",
-    render: (row) => `${row.items?.length ?? 0} items`,
+    render: (row) => `${row.item_count ?? row.items?.length ?? 0} items`,
   },
   {
     key: "total",

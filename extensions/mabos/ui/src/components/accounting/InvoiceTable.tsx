@@ -16,9 +16,10 @@ const columns: Column<Invoice>[] = [
   {
     key: "customer_id",
     header: "Customer",
-    render: (row) => (
-      <span className="font-mono text-xs">{(row.customer_id as string).slice(0, 8)}</span>
-    ),
+    render: (row) =>
+      row.customer_name ?? (
+        <span className="font-mono text-xs">{(row.customer_id as string).slice(0, 8)}</span>
+      ),
   },
   {
     key: "amount",

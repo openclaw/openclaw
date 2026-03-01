@@ -125,7 +125,7 @@ export async function listPurchaseOrders(
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pg.query(
-    `SELECT * FROM erp.purchase_orders ${where} ORDER BY created_at DESC LIMIT $${idx}`,
+    `SELECT *, total_cost AS total FROM erp.purchase_orders ${where} ORDER BY created_at DESC LIMIT $${idx}`,
     [...values, params.limit ?? 50],
   );
   return result.rows;

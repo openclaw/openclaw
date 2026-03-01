@@ -381,6 +381,7 @@ export type Contact = {
 export type Invoice = {
   id: string;
   customer_id: string;
+  customer_name?: string;
   status: string;
   amount: number;
   currency: string;
@@ -430,6 +431,7 @@ export type Order = {
   total: number;
   currency: string;
   items: Array<{ product_id: string; quantity: number; unit_price: number }>;
+  item_count?: number;
   created_at: string;
   updated_at: string;
 };
