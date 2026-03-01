@@ -16,6 +16,9 @@ const CHANNEL_CONTEXT_HEADING = "\n\n---\n\n## 📡 Channel-Specific Context\n\n
  *   Telegram group:   agent:main:telegram:group:-100123456789
  *   Slack channel:    agent:main:slack:channel:c0123abcdef (lowercased by session-key.ts)
  *   WhatsApp group:   agent:main:whatsapp:group:120363403215116621@g.us
+ *
+ * Returns the extracted ID as-is (preserving case from the session key).
+ * Callers that need case-insensitive file lookup should handle that separately.
  */
 export function extractChannelId(sessionKey: string): string | null {
   const discordChannel = sessionKey.match(/:discord:channel:(\d+)/);
@@ -28,7 +31,7 @@ export function extractChannelId(sessionKey: string): string | null {
     return telegramGroup[1];
   }
 
-  // Case-insensitive: session-key.ts lowercases peerId, so Slack IDs may be lowercase at runtime
+  // Case-insensitive: session-key.ts lowercases peerId, so Slack IDs are lowercase at runtime
   const slackChannel = sessionKey.match(/:slack:channel:([A-Z0-9]+)/i);
   if (slackChannel) {
     return slackChannel[1];
@@ -37,6 +40,43 @@ export function extractChannelId(sessionKey: string): string | null {
   const waGroup = sessionKey.match(/:whatsapp:group:([^:]+)/);
   if (waGroup) {
     return waGroup[1];
+  }
+
+  return null;
+}
+
+/**
+ * Try to read a channel context file, falling back to uppercase variant for
+ * case-sensitive filesystems where Slack IDs are lowercased in session keys
+ * but users may name files with canonical uppercase (e.g. C0123ABCDEF.md).
+ */
+function tryReadChannelFile(channelsDir: string, channelId: string): string | null {
+  const candidates = [channelId];
+
+  // For Slack-style IDs (alphanumeric, starts with letter), also try uppercase
+  if (/^[a-z]/i.test(channelId) && channelId !== channelId.toUpperCase()) {
+    candidates.push(channelId.toUpperCase());
+  }
+
+  for (const candidate of candidates) {
+    const filePath = path.join(channelsDir, `${candidate}.md`);
+    try {
+      const content = fs.readFileSync(filePath, "utf8").trim();
+      if (content) {
+        return content;
+      }
+    } catch (err: unknown) {
+      // Only silently skip file-not-found; surface other errors
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      log.warn(`failed to read ${filePath}: ${String(err)}`);
+      return null;
+    }
   }
 
   return null;
@@ -57,37 +97,33 @@ const channelBootstrapHook: HookHandler = async (event) => {
     return;
   }
 
-  const channelFile = path.join(workspaceDir, "channels", `${channelId}.md`);
-
-  let channelContent: string;
-  try {
-    channelContent = fs.readFileSync(channelFile, "utf8").trim();
-  } catch {
-    // No channel file for this channel — silently skip
-    return;
-  }
-
+  const channelsDir = path.join(workspaceDir, "channels");
+  const channelContent = tryReadChannelFile(channelsDir, channelId);
   if (!channelContent) {
     return;
   }
 
-  // Find an existing, non-missing AGENTS.md entry to append to.
-  // We must not mutate the cached entry in place (bootstrap-cache.ts reuses the same
-  // array across agent:bootstrap calls within a session), so we replace the entry with
-  // a shallow clone that carries the updated content.
-  const agentsIndex = bootstrapFiles.findIndex((f) => f.name === "AGENTS.md" && !f.missing);
+  // Work on a shallow copy of the array to avoid mutating the cached snapshot
+  // from bootstrap-cache.ts (which reuses the same array across agent:bootstrap
+  // calls within a session).
+  const updatedFiles = [...bootstrapFiles];
+
+  const agentsIndex = updatedFiles.findIndex((f) => f.name === "AGENTS.md" && !f.missing);
   if (agentsIndex !== -1) {
-    const original = bootstrapFiles[agentsIndex];
-    bootstrapFiles[agentsIndex] = {
+    const original = updatedFiles[agentsIndex];
+    updatedFiles[agentsIndex] = {
       ...original,
       content: (original.content ?? "") + CHANNEL_CONTEXT_HEADING + channelContent,
     };
     log.debug(`appended channel context for ${channelId} to AGENTS.md`);
   } else {
-    // Either AGENTS.md is absent or marked missing — inject as a new, non-missing entry.
-    // Use the workspace AGENTS.md path (not the channel file) so the system-prompt heading
-    // renders correctly (src/agents/system-prompt.ts reads path as the section heading).
-    bootstrapFiles.push({
+    // Remove any missing placeholder to avoid contradictory [MISSING] + injected content
+    const missingIndex = updatedFiles.findIndex((f) => f.name === "AGENTS.md" && f.missing);
+    if (missingIndex !== -1) {
+      updatedFiles.splice(missingIndex, 1);
+    }
+
+    updatedFiles.push({
       name: "AGENTS.md",
       path: path.join(workspaceDir, "AGENTS.md"),
       content: `## 📡 Channel-Specific Context\n\n${channelContent}`,
@@ -95,6 +131,11 @@ const channelBootstrapHook: HookHandler = async (event) => {
     });
     log.debug(`injected channel context for ${channelId} as new AGENTS.md entry`);
   }
+
+  // Replace the entire array contents so the context reference is updated
+  // without breaking the caller's reference to event.context.bootstrapFiles
+  bootstrapFiles.length = 0;
+  bootstrapFiles.push(...updatedFiles);
 };
 
 export default channelBootstrapHook;

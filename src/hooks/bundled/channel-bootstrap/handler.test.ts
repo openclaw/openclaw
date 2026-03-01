@@ -124,15 +124,13 @@ describe("channel-bootstrap handler", () => {
     const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
-    // The slot in the array should be a new object, not the original reference
-    expect(context.bootstrapFiles[0]).not.toBe(originalEntry);
-    // Original entry content must be untouched
+    // Original entry content must be untouched (we work on a copy)
     expect(originalEntry.content).toBe("Global.");
-    // New entry should have the appended content
+    // The array should contain the updated entry
     expect(context.bootstrapFiles[0].content).toContain("Channel only.");
   });
 
-  it("injects new non-missing AGENTS.md entry when only a missing placeholder exists", async () => {
+  it("replaces missing AGENTS.md placeholder with injected channel context", async () => {
     const dir = await makeTempWorkspace("openclaw-channel-bootstrap-missing-");
     const channelsDir = path.join(dir, "channels");
     await fs.mkdir(channelsDir, { recursive: true });
@@ -147,13 +145,34 @@ describe("channel-bootstrap handler", () => {
     const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
-    const nonMissingAgents = context.bootstrapFiles.filter(
-      (f) => f.name === "AGENTS.md" && !f.missing,
-    );
-    expect(nonMissingAgents).toHaveLength(1);
-    expect(nonMissingAgents[0].content).toContain("Channel only.");
-    expect(nonMissingAgents[0].path).toContain("AGENTS.md");
-    expect(nonMissingAgents[0].path).not.toContain("channels");
+    // Missing placeholder should be removed, replaced with non-missing entry
+    const allAgents = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
+    expect(allAgents).toHaveLength(1);
+    expect(allAgents[0].missing).toBe(false);
+    expect(allAgents[0].content).toContain("Channel only.");
+    expect(allAgents[0].path).toContain("AGENTS.md");
+    expect(allAgents[0].path).not.toContain("channels");
+  });
+
+  it("resolves uppercase channel file for lowercase Slack session key", async () => {
+    const dir = await makeTempWorkspace("openclaw-channel-bootstrap-slack-case-");
+    const channelsDir = path.join(dir, "channels");
+    await fs.mkdir(channelsDir, { recursive: true });
+    // File named with canonical Slack uppercase
+    await fs.writeFile(path.join(channelsDir, "C0123ABCDEF.md"), "Slack context.", "utf-8");
+
+    const context = makeContext({
+      workspaceDir: dir,
+      // Runtime session key uses lowercase (session-key.ts normalizes)
+      sessionKey: "agent:main:slack:channel:c0123abcdef",
+      agentsMdContent: "Global.",
+    });
+
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
+    await handler(event);
+
+    const agents = context.bootstrapFiles.find((f) => f.name === "AGENTS.md");
+    expect(agents!.content).toContain("Slack context.");
   });
 
   it("silently skips and does not modify bootstrap files when no channel file exists", async () => {
