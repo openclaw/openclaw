@@ -559,6 +559,26 @@ export async function runCronIsolatedAgentTurn(params: {
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
+  const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
+  const runLevelError = runResult.meta?.error;
+  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const hasSuccessfulPayloadAfterLastError =
+    !runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    payloads
+      .slice(lastErrorPayloadIndex + 1)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+  // Tool wrappers can emit transient/false-positive error payloads before a valid final
+  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
+  // did not report a model/context-level error and (b) a non-error payload follows.
+  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const lastErrorPayloadText = [...payloads]
+    .toReversed()
+    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
+    ?.text?.trim();
+  const embeddedRunError = hasFatalErrorPayload
+    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
+    : undefined;
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
@@ -782,5 +802,14 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  return withRunSession({ status: "ok", summary, outputText, delivered, deliveryAttempted });
+  return withRunSession({
+    status: hasFatalErrorPayload ? "error" : "ok",
+    ...(hasFatalErrorPayload
+      ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
+      : {}),
+    summary,
+    outputText,
+    delivered,
+    deliveryAttempted,
+  });
 }

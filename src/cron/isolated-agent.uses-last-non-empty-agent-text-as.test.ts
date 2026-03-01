@@ -29,14 +29,18 @@ function makeDeps(): CliDeps {
   };
 }
 
-function mockEmbeddedTexts(texts: string[]) {
+function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: texts.map((text) => ({ text })),
+    payloads,
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
   });
+}
+
+function mockEmbeddedTexts(texts: string[]) {
+  mockEmbeddedPayloads(texts.map((text) => ({ text })));
 }
 
 function mockEmbeddedOk() {
@@ -190,6 +194,50 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(res.summary).toBe("last");
+    });
+  });
+
+  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps = makeDeps();
+      mockEmbeddedPayloads([
+        { text: "⚠️ ✍️ Write: failed", isError: true },
+        { text: "Write completed successfully.", isError: false },
+      ]);
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
+        message: DEFAULT_MESSAGE,
+        sessionKey: DEFAULT_SESSION_KEY,
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.summary).toBe("Write completed successfully.");
+    });
+  });
+
+  it("keeps error status when run-level error accompanies post-error text", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [
+          { text: "Model context overflow", isError: true },
+          { text: "Partial assistant text before error" },
+        ],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          error: { kind: "context_overflow", message: "exceeded context window" },
+        },
+      });
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
     });
   });
 
