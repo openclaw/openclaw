@@ -69,7 +69,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       };
     })
     .filter((entry) => entry.msgs > 0 && entry.errors > 0)
-    .toSorted((a, b) => b.rate - a.rate)
+    .slice().sort((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
@@ -510,17 +510,17 @@ const buildAggregatesFromSessions = (
       uniqueTools: toolMap.size,
       tools: Array.from(toolMap.entries())
         .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
+        .slice().sort((a, b) => b.count - a.count),
     },
-    byModel: Array.from(modelMap.values()).toSorted(
+    byModel: Array.from(modelMap.values()).slice().sort(
       (a, b) => b.totals.totalCost - a.totals.totalCost,
     ),
-    byProvider: Array.from(providerMap.values()).toSorted(
+    byProvider: Array.from(providerMap.values()).slice().sort(
       (a, b) => b.totals.totalCost - a.totals.totalCost,
     ),
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .slice().sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     ...tail,
   };
 };
@@ -567,7 +567,7 @@ const buildUsageInsightStats = (
       messages: day.messages,
       rate: day.errors / day.messages,
     }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    .slice().sort((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
 
   return {
     durationSumMs,

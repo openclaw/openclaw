@@ -746,11 +746,11 @@ function renderContextPanel(
     }
   }
 
-  const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
-  const toolsList = contextWeight.tools.entries.toSorted(
+  const skillsList = contextWeight.skills.entries.slice().sort((a, b) => b.blockChars - a.blockChars);
+  const toolsList = contextWeight.tools.entries.slice().sort(
     (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
   );
-  const filesList = contextWeight.injectedWorkspaceFiles.toSorted(
+  const filesList = contextWeight.injectedWorkspaceFiles.slice().sort(
     (a, b) => b.injectedChars - a.injectedChars,
   );
   const defaultLimit = 4;
@@ -922,7 +922,7 @@ function renderSessionLogsCompact(
   });
   const toolOptions = Array.from(
     new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
-  ).toSorted((a, b) => a.localeCompare(b));
+  ).slice().sort((a, b) => a.localeCompare(b));
   const filteredEntries = entries.filter((entry) => {
     // Filter by cursor timeline range (only if logs cover the range)
     if (cursorStart != null && cursorEnd != null) {

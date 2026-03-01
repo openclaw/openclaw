@@ -416,7 +416,7 @@ function renderUsageInsights(
         rate,
       };
     })
-    .toSorted((a, b) => b.rate - a.rate)
+    .slice().sort((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
@@ -625,7 +625,7 @@ function renderSessionsCard(
     return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
   };
 
-  const sortedSessions = [...sessions].toSorted((a, b) => {
+  const sortedSessions = [...sessions].slice().sort((a, b) => {
     switch (sessionSort) {
       case "recent":
         return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);

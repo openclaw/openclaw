@@ -177,7 +177,7 @@ export function renderUsageTab(state: AppViewState) {
         // Shift-click: select range from last selected to this session
         // Sort sessions same way as displayed (by tokens or cost descending)
         const isTokenMode = state.usageChartMode === "tokens";
-        const sortedSessions = [...(state.usageResult?.sessions ?? [])].toSorted((a, b) => {
+        const sortedSessions = [...(state.usageResult?.sessions ?? [])].slice().sort((a, b) => {
           const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
           const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
           return valB - valA;

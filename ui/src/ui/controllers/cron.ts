@@ -183,7 +183,7 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
         return typeof id === "string" ? id.trim() : "";
       })
       .filter(Boolean);
-    state.cronModelSuggestions = Array.from(new Set(ids)).toSorted((a, b) => a.localeCompare(b));
+    state.cronModelSuggestions = Array.from(new Set(ids)).slice().sort((a, b) => a.localeCompare(b));
   } catch {
     state.cronModelSuggestions = [];
   }

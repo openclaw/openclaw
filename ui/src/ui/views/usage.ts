@@ -101,7 +101,7 @@ export function renderUsage(props: UsageProps) {
   // (intentionally no global Clear button in the header; chips + query clear handle this)
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...props.sessions].toSorted((a, b) => {
+  const sortedSessions = [...props.sessions].slice().sort((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;
