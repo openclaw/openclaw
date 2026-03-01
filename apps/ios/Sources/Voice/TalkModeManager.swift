@@ -72,6 +72,9 @@ final class TalkModeManager: NSObject {
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    /// Set when the ElevenLabs API rejects PCM format (e.g. 403 subscription_required).
+    /// Once set, all subsequent requests in this session use MP3 instead of re-trying PCM.
+    private var pcmFormatUnavailable: Bool = false
     var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
@@ -1004,7 +1007,8 @@ final class TalkModeManager: NSObject {
                 let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(requestedOutputFormat ?? "pcm_44100")
+                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
+                    requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
                 if outputFormat == nil, let requestedOutputFormat {
                     self.logger.warning(
                         "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
@@ -1051,8 +1055,9 @@ final class TalkModeManager: NSObject {
                     self.lastPlaybackWasPCM = true
                     var playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
                     if !playback.finished, playback.interruptedAt == nil {
-                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100")
+                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
                         self.logger.warning("pcm playback failed; retrying mp3")
+                        self.pcmFormatUnavailable = true
                         self.lastPlaybackWasPCM = false
                         let mp3Stream = client.streamSynthesize(
                             voiceId: voiceId,
@@ -1388,7 +1393,7 @@ final class TalkModeManager: NSObject {
 
     private func resolveIncrementalPrefetchOutputFormat(context: IncrementalSpeechContext) -> String? {
         if TalkTTSValidation.pcmSampleRate(from: context.outputFormat) != nil {
-            return ElevenLabsTTSClient.validatedOutputFormat("mp3_44100")
+            return ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
         }
         return context.outputFormat
     }
@@ -1474,7 +1479,8 @@ final class TalkModeManager: NSObject {
         let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(requestedOutputFormat ?? "pcm_44100")
+        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
+            requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
         if outputFormat == nil, let requestedOutputFormat {
             self.logger.warning(
                 "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
@@ -1523,6 +1529,11 @@ final class TalkModeManager: NSObject {
             normalize: ElevenLabsTTSClient.validatedNormalize(context.directive?.normalize),
             language: context.language,
             latencyTier: TalkTTSValidation.validatedLatencyTier(context.directive?.latencyTier))
+    }
+
+    /// Returns `mp3_44100_128` when the API has already rejected PCM, otherwise `pcm_44100`.
+    private var effectiveDefaultOutputFormat: String {
+        self.pcmFormatUnavailable ? "mp3_44100_128" : "pcm_44100"
     }
 
     private static func makeBufferedAudioStream(chunks: [Data]) -> AsyncThrowingStream<Data, Error> {
@@ -1580,8 +1591,9 @@ final class TalkModeManager: NSObject {
             var playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
             if !playback.finished, playback.interruptedAt == nil {
                 self.logger.warning("pcm playback failed; retrying mp3")
+                self.pcmFormatUnavailable = true
                 self.lastPlaybackWasPCM = false
-                let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100")
+                let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
                 let mp3Stream = client.streamSynthesize(
                     voiceId: voiceId,
                     request: self.makeIncrementalTTSRequest(
@@ -1991,6 +2003,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.pcmFormatUnavailable = false
         }
     }
 
