@@ -84,10 +84,8 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       }
 
       const memberCount = await resolveMemberCount(roomId);
-      if (memberCount === 2) {
-        log(`matrix: dm detected via member count room=${roomId} members=${memberCount}`);
-        return true;
-      }
+      // memberCount === 2 does NOT indicate DM: users can create multiple 2-person rooms.
+      // Only m.direct account data and is_direct member state indicate true DMs.
 
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const directViaState =
