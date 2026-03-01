@@ -50,6 +50,8 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /** Durable message-turn id used by lifecycle recovery and outbox linking. */
+  MessageTurnId?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;

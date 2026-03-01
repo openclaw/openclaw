@@ -1345,6 +1345,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
+  "messages.delivery":
+    "Durable outbound delivery lifecycle settings including queue expiry behavior and terminalization policy.",
+  "messages.delivery.maxAgeMs":
+    "Maximum queued age in milliseconds before pending deliveries expire. Default is 1800000 (30 minutes).",
+  "messages.delivery.expireAction":
+    'Expiry action for stale queued deliveries: "fail" marks terminal failure (default), "deliver" allows stale delivery attempts.',
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":

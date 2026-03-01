@@ -183,6 +183,13 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    delivery: z
+      .object({
+        maxAgeMs: z.number().int().positive().optional(),
+        expireAction: z.enum(["fail", "deliver"]).optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

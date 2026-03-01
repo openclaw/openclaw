@@ -221,6 +221,8 @@ type DeliverOutboundPayloadsCoreParams = {
     mediaUrls?: string[];
   };
   silent?: boolean;
+  /** Links outbox queue rows to a durable message turn. */
+  turnId?: string;
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -247,22 +249,25 @@ export async function deliverOutboundPayloads(
         gifPlayback: params.gifPlayback,
         silent: params.silent,
         mirror: params.mirror,
+        turnId: params.turnId,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
+  // When bestEffort is true but onError is absent, we still wrap so hadPartialFailure is set.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
-    ? {
-        ...params,
-        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-          hadPartialFailure = true;
-          params.onError!(err, payload);
-        },
-      }
-    : params;
+  const wrappedParams =
+    params.bestEffort || params.onError
+      ? {
+          ...params,
+          onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+            hadPartialFailure = true;
+            params.onError?.(err, payload);
+          },
+        }
+      : params;
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);

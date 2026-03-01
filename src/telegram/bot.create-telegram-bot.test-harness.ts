@@ -185,6 +185,30 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
+// Mock lifecycle turn tracking so persistent SQLite dedupe doesn't reject
+// test messages that reuse the same chat_id/message_id across tests.
+const lifecycleMocks = vi.hoisted(() => ({
+  acceptTurn: vi.fn(
+    () => ({ accepted: true, id: `test-turn-${Math.random().toString(16).slice(2)}` }) as const,
+  ),
+  finalizeTurn: vi.fn(),
+  markTurnDeliveryPending: vi.fn(),
+  markTurnRunning: vi.fn(),
+  recordTurnRecoveryFailure: vi.fn(() => ({ attempts: 0, markedFailed: false })),
+  registerActiveTurn: vi.fn(),
+  unregisterActiveTurn: vi.fn(),
+  isTurnActive: vi.fn(() => false),
+}));
+vi.mock("../infra/message-lifecycle/turns.js", () => lifecycleMocks);
+
+const outboxMocks = vi.hoisted(() => ({
+  getOutboxStatusForTurn: vi.fn(() => ({ queued: 0, delivered: 0, failed: 0 })),
+  enqueueDelivery: vi.fn(async () => "test-queue-id"),
+  ackDelivery: vi.fn(async () => {}),
+  failDelivery: vi.fn(async () => {}),
+}));
+vi.mock("../infra/outbound/delivery-queue.js", () => outboxMocks);
+
 export const replySpy: MockFn<
   (
     ctx: MsgContext,

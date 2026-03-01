@@ -82,6 +82,15 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type MessagesDeliveryExpireAction = "fail" | "deliver";
+
+export type MessagesDeliveryConfig = {
+  /** Maximum queue age in milliseconds before pending deliveries are considered expired. */
+  maxAgeMs?: number;
+  /** Action taken when a queued delivery exceeds maxAgeMs (default: "fail"). */
+  expireAction?: MessagesDeliveryExpireAction;
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -117,6 +126,8 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Durable outbound delivery retry/expiry behavior. */
+  delivery?: MessagesDeliveryConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
