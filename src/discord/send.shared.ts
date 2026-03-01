@@ -86,6 +86,7 @@ export async function parseAndResolveRecipient(
   // First try to resolve using directory lookup (handles usernames)
   const trimmed = raw.trim();
   const parseOptions = {
+    defaultKind: "channel" as const,
     ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
   };
 
