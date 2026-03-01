@@ -504,4 +504,91 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
     }
   });
+
+  test("webchat final message includes pre-tool and post-tool text", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    let webchatWs: WebSocket | undefined;
+
+    try {
+      webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      trackConnectChallengeNonce(webchatWs);
+      await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
+      await connectOk(webchatWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          version: "dev",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
+
+      registerAgentRunContext("run-multi-msg", {
+        sessionKey: "main",
+        verboseLevel: "on",
+      });
+
+      const chatEvents: Array<{ state: string; text?: string }> = [];
+      webchatWs.on("message", (raw) => {
+        try {
+          const data = raw instanceof Buffer ? raw : Buffer.from(raw as ArrayLike<number>);
+          const msg = JSON.parse(data.toString("utf8"));
+          if (msg.type === "event" && msg.event === "chat") {
+            chatEvents.push({
+              state: msg.payload?.state,
+              text: msg.payload?.message?.content?.[0]?.text ?? msg.payload?.message?.text,
+            });
+          }
+        } catch {
+          // ignore
+        }
+      });
+
+      // Simulate pre-tool text streaming
+      emitAgentEvent({
+        runId: "run-multi-msg",
+        stream: "assistant",
+        data: { text: "The file is being checked." },
+      });
+
+      // Simulate tool execution (no assistant event during tool)
+
+      // Simulate post-tool text streaming (incremental chunks, new assistant message)
+      emitAgentEvent({
+        runId: "run-multi-msg",
+        stream: "assistant",
+        data: { text: "The file" }, // first chunk
+      });
+      emitAgentEvent({
+        runId: "run-multi-msg",
+        stream: "assistant",
+        data: { text: "The file contains" }, // second chunk extends first
+      });
+      emitAgentEvent({
+        runId: "run-multi-msg",
+        stream: "assistant",
+        data: { text: "The file contains 42 lines." }, // final chunk
+      });
+
+      // Simulate lifecycle end
+      emitAgentEvent({
+        runId: "run-multi-msg",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now() },
+      });
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      const finalEvent = chatEvents.find((e) => e.state === "final");
+      expect(finalEvent).toBeDefined();
+      expect(finalEvent?.text).toContain("The file is being checked.");
+      expect(finalEvent?.text).toContain("The file contains 42 lines.");
+
+      webchatWs.close();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      testState.sessionStorePath = undefined;
+    }
+  });
 });

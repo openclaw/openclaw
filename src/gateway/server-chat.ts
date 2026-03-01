@@ -143,6 +143,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  currentMessageTexts: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
@@ -151,12 +152,14 @@ export type ChatRunState = {
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const currentMessageTexts = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    currentMessageTexts.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
@@ -164,6 +167,7 @@ export function createChatRunState(): ChatRunState {
   return {
     registry,
     buffers,
+    currentMessageTexts,
     deltaSentAt,
     abortedRuns,
     clear,
@@ -291,7 +295,18 @@ export function createAgentEventHandler({
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
+    const prevBuffer = chatRunState.buffers.get(clientRunId) ?? "";
+    const prevCurrentText = chatRunState.currentMessageTexts.get(clientRunId) ?? "";
+    if (cleaned.startsWith(prevCurrentText)) {
+      // Continuation of current message: update buffer and current text
+      chatRunState.buffers.set(clientRunId, prevBuffer + cleaned.slice(prevCurrentText.length));
+      chatRunState.currentMessageTexts.set(clientRunId, cleaned);
+    } else {
+      // New assistant message (e.g., after tool calls): append to preserve pre-tool text
+      const newBuffer = prevBuffer ? `${prevBuffer}\n\n${cleaned}` : cleaned;
+      chatRunState.buffers.set(clientRunId, newBuffer);
+      chatRunState.currentMessageTexts.set(clientRunId, cleaned);
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -336,6 +351,7 @@ export function createAgentEventHandler({
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.currentMessageTexts.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
@@ -484,6 +500,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
+        chatRunState.currentMessageTexts.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
