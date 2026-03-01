@@ -1,4 +1,12 @@
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
+=======
+import {
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+} from "./app-render.helpers.ts";
+>>>>>>> 266d32006 (feat(ui): add hide-cron toggle to chat session selector (#26976))
 import type { SessionsListResult } from "./types.ts";
 import { parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
 
@@ -33,6 +41,10 @@ describe("parseSessionKey", () => {
 
   it("identifies cron sessions", () => {
     expect(parseSessionKey("agent:main:cron:daily-briefing-uuid")).toEqual({
+      prefix: "Cron:",
+      fallbackName: "Cron Job:",
+    });
+    expect(parseSessionKey("cron:daily-briefing-uuid")).toEqual({
       prefix: "Cron:",
       fallbackName: "Cron Job:",
     });
@@ -259,5 +271,20 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("isCronSessionKey", () => {
+  it("returns true for cron: prefixed keys", () => {
+    expect(isCronSessionKey("cron:abc-123")).toBe(true);
+    expect(isCronSessionKey("cron:weekly-agent-roundtable")).toBe(true);
+    expect(isCronSessionKey("agent:main:cron:abc-123")).toBe(true);
+    expect(isCronSessionKey("agent:main:cron:abc-123:run:run-1")).toBe(true);
+  });
+
+  it("returns false for non-cron keys", () => {
+    expect(isCronSessionKey("main")).toBe(false);
+    expect(isCronSessionKey("discord:group:eng")).toBe(false);
+    expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
   });
 });
