@@ -37,10 +37,10 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
 export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
   const preferredRaw = (cfg.channels?.feishu as FeishuConfig | undefined)?.defaultAccount?.trim();
   const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
-  const ids = listFeishuAccountIds(cfg);
-  if (preferred && ids.includes(preferred)) {
+  if (preferred) {
     return preferred;
   }
+  const ids = listFeishuAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
   }
