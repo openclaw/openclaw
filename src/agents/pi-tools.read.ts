@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -764,11 +765,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandTilde(dir));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTilde(absolutePath));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
@@ -803,17 +804,17 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTilde(absolutePath));
         return await fs.readFile(resolved);
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTilde(absolutePath));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
       },
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTilde(absolutePath));
         await fs.access(resolved);
       },
     } as const;
@@ -843,8 +844,8 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
       try {
+        const relative = toRelativePathInRoot(root, absolutePath);
         const opened = await openFileWithinRoot({
           rootDir: root,
           relativePath: relative,
@@ -863,22 +864,33 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   } as const;
 }
 
+/** Expand leading `~` or `~/` to the user's home directory. */
+export function expandTilde(filePath: string): string {
+  if (filePath === "~") {
+    return os.homedir();
+  }
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return path.join(os.homedir(), filePath.slice(2));
+  }
+  return filePath;
+}
+
 function toRelativePathInRoot(
   root: string,
   candidate: string,
   options?: { allowRoot?: boolean },
 ): string {
   const rootResolved = path.resolve(root);
-  const resolved = path.resolve(candidate);
+  const resolved = path.resolve(expandTilde(candidate));
   const relative = path.relative(rootResolved, resolved);
   if (relative === "" || relative === ".") {
     if (options?.allowRoot) {
       return "";
     }
-    throw new Error(`Path escapes workspace root: ${candidate}`);
+    throw new SafeOpenError("outside-workspace", `Path is outside workspace root: ${candidate}`);
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes workspace root: ${candidate}`);
+    throw new SafeOpenError("outside-workspace", `Path is outside workspace root: ${candidate}`);
   }
   return relative;
 }
