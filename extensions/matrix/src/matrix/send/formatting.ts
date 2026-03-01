@@ -13,6 +13,16 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
+/**
+ * Extract Matrix user IDs (@user:server) from message text for m.mentions (MSC3952).
+ */
+export function extractMatrixUserMentions(body: string): string[] {
+  if (!body) return [];
+  // Matrix user IDs: @localpart:server.tld
+  const matches = body.match(/@[a-zA-Z0-9._=\-\/]+:[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
 export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
@@ -25,6 +35,7 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
         body,
       };
   applyMatrixFormatting(content, body);
+  applyMatrixMentions(content, body);
   return content;
 }
 
@@ -37,6 +48,16 @@ export function applyMatrixFormatting(content: MatrixFormattedContent, body: str
   content.formatted_body = formatted;
 }
 
+/**
+ * Add m.mentions field to content based on Matrix user IDs found in the body.
+ * Per MSC3952/Matrix spec v1.9, clients use m.mentions.user_ids for highlight notifications.
+ */
+export function applyMatrixMentions(content: Record<string, unknown>, body: string): void {
+  const userIds = extractMatrixUserMentions(body);
+  if (userIds.length > 0) {
+    (content as Record<string, unknown>)["m.mentions"] = { user_ids: userIds };
+  }
+}
 export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
   const trimmed = replyToId?.trim();
   if (!trimmed) {
