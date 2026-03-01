@@ -237,12 +237,24 @@ describe("resolveGatewayListenHosts", () => {
   it("resolves listen hosts for non-loopback and loopback variants", async () => {
     const cases = [
       {
-        name: "non-loopback host passthrough",
+        name: "wildcard IPv4 host passthrough",
         host: "0.0.0.0",
         canBindToHost: async () => {
           throw new Error("should not be called");
         },
         expected: ["0.0.0.0"],
+      },
+      {
+        name: "non-loopback host adds loopback alias when available",
+        host: "100.64.0.9",
+        canBindToHost: async (host: string) => host === "127.0.0.1",
+        expected: ["100.64.0.9", "127.0.0.1"],
+      },
+      {
+        name: "non-loopback host stays single when loopback alias unavailable",
+        host: "100.64.0.9",
+        canBindToHost: async () => false,
+        expected: ["100.64.0.9"],
       },
       {
         name: "loopback with IPv6 available",

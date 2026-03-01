@@ -12,6 +12,7 @@ export type ResolvedGatewayCredentials = {
 
 export type GatewayCredentialMode = "local" | "remote";
 export type GatewayCredentialPrecedence = "env-first" | "config-first";
+export type GatewayLocalCredentialFallback = "local-remote" | "local-only";
 export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
@@ -98,6 +99,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
   includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
   localPasswordPrecedence?: GatewayCredentialPrecedence;
+  localTokenFallback?: GatewayLocalCredentialFallback;
+  localPasswordFallback?: GatewayLocalCredentialFallback;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
@@ -127,13 +130,14 @@ export function resolveGatewayCredentialsFromConfig(params: {
 
   const localTokenPrecedence = params.localTokenPrecedence ?? "env-first";
   const localPasswordPrecedence = params.localPasswordPrecedence ?? "env-first";
+  const localTokenFallback = params.localTokenFallback ?? "local-remote";
+  const localPasswordFallback = params.localPasswordFallback ?? "local-remote";
 
   if (mode === "local") {
-    // In local mode, prefer gateway.auth.token, but also accept gateway.remote.token
-    // as a fallback for cron commands and other local gateway clients.
-    // This allows users in remote mode to use a single token for all operations.
-    const fallbackToken = localToken ?? remoteToken;
-    const fallbackPassword = localPassword ?? remotePassword;
+    const fallbackToken =
+      localTokenFallback === "local-only" ? localToken : (localToken ?? remoteToken);
+    const fallbackPassword =
+      localPasswordFallback === "local-only" ? localPassword : (localPassword ?? remotePassword);
     const localResolved = resolveGatewayCredentialsFromValues({
       configToken: fallbackToken,
       configPassword: fallbackPassword,

@@ -122,6 +122,31 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
+  it("supports local-only fallback in local mode", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          remote: { token: "remote-token", password: "remote-password" },
+          auth: {},
+        },
+      }),
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-local-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-local-password",
+      } as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+      localTokenFallback: "local-only",
+      localPasswordFallback: "local-only",
+      localTokenPrecedence: "config-first",
+      localPasswordPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({
+      token: "env-local-token",
+      password: "env-local-password",
+    });
+  });
+
   it("uses remote-mode remote credentials before env and local config", () => {
     const resolved = resolveRemoteModeWithRemoteCredentials();
     expect(resolved).toEqual({

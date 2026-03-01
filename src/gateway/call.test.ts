@@ -623,6 +623,29 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe("local-password");
   });
 
+  it("does not fall back to remote config credentials for forceLoopback local auth", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-local-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-local-password";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: {
+          url: "wss://remote.example:18789",
+          token: "remote-token",
+          password: "remote-password",
+        },
+        auth: {},
+      },
+    });
+
+    await callGateway({ method: "health", forceLoopback: true });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("env-local-token");
+    expect(lastClientOptions?.password).toBe("env-local-password");
+  });
+
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
     process.env[testCase.envKey] = testCase.envValue;
     const auth = { [testCase.authKey]: testCase.configValue } as {
