@@ -193,6 +193,19 @@ describe("cron webhook schema", () => {
 
     expect(res.success).toBe(false);
   });
+
+  it("accepts cron.retry config", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        retry: {
+          maxAttempts: 5,
+          backoffMs: [60000, 120000, 300000],
+          retryOn: ["rate_limit", "network"],
+        },
+      },
+    });
+    expect(res.success).toBe(true);
+  });
 });
 
 describe("broadcast", () => {
