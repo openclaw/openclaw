@@ -3,9 +3,13 @@ import { captureFullEnv } from "../test-utils/env.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const triggerBotRestartMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
+}));
+vi.mock("./restart.js", () => ({
+  triggerBotRestart: (...args: unknown[]) => triggerBotRestartMock(...args),
 }));
 
 import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
@@ -30,6 +34,7 @@ afterEach(() => {
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
+  triggerBotRestartMock.mockClear();
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -50,46 +55,39 @@ describe("restartGatewayProcessWithFreshPid", () => {
   });
 
   it("returns supervised when launchd/systemd hints are present", () => {
-    process.env.LAUNCH_JOB_LABEL = "ai.bot.gateway";
+    process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("schedules detached launchctl kickstart on macOS when launchd label is set", () => {
+  it("runs launchd kickstart helper on macOS when launchd label is set", () => {
     setPlatform("darwin");
     process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
     process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
-    const unrefMock = vi.fn();
-    spawnMock.mockReturnValue({ unref: unrefMock, on: vi.fn() });
+    triggerBotRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
 
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
-    expect(spawnMock).toHaveBeenCalledWith(
-      "launchctl",
-      ["kickstart", "-k", expect.stringContaining("ai.hanzo.bot.gateway")],
-      expect.objectContaining({ detached: true, stdio: "ignore" }),
-    );
-    expect(unrefMock).toHaveBeenCalledOnce();
+    expect(triggerBotRestartMock).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("still returns supervised even if kickstart spawn throws", () => {
+  it("returns failed when launchd kickstart helper fails", () => {
     setPlatform("darwin");
     process.env.LAUNCH_JOB_LABEL = "ai.hanzo.bot.gateway";
     process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
-    spawnMock.mockImplementation((...args: unknown[]) => {
-      const [cmd] = args as [string];
-      if (cmd === "launchctl") {
-        throw new Error("spawn failed");
-      }
-      return { unref: vi.fn(), on: vi.fn() };
+    triggerBotRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "spawn failed",
     });
 
     const result = restartGatewayProcessWithFreshPid();
 
-    // Kickstart is best-effort; failure should not block supervised exit
-    expect(result.mode).toBe("supervised");
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("spawn failed");
   });
 
   it("does not schedule kickstart on non-darwin platforms", () => {
@@ -100,6 +98,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
+    expect(triggerBotRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -127,21 +126,16 @@ describe("restartGatewayProcessWithFreshPid", () => {
     clearSupervisorHints();
     setPlatform("darwin");
     process.env.BOT_LAUNCHD_LABEL = "ai.hanzo.bot.gateway";
-    const unrefMock = vi.fn();
-    spawnMock.mockReturnValue({ unref: unrefMock, on: vi.fn() });
+    triggerBotRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
-    expect(spawnMock).toHaveBeenCalledWith(
-      "launchctl",
-      expect.arrayContaining(["kickstart", "-k"]),
-      expect.objectContaining({ detached: true }),
-    );
-    expect(unrefMock).toHaveBeenCalledOnce();
+    expect(triggerBotRestartMock).toHaveBeenCalledOnce();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns supervised when BOT_SYSTEMD_UNIT is set", () => {
     clearSupervisorHints();
-    process.env.BOT_SYSTEMD_UNIT = "hanzo-bot-gateway.service";
+    process.env.BOT_SYSTEMD_UNIT = "bot-gateway.service";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(spawnMock).not.toHaveBeenCalled();
