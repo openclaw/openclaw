@@ -29,6 +29,7 @@ function createMessagesContext(overrides?: SlackSystemEventTestOverrides) {
     handleSlackMessage,
   });
   return {
+    ctx: harness.ctx,
     getMessageHandler: () => harness.getHandler("message") as SlackMessageHandler | null,
     handleSlackMessage,
   };
@@ -95,6 +96,53 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores self-authored message_changed events from bot user", async () => {
+    enqueueSystemEventMock.mockClear();
+    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+    const { ctx, getMessageHandler, handleSlackMessage } = createMessagesContext({
+      dmPolicy: "open",
+    });
+    (ctx as { botUserId?: string }).botUserId = "UBOT";
+    const messageHandler = getMessageHandler();
+    expect(messageHandler).toBeTruthy();
+
+    await messageHandler!({
+      event: makeChangedEvent({ user: "UBOT" }),
+      body: {},
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("ignores message_changed events edited by bot user", async () => {
+    enqueueSystemEventMock.mockClear();
+    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+    const { ctx, getMessageHandler, handleSlackMessage } = createMessagesContext({
+      dmPolicy: "open",
+    });
+    (ctx as { botUserId?: string }).botUserId = "UBOT";
+    const messageHandler = getMessageHandler();
+    expect(messageHandler).toBeTruthy();
+
+    await messageHandler!({
+      event: {
+        ...makeChangedEvent({ user: "U1" }),
+        message: {
+          ts: "123.456",
+          user: "U1",
+          edited: {
+            user: "UBOT",
+          },
+        },
+      },
+      body: {},
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(handleSlackMessage).not.toHaveBeenCalled();
   });
 
   it("blocks message_changed system events when dmPolicy is disabled", async () => {

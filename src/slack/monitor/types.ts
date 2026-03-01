@@ -70,7 +70,7 @@ export type SlackMessageChangedEvent = {
   type: "message";
   subtype: "message_changed";
   channel?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
+  message?: { ts?: string; user?: string; bot_id?: string; edited?: { user?: string } };
   previous_message?: { ts?: string; user?: string; bot_id?: string };
   event_ts?: string;
 };

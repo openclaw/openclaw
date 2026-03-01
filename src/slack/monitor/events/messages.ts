@@ -11,6 +11,26 @@ import type {
 } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
+function isSelfAuthoredSlackMessageChange(params: {
+  botUserId: string;
+  changed: SlackMessageChangedEvent;
+}): boolean {
+  const { botUserId, changed } = params;
+  const currentUser = changed.message?.user?.trim();
+  if (currentUser && currentUser === botUserId) {
+    return true;
+  }
+  const previousUser = changed.previous_message?.user?.trim();
+  if (previousUser && previousUser === botUserId) {
+    return true;
+  }
+  const editedBy = changed.message?.edited?.user?.trim();
+  if (editedBy && editedBy === botUserId) {
+    return true;
+  }
+  return false;
+}
+
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
   handleSlackMessage: SlackMessageHandler;
@@ -36,6 +56,9 @@ export function registerSlackMessageEvents(params: {
       const message = event as SlackMessageEvent;
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
+        if (isSelfAuthoredSlackMessageChange({ botUserId: ctx.botUserId, changed })) {
+          return;
+        }
         const channelId = changed.channel;
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
