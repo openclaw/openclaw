@@ -305,6 +305,29 @@ describe("resolveWritablePathWithinRoot", () => {
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects existing hardlinked files under root",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsidePath = path.join(baseDir, "outside-target.txt");
+        await fs.writeFile(outsidePath, "outside", "utf8");
+        const hardlinkedPath = path.join(uploadsDir, "linked.txt");
+        await fs.link(outsidePath, hardlinkedPath);
+
+        const result = await resolveWritablePathWithinRoot({
+          rootDir: uploadsDir,
+          requestedPath: "linked.txt",
+          scopeLabel: "uploads directory",
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toContain("must stay within uploads directory");
+        }
+      });
+    },
+  );
 });
 
 describe("resolvePathsWithinRoot", () => {
