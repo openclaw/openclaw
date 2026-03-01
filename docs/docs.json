@@ -1103,7 +1103,10 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
-                  "platforms/ios"
+                  "platforms/ios",
+                  "platforms/digitalocean",
+                  "platforms/oracle",
+                  "platforms/raspberry-pi"
                 ]
               },
               {
@@ -1629,7 +1632,10 @@
                   "zh-CN/platforms/linux",
                   "zh-CN/platforms/windows",
                   "zh-CN/platforms/android",
-                  "zh-CN/platforms/ios"
+                  "zh-CN/platforms/ios",
+                  "zh-CN/platforms/digitalocean",
+                  "zh-CN/platforms/oracle",
+                  "zh-CN/platforms/raspberry-pi"
                 ]
               },
               {
