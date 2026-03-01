@@ -14,6 +14,8 @@ export type AcpStreamConfig = {
   repeatSuppression?: boolean;
   /** Live streams chunks or waits for terminal event before delivery. */
   deliveryMode?: "live" | "final_only";
+  /** Separator inserted before visible text when hidden tool events occurred. */
+  hiddenBoundarySeparator?: "none" | "space" | "newline" | "paragraph";
   /** Maximum assistant text characters forwarded per turn. */
   maxTurnChars?: number;
   /** Maximum visible characters for tool summary/meta lines. */
