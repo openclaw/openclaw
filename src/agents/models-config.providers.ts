@@ -176,6 +176,20 @@ const VLLM_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Privatemode - confidential computing / end-to-end encrypted inference proxy.
+// Exposes an OpenAI-compatible API at http://localhost:8080/v1 (default).
+// Run the proxy first: docker run -p 8080:8080 ghcr.io/edgelesssys/privatemode/privatemode-proxy:latest
+// Docs: https://docs.privatemode.ai/guides/proxy-configuration
+const PRIVATEMODE_BASE_URL = "http://localhost:8080/v1";
+const PRIVATEMODE_DEFAULT_CONTEXT_WINDOW = 128000;
+const PRIVATEMODE_DEFAULT_MAX_TOKENS = 8192;
+const PRIVATEMODE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -822,6 +836,43 @@ async function buildVllmProvider(params?: {
   };
 }
 
+export function buildPrivatemodeProvider(params?: { baseUrl?: string }): ProviderConfig {
+  const baseUrl = (params?.baseUrl?.trim() || PRIVATEMODE_BASE_URL).replace(/\/+$/, "");
+  return {
+    baseUrl,
+    api: "openai-completions",
+    models: [
+      {
+        id: "gemma-3-27b",
+        name: "Gemma 3 27B",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: PRIVATEMODE_DEFAULT_COST,
+        contextWindow: PRIVATEMODE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: PRIVATEMODE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        reasoning: false,
+        input: ["text"],
+        cost: PRIVATEMODE_DEFAULT_COST,
+        contextWindow: PRIVATEMODE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: PRIVATEMODE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen3-coder-30b-a3b",
+        name: "Qwen3-Coder 30B-A3B",
+        reasoning: true,
+        input: ["text"],
+        cost: PRIVATEMODE_DEFAULT_COST,
+        contextWindow: PRIVATEMODE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: PRIVATEMODE_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -1068,6 +1119,24 @@ export async function resolveImplicitProviders(params: {
     }
   }
 
+  // Privatemode provider - confidential computing proxy (opt-in via env/profile).
+  // Requires the privatemode-proxy to be running locally before use.
+  // See: https://docs.privatemode.ai/guides/proxy-configuration
+  if (!params.explicitProviders?.privatemode) {
+    const privatemodeEnvVar = resolveEnvApiKeyVarName("privatemode");
+    const privatemodeProfileKey = resolveApiKeyFromProfiles({
+      provider: "privatemode",
+      store: authStore,
+    });
+    const privatemodeKey = privatemodeEnvVar ?? privatemodeProfileKey;
+    if (privatemodeKey) {
+      providers.privatemode = {
+        ...buildPrivatemodeProvider(),
+        apiKey: privatemodeKey,
+      };
+    }
+  }
+
   const togetherKey =
     resolveEnvApiKeyVarName("together") ??
     resolveApiKeyFromProfiles({ provider: "together", store: authStore });
@@ -1210,3 +1279,4 @@ export async function resolveImplicitBedrockProvider(params: {
     models,
   } satisfies ProviderConfig;
 }
+
