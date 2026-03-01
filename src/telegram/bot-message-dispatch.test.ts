@@ -40,6 +40,9 @@ import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
+  const flushMicrotasks = async () => {
+    await Promise.resolve();
+  };
 
   beforeEach(() => {
     createTelegramDraftStream.mockClear();
@@ -1442,6 +1445,24 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     // Preview contains stale partial text — must be cleaned up
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes ack reaction when response is NO_REPLY and cleanup is enabled", async () => {
+    const reactionApi = vi.fn().mockResolvedValue(undefined);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ackReactionPromise: Promise.resolve(true),
+        reactionApi,
+        removeAckAfterReply: true,
+      }),
+    });
+    await flushMicrotasks();
+
+    expect(reactionApi).toHaveBeenCalledWith(123, 456, []);
   });
 
   it("falls back when all finals are skipped and clears preview", async () => {

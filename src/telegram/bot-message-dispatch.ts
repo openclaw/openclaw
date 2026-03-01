@@ -687,23 +687,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
-
-  if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
-  }
-
-  if (!hasFinalResponse) {
-    clearGroupHistory();
-    return;
-  }
-
-  if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
-  } else {
+  const scheduleAckReactionCleanup = () => {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,
@@ -721,6 +705,28 @@ export const dispatchTelegramMessage = async ({
         });
       },
     });
+  };
+
+  if (statusReactionController && !hasFinalResponse) {
+    void statusReactionController.setError().catch((err) => {
+      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+    });
+  }
+
+  if (!hasFinalResponse) {
+    if (!statusReactionController) {
+      scheduleAckReactionCleanup();
+    }
+    clearGroupHistory();
+    return;
+  }
+
+  if (statusReactionController) {
+    void statusReactionController.setDone().catch((err) => {
+      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+    });
+  } else {
+    scheduleAckReactionCleanup();
   }
   clearGroupHistory();
 };
