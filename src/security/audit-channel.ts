@@ -603,7 +603,13 @@ export async function collectChannelSecurityFindings(params: {
       );
 
       const hasAnySenderAllowlist =
-        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+        storeAllowFrom.length > 0 ||
+        groupAllowFrom.length > 0 ||
+        anyGroupOverride ||
+        // For "members" policy, per-account allowFrom is a valid runtime fallback
+        // (bot.ts uses allowFrom when groupAllowFrom is not set). Count it here to
+        // avoid false-positive "no sender allowlist" findings.
+        (groupPolicy === "members" && dmAllowFrom.length > 0);
 
       if (invalidTelegramAllowFromEntries.size > 0) {
         const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);

@@ -209,6 +209,27 @@ describe("group-membership-cache", () => {
     expect((apiWild.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
   });
 
+  it("uses separate cache entries for different botIds with same chatId and allowFrom", async () => {
+    const allowFrom: NormalizedAllowFrom = {
+      entries: ["111"],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: [],
+    };
+    const mockApi = {
+      getChatMemberCount: vi.fn(async () => 2),
+      getChatMember: vi.fn(async () => ({ status: "member" })),
+    } as unknown as import("grammy").Api;
+
+    // Bot A: verified trusted
+    await verifyGroupMembership({ chatId: 1, api: mockApi, botId: 100, allowFrom });
+    // Bot B: same chat, same allowFrom — should make its own API call
+    await verifyGroupMembership({ chatId: 1, api: mockApi, botId: 200, allowFrom });
+
+    // Each bot should have triggered its own getChatMemberCount call
+    expect((mockApi.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+
   describe("eviction sweep", () => {
     const TTL_MS = 5 * 60 * 1000;
 
