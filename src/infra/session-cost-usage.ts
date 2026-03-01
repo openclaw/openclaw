@@ -82,11 +82,21 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     return undefined;
   }
   const record = usageRaw as Record<string, unknown>;
-  const cost = record.cost as Record<string, unknown> | undefined;
-  if (!cost) {
+  const rawCost = record.cost;
+  if (rawCost === undefined || rawCost === null) {
     return undefined;
   }
 
+  // OpenRouter sends cost as a flat number; normalize to object form.
+  if (typeof rawCost === "number") {
+    const total = toFiniteNumber(rawCost);
+    if (total === undefined || total < 0) {
+      return undefined;
+    }
+    return { total };
+  }
+
+  const cost = rawCost as Record<string, unknown>;
   const total = toFiniteNumber(cost.total);
   if (total === undefined || total < 0) {
     return undefined;
