@@ -8,6 +8,7 @@ import {
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  isRootVersionInvocation,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -61,6 +62,36 @@ describe("argv helpers", () => {
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "root --version",
+      argv: ["node", "openclaw", "--version"],
+      expected: true,
+    },
+    {
+      name: "root -V",
+      argv: ["node", "openclaw", "-V"],
+      expected: true,
+    },
+    {
+      name: "root -v alias with profile",
+      argv: ["node", "openclaw", "--profile", "work", "-v"],
+      expected: true,
+    },
+    {
+      name: "subcommand version flag",
+      argv: ["node", "openclaw", "status", "--version"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag with version",
+      argv: ["node", "openclaw", "--unknown", "--version"],
+      expected: false,
+    },
+  ])("detects root-only version invocations: $name", ({ argv, expected }) => {
+    expect(isRootVersionInvocation(argv)).toBe(expected);
   });
 
   it.each([
