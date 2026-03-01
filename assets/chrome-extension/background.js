@@ -112,10 +112,22 @@ async function rehydrateState() {
     for (const entry of entries) {
       try {
         await chrome.tabs.get(entry.tabId)
-        await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
-          expression: '1',
-          returnByValue: true,
-        })
+
+        try {
+          await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
+            expression: '1',
+            returnByValue: true,
+          })
+        } catch {
+          // Service worker restarts can drop debugger attachment even if
+          // persisted tab state is still valid. Re-attach debugger before
+          // treating the tab as stale.
+          await chrome.debugger.attach({ tabId: entry.tabId }, '1.3')
+          await chrome.debugger.sendCommand({ tabId: entry.tabId }, 'Runtime.evaluate', {
+            expression: '1',
+            returnByValue: true,
+          })
+        }
       } catch {
         tabs.delete(entry.tabId)
         tabBySession.delete(entry.sessionId)
@@ -769,7 +781,7 @@ async function onDebuggerDetach(source, reason) {
     title: 'OpenClaw Browser Relay: re-attaching after navigation…',
   })
 
-  const delays = [300, 700, 1500]
+  const delays = [300, 700, 1500, 3000, 5000, 5000]
   for (let attempt = 0; attempt < delays.length; attempt++) {
     await new Promise((r) => setTimeout(r, delays[attempt]))
 
@@ -884,7 +896,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // MV3 keepalive via chrome.alarms — more reliable than setInterval across
 // service worker restarts. Checks relay health and refreshes badges.
-chrome.alarms.create('relay-keepalive', { periodInMinutes: 0.5 })
+chrome.alarms.create('relay-keepalive', { periodInMinutes: 1 / 3 })
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'relay-keepalive') return
