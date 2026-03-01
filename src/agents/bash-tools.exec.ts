@@ -52,6 +52,49 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+/**
+ * Try to parse exec output as MCP content blocks (JSON array).
+ * Tools like mcp-call output `[{"type":"image","data":"...","mimeType":"image/jpeg"},{"type":"text","text":"..."}]`.
+ * Falls back to a single TextContent block if parsing fails.
+ */
+function parseExecContentBlocks(text: string): ContentBlock[] | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("[")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown[];
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return null;
+    }
+    const blocks: ContentBlock[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const block = item as Record<string, unknown>;
+      if (
+        block.type === "image" &&
+        typeof block.data === "string" &&
+        typeof block.mimeType === "string"
+      ) {
+        blocks.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      } else if (block.type === "text" && typeof block.text === "string") {
+        blocks.push({ type: "text", text: block.text });
+      } else {
+        return null; // Unknown block type — not MCP content
+      }
+    }
+    return blocks;
+  } catch {
+    return null;
+  }
+}
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -1597,13 +1640,10 @@ export function createExecTool(
               reject(new Error(outcome.reason ?? "Command failed."));
               return;
             }
+            const rawOutput = `${getWarningText()}${outcome.aggregated || "(no output)"}`;
+            const mcpBlocks = parseExecContentBlocks(outcome.aggregated || "");
             resolve({
-              content: [
-                {
-                  type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
-                },
-              ],
+              content: mcpBlocks ?? [{ type: "text", text: rawOutput }],
               details: {
                 status: "completed",
                 exitCode: outcome.exitCode ?? 0,
