@@ -70,6 +70,7 @@ import {
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { resolveConfiguredCronModelSuggestions } from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -124,6 +125,60 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+<<<<<<< HEAD
+=======
+  const cronAgentSuggestions = Array.from(
+    new Set(
+      [
+        ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
+        ...state.cronJobs
+          .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const cronModelSuggestions = Array.from(
+    new Set(
+      [
+        ...state.cronModelSuggestions,
+        ...resolveConfiguredCronModelSuggestions(configValue),
+        ...state.cronJobs
+          .map((job) => {
+            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+              return "";
+            }
+            return job.payload.model.trim();
+          })
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const selectedDeliveryChannel =
+    state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
+      ? state.cronForm.deliveryChannel.trim()
+      : "last";
+  const jobToSuggestions = state.cronJobs
+    .map((job) => normalizeSuggestionValue(job.delivery?.to))
+    .filter(Boolean);
+  const accountToSuggestions = (
+    selectedDeliveryChannel === "last"
+      ? Object.values(state.channelsSnapshot?.channelAccounts ?? {}).flat()
+      : (state.channelsSnapshot?.channelAccounts?.[selectedDeliveryChannel] ?? [])
+  )
+    .flatMap((account) => [
+      normalizeSuggestionValue(account.accountId),
+      normalizeSuggestionValue(account.name),
+    ])
+    .filter(Boolean);
+  const rawDeliveryToSuggestions = uniquePreserveOrder([
+    ...jobToSuggestions,
+    ...accountToSuggestions,
+  ]);
+  const deliveryToSuggestions =
+    state.cronForm.deliveryMode === "webhook"
+      ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
+      : rawDeliveryToSuggestions;
+>>>>>>> f10734760 (fix(ui-cron): include configured model suggestions for scheduled jobs (openclaw#29709) thanks @Sid-Qin)
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
