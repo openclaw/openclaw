@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resolveImplicitProviders, resolveOllamaApiBase } from "./models-config.providers.js";
 
 afterEach(() => {
@@ -200,12 +201,12 @@ describe("Ollama provider", () => {
     process.env.OLLAMA_API_KEY = "test-key";
 
     try {
-      const explicitModels = [
+      const explicitModels: ModelDefinitionConfig[] = [
         {
           id: "gpt-oss:20b",
           name: "GPT-OSS 20B",
           reasoning: false,
-          input: ["text"],
+          input: ["text"] as Array<"text" | "image">,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 8192,
           maxTokens: 81920,
