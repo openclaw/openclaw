@@ -276,7 +276,7 @@ async function runPackageInstallUpdate(params: {
     DEFAULT_PACKAGE_NAME;
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
-  if (pkgRoot) {
+  if (effectivePkgRoot) {
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
       packageName,
@@ -291,11 +291,17 @@ async function runPackageInstallUpdate(params: {
   });
 
   const steps = [updateStep];
+
+  // Re-resolve pkgRoot after update to handle npm moving the package during update
+  // This ensures we use the correct path for the updated installation
+  // See: https://github.com/openclaw/openclaw/issues/13258
+  const updatedPkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
+  const effectivePkgRoot = updatedPkgRoot ?? pkgRoot;
   let afterVersion = beforeVersion;
 
-  if (pkgRoot) {
-    afterVersion = await readPackageVersion(pkgRoot);
-    const entryPath = path.join(pkgRoot, "dist", "entry.js");
+  if (effectivePkgRoot) {
+    afterVersion = await readPackageVersion(effectivePkgRoot);
+    const entryPath = path.join(effectivePkgRoot, "dist", "entry.js");
     if (await pathExists(entryPath)) {
       const doctorStep = await runUpdateStep({
         name: `${CLI_NAME} doctor`,
@@ -311,7 +317,7 @@ async function runPackageInstallUpdate(params: {
   return {
     status: failedStep ? "error" : "ok",
     mode: manager,
-    root: pkgRoot ?? params.root,
+    root: effectivePkgRoot ?? params.root,
     reason: failedStep ? failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: afterVersion },
