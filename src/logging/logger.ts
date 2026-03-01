@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
@@ -74,7 +75,8 @@ function resolveSettings(): ResolvedSettings {
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? fromConfig;
-  const file = cfg?.file ?? defaultRollingPathForToday();
+  const rawFile = cfg?.file ?? defaultRollingPathForToday();
+  const file = expandHomePrefix(rawFile);
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
