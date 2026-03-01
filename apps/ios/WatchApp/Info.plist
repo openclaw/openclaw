@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.2.27</string>
+	<string>2026.3.1</string>
 	<key>CFBundleVersion</key>
-	<string>20260227</string>
+	<string>20260301</string>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
 	<key>WKWatchKitApp</key>

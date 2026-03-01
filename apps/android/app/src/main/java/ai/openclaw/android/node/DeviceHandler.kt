@@ -130,6 +130,24 @@ class DeviceHandler(
   private fun permissionsPayloadJson(): String {
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
     val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
+    val photosGranted =
+      if (Build.VERSION.SDK_INT >= 33) {
+        hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
+      } else {
+        hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+      }
+    val motionGranted =
+      if (Build.VERSION.SDK_INT >= 29) {
+        hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+      } else {
+        true
+      }
+    val notificationsGranted =
+      if (Build.VERSION.SDK_INT >= 33) {
+        hasPermission(Manifest.permission.POST_NOTIFICATIONS)
+      } else {
+        true
+      }
     return buildJsonObject {
       put(
         "permissions",
@@ -176,6 +194,41 @@ class DeviceHandler(
             permissionStateJson(
               granted = notificationAccess,
               promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "notifications",
+            permissionStateJson(
+              granted = notificationsGranted,
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "photos",
+            permissionStateJson(
+              granted = photosGranted,
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "contacts",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.READ_CONTACTS),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "calendar",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.READ_CALENDAR),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "motion",
+            permissionStateJson(
+              granted = motionGranted,
+              promptableWhenDenied = Build.VERSION.SDK_INT >= 29,
             ),
           )
           // Screen capture on Android is interactive per-capture consent, not a sticky app permission.

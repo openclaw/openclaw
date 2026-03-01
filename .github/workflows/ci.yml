@@ -208,10 +208,6 @@ jobs:
         with:
           install-bun: "${{ matrix.runtime == 'bun' }}"
 
-      - name: Configure vitest JSON reports
-        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
-
       - name: Configure Node test resources
         if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
         run: |
@@ -223,21 +219,6 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: matrix.runtime != 'bun' || github.event_name != 'push'
         run: ${{ matrix.command }}
-
-      - name: Summarize slowest tests
-        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
-        run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
-          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
-
-      - name: Upload vitest reports
-        if: (github.event_name != 'push' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
-          path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
-            ${{ runner.temp }}/vitest-slowest.md
 
   # Types, lint, and format check.
   check:
@@ -513,27 +494,8 @@ jobs:
           echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
 
-      - name: Configure vitest JSON reports
-        if: matrix.task == 'test'
-        run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
-
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
-
-      - name: Summarize slowest tests
-        if: matrix.task == 'test'
-        run: |
-          node scripts/vitest-slowest.mjs --dir "$OPENCLAW_VITEST_REPORT_DIR" --top 50 --out "$RUNNER_TEMP/vitest-slowest.md" > /dev/null
-          echo "Slowest test summary written to $RUNNER_TEMP/vitest-slowest.md"
-
-      - name: Upload vitest reports
-        if: matrix.task == 'test'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}-shard${{ matrix.shard_index }}of${{ matrix.shard_count }}
-          path: |
-            ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
-            ${{ runner.temp }}/vitest-slowest.md
 
   # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
   # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
