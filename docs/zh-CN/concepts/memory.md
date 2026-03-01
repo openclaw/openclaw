@@ -5,10 +5,10 @@ read_when:
 summary: OpenClaw 记忆的工作原理（工作空间文件 + 自动记忆刷新）
 title: 记忆
 x-i18n:
-  generated_at: "2026-02-03T07:47:38Z"
+  generated_at: "2026-03-01T07:48:34Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: b31753d59496ceec64e4fd3554fff5ad3c698915caf15729f278399385c40f4d
+  source_hash: e449e6a502daae76a311912711c0005ebac2be83
   source_path: concepts/memory.md
   workflow: 15
 ---
@@ -31,6 +31,15 @@ OpenClaw 记忆是**智能体工作空间中的纯 Markdown 文件**。这些文
   - **仅在主要的私人会话中加载**（绝不在群组上下文中加载）。
 
 这些文件位于工作空间下（`agents.defaults.workspace`，默认 `~/.openclaw/workspace`）。完整布局参见[智能体工作空间](/concepts/agent-workspace)。
+
+## 记忆工具
+
+OpenClaw 为这些 Markdown 文件暴露了两个面向智能体的工具：
+
+- `memory_search` — 对索引片段进行语义召回。
+- `memory_get` — 针对特定 Markdown 文件/行范围的读取。
+
+`memory_get` 现在**在文件不存在时会优雅降级**（例如，首次写入前的当日日志）。内置管理器和 QMD 后端都返回 `{ text: "", path }` 而不是抛出 `ENOENT`，因此智能体可以处理"尚未记录"的情况并继续工作流程，而无需将工具调用包装在 try/catch 逻辑中。
 
 ## 何时写入记忆
 
@@ -256,12 +265,12 @@ agents: {
 - `memorySearch.fallback` 可以是 `openai`、`gemini`、`voyage`、`mistral`、`local` 或 `none`。
 - 回退提供商仅在主嵌入提供商失败时使用。
 
-批量索引（OpenAI + Gemini）：
+批量索引（OpenAI + Gemini + Voyage）：
 
-- OpenAI 和 Gemini 嵌入默认启用。设置 `agents.defaults.memorySearch.remote.batch.enabled = false` 以禁用。
+- 默认禁用。设置 `agents.defaults.memorySearch.remote.batch.enabled = true` 以启用大规模语料库索引（OpenAI、Gemini 和 Voyage）。
 - 默认行为等待批处理完成；如果需要可以调整 `remote.batch.wait`、`remote.batch.pollIntervalMs` 和 `remote.batch.timeoutMinutes`。
 - 设置 `remote.batch.concurrency` 以控制我们并行提交多少个批处理作业（默认：2）。
-- 批处理模式在 `memorySearch.provider = "openai"` 或 `"gemini"` 时适用，并使用相应的 API 密钥。
+- 批处理模式在 `memorySearch.provider = "openai"` 或 `"gemini"` 时适用，并使用相应的 API 密钥。Voyage 批处理作业同样支持。
 - Gemini 批处理作业使用异步嵌入批处理端点，需要 Gemini Batch API 可用。
 
 为什么 OpenAI 批处理快速又便宜：
@@ -628,7 +637,7 @@ agents: {
 
 ### 本地嵌入自动下载
 
-- 默认本地嵌入模型：`hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`（约 0.6 GB）。
+- 默认本地嵌入模型：`hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf`（约 0.6 GB）。
 - 当 `memorySearch.provider = "local"` 时，`node-llama-cpp` 解析 `modelPath`；如果 GGUF 缺失，它会**自动下载**到缓存（或 `local.modelCacheDir`，如果已设置），然后加载它。下载在重试时会续传。
 - 原生构建要求：运行 `pnpm approve-builds`，选择 `node-llama-cpp`，然后运行 `pnpm rebuild node-llama-cpp`。
 - 回退：如果本地设置失败且 `memorySearch.fallback = "openai"`，我们自动切换到远程嵌入（`openai/text-embedding-3-small`，除非被覆盖）并记录原因。
