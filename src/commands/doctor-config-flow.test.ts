@@ -657,4 +657,54 @@ describe("doctor config flow", () => {
 
     expectGoogleChatDmAllowFromRepaired(result.cfg);
   });
+
+  it("suppresses note output when json mode is enabled", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      // Run with an invalid config that would normally produce notes
+      await runDoctorConfigWithInput({
+        config: {
+          bridge: { bind: "auto" }, // Unknown key
+          gateway: { auth: { mode: "token", token: "ok" } },
+          agents: { list: [{ id: "pi" }] },
+        },
+        run: (params) =>
+          loadAndMaybeMigrateDoctorConfig({
+            ...params,
+            json: true,
+          }),
+      });
+
+      // When json: true, note() should not be called at all
+      expect(noteSpy).not.toHaveBeenCalled();
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("produces note output when json mode is disabled", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      // Same config as the json mode test, but without json flag
+      await runDoctorConfigWithInput({
+        config: {
+          bridge: { bind: "auto" }, // Unknown key
+          gateway: { auth: { mode: "token", token: "ok" } },
+          agents: { list: [{ id: "pi" }] },
+        },
+        run: (params) =>
+          loadAndMaybeMigrateDoctorConfig({
+            ...params,
+            json: false,
+          }),
+      });
+
+      // When json: false, note() should be called for warnings
+      expect(noteSpy).toHaveBeenCalled();
+      const noteCalls = noteSpy.mock.calls.map((call) => call[1]);
+      expect(noteCalls).toContain("Unknown config keys");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
 });

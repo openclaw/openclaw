@@ -200,3 +200,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
 export function shouldMigrateState(argv: string[]): boolean {
   return shouldMigrateStateFromPath(getCommandPath(argv, 2));
 }
+
+export function hasJsonFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--json");
+}

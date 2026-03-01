@@ -8,6 +8,7 @@ import {
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  hasJsonFlag,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -283,5 +284,27 @@ describe("argv helpers", () => {
     { path: ["agents", "list"], expected: true },
   ])("reuses command path for migrate state decisions: $path", ({ path, expected }) => {
     expect(shouldMigrateStateFromPath(path)).toBe(expected);
+  });
+
+  it.each([
+    { name: "no flags", argv: ["node", "openclaw", "status"], expected: false },
+    { name: "with --json", argv: ["node", "openclaw", "status", "--json"], expected: true },
+    {
+      name: "--json before command",
+      argv: ["node", "openclaw", "--json", "status"],
+      expected: true,
+    },
+    {
+      name: "other flags only",
+      argv: ["node", "openclaw", "status", "--verbose"],
+      expected: false,
+    },
+    {
+      name: "--json after terminator",
+      argv: ["node", "openclaw", "status", "--", "--json"],
+      expected: false,
+    },
+  ])("detects --json flag: $name", ({ argv, expected }) => {
+    expect(hasJsonFlag(argv)).toBe(expected);
   });
 });

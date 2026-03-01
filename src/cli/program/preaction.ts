@@ -3,7 +3,7 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
+import { getCommandPath, getVerboseFlag, hasHelpOrVersion, hasJsonFlag } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
 
@@ -80,7 +80,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
+    await ensureConfigReady({ runtime: defaultRuntime, commandPath, json: hasJsonFlag(argv) });
     // Load plugins for commands that need channel access
     if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
       const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");
