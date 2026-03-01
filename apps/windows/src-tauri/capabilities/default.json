@@ -1,0 +1,34 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "dashboard",
+    "setup",
+    "settings",
+    "tray_menu",
+    "voice_overlay",
+    "notification"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:window:allow-close",
+    "core:window:allow-center",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-set-size",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-maximized",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+    "frame:default",
+    "dialog:allow-open",
+    "dialog:default",
+    "store:allow-load",
+    "store:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "opener:allow-open-path"
+  ]
+}

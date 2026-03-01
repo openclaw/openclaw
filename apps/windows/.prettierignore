@@ -1,0 +1,6 @@
+node_modules
+dist
+dist-tauri
+target
+src-tauri
+package-lock.json

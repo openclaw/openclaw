@@ -1,0 +1,90 @@
+#frame-tb-minimize,
+#frame-tb-maximize,
+#frame-tb-close {
+  color: black !important;
+  background: transparent !important;
+}
+
+#frame-tb-minimize:hover,
+#frame-tb-maximize:hover {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+#frame-tb-close:hover {
+  background: rgb(196, 43, 28) !important;
+  color: white !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  #frame-tb-minimize,
+  #frame-tb-maximize,
+  #frame-tb-close {
+    color: white !important;
+    background: transparent !important;
+  }
+
+  #frame-tb-minimize:hover,
+  #frame-tb-maximize:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  user-select: none; /* Disable text selection for native feel */
+  -webkit-user-select: none;
+}
+
+/* ================================
+   Chromium / WebView2
+================================ */
+
+/* Default thin */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  transition:
+    width 150ms ease,
+    height 150ms ease;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--colorTransparentBackground);
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  border: 2px solid var(--colorTransparentBackground); /* inset Fluent look */
+  background-clip: content-box;
+  background-color: color-mix(
+    in srgb,
+    var(--colorNeutralForeground3) 35%,
+    var(--colorTransparentBackground)
+  );
+  opacity: 0.7;
+  transition:
+    background-color 120ms ease,
+    opacity 150ms ease;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  opacity: 1;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--colorNeutralForeground3) 55%,
+    var(--colorTransparentBackground)
+  );
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(
+    in srgb,
+    var(--colorNeutralForeground3) 75%,
+    var(--colorTransparentBackground)
+  );
+}

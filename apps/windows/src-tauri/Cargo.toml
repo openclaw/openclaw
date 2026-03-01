@@ -1,0 +1,63 @@
+[package]
+name = "openclaw-windows"
+version = "1.0.1"
+description = "Desktop companion app for OpenClaw on Windows"
+authors = ["Nitesh"]
+edition = "2021"
+license = "MIT"
+homepage = "https://github.com/nites/OpenClaw-Windows"
+repository = "https://github.com/nites/OpenClaw-Windows"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "openclaw_windows_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-frame = "1.1.6"
+tauri-plugin-fs = "2"
+tauri-plugin-store = "2"
+tauri-plugin-global-shortcut = "2"
+mdns-sd = "0.18.0"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.20"
+tungstenite = "0.20"
+futures-util = "0.3"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+base64 = "0.21"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+directories = "5"
+sha2 = "0.10.9"
+hex = "0.4.3"
+tauri-plugin-dialog = "2"
+portable-pty = { version = "0.8", features = ["serde_support"] }
+async-trait = "0.1"
+xcap = "0.0.12"
+image = "0.25"
+url = "2"
+cpal = "0.15"
+reqwest = { version = "0.12", features = ["json"] }
+nokhwa = { version = "0.10.4", features = ["input-msmf"] }
+thiserror = "2.0.18"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-appender = "0.2"
+windows = { version = "0.62.2", features = ["Media_SpeechRecognition", "Foundation", "Foundation_Collections", "Globalization", "Win32_System_Console"] }
+hostname = "0.3"
+subtle = "2"
+tauri-plugin-autostart = "2"
+urlencoding = "2"
+wait-timeout = "0.2"

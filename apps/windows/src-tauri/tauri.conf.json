@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "openclaw-windows",
+  "version": "1.0.1",
+  "identifier": "com.openclaw.windows",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "voice_overlay",
+        "title": "Voice Wake",
+        "url": "/voice-overlay",
+        "width": 400,
+        "height": 100,
+        "fullscreen": false,
+        "resizable": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false
+      },
+      {
+        "label": "tray_menu",
+        "title": "OpenClaw",
+        "url": "/tray-menu",
+        "width": 320,
+        "height": 520,
+        "fullscreen": false,
+        "resizable": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": true
+      },
+      {
+        "label": "notification",
+        "title": "Notification",
+        "url": "/notification",
+        "width": 360,
+        "height": 100,
+        "fullscreen": false,
+        "resizable": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https: wss: ipc:; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' asset: data: blob:; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "signCommand": null
+    }
+  }
+}
