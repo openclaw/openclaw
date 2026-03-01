@@ -1,15 +1,9 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "../../infra/net/hostname.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { FetchLike } from "../../media/fetch.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
-
-const SLACK_MEDIA_SSRF_POLICY: SsrFPolicy = {
-  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
-  allowRfc2544BenchmarkRange: true,
-};
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -113,6 +107,11 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   // (Slack's CDN URLs are pre-signed and don't need it)
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
+
+const SLACK_MEDIA_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 /**
  * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
