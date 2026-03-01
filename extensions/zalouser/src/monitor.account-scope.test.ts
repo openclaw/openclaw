@@ -13,8 +13,22 @@ vi.mock("./send.js", () => ({
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
     const readAllowFromStore = vi.fn(
-      async (_channel: string, _env?: NodeJS.ProcessEnv, accountId?: string) =>
-        accountId === "beta" ? [] : ["attacker"],
+      async (
+        channelOrParams:
+          | string
+          | {
+              channel?: string;
+              accountId?: string;
+            },
+        _env?: NodeJS.ProcessEnv,
+        accountId?: string,
+      ) => {
+        const scopedAccountId =
+          typeof channelOrParams === "object" && channelOrParams !== null
+            ? channelOrParams.accountId
+            : accountId;
+        return scopedAccountId === "beta" ? [] : ["attacker"];
+      },
     );
     const upsertPairingRequest = vi.fn(async () => ({ code: "PAIRME88", created: true }));
 
@@ -86,7 +100,12 @@ describe("zalouser monitor pairing account scoping", () => {
       runtime,
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledWith("zalouser", undefined, "beta");
+    expect(readAllowFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalouser",
+        accountId: "beta",
+      }),
+    );
     expect(upsertPairingRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "zalouser",
