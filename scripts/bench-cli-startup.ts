@@ -16,7 +16,6 @@ type CaseSummary = ReturnType<typeof summarize>;
 const DEFAULT_RUNS = 8;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
-const DEFAULT_BUNDLED_ENTRY = "dist/entry.bundle.mjs";
 
 const DEFAULT_CASES: CommandCase[] = [
   { name: "--version", args: ["--version"] },
@@ -43,10 +42,6 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
     return fallback;
   }
   return parsed;
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
 }
 
 function median(values: number[]): number {
@@ -161,9 +156,7 @@ function printSuite(params: {
 async function main(): Promise<void> {
   const entryPrimary =
     parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY;
-  const compareBundle = hasFlag("--compare-bundle");
-  const entrySecondary =
-    parseFlagValue("--entry-secondary") ?? (compareBundle ? DEFAULT_BUNDLED_ENTRY : undefined);
+  const entrySecondary = parseFlagValue("--entry-secondary");
   const runs = parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS);
   const timeoutMs = parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS);
 
