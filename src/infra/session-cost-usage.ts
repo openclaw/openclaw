@@ -82,22 +82,23 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     return undefined;
   }
   const record = usageRaw as Record<string, unknown>;
-  const cost = record.cost as Record<string, unknown> | undefined;
+  const cost = record.cost as Record<string, unknown> | number | undefined;
   if (!cost) {
     return undefined;
   }
 
-  const total = toFiniteNumber(cost.total);
+  // Handle both object format ({total, input, output}) and flat number format (OpenRouter)
+  const total = toFiniteNumber(typeof cost === "number" ? cost : cost.total);
   if (total === undefined || total < 0) {
     return undefined;
   }
 
   return {
     total,
-    input: toFiniteNumber(cost.input),
-    output: toFiniteNumber(cost.output),
-    cacheRead: toFiniteNumber(cost.cacheRead),
-    cacheWrite: toFiniteNumber(cost.cacheWrite),
+    input: toFiniteNumber(typeof cost === "number" ? undefined : cost.input),
+    output: toFiniteNumber(typeof cost === "number" ? undefined : cost.output),
+    cacheRead: toFiniteNumber(typeof cost === "number" ? undefined : cost.cacheRead),
+    cacheWrite: toFiniteNumber(typeof cost === "number" ? undefined : cost.cacheWrite),
   };
 };
 
