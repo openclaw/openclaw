@@ -975,6 +975,108 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+<<<<<<< HEAD
+=======
+  it("skips qmd embed in search mode even for forced sync", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "status" });
+    await manager.sync({ reason: "manual", force: true });
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"]]);
+    await manager.close();
+  });
+
+  it("retries boot update when qmd reports a retryable lock error", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: {
+            interval: "0s",
+            debounceMs: 60_000,
+            onBoot: true,
+            waitForBootSync: true,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let updateCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        updateCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        if (updateCalls === 1) {
+          emitAndClose(child, "stderr", "SQLITE_BUSY: database is locked", 2);
+        } else {
+          emitAndClose(child, "stdout", "", 0);
+        }
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const nativeSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof timeout === "number" && timeout >= 500) {
+        return nativeSetTimeout(handler, 1, ...args);
+      }
+      return nativeSetTimeout(handler, timeout, ...args);
+    }) as typeof globalThis.setTimeout);
+
+    const { manager } = await createManager({ mode: "full" });
+
+    try {
+      expect(updateCalls).toBe(2);
+      await manager.close();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("succeeds on qmd update even when stdout exceeds the output cap", async () => {
+    // Regression test for #24966: large indexes produce >200K chars of stdout
+    // during `qmd update`, which used to fail with "produced too much output".
+    const largeOutput = "x".repeat(300_000);
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", largeOutput);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    // sync triggers runQmdUpdateOnce -> runQmd(["update"], { discardOutput: true })
+    await expect(manager.sync({ reason: "manual" })).resolves.toBeUndefined();
+    await manager.close();
+  });
+
+>>>>>>> 134296276 (fix(memory): discard stdout for qmd update/embed to prevent output cap failure (openclaw#28900) thanks @Glucksberg)
   it("scopes by channel for agent-prefixed session keys", async () => {
     cfg = {
       ...cfg,

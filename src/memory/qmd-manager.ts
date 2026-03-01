@@ -609,7 +609,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
       if (shouldEmbed) {
         try {
+<<<<<<< HEAD
           await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
+=======
+          await runWithQmdEmbedLock(async () => {
+            await this.runQmd(["embed"], {
+              timeoutMs: this.qmd.update.embedTimeoutMs,
+              discardOutput: true,
+            });
+          });
+>>>>>>> 134296276 (fix(memory): discard stdout for qmd update/embed to prevent output cap failure (openclaw#28900) thanks @Glucksberg)
           this.lastEmbedAt = Date.now();
         } catch (err) {
           log.warn(`qmd embed failed (${reason}): ${String(err)}`);
@@ -624,6 +633,83 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.pendingUpdate;
   }
 
+<<<<<<< HEAD
+=======
+  private async runQmdUpdateWithRetry(reason: string): Promise<void> {
+    const isBootRun = reason === "boot" || reason.startsWith("boot:");
+    const maxAttempts = isBootRun ? 3 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.runQmdUpdateOnce(reason);
+        return;
+      } catch (err) {
+        if (attempt >= maxAttempts || !this.isRetryableUpdateError(err)) {
+          throw err;
+        }
+        const delayMs = 500 * 2 ** (attempt - 1);
+        log.warn(
+          `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  private async runQmdUpdateOnce(reason: string): Promise<void> {
+    try {
+      await this.runQmd(["update"], {
+        timeoutMs: this.qmd.update.updateTimeoutMs,
+        discardOutput: true,
+      });
+    } catch (err) {
+      if (!(await this.tryRepairNullByteCollections(err, reason))) {
+        throw err;
+      }
+      await this.runQmd(["update"], {
+        timeoutMs: this.qmd.update.updateTimeoutMs,
+        discardOutput: true,
+      });
+    }
+  }
+
+  private isRetryableUpdateError(err: unknown): boolean {
+    if (this.isSqliteBusyError(err)) {
+      return true;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return normalized.includes("timed out");
+  }
+
+  private shouldRunEmbed(force?: boolean): boolean {
+    if (this.qmd.searchMode === "search") {
+      return false;
+    }
+    const now = Date.now();
+    if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
+      return false;
+    }
+    const embedIntervalMs = this.qmd.update.embedIntervalMs;
+    return (
+      Boolean(force) ||
+      this.lastEmbedAt === null ||
+      (embedIntervalMs > 0 && now - this.lastEmbedAt > embedIntervalMs)
+    );
+  }
+
+  private noteEmbedFailure(reason: string, err: unknown): void {
+    this.embedFailureCount += 1;
+    const delayMs = Math.min(
+      QMD_EMBED_BACKOFF_MAX_MS,
+      QMD_EMBED_BACKOFF_BASE_MS * 2 ** Math.max(0, this.embedFailureCount - 1),
+    );
+    this.embedBackoffUntil = Date.now() + delayMs;
+    log.warn(
+      `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
+    );
+  }
+
+>>>>>>> 134296276 (fix(memory): discard stdout for qmd update/embed to prevent output cap failure (openclaw#28900) thanks @Glucksberg)
   private enqueueForcedUpdate(reason: string): Promise<void> {
     this.queuedForcedRuns += 1;
     if (!this.queuedForcedUpdate) {
@@ -706,7 +792,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmd(
     args: string[],
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
       const child = spawn(this.qmd.command, args, {
@@ -717,6 +803,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       let stderr = "";
       let stdoutTruncated = false;
       let stderrTruncated = false;
+      // When discardOutput is set, skip stdout accumulation entirely and keep
+      // only a small stderr tail for diagnostics -- never fail on truncation.
+      // This prevents large `qmd update` runs from hitting the output cap.
+      const discard = opts?.discardOutput === true;
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
@@ -724,6 +814,9 @@ export class QmdMemoryManager implements MemorySearchManager {
           }, opts.timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
+        if (discard) {
+          return; // drain without accumulating
+        }
         const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
         stdout = next.text;
         stdoutTruncated = stdoutTruncated || next.truncated;
@@ -743,7 +836,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (timer) {
           clearTimeout(timer);
         }
-        if (stdoutTruncated || stderrTruncated) {
+        if (!discard && (stdoutTruncated || stderrTruncated)) {
           reject(
             new Error(
               `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
