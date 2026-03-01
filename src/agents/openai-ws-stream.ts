@@ -53,6 +53,8 @@ interface WsSession {
   lastContextLength: number;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
+  /** True once a best-effort warm-up attempt has run for this session. */
+  warmUpAttempted: boolean;
   /** True if the session is permanently broken (no more reconnect). */
   broken: boolean;
 }
@@ -325,12 +327,75 @@ export interface OpenAIWebSocketStreamOptions {
 }
 
 type WsTransport = "sse" | "websocket" | "auto";
+const WARM_UP_TIMEOUT_MS = 8_000;
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
   return transport === "sse" || transport === "websocket" || transport === "auto"
     ? transport
     : "auto";
+}
+
+type WsOptions = Parameters<StreamFn>[2] & { openaiWsWarmup?: unknown; signal?: AbortSignal };
+
+function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
+  const warmup = (options as WsOptions | undefined)?.openaiWsWarmup;
+  return warmup === true;
+}
+
+async function runWarmUp(params: {
+  manager: OpenAIWebSocketManager;
+  modelId: string;
+  tools: FunctionToolDefinition[];
+  instructions?: string;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.signal?.aborted) {
+    throw new Error("aborted");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`warm-up timed out after ${WARM_UP_TIMEOUT_MS}ms`));
+    }, WARM_UP_TIMEOUT_MS);
+
+    const abortHandler = () => {
+      cleanup();
+      reject(new Error("aborted"));
+    };
+    const closeHandler = (code: number, reason: string) => {
+      cleanup();
+      reject(new Error(`warm-up closed (code=${code}, reason=${reason || "unknown"})`));
+    };
+    const unsubscribe = params.manager.onMessage((event) => {
+      if (event.type === "response.completed") {
+        cleanup();
+        resolve();
+      } else if (event.type === "response.failed") {
+        cleanup();
+        const errMsg = event.response?.error?.message ?? "Response failed";
+        reject(new Error(`warm-up failed: ${errMsg}`));
+      } else if (event.type === "error") {
+        cleanup();
+        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+      }
+    });
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      params.signal?.removeEventListener("abort", abortHandler);
+      params.manager.off("close", closeHandler);
+      unsubscribe();
+    };
+
+    params.signal?.addEventListener("abort", abortHandler, { once: true });
+    params.manager.on("close", closeHandler);
+    params.manager.warmUp({
+      model: params.modelId,
+      tools: params.tools.length > 0 ? params.tools : undefined,
+      instructions: params.instructions,
+    });
+  });
 }
 
 /**
@@ -369,6 +434,7 @@ export function createOpenAIWebSocketStreamFn(
           manager,
           lastContextLength: 0,
           everConnected: false,
+          warmUpAttempted: false,
           broken: false,
         };
         wsRegistry.set(sessionId, session);
@@ -414,6 +480,29 @@ export function createOpenAIWebSocketStreamFn(
         }
         wsRegistry.delete(sessionId);
         return fallbackToHttp(model, context, options, eventStream, opts.signal);
+      }
+
+      const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
+
+      if (resolveWsWarmup(options) && !session.warmUpAttempted) {
+        session.warmUpAttempted = true;
+        try {
+          await runWarmUp({
+            manager: session.manager,
+            modelId: model.id,
+            tools: convertTools(context.tools),
+            instructions: context.systemPrompt ?? undefined,
+            signal,
+          });
+          log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
+        } catch (warmErr) {
+          if (signal?.aborted) {
+            throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
+          }
+          log.warn(
+            `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
+          );
+        }
       }
 
       // ── 3. Compute incremental vs full input ─────────────────────────────
@@ -544,7 +633,6 @@ export function createOpenAIWebSocketStreamFn(
           cleanup();
           reject(new Error("aborted"));
         };
-        const signal = opts.signal ?? (options as { signal?: AbortSignal } | undefined)?.signal;
         if (signal?.aborted) {
           reject(new Error("aborted"));
           return;

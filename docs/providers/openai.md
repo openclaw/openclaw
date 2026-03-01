@@ -68,6 +68,9 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
 
+For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+default (`openaiWsWarmup: true`) when WebSocket transport is used.
+
 ```json5
 {
   agents: {
@@ -77,6 +80,47 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
         "openai-codex/gpt-5.3-codex": {
           params: {
             transport: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenAI WebSocket warm-up
+
+OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+`openai/*` to reduce first-turn latency when using WebSocket transport.
+
+### Disable warm-up
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            openaiWsWarmup: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable warm-up explicitly
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            openaiWsWarmup: true,
           },
         },
       },

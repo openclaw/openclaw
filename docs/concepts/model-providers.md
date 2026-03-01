@@ -45,6 +45,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
+- OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 
 ```json5
 {
