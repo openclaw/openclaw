@@ -30,6 +30,29 @@ function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
   void agent.streamFn?.(model, context, {});
 }
 
+function runOpenRouterPayloadWithOverride(
+  payload: StreamPayload,
+  modelId: string,
+  extraParamsOverride: Record<string, unknown>,
+) {
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    options?.onPayload?.(payload);
+    return createAssistantMessageEventStream();
+  };
+  const agent = { streamFn: baseStreamFn };
+
+  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId, extraParamsOverride);
+
+  const model = {
+    api: "openai-completions",
+    provider: "openrouter",
+    id: modelId,
+  } as Model<"openai-completions">;
+  const context: Context = { messages: [] };
+
+  void agent.streamFn?.(model, context, {});
+}
+
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
   it("injects cache_control into system message for OpenRouter Anthropic models", () => {
     const payload = {
@@ -69,6 +92,36 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
       text: "Part 2",
       cache_control: { type: "ephemeral" },
     });
+  });
+
+  it("injects ttl=1h when OpenRouter cacheRetention is long", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    runOpenRouterPayloadWithOverride(payload, "anthropic/claude-opus-4-6", {
+      cacheRetention: "long",
+    });
+
+    expect(payload.messages[0].content).toEqual([
+      {
+        type: "text",
+        text: "You are a helpful assistant.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+  });
+
+  it("does not inject cache_control when OpenRouter cacheRetention is none", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    runOpenRouterPayloadWithOverride(payload, "anthropic/claude-opus-4-6", {
+      cacheRetention: "none",
+    });
+
+    expect(payload.messages[0].content).toBe("You are a helpful assistant.");
   });
 
   it("does not inject cache_control for OpenRouter non-Anthropic models", () => {
