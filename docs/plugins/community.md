@@ -43,9 +43,14 @@ Use this format when adding entries:
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
 
-## Plugins
+## Listed plugins
 
 - **Manifest** — Observability plugin for OpenClaw — traces, metrics, and cost tracking for your AI agent
   npm: `manifest`
   repo: `https://github.com/mnfst/manifest`
   install: `openclaw plugins install manifest`
+
+- **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
+  npm: `@icesword760/openclaw-wechat`
+  repo: `https://github.com/icesword0760/openclaw-wechat`
+  install: `openclaw plugins install @icesword760/openclaw-wechat`
