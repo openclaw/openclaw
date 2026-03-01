@@ -39,9 +39,12 @@ async function getConfigSnapshot() {
 export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
+  argv?: string[];
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
-  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
+  const argv = params.argv ?? process.argv;
+  const jsonOutputRequested = argv.includes("--json");
+  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath) && !jsonOutputRequested) {
     didRunDoctorConfigFlow = true;
     await loadAndMaybeMigrateDoctorConfig({
       options: { nonInteractive: true },

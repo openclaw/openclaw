@@ -80,7 +80,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const { ensureConfigReady } = await import("./config-guard.js");
-    await ensureConfigReady({ runtime: defaultRuntime, commandPath });
+    await ensureConfigReady({ runtime: defaultRuntime, commandPath, argv });
     // Load plugins for commands that need channel access
     if (PLUGIN_REQUIRED_COMMANDS.has(commandPath[0])) {
       const { ensurePluginRegistryLoaded } = await import("../plugin-registry.js");

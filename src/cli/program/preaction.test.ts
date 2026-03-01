@@ -109,6 +109,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["status"],
+      argv: ["node", "openclaw", "status", "--debug"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(process.title).toBe("openclaw-status");
@@ -125,6 +126,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["message", "send"],
+      argv: ["node", "openclaw", "message", "send"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });

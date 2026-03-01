@@ -34,10 +34,10 @@ describe("ensureConfigReady", () => {
     return await import("./config-guard.js");
   }
 
-  async function runEnsureConfigReady(commandPath: string[]) {
+  async function runEnsureConfigReady(commandPath: string[], argv?: string[]) {
     const runtime = makeRuntime();
     const { ensureConfigReady } = await loadEnsureConfigReady();
-    await ensureConfigReady({ runtime: runtime as never, commandPath });
+    await ensureConfigReady({ runtime: runtime as never, commandPath, argv });
     return runtime;
   }
 
@@ -70,6 +70,14 @@ describe("ensureConfigReady", () => {
   ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
     await runEnsureConfigReady(commandPath);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
+  });
+
+  it("skips doctor flow when --json output is requested", async () => {
+    await runEnsureConfigReady(
+      ["nodes", "status"],
+      ["node", "openclaw", "nodes", "status", "--json"],
+    );
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {
