@@ -25,6 +25,8 @@ export async function runDiscordGatewayLifecycle(params: {
   pendingGatewayErrors?: unknown[];
   releaseEarlyGatewayErrorGuard?: () => void;
 }) {
+  const HELLO_TIMEOUT_MS = 30000;
+  const RECONNECT_STALL_TIMEOUT_MS = 15000;
   const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
     registerGateway(params.accountId, gateway);
@@ -35,7 +37,25 @@ export async function runDiscordGatewayLifecycle(params: {
     runtime: params.runtime,
   });
 
+  let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let reconnectTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let isShuttingDown = false;
+  const clearHelloTimeout = () => {
+    if (helloTimeoutId) {
+      clearTimeout(helloTimeoutId);
+      helloTimeoutId = undefined;
+    }
+  };
+  const clearReconnectTimeout = () => {
+    if (reconnectTimeoutId) {
+      clearTimeout(reconnectTimeoutId);
+      reconnectTimeoutId = undefined;
+    }
+  };
   const onAbort = () => {
+    isShuttingDown = true;
+    clearHelloTimeout();
+    clearReconnectTimeout();
     if (!gateway) {
       return;
     }
@@ -50,28 +70,53 @@ export async function runDiscordGatewayLifecycle(params: {
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   }
 
-  const HELLO_TIMEOUT_MS = 30000;
-  let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
-    if (!message.includes("WebSocket connection opened")) {
+    if (message.includes("WebSocket connection opened")) {
+      clearReconnectTimeout();
+      clearHelloTimeout();
+      helloTimeoutId = setTimeout(() => {
+        if (!gateway || isShuttingDown) {
+          helloTimeoutId = undefined;
+          return;
+        }
+        if (!gateway.isConnected) {
+          params.runtime.log?.(
+            danger(
+              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            ),
+          );
+          gateway.disconnect();
+          gateway.connect(false);
+        }
+        helloTimeoutId = undefined;
+      }, HELLO_TIMEOUT_MS);
       return;
     }
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
+    if (!message.includes("WebSocket connection closed")) {
+      return;
     }
-    helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
+    clearHelloTimeout();
+    if (isShuttingDown) {
+      return;
+    }
+    clearReconnectTimeout();
+    reconnectTimeoutId = setTimeout(() => {
+      if (!gateway || isShuttingDown) {
+        reconnectTimeoutId = undefined;
+        return;
+      }
+      if (!gateway.isConnected) {
         params.runtime.log?.(
           danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            `connection stalled: no reconnect within ${RECONNECT_STALL_TIMEOUT_MS}ms after close, forcing reconnect`,
           ),
         );
-        gateway?.disconnect();
-        gateway?.connect(false);
+        gateway.disconnect();
+        gateway.connect(false);
       }
-      helloTimeoutId = undefined;
-    }, HELLO_TIMEOUT_MS);
+      reconnectTimeoutId = undefined;
+    }, RECONNECT_STALL_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
@@ -137,9 +182,8 @@ export async function runDiscordGatewayLifecycle(params: {
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
+    clearHelloTimeout();
+    clearReconnectTimeout();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {

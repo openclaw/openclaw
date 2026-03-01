@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -51,6 +52,8 @@ describe("runDiscordGatewayLifecycle", () => {
     stop?: () => Promise<void>;
     isDisallowedIntentsError?: (err: unknown) => boolean;
     pendingGatewayErrors?: unknown[];
+    withGateway?: boolean;
+    gatewayConnected?: boolean;
   }) => {
     const start = vi.fn(params?.start ?? (async () => undefined));
     const stop = vi.fn(params?.stop ?? (async () => undefined));
@@ -64,15 +67,30 @@ describe("runDiscordGatewayLifecycle", () => {
       error: runtimeError,
       exit: runtimeExit,
     };
+    const gatewayEmitter = params?.withGateway ? new EventEmitter() : undefined;
+    const gateway =
+      params?.withGateway && gatewayEmitter
+        ? ({
+            emitter: gatewayEmitter,
+            disconnect: vi.fn(),
+            connect: vi.fn(),
+            isConnected: params?.gatewayConnected ?? true,
+            options: { reconnect: { maxAttempts: 50 } },
+          } as const)
+        : undefined;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(gatewayEmitter);
     return {
       start,
       stop,
       threadStop,
+      runtimeLog,
       runtimeError,
       releaseEarlyGatewayErrorGuard,
+      gateway,
+      gatewayEmitter,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        client: { getPlugin: vi.fn(() => undefined) } as unknown as Client,
+        client: { getPlugin: vi.fn(() => gateway) } as unknown as Client,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
@@ -202,5 +220,89 @@ describe("runDiscordGatewayLifecycle", () => {
       waitCalls: 0,
       releaseEarlyGatewayErrorGuard,
     });
+  });
+
+  it("forces reconnect when the gateway closes and stays disconnected", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveWait = resolve;
+          }),
+      );
+      const {
+        lifecycleParams,
+        start,
+        stop,
+        threadStop,
+        runtimeLog,
+        gateway,
+        gatewayEmitter,
+        releaseEarlyGatewayErrorGuard,
+      } = createLifecycleHarness({
+        withGateway: true,
+        gatewayConnected: false,
+      });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      gatewayEmitter?.emit("debug", "WebSocket connection closed with code 1006");
+      await vi.advanceTimersByTimeAsync(15000);
+
+      expect(gateway?.disconnect).toHaveBeenCalledTimes(1);
+      expect(gateway?.connect).toHaveBeenCalledTimes(1);
+      expect(gateway?.connect).toHaveBeenCalledWith(false);
+      expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("no reconnect within"));
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 1,
+        releaseEarlyGatewayErrorGuard,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels forced reconnect when the gateway reopens before timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      let resolveWait: (() => void) | undefined;
+      waitForDiscordGatewayStopMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveWait = resolve;
+          }),
+      );
+      const { lifecycleParams, gateway, gatewayEmitter } = createLifecycleHarness({
+        withGateway: true,
+        gatewayConnected: false,
+      });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      gatewayEmitter?.emit("debug", "WebSocket connection closed with code 1006");
+      await vi.advanceTimersByTimeAsync(5000);
+      if (gateway) {
+        gateway.isConnected = true;
+      }
+      gatewayEmitter?.emit("debug", "WebSocket connection opened");
+      await vi.advanceTimersByTimeAsync(15000);
+
+      expect(gateway?.disconnect).not.toHaveBeenCalled();
+      expect(gateway?.connect).not.toHaveBeenCalled();
+
+      resolveWait?.();
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
