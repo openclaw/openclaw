@@ -27,6 +27,25 @@ vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: async () => "done",
 }));
 
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: vi.fn((path) => {
+      if (typeof path === "string" && path.includes("whatsapp-targeted")) {
+        return {
+          "agent:whatsapp-targeted:main": {
+            channel: "whatsapp",
+            lastTo: "+123",
+            accountId: "kev",
+          },
+        };
+      }
+      return {};
+    }),
+  };
+});
+
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
 
@@ -368,5 +387,73 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(announceParams?.deliver).toBe(false);
     expect(announceParams?.channel).toBeUndefined();
     expect(announceParams?.accountId).toBeUndefined();
+  });
+
+  it("sessions_spawn on deliverable channel (whatsapp) notifies BOTH user and agent", async () => {
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeSessionsList: true,
+      includeChatHistory: true,
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:whatsapp-targeted:main",
+      agentChannel: "whatsapp",
+      agentTo: "+123",
+      agentAccountId: "kev",
+    });
+
+    await executeSpawnAndExpectAccepted({
+      tool,
+      callId: "call-deliverable",
+      cleanup: "keep",
+    });
+
+    const child = ctx.getChild();
+    if (!child.runId) {
+      throw new Error("missing child runId");
+    }
+
+    // Trigger completion
+    await emitLifecycleEndAndFlush({
+      runId: child.runId,
+      startedAt: 1000,
+      endedAt: 2000,
+    });
+
+    await waitFor(() => {
+      const sendCalls = ctx.calls.filter((c) => c.method === "send");
+      const agentTriggerCalls = ctx.calls.filter((c) => {
+        if (c.method !== "agent") {
+          return false;
+        }
+        const params = c.params as Record<string, unknown>;
+        return params.lane !== "subagent";
+      });
+      return sendCalls.length === 1 && agentTriggerCalls.length === 1;
+    });
+
+    const sendCalls = ctx.calls.filter((c) => c.method === "send");
+    const agentTriggerCalls = ctx.calls.filter((c) => {
+      if (c.method !== "agent") {
+        return false;
+      }
+      const params = c.params as Record<string, unknown>;
+      return params.lane !== "subagent";
+    });
+
+    expect(sendCalls).toHaveLength(1);
+    expect(agentTriggerCalls).toHaveLength(1);
+
+    expect(sendCalls[0].params).toMatchObject({
+      channel: "whatsapp",
+      to: "+123",
+      message: expect.stringContaining("✅ Subagent"),
+    });
+
+    expect(agentTriggerCalls[0].params).toMatchObject({
+      sessionKey: "agent:whatsapp-targeted:main",
+      deliver: true,
+      message: expect.stringContaining("[System Message]"),
+    });
   });
 });

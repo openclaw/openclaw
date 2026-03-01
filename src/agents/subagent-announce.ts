@@ -837,11 +837,9 @@ async function sendSubagentAnnounceDirectly(params: {
               timeoutMs: announceTimeoutMs,
             }),
         });
-
-        return {
-          delivered: true,
-          path: "direct",
-        };
+        defaultRuntime.log(
+          `Subagent task completion direct notification sent to ${completionChannel}:${completionTo} (session: ${canonicalRequesterSessionKey})`,
+        );
       }
     }
 
@@ -860,6 +858,17 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
+
+    if (shouldDeliverExternally) {
+      defaultRuntime.log(
+        `Triggering main agent for task completion with external delivery to ${directChannel}:${directTo} (session: ${canonicalRequesterSessionKey})`,
+      );
+    } else {
+      defaultRuntime.log(
+        `Triggering main agent for task completion via internal injection (session: ${canonicalRequesterSessionKey})`,
+      );
+    }
+
     if (params.signal?.aborted) {
       return {
         delivered: false,
