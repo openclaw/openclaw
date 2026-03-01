@@ -17,7 +17,11 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  classifySessionKeyShape,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -31,12 +35,14 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import { GATEWAY_EVENT_AGENT_MESSAGE } from "../events.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateAgentIdentityParams,
+  validateAgentMessageParams,
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
@@ -753,5 +759,65 @@ export const agentHandlers: GatewayRequestHandlers = {
       endedAt: snapshot.endedAt,
       error: snapshot.error,
     });
+  },
+  "agent.message": ({ params, respond, context }) => {
+    if (!validateAgentMessageParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.message params: ${formatValidationErrors(validateAgentMessageParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      targetSessionKey: string;
+      sourceSessionKey: string;
+      message: string;
+      correlationId?: string;
+      metadata?: Record<string, unknown>;
+    };
+
+    const targetParsed = parseAgentSessionKey(p.targetSessionKey);
+    if (!targetParsed) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.message params: malformed target session key "${p.targetSessionKey}"`,
+        ),
+      );
+      return;
+    }
+
+    const sourceParsed = parseAgentSessionKey(p.sourceSessionKey);
+    if (!sourceParsed) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.message params: malformed source session key "${p.sourceSessionKey}"`,
+        ),
+      );
+      return;
+    }
+
+    const ts = Date.now();
+    const correlationId = p.correlationId?.trim() || undefined;
+    const payload = {
+      sourceSessionKey: p.sourceSessionKey,
+      targetSessionKey: p.targetSessionKey,
+      message: p.message,
+      correlationId,
+      ts,
+    };
+
+    context.broadcast(GATEWAY_EVENT_AGENT_MESSAGE, payload, { dropIfSlow: true });
+
+    respond(true, { status: "delivered", correlationId, ts });
   },
 };

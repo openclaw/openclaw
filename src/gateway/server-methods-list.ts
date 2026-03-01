@@ -1,5 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+import { GATEWAY_EVENT_AGENT_MESSAGE, GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
@@ -91,6 +91,7 @@ const BASE_METHODS = [
   "agent",
   "agent.identity.get",
   "agent.wait",
+  "agent.message",
   "browser.request",
   // WebChat WebSocket-native chat methods
   "chat.history",
@@ -122,5 +123,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  GATEWAY_EVENT_AGENT_MESSAGE,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

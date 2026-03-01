@@ -122,6 +122,17 @@ export const AgentWaitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentMessageParamsSchema = Type.Object(
+  {
+    targetSessionKey: NonEmptyString,
+    sourceSessionKey: NonEmptyString,
+    message: NonEmptyString,
+    correlationId: Type.Optional(NonEmptyString),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
+
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
