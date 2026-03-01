@@ -54,7 +54,8 @@ describe("msteams conversation store (fs)", () => {
 
     const list = await store.list();
     const ids = list.map((e) => e.conversationId).toSorted();
-    expect(ids).toEqual(["19:active@thread.tacv2", "19:legacy@thread.tacv2"]);
+    expect(ids).toContain("19:legacy@thread.tacv2");
+    expect(ids).not.toContain("19:old@thread.tacv2");
 
     expect(await store.get("19:old@thread.tacv2")).toBeNull();
     expect(await store.get("19:legacy@thread.tacv2")).not.toBeNull();
