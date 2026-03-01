@@ -16,12 +16,10 @@ export type AcpStreamConfig = {
   deliveryMode?: "live" | "final_only";
   /** Separator inserted before visible text when hidden tool events occurred. */
   hiddenBoundarySeparator?: "none" | "space" | "newline" | "paragraph";
-  /** Maximum assistant text characters forwarded per turn. */
-  maxTurnChars?: number;
-  /** Maximum visible characters for tool summary/meta lines. */
-  maxToolSummaryChars?: number;
-  /** Maximum visible characters for status lines. */
-  maxStatusChars?: number;
+  /** Maximum assistant output characters forwarded per turn. */
+  maxOutputChars?: number;
+  /** Maximum visible characters for projected session/update lines. */
+  maxSessionUpdateChars?: number;
   /**
    * Per-sessionUpdate visibility overrides.
    * Keys not listed here fall back to OpenClaw defaults.
