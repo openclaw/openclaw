@@ -1,4 +1,4 @@
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "auto";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -47,6 +47,9 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   const collapsed = key.replace(/[\s_-]+/g, "");
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
+  }
+  if (["auto", "automatic", "adaptive"].includes(key)) {
+    return "auto";
   }
   if (["off"].includes(key)) {
     return "off";

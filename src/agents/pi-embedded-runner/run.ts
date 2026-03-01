@@ -48,6 +48,7 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
+import { resolveAutoThinkingLevel } from "../thinking-auto.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -360,7 +361,21 @@ export async function runEmbeddedPiAgent(
           : [undefined];
       let profileIndex = 0;
 
-      const initialThinkLevel = params.thinkLevel ?? "off";
+      let initialThinkLevel = params.thinkLevel ?? "off";
+      // Resolve "auto" thinking level via haiku pre-classification
+      if (initialThinkLevel === "auto") {
+        try {
+          initialThinkLevel = await resolveAutoThinkingLevel({
+            sessionFile: params.sessionFile,
+            workspaceDir: resolvedWorkspace,
+            prompt: params.prompt,
+          });
+          log.info(`[thinking-auto] classified as "${initialThinkLevel}"`);
+        } catch (err) {
+          log.warn(`[thinking-auto] classification failed, falling back to high: ${String(err)}`);
+          initialThinkLevel = "high";
+        }
+      }
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
