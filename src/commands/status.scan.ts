@@ -59,6 +59,120 @@ export type StatusScanResult = {
   memoryPlugin: MemoryPluginStatus;
 };
 
+async function resolveMemoryStatusSnapshot(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  memoryPlugin: MemoryPluginStatus;
+}): Promise<MemoryStatusSnapshot | null> {
+  const { cfg, agentStatus, memoryPlugin } = params;
+  if (!memoryPlugin.enabled) {
+    return null;
+  }
+  if (memoryPlugin.slot !== "memory-core") {
+    return null;
+  }
+  const agentId = agentStatus.defaultId ?? "main";
+  const { manager } = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+  if (!manager) {
+    return null;
+  }
+  try {
+    await manager.probeVectorAvailability();
+  } catch {}
+  const status = manager.status();
+  await manager.close?.().catch(() => {});
+  return { agentId, ...status };
+}
+
+async function scanStatusJsonFast(opts: {
+  timeoutMs?: number;
+  all?: boolean;
+}): Promise<StatusScanResult> {
+  const cfg = loadConfig();
+  const osSummary = resolveOsSummary();
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  const updateTimeoutMs = opts.all ? 6500 : 2500;
+  const updatePromise = getUpdateCheckResult({
+    timeoutMs: updateTimeoutMs,
+    fetchGit: true,
+    includeRegistry: true,
+  });
+  const agentStatusPromise = getAgentLocalStatuses();
+  const summaryPromise = getStatusSummary();
+
+  const tailscaleDnsPromise =
+    tailscaleMode === "off"
+      ? Promise.resolve<string | null>(null)
+      : getTailnetHostname((cmd, args) =>
+          runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+        ).catch(() => null);
+
+  const gatewayConnection = buildGatewayConnectionDetails();
+  const isRemoteMode = cfg.gateway?.mode === "remote";
+  const remoteUrlRaw = typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url : "";
+  const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
+  const gatewayMode = isRemoteMode ? "remote" : "local";
+  const gatewayProbePromise = remoteUrlMissing
+    ? Promise.resolve<Awaited<ReturnType<typeof probeGateway>> | null>(null)
+    : probeGateway({
+        url: gatewayConnection.url,
+        auth: resolveGatewayProbeAuth(cfg),
+        timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
+      }).catch(() => null);
+
+  const [tailscaleDns, update, agentStatus, gatewayProbe, summary] = await Promise.all([
+    tailscaleDnsPromise,
+    updatePromise,
+    agentStatusPromise,
+    gatewayProbePromise,
+    summaryPromise,
+  ]);
+  const tailscaleHttpsUrl =
+    tailscaleMode !== "off" && tailscaleDns
+      ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
+      : null;
+
+  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewaySelf = gatewayProbe?.presence
+    ? pickGatewaySelfPresence(gatewayProbe.presence)
+    : null;
+  const channelsStatusPromise = gatewayReachable
+    ? callGateway({
+        method: "channels.status",
+        params: {
+          probe: false,
+          timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
+        },
+        timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
+      }).catch(() => null)
+    : Promise.resolve(null);
+  const memoryPlugin = resolveMemoryPluginStatus(cfg);
+  const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
+  const [channelsStatus, memory] = await Promise.all([channelsStatusPromise, memoryPromise]);
+  const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
+
+  return {
+    cfg,
+    osSummary,
+    tailscaleMode,
+    tailscaleDns,
+    tailscaleHttpsUrl,
+    update,
+    gatewayConnection,
+    remoteUrlMissing,
+    gatewayMode,
+    gatewayProbe,
+    gatewayReachable,
+    gatewaySelf,
+    channelIssues,
+    agentStatus,
+    channels: [],
+    summary,
+    memory,
+    memoryPlugin,
+  };
+}
+
 export async function scanStatus(
   opts: {
     json?: boolean;
@@ -67,6 +181,9 @@ export async function scanStatus(
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  if (opts.json) {
+    return await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
+  }
   return await withProgress(
     {
       label: "Scanning status…",
