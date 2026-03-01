@@ -136,7 +136,7 @@ export function loadOntologies(): Map<string, Ontology> {
   const ontologies = new Map<string, Ontology>();
   const excludeFiles = new Set(["shapes.jsonld", "shapes-sbvr.jsonld"]);
   const files = readdirSync(ONTOLOGY_DIR).filter(
-    (f) => f.endsWith(".jsonld") && !excludeFiles.has(f),
+    (f) => f.endsWith(".jsonld") && !f.startsWith("._") && !excludeFiles.has(f),
   );
 
   for (const file of files) {
