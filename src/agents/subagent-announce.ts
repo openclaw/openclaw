@@ -1496,11 +1496,8 @@ export async function runSubagentAnnounceFlow(params: {
       subagentName,
       spawnMode: params.spawnMode,
       outcome,
-<<<<<<< HEAD
       announceType,
-=======
       launchProofLine,
->>>>>>> 0e2b9b004 (fix: autochain runtime + subagent lint/test updates)
     });
     const internalSummaryMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.${params.retrospectiveCorrection ? " [retrospective correction]" : ""}`,
