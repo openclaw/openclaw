@@ -1,5 +1,5 @@
-import type { NodeListNode } from "../../shared/node-list-types.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
