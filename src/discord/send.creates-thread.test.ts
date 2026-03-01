@@ -76,6 +76,44 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("passes applied_tags for forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "tagged post", appliedTags: ["tag1", "tag2"] },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "tagged post",
+          message: { content: "tagged post" },
+          applied_tags: ["tag1", "tag2"],
+        },
+      }),
+    );
+  });
+
+  it("omits applied_tags for non-forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", appliedTags: ["tag1"] },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.not.objectContaining({ applied_tags: expect.anything() }),
+      }),
+    );
+  });
+
   it("falls back when channel lookup is unavailable", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockRejectedValue(new Error("lookup failed"));
