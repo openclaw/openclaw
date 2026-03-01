@@ -109,6 +109,30 @@ const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawC
     },
   }) satisfies OpenClawConfig;
 
+const makeAnthropicConfig = (): OpenClawConfig =>
+  ({
+    models: {
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          apiKey: "sk-anth",
+          baseUrl: "https://api.anthropic.com",
+          models: [
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
   ({
     agents: {
@@ -744,6 +768,58 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
       expect(typeof usageStats["openai:p3"]?.lastUsed).toBe("number");
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
+    });
+  });
+
+  it("retries once with thinking blocks stripped on Anthropic signature-mutation errors", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir, { includeAnthropic: true });
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            promptError: new Error(
+              "messages.13.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified.",
+            ),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAssistant({
+              stopReason: "stop",
+              api: "anthropic-messages",
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:anthropic-thinking-mutation",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeAnthropicConfig(),
+        prompt: "hello",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        authProfileId: "anthropic:default",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:anthropic-thinking-mutation",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
+        | { forceDropThinkingBlocks?: boolean }
+        | undefined;
+      const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as
+        | { forceDropThinkingBlocks?: boolean }
+        | undefined;
+      expect(firstCall?.forceDropThinkingBlocks).toBe(false);
+      expect(secondCall?.forceDropThinkingBlocks).toBe(true);
     });
   });
 });

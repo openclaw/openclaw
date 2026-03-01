@@ -80,6 +80,15 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
+function isAnthropicThinkingBlockMutationError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("cannot be modified") &&
+    normalized.includes("latest assistant message") &&
+    (normalized.includes("thinking") || normalized.includes("redacted_thinking"))
+  );
+}
+
 type UsageAccumulator = {
   input: number;
   output: number;
@@ -516,6 +525,8 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let forceDropThinkingBlocks = false;
+      let anthropicThinkingDropRetryUsed = false;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -631,6 +642,7 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            forceDropThinkingBlocks,
           });
 
           const {
@@ -903,6 +915,18 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            if (
+              provider === "anthropic" &&
+              !anthropicThinkingDropRetryUsed &&
+              isAnthropicThinkingBlockMutationError(errorText)
+            ) {
+              anthropicThinkingDropRetryUsed = true;
+              forceDropThinkingBlocks = true;
+              log.warn(
+                "anthropic signed thinking mismatch detected; retrying with thinking blocks stripped",
+              );
+              continue;
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
@@ -944,6 +968,19 @@ export async function runEmbeddedPiAgent(
             message: lastAssistant?.errorMessage,
             attempted: attemptedThinking,
           });
+          if (
+            !aborted &&
+            provider === "anthropic" &&
+            !anthropicThinkingDropRetryUsed &&
+            isAnthropicThinkingBlockMutationError(lastAssistant?.errorMessage ?? "")
+          ) {
+            anthropicThinkingDropRetryUsed = true;
+            forceDropThinkingBlocks = true;
+            log.warn(
+              "anthropic signed thinking mismatch detected; retrying with thinking blocks stripped",
+            );
+            continue;
+          }
           if (fallbackThinking && !aborted) {
             log.warn(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,

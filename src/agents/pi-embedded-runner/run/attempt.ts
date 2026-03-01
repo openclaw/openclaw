@@ -724,11 +724,14 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
-      const transcriptPolicy = resolveTranscriptPolicy({
+      const transcriptPolicyResolved = resolveTranscriptPolicy({
         modelApi: params.model?.api,
         provider: params.provider,
         modelId: params.modelId,
       });
+      const transcriptPolicy = params.forceDropThinkingBlocks
+        ? { ...transcriptPolicyResolved, dropThinkingBlocks: true }
+        : transcriptPolicyResolved;
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
