@@ -2268,7 +2268,8 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       };
     })
     .filter((entry) => entry.msgs > 0 && entry.errors > 0)
-    .toSorted((a, b) => b.rate - a.rate)
+    .slice()
+    .sort((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
@@ -2759,20 +2760,23 @@ const buildAggregatesFromSessions = (
       uniqueTools: toolMap.size,
       tools: Array.from(toolMap.entries())
         .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
+        .slice()
+        .sort((a, b) => b.count - a.count),
     },
-    byModel: Array.from(modelMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byProvider: Array.from(providerMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
+    byModel: Array.from(modelMap.values())
+      .slice()
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
+    byProvider: Array.from(providerMap.values())
+      .slice()
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .slice()
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     byChannel: Array.from(channelMap.entries())
       .map(([channel, totals]) => ({ channel, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .slice()
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     latency:
       latencyTotals.count > 0
         ? {
@@ -2792,11 +2796,14 @@ const buildAggregatesFromSessions = (
         maxMs: entry.max,
         p95Ms: entry.p95Max,
       }))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    modelDaily: Array.from(modelDailyMap.values()).toSorted(
-      (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
-    ),
-    daily: Array.from(dailyMap.values()).toSorted((a, b) => a.date.localeCompare(b.date)),
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    modelDaily: Array.from(modelDailyMap.values())
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date) || b.cost - a.cost),
+    daily: Array.from(dailyMap.values())
+      .slice()
+      .sort((a, b) => a.date.localeCompare(b.date)),
   };
 };
 
@@ -2842,7 +2849,8 @@ const buildUsageInsightStats = (
       messages: day.messages,
       rate: day.errors / day.messages,
     }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    .slice()
+    .sort((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
 
   return {
     durationSumMs,
@@ -3487,7 +3495,8 @@ function renderUsageInsights(
         rate,
       };
     })
-    .toSorted((a, b) => b.rate - a.rate)
+    .slice()
+    .sort((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
@@ -3696,7 +3705,7 @@ function renderSessionsCard(
     return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
   };
 
-  const sortedSessions = [...sessions].toSorted((a, b) => {
+  const sortedSessions = [...sessions].slice().sort((a, b) => {
     switch (sessionSort) {
       case "recent":
         return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
@@ -4328,13 +4337,15 @@ function renderContextPanel(
     }
   }
 
-  const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
-  const toolsList = contextWeight.tools.entries.toSorted(
-    (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
-  );
-  const filesList = contextWeight.injectedWorkspaceFiles.toSorted(
-    (a, b) => b.injectedChars - a.injectedChars,
-  );
+  const skillsList = contextWeight.skills.entries
+    .slice()
+    .sort((a, b) => b.blockChars - a.blockChars);
+  const toolsList = contextWeight.tools.entries
+    .slice()
+    .sort((a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars));
+  const filesList = contextWeight.injectedWorkspaceFiles
+    .slice()
+    .sort((a, b) => b.injectedChars - a.injectedChars);
   const defaultLimit = 4;
   const showAll = expanded;
   const skillsTop = showAll ? skillsList : skillsList.slice(0, defaultLimit);
@@ -4500,7 +4511,9 @@ function renderSessionLogsCompact(
   });
   const toolOptions = Array.from(
     new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
-  ).toSorted((a, b) => a.localeCompare(b));
+  )
+    .slice()
+    .sort((a, b) => a.localeCompare(b));
   const filteredEntries = entries.filter((entry) => {
     if (filters.roles.length > 0 && !filters.roles.includes(entry.log.role)) {
       return false;
@@ -4692,7 +4705,7 @@ export function renderUsage(props: UsageProps) {
   // (intentionally no global Clear button in the header; chips + query clear handle this)
 
   // Sort sessions by tokens or cost depending on mode
-  const sortedSessions = [...props.sessions].toSorted((a, b) => {
+  const sortedSessions = [...props.sessions].slice().sort((a, b) => {
     const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
     const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
     return valB - valA;

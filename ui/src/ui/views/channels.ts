@@ -43,7 +43,8 @@ export function renderChannels(props: ChannelsProps) {
       enabled: channelEnabled(key, props),
       order: index,
     }))
-    .toSorted((a, b) => {
+    .slice()
+    .sort((a, b) => {
       if (a.enabled !== b.enabled) {
         return a.enabled ? -1 : 1;
       }

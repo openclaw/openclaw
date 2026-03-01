@@ -59,7 +59,7 @@ export function renderCron(props: CronProps) {
   const selectedJob =
     props.runsJobId == null ? undefined : props.jobs.find((job) => job.id === props.runsJobId);
   const selectedRunTitle = selectedJob?.name ?? props.runsJobId ?? "(select a job)";
-  const orderedRuns = props.runs.toSorted((a, b) => b.ts - a.ts);
+  const orderedRuns = props.runs.slice().sort((a, b) => b.ts - a.ts);
   return html`
     <section class="grid grid-cols-2">
       <div class="card">
