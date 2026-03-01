@@ -269,4 +269,38 @@ describe("sanitizeRenderableText", () => {
 
     expect(sanitized).toBe(input);
   });
+
+  it("preserves long Base64-like tokens (API keys, SSH keys) verbatim for copy safety", () => {
+    // RustDesk key from issue #30370
+    const input = "hPc5j+rBJs5Vh0LLEKnd9qdanH0TD3VjLRlYCTKImuw=";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+    // Should NOT have space after 32 chars
+    expect(sanitized).not.toContain("Vj LRlY");
+  });
+
+  it("preserves long hex tokens with mixed case verbatim for copy safety", () => {
+    const input = "deadBEEF1234567890abcdef1234567890ABCDEF12";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long hex tokens with digits verbatim for copy safety", () => {
+    const input = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("chunks long lowercase-only hex strings (not credential-like)", () => {
+    const input = "a".repeat(50);
+    const sanitized = sanitizeRenderableText(input);
+
+    // Should be chunked because it's all lowercase (test string, not real credential)
+    expect(sanitized).toContain(" ");
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((s) => s.length));
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
 });

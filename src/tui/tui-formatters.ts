@@ -17,10 +17,11 @@ const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
 // Patterns for credential-like tokens that should be preserved exactly (not chunked with spaces)
-// Base64: alphanumeric + '+' '/' '=' (e.g., API keys, SSH keys, tokens) - min 16 chars with mixed case or special chars
+// Base64: alphanumeric + '+' '/' '=' (e.g., API keys, SSH keys, tokens) - requires mixed case
 const BASE64_RE = /^(?=.*[a-z])(?=.*[A-Z])[a-zA-Z0-9+/]+=*$/;
-// Hex: only hexadecimal characters - min 16 chars (e.g., API keys, hashes, UUIDs without dashes)
-const HEX_RE = /^[a-fA-F0-9]{16,}$/;
+// Hex: only hexadecimal characters - require 40+ chars AND mixed case or digits
+// This avoids false positives on test strings like "aaaaaaaa..." (all same case, no digits)
+const HEX_RE = /^(?=.*[0-9]|[A-F].*[a-f]|[a-f].*[A-F])[a-fA-F0-9]{40,}$/;
 // Alphanumeric with common key suffixes/patterns
 const CREDENTIAL_SUFFIX_RE = /(key|secret|token|password|hash|id|priv|pub|ssh|rsa|ed25519)$/i;
 
