@@ -2312,6 +2312,7 @@ public struct CronJob: Codable, Sendable {
     public let wakemode: AnyCodable
     public let payload: AnyCodable
     public let delivery: AnyCodable?
+    public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
 
     public init(
@@ -2329,8 +2330,14 @@ public struct CronJob: Codable, Sendable {
         wakemode: AnyCodable,
         payload: AnyCodable,
         delivery: AnyCodable?,
+<<<<<<< HEAD:apps/macos/Sources/BotProtocol/GatewayModels.swift
         state: [String: AnyCodable]
     ) {
+=======
+        failurealert: AnyCodable?,
+        state: [String: AnyCodable])
+    {
+>>>>>>> 0d672e43b (chore(protocol): sync generated swift models):apps/macos/Sources/OpenClawProtocol/GatewayModels.swift
         self.id = id
         self.agentid = agentid
         self.sessionkey = sessionkey
@@ -2345,6 +2352,7 @@ public struct CronJob: Codable, Sendable {
         self.wakemode = wakemode
         self.payload = payload
         self.delivery = delivery
+        self.failurealert = failurealert
         self.state = state
     }
     private enum CodingKeys: String, CodingKey {
@@ -2362,6 +2370,7 @@ public struct CronJob: Codable, Sendable {
         case wakemode = "wakeMode"
         case payload
         case delivery
+        case failurealert = "failureAlert"
         case state
     }
 }
@@ -2418,6 +2427,7 @@ public struct CronAddParams: Codable, Sendable {
     public let wakemode: AnyCodable
     public let payload: AnyCodable
     public let delivery: AnyCodable?
+    public let failurealert: AnyCodable?
 
     public init(
         name: String,
@@ -2430,8 +2440,14 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
+<<<<<<< HEAD:apps/macos/Sources/BotProtocol/GatewayModels.swift
         delivery: AnyCodable?
     ) {
+=======
+        delivery: AnyCodable?,
+        failurealert: AnyCodable?)
+    {
+>>>>>>> 0d672e43b (chore(protocol): sync generated swift models):apps/macos/Sources/OpenClawProtocol/GatewayModels.swift
         self.name = name
         self.agentid = agentid
         self.sessionkey = sessionkey
@@ -2443,6 +2459,7 @@ public struct CronAddParams: Codable, Sendable {
         self.wakemode = wakemode
         self.payload = payload
         self.delivery = delivery
+        self.failurealert = failurealert
     }
     private enum CodingKeys: String, CodingKey {
         case name
@@ -2456,6 +2473,7 @@ public struct CronAddParams: Codable, Sendable {
         case wakemode = "wakeMode"
         case payload
         case delivery
+        case failurealert = "failureAlert"
     }
 }
 
