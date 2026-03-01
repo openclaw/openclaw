@@ -115,6 +115,29 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    complexityRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        tiers: z
+          .object({
+            simple: z
+              .object({ model: z.string().optional(), thinking: z.string().optional() })
+              .strict()
+              .optional(),
+            medium: z
+              .object({ model: z.string().optional(), thinking: z.string().optional() })
+              .strict()
+              .optional(),
+            complex: z
+              .object({ model: z.string().optional(), thinking: z.string().optional() })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z

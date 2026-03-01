@@ -11,6 +11,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
+import { classifyComplexity, complexityLog } from "./complexity-classifier.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -338,8 +339,35 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  // Complexity-adaptive routing: classify message if no explicit model/think directive.
+  // This runs only when complexityRouting is enabled; user overrides always take precedence.
+  let complexityModel: string | undefined;
+  let complexityThinking: ThinkLevel | undefined;
+  if (agentCfg?.complexityRouting?.enabled) {
+    const hasExplicitThink = directives.hasThinkDirective || Boolean(sessionEntry?.thinkingLevel);
+    const hasExplicitModel = directives.hasModelDirective || Boolean(sessionEntry?.modelOverride);
+    if (!hasExplicitThink || !hasExplicitModel) {
+      const classification = classifyComplexity({ messageText: commandText });
+      complexityLog.debug("message classified", {
+        tier: classification.tier,
+        confidence: classification.confidence,
+        signals: classification.signals,
+      });
+      const tierCfg = agentCfg.complexityRouting.tiers?.[classification.tier];
+      if (!hasExplicitThink && tierCfg?.thinking) {
+        complexityThinking = tierCfg.thinking as ThinkLevel;
+      }
+      if (!hasExplicitModel && tierCfg?.model) {
+        complexityModel = tierCfg.model;
+      }
+    }
+  }
+
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    directives.thinkLevel ??
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    complexityThinking ??
+    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -385,6 +413,8 @@ export async function resolveReplyDirectives(params: {
     model,
     hasModelDirective: directives.hasModelDirective,
     hasResolvedHeartbeatModelOverride,
+    complexityModel,
+    aliasIndex: params.aliasIndex,
   });
   provider = modelState.provider;
   model = modelState.model;

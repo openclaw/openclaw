@@ -277,6 +277,10 @@ export async function createModelSelectionState(params: {
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  /** Complexity-adaptive routing: pre-resolved model string from tier config. */
+  complexityModel?: string;
+  /** Model alias index for resolving complexity tier model strings. */
+  aliasIndex?: ModelAliasIndex;
 }): Promise<ModelSelectionState> {
   const {
     cfg,
@@ -359,6 +363,23 @@ export async function createModelSelectionState(params: {
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
       model = storedOverride.model;
+    }
+  }
+
+  // Complexity-adaptive routing: apply tier model only when no user overrides are present.
+  // Stored session override and /model directives always take precedence.
+  if (!storedOverride && !params.hasModelDirective && params.complexityModel) {
+    const resolved = resolveModelRefFromString({
+      raw: params.complexityModel,
+      defaultProvider,
+      aliasIndex: params.aliasIndex,
+    });
+    if (resolved) {
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+        provider = resolved.ref.provider;
+        model = resolved.ref.model;
+      }
     }
   }
 

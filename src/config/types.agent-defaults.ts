@@ -183,6 +183,17 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /** Complexity-adaptive model routing. Auto-selects model/thinking based on message complexity. */
+  complexityRouting?: {
+    /** Enable complexity-based routing (default: false). */
+    enabled?: boolean;
+    /** Override tier mappings. Each tier can specify model (provider/model or alias) and thinking level. */
+    tiers?: {
+      simple?: { model?: string; thinking?: string };
+      medium?: { model?: string; thinking?: string };
+      complex?: { model?: string; thinking?: string };
+    };
+  };
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */
