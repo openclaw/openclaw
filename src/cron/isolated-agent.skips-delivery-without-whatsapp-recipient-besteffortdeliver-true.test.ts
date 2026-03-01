@@ -1,6 +1,7 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import {
@@ -108,6 +109,58 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("passes cron-event bashElevated defaults into embedded runs", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "webchat",
+        lastTo: "",
+      });
+      const cfg = makeCfg(home, storePath);
+      cfg.tools = {
+        elevated: {
+          enabled: true,
+          allowFrom: { "cron-event": ["*"] },
+        },
+      };
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          elevatedDefault: "ask",
+        },
+      };
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "none", channel: "last" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as
+        | {
+            bashElevated?: {
+              enabled?: boolean;
+              allowed?: boolean;
+              defaultLevel?: string;
+            };
+          }
+        | undefined;
+      expect(call?.bashElevated).toEqual({
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+      });
+    });
+  });
   it("announces the final payload text when delivery has an explicit target", async () => {
     await expectExplicitTelegramTargetAnnounce({
       payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
