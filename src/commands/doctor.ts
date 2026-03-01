@@ -53,6 +53,7 @@ import {
 import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
+import { noteVerificationDebt } from "./doctor-verification-debt.js";
 import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "./doctor-workspace.js";
 import { applyWizardMetadata, printWizardHeader, randomToken } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
@@ -321,6 +322,8 @@ export async function doctorCommand(
       runtime.error(`- ${path}: ${issue.message}`);
     }
   }
+
+  await noteVerificationDebt(cfg, options);
 
   outro("Doctor complete.");
 }
