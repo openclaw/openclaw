@@ -1327,12 +1327,17 @@ describe("Cron issue regressions", () => {
   it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
     vi.useRealTimers();
     const abortController = new AbortController();
-    const runHeartbeatOnce = vi.fn(
-      async (): Promise<HeartbeatRunResult> => ({
+    let aborted = false;
+    const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
+      if (!aborted) {
+        aborted = true;
+        abortController.abort();
+      }
+      return {
         status: "skipped",
         reason: "requests-in-flight",
-      }),
-    );
+      };
+    });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const mainJob: CronJob = {
@@ -1359,10 +1364,6 @@ describe("Cron issue regressions", () => {
       wakeNowHeartbeatBusyRetryDelayMs: 5,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
-
-    setTimeout(() => {
-      abortController.abort();
-    }, 10);
 
     const result = await executeJobCore(state, mainJob, abortController.signal);
 
