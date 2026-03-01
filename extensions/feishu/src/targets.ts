@@ -24,18 +24,28 @@ export function normalizeFeishuTarget(raw: string): string | null {
     return null;
   }
 
+  // Strip optional provider prefix (e.g., "feishu:")
+  let remaining = trimmed;
   const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("chat:")) {
-    return trimmed.slice("chat:".length).trim() || null;
-  }
-  if (lowered.startsWith("user:")) {
-    return trimmed.slice("user:".length).trim() || null;
-  }
-  if (lowered.startsWith("open_id:")) {
-    return trimmed.slice("open_id:".length).trim() || null;
+  if (lowered.startsWith("feishu:")) {
+    remaining = trimmed.slice("feishu:".length).trim();
+    if (!remaining) {
+      return null;
+    }
   }
 
-  return trimmed;
+  const lowerRemaining = remaining.toLowerCase();
+  if (lowerRemaining.startsWith("chat:")) {
+    return remaining.slice("chat:".length).trim() || null;
+  }
+  if (lowerRemaining.startsWith("user:")) {
+    return remaining.slice("user:".length).trim() || null;
+  }
+  if (lowerRemaining.startsWith("open_id:")) {
+    return remaining.slice("open_id:".length).trim() || null;
+  }
+
+  return remaining;
 }
 
 export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
@@ -64,6 +74,11 @@ export function looksLikeFeishuId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
+  }
+
+  // Accept provider-prefixed forms: feishu:user:..., feishu:chat:..., feishu:open_id:...
+  if (/^feishu:/i.test(trimmed)) {
+    return true;
   }
   if (/^(chat|user|open_id):/i.test(trimmed)) {
     return true;
