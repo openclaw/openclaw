@@ -666,7 +666,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const threadRootId = post.root_id?.trim() || undefined;
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const effectiveReplyToId =
-      threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined);
+      threadRootId ??
+      (kind !== "direct" && (replyToMode === "all" || replyToMode === "first")
+        ? post.id
+        : undefined);
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
       threadId: effectiveReplyToId,
