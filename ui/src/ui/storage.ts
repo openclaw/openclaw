@@ -1,6 +1,6 @@
 const KEY = "openclaw.control.settings.v1";
 
-import { isSupportedLocale } from "../i18n/index.ts";
+import { canonicalizeLocale } from "../i18n/index.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export type UiSettings = {
@@ -79,7 +79,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.navGroupsCollapsed === "object" && parsed.navGroupsCollapsed !== null
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
-      locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      locale: canonicalizeLocale(parsed.locale) ?? undefined,
     };
   } catch {
     return defaults;
@@ -87,5 +87,6 @@ export function loadSettings(): UiSettings {
 }
 
 export function saveSettings(next: UiSettings) {
-  localStorage.setItem(KEY, JSON.stringify(next));
+  const locale = canonicalizeLocale(next.locale) ?? undefined;
+  localStorage.setItem(KEY, JSON.stringify({ ...next, locale }));
 }

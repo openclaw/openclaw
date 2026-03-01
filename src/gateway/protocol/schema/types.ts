@@ -97,6 +97,16 @@ import type {
   TickEventSchema,
 } from "./frames.js";
 import type {
+  ControlUiI18nGenerateParamsSchema,
+  ControlUiI18nGenerateResultSchema,
+  ControlUiI18nGeneratedLocaleSchema,
+  ControlUiI18nGetParamsSchema,
+  ControlUiI18nGetResultSchema,
+  ControlUiI18nJobSchema,
+  ControlUiI18nListParamsSchema,
+  ControlUiI18nListResultSchema,
+} from "./i18n.js";
+import type {
   ChatAbortParamsSchema,
   ChatEventSchema,
   ChatInjectParamsSchema,
@@ -255,5 +265,13 @@ export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
+export type ControlUiI18nListParams = Static<typeof ControlUiI18nListParamsSchema>;
+export type ControlUiI18nGeneratedLocale = Static<typeof ControlUiI18nGeneratedLocaleSchema>;
+export type ControlUiI18nJob = Static<typeof ControlUiI18nJobSchema>;
+export type ControlUiI18nListResult = Static<typeof ControlUiI18nListResultSchema>;
+export type ControlUiI18nGetParams = Static<typeof ControlUiI18nGetParamsSchema>;
+export type ControlUiI18nGetResult = Static<typeof ControlUiI18nGetResultSchema>;
+export type ControlUiI18nGenerateParams = Static<typeof ControlUiI18nGenerateParamsSchema>;
+export type ControlUiI18nGenerateResult = Static<typeof ControlUiI18nGenerateResultSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;
 export type ShutdownEvent = Static<typeof ShutdownEventSchema>;

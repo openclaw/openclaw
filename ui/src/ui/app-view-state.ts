@@ -1,5 +1,7 @@
 import type { EventLogEntry } from "./app-events.ts";
+import type { AppNotice } from "./app-notices.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { ControlUiI18nJob, ControlUiI18nListResult } from "./controllers/control-ui-i18n.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -56,6 +58,14 @@ export type AppViewState = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  controlUiI18nCatalog: ControlUiI18nListResult | null;
+  controlUiI18nJobs: ControlUiI18nJob[];
+  controlUiI18nModalOpen: boolean;
+  controlUiI18nModalSearch: string;
+  controlUiI18nModalCustomLocale: string;
+  controlUiI18nConfirmRequest: { locale: string; force: boolean } | null;
+  controlUiI18nPendingAutoSelectLocale: string | null;
+  controlUiNotice: AppNotice | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -266,6 +276,7 @@ export type AppViewState = {
   setTheme: (theme: ThemeMode, context?: ThemeTransitionContext) => void;
   applySettings: (next: UiSettings) => void;
   loadOverview: () => Promise<void>;
+  loadControlUiI18nCatalog: () => Promise<void>;
   loadAssistantIdentity: () => Promise<void>;
   loadCron: () => Promise<void>;
   handleWhatsAppStart: (force: boolean) => Promise<void>;
@@ -282,6 +293,14 @@ export type AppViewState = {
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
   handleGatewayUrlConfirm: () => void;
   handleGatewayUrlCancel: () => void;
+  handleControlUiI18nOpenModal: () => void;
+  handleControlUiI18nCloseModal: () => void;
+  handleControlUiI18nSearchChange: (next: string) => void;
+  handleControlUiI18nCustomLocaleChange: (next: string) => void;
+  handleControlUiI18nRequestGenerate: (locale: string, opts?: { force?: boolean }) => void;
+  handleControlUiI18nCancelConfirm: () => void;
+  handleControlUiI18nConfirmGenerate: () => Promise<void>;
+  dismissControlUiNotice: () => void;
   handleConfigLoad: () => Promise<void>;
   handleConfigSave: () => Promise<void>;
   handleConfigApply: () => Promise<void>;

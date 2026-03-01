@@ -101,6 +101,16 @@ import {
   TickEventSchema,
 } from "./frames.js";
 import {
+  ControlUiI18nGenerateParamsSchema,
+  ControlUiI18nGenerateResultSchema,
+  ControlUiI18nGeneratedLocaleSchema,
+  ControlUiI18nGetParamsSchema,
+  ControlUiI18nGetResultSchema,
+  ControlUiI18nJobSchema,
+  ControlUiI18nListParamsSchema,
+  ControlUiI18nListResultSchema,
+} from "./i18n.js";
+import {
   ChatAbortParamsSchema,
   ChatEventSchema,
   ChatHistoryParamsSchema,
@@ -270,6 +280,14 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
   UpdateRunParams: UpdateRunParamsSchema,
+  ControlUiI18nListParams: ControlUiI18nListParamsSchema,
+  ControlUiI18nGeneratedLocale: ControlUiI18nGeneratedLocaleSchema,
+  ControlUiI18nJob: ControlUiI18nJobSchema,
+  ControlUiI18nListResult: ControlUiI18nListResultSchema,
+  ControlUiI18nGetParams: ControlUiI18nGetParamsSchema,
+  ControlUiI18nGetResult: ControlUiI18nGetResultSchema,
+  ControlUiI18nGenerateParams: ControlUiI18nGenerateParamsSchema,
+  ControlUiI18nGenerateResult: ControlUiI18nGenerateResultSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
 };

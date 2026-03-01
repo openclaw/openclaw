@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { t, i18n } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -20,11 +20,14 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  availableLocales: Array<{ value: string; label: string }>;
+  localeGenerationStatus: string | null;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onConnect: () => void;
   onRefresh: () => void;
+  onOpenLanguageModal: () => void;
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -62,8 +65,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Device pairing docs (opens in new tab)"
-            >Docs: Device pairing</a
+            title=${t("overview.pairing.docsTitle")}
+            >${t("overview.pairing.docsLink")}</a
           >
         </div>
       </div>
@@ -119,8 +122,8 @@ export function renderOverview(props: OverviewProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
-              title="Control UI auth docs (opens in new tab)"
-              >Docs: Control UI auth</a
+              title=${t("overview.authDocsTitle")}
+              >${t("overview.authDocsLink")}</a
             >
           </div>
         </div>
@@ -135,8 +138,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/dashboard"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title=${t("overview.authDocsTitle")}
+            >${t("overview.authDocsLink")}</a
           >
         </div>
       </div>
@@ -174,8 +177,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/gateway/tailscale"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Tailscale Serve docs (opens in new tab)"
-            >Docs: Tailscale Serve</a
+            title=${t("overview.insecure.tailscaleDocsTitle")}
+            >${t("overview.insecure.tailscaleDocsLink")}</a
           >
           <span class="muted"> · </span>
           <a
@@ -183,8 +186,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#insecure-http"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Insecure HTTP docs (opens in new tab)"
-            >Docs: Insecure HTTP</a
+            title=${t("overview.insecure.insecureDocsTitle")}
+            >${t("overview.insecure.insecureDocsLink")}</a
           >
         </div>
       </div>
@@ -251,19 +254,32 @@ export function renderOverview(props: OverviewProps) {
           </label>
           <label class="field">
             <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
-            >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
-              })}
-            </select>
+            <div style="display: grid; gap: 8px;">
+              <select
+                .value=${currentLocale}
+                @change=${(e: Event) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  void i18n.setLocale(v);
+                  props.onSettingsChange({ ...props.settings, locale: v });
+                }}
+              >
+                ${props.availableLocales.map(
+                  (locale) => html`<option value=${locale.value}>${locale.label}</option>`,
+                )}
+              </select>
+              <div class="row" style="justify-content: space-between; gap: 8px;">
+                <button class="btn btn--sm" type="button" @click=${() => props.onOpenLanguageModal()}>
+                  ${t("overview.access.addLanguage")}
+                </button>
+                ${
+                  props.localeGenerationStatus
+                    ? html`<span class="muted" style="font-size: 12px;">${props.localeGenerationStatus}</span>`
+                    : html`
+                        <span class="muted" style="font-size: 12px">${t("overview.access.languageGenerateHint")}</span>
+                      `
+                }
+              </div>
+            </div>
           </label>
         </div>
         <div class="row" style="margin-top: 14px;">

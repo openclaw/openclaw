@@ -1,5 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+import { GATEWAY_EVENT_CONTROL_UI_I18N, GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
@@ -35,6 +35,9 @@ const BASE_METHODS = [
   "talk.config",
   "talk.mode",
   "models.list",
+  "controlui.i18n.list",
+  "controlui.i18n.get",
+  "controlui.i18n.generate",
   "tools.catalog",
   "agents.list",
   "agents.create",
@@ -122,5 +125,6 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  GATEWAY_EVENT_CONTROL_UI_I18N,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

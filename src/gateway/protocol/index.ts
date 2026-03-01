@@ -72,6 +72,22 @@ import {
   ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
+  type ControlUiI18nGenerateParams,
+  ControlUiI18nGenerateParamsSchema,
+  type ControlUiI18nGenerateResult,
+  ControlUiI18nGenerateResultSchema,
+  type ControlUiI18nGeneratedLocale,
+  ControlUiI18nGeneratedLocaleSchema,
+  type ControlUiI18nGetParams,
+  ControlUiI18nGetParamsSchema,
+  type ControlUiI18nGetResult,
+  ControlUiI18nGetResultSchema,
+  type ControlUiI18nJob,
+  ControlUiI18nJobSchema,
+  type ControlUiI18nListParams,
+  ControlUiI18nListParamsSchema,
+  type ControlUiI18nListResult,
+  ControlUiI18nListResultSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
@@ -377,6 +393,15 @@ export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortPar
 export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
 export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
+export const validateControlUiI18nListParams = ajv.compile<ControlUiI18nListParams>(
+  ControlUiI18nListParamsSchema,
+);
+export const validateControlUiI18nGetParams = ajv.compile<ControlUiI18nGetParams>(
+  ControlUiI18nGetParamsSchema,
+);
+export const validateControlUiI18nGenerateParams = ajv.compile<ControlUiI18nGenerateParams>(
+  ControlUiI18nGenerateParamsSchema,
+);
 export const validateWebLoginStartParams =
   ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
@@ -508,6 +533,14 @@ export {
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
   UpdateRunParamsSchema,
+  ControlUiI18nListParamsSchema,
+  ControlUiI18nGeneratedLocaleSchema,
+  ControlUiI18nJobSchema,
+  ControlUiI18nListResultSchema,
+  ControlUiI18nGetParamsSchema,
+  ControlUiI18nGetResultSchema,
+  ControlUiI18nGenerateParamsSchema,
+  ControlUiI18nGenerateResultSchema,
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
@@ -617,5 +650,13 @@ export type {
   LogsTailResult,
   PollParams,
   UpdateRunParams,
+  ControlUiI18nListParams,
+  ControlUiI18nGeneratedLocale,
+  ControlUiI18nJob,
+  ControlUiI18nListResult,
+  ControlUiI18nGetParams,
+  ControlUiI18nGetResult,
+  ControlUiI18nGenerateParams,
+  ControlUiI18nGenerateResult,
   ChatInjectParams,
 };

@@ -1,6 +1,12 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
+import {
+  i18n,
+  I18nController,
+  isSupportedLocale,
+  registerRuntimeLocaleLoader,
+  t,
+} from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -22,12 +28,14 @@ import {
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
+import { applyLiteralTranslations } from "./app-i18n-literals.ts";
 import {
   handleConnected,
   handleDisconnected,
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
+import { dismissTransientNotice, showTransientNotice, type AppNotice } from "./app-notices.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -53,6 +61,13 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import {
+  generateControlUiLocale,
+  loadControlUiI18nCatalog as loadControlUiI18nCatalogInternal,
+  loadGeneratedLocaleTranslation,
+  type ControlUiI18nJob,
+  type ControlUiI18nListResult,
+} from "./controllers/control-ui-i18n.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -114,6 +129,7 @@ export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
+    registerRuntimeLocaleLoader((locale) => loadGeneratedLocaleTranslation(this, locale));
     if (isSupportedLocale(this.settings.locale)) {
       void i18n.setLocale(this.settings.locale);
     }
@@ -127,10 +143,19 @@ export class OpenClawApp extends LitElement {
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
+  @state() controlUiI18nCatalog: ControlUiI18nListResult | null = null;
+  @state() controlUiI18nJobs: ControlUiI18nJob[] = [];
+  @state() controlUiI18nModalOpen = false;
+  @state() controlUiI18nModalSearch = "";
+  @state() controlUiI18nModalCustomLocale = "";
+  @state() controlUiI18nConfirmRequest: { locale: string; force: boolean } | null = null;
+  @state() controlUiI18nPendingAutoSelectLocale: string | null = null;
+  @state() controlUiNotice: AppNotice | null = null;
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
+  controlUiNoticeTimer: number | null = null;
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
@@ -409,6 +434,19 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    const isChatStreamOnlyUpdate =
+      changed.size > 0 &&
+      [...changed.keys()].every(
+        (key) =>
+          key === "chatMessages" ||
+          key === "chatToolMessages" ||
+          key === "chatStream" ||
+          key === "chatStreamStartedAt" ||
+          key === "chatRunId",
+      );
+    if (!isChatStreamOnlyUpdate) {
+      applyLiteralTranslations(this);
+    }
   }
 
   connect() {
@@ -468,6 +506,10 @@ export class OpenClawApp extends LitElement {
 
   async loadOverview() {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  }
+
+  async loadControlUiI18nCatalog() {
+    await loadControlUiI18nCatalogInternal(this);
   }
 
   async loadCron() {
@@ -575,6 +617,59 @@ export class OpenClawApp extends LitElement {
 
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
+  }
+
+  handleControlUiI18nOpenModal() {
+    this.controlUiI18nModalOpen = true;
+  }
+
+  handleControlUiI18nCloseModal() {
+    this.controlUiI18nModalOpen = false;
+    this.controlUiI18nConfirmRequest = null;
+  }
+
+  handleControlUiI18nSearchChange(next: string) {
+    this.controlUiI18nModalSearch = next;
+  }
+
+  handleControlUiI18nCustomLocaleChange(next: string) {
+    this.controlUiI18nModalCustomLocale = next;
+  }
+
+  handleControlUiI18nRequestGenerate(locale: string, opts?: { force?: boolean }) {
+    this.controlUiI18nConfirmRequest = {
+      locale,
+      force: Boolean(opts?.force),
+    };
+  }
+
+  handleControlUiI18nCancelConfirm() {
+    this.controlUiI18nConfirmRequest = null;
+  }
+
+  async handleControlUiI18nConfirmGenerate() {
+    const request = this.controlUiI18nConfirmRequest;
+    if (!request) {
+      return;
+    }
+    this.controlUiI18nConfirmRequest = null;
+    this.controlUiI18nModalOpen = false;
+    this.controlUiI18nPendingAutoSelectLocale = request.locale;
+    try {
+      await generateControlUiLocale(this, request);
+    } catch (err) {
+      this.controlUiI18nPendingAutoSelectLocale = null;
+      showTransientNotice(this, {
+        kind: "danger",
+        message: t("controlUiI18n.notices.startFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      });
+    }
+  }
+
+  dismissControlUiNotice() {
+    dismissTransientNotice(this);
   }
 
   // Sidebar handlers for tool output viewing

@@ -6,9 +6,45 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const CONTROL_UI_DIST_PATH_SEGMENTS = ["dist", "control-ui", "index.html"] as const;
+const CONTROL_UI_I18N_EN_SOURCE_MANIFEST_SEGMENTS = ["i18n", "en-source-manifest.json"] as const;
+
+export type ControlUiEnglishSourceManifest = {
+  schemaVersion: number;
+  sourceLocale: "en";
+  sourceHash: string;
+  keyCount: number;
+  flat: Record<string, string>;
+};
 
 export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
+}
+
+function resolveControlUiRootDirForManifest(root: string): string {
+  const normalizedRoot = path.resolve(root);
+  const rootIndex = path.join(normalizedRoot, "index.html");
+  if (fs.existsSync(rootIndex)) {
+    return normalizedRoot;
+  }
+  const nestedControlUiRoot = path.join(normalizedRoot, "dist", "control-ui");
+  const nestedIndex = path.join(nestedControlUiRoot, "index.html");
+  if (fs.existsSync(nestedIndex)) {
+    return nestedControlUiRoot;
+  }
+  return normalizedRoot;
+}
+
+export function resolveControlUiEnglishSourceManifestPathForRoot(root: string): string {
+  const controlUiRoot = resolveControlUiRootDirForManifest(root);
+  return path.join(controlUiRoot, ...CONTROL_UI_I18N_EN_SOURCE_MANIFEST_SEGMENTS);
+}
+
+export function readControlUiEnglishSourceManifestSync(
+  root: string,
+): ControlUiEnglishSourceManifest {
+  const manifestPath = resolveControlUiEnglishSourceManifestPathForRoot(root);
+  const raw = fs.readFileSync(manifestPath, "utf-8");
+  return JSON.parse(raw) as ControlUiEnglishSourceManifest;
 }
 
 export type ControlUiDistIndexHealth = {

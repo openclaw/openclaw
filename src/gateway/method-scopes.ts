@@ -57,6 +57,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.status",
     "tts.providers",
     "models.list",
+    "controlui.i18n.list",
+    "controlui.i18n.get",
     "tools.catalog",
     "agents.list",
     "agent.identity.get",
@@ -122,6 +124,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "set-heartbeats",
     "system-event",
     "agents.files.set",
+    "controlui.i18n.generate",
   ],
 };
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { i18n, t } from "../lib/translate.ts";
+import { i18n, t, translateLiteral } from "../lib/translate.ts";
 
 describe("i18n", () => {
   beforeEach(async () => {
@@ -52,5 +52,18 @@ describe("i18n", () => {
 
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
+  });
+
+  it("translates extracted literal strings for runtime locales", async () => {
+    const sourceLiteral = "Gateway Dashboard";
+    const encoded = btoa(sourceLiteral).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    i18n.registerTranslation("uk", {
+      auto: {
+        [encoded]: "Панель шлюзу",
+      },
+    });
+
+    await i18n.setLocale("uk");
+    expect(translateLiteral(sourceLiteral)).toBe("Панель шлюзу");
   });
 });

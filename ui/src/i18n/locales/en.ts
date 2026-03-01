@@ -13,6 +13,13 @@ export const en: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Resources",
+    dismiss: "Dismiss",
+    close: "Close",
+    cancel: "Cancel",
+    confirm: "Confirm",
+    generating: "Generating…",
+    generate: "Generate",
+    regenerate: "Regenerate",
   },
   nav: {
     chat: "Chat",
@@ -61,6 +68,9 @@ export const en: TranslationMap = {
       password: "Password (not stored)",
       sessionKey: "Default Session Key",
       language: "Language",
+      addLanguage: "Add language",
+      languageGenerateHint: "Generate more locales on demand",
+      languageGenerating: "Generating {language}…",
       connectHint: "Click Connect to apply connection changes.",
       trustedProxy: "Authenticated via trusted proxy.",
     },
@@ -100,11 +110,19 @@ export const en: TranslationMap = {
       hint: "This device needs pairing approval from the gateway host.",
       mobileHint:
         "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
+      docsLink: "Docs: Device pairing",
+      docsTitle: "Device pairing docs (opens in new tab)",
     },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      tailscaleDocsTitle: "Tailscale Serve docs (opens in new tab)",
+      insecureDocsLink: "Docs: Insecure HTTP",
+      insecureDocsTitle: "Insecure HTTP docs (opens in new tab)",
     },
+    authDocsLink: "Docs: Control UI auth",
+    authDocsTitle: "Control UI auth docs (opens in new tab)",
   },
   chat: {
     disconnected: "Disconnected from gateway.",
@@ -119,5 +137,249 @@ export const en: TranslationMap = {
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",
     de: "Deutsch (German)",
+  },
+  controlUiI18n: {
+    modal: {
+      addLanguage: "Add Language",
+      subtitle:
+        "Generate additional Control UI translations on demand using your configured AI provider/model.",
+      searchPlaceholder: "Search languages or locale code (e.g. Ukrainian, uk, uk-UA)",
+      customLocaleLabel: "Custom locale code (BCP-47)",
+      customLocalePlaceholder: "uk-UA",
+      canonical: "Canonical: {locale}",
+      invalidCustomLocale: "Enter a valid locale code",
+      generateTranslation: "Generate translation",
+      regenerateTranslation: "Regenerate translation",
+      providerNotice:
+        "This will ask the configured AI provider/model to translate the Control UI strings. It may take some time, and cost/network usage depends on your provider setup.",
+    },
+    badges: {
+      bundled: "Bundled",
+      generated: "Generated",
+      generating: "Generating",
+      stale: "Stale",
+    },
+    notices: {
+      startFailed: "Failed to start translation: {error}",
+      started:
+        "Started generating {language}. This may take some time depending on your configured AI provider/model.",
+      completed: "{language} translation is ready.",
+      failed: "{language} translation failed: {error}",
+      staleSelected:
+        "Your selected {language} translation is stale and may miss newer UI text. Regenerate it from Add language.",
+    },
+  },
+  config: {
+    sidebar: {
+      title: "Settings",
+      allSettings: "All Settings",
+    },
+    sections: {
+      env: "Environment",
+      update: "Updates",
+      agents: "Agents",
+      auth: "Authentication",
+      channels: "Channels",
+      messages: "Messages",
+      commands: "Commands",
+      hooks: "Hooks",
+      skills: "Skills",
+      tools: "Tools",
+      gateway: "Gateway",
+      wizard: "Setup Wizard",
+    },
+    sectionMeta: {
+      env: {
+        label: "Environment Variables",
+        description: "Environment variables passed to the gateway process",
+      },
+      update: {
+        label: "Updates",
+        description: "Auto-update settings and release channel",
+      },
+      agents: {
+        label: "Agents",
+        description: "Agent configurations, models, and identities",
+      },
+      auth: {
+        label: "Authentication",
+        description: "API keys and authentication profiles",
+      },
+      channels: {
+        label: "Channels",
+        description: "Messaging channels (Telegram, Discord, Slack, etc.)",
+      },
+      messages: {
+        label: "Messages",
+        description: "Message handling and routing settings",
+      },
+      commands: {
+        label: "Commands",
+        description: "Custom slash commands",
+      },
+      hooks: {
+        label: "Hooks",
+        description: "Webhooks and event hooks",
+      },
+      skills: {
+        label: "Skills",
+        description: "Skill packs and capabilities",
+      },
+      tools: {
+        label: "Tools",
+        description: "Tool configurations (browser, search, etc.)",
+      },
+      gateway: {
+        label: "Gateway",
+        description: "Gateway server settings (port, auth, binding)",
+      },
+      wizard: {
+        label: "Setup Wizard",
+        description: "Setup wizard state and history",
+      },
+      meta: {
+        label: "Metadata",
+        description: "Gateway metadata and version information",
+      },
+      logging: {
+        label: "Logging",
+        description: "Log levels and output configuration",
+      },
+      browser: {
+        label: "Browser",
+        description: "Browser automation settings",
+      },
+      ui: {
+        label: "UI",
+        description: "User interface preferences",
+      },
+      models: {
+        label: "Models",
+        description: "AI model configurations and providers",
+      },
+      bindings: {
+        label: "Bindings",
+        description: "Key bindings and shortcuts",
+      },
+      broadcast: {
+        label: "Broadcast",
+        description: "Broadcast and notification settings",
+      },
+      audio: {
+        label: "Audio",
+        description: "Audio input/output settings",
+      },
+      session: {
+        label: "Session",
+        description: "Session management and persistence",
+      },
+      cron: {
+        label: "Cron",
+        description: "Scheduled tasks and automation",
+      },
+      web: {
+        label: "Web",
+        description: "Web server and API settings",
+      },
+      discovery: {
+        label: "Discovery",
+        description: "Service discovery and networking",
+      },
+      canvasHost: {
+        label: "Canvas Host",
+        description: "Canvas rendering and display",
+      },
+      talk: {
+        label: "Talk",
+        description: "Voice and speech settings",
+      },
+      plugins: {
+        label: "Plugins",
+        description: "Plugin management and extensions",
+      },
+    },
+    validity: {
+      valid: "Valid",
+      invalid: "Invalid",
+      unknown: "Unknown",
+    },
+    search: {
+      placeholder: "Search settings...",
+      tagFilters: "Tag filters:",
+      addTags: "Add tags",
+    },
+    modes: {
+      form: "Form",
+      raw: "Raw",
+      rawJson5: "Raw JSON5",
+    },
+    status: {
+      unsavedChangesRaw: "Unsaved changes",
+      unsavedChangesOne: "1 unsaved change",
+      unsavedChangesMany: "{count} unsaved changes",
+      noChanges: "No changes",
+    },
+    actions: {
+      loading: "Loading…",
+      reload: "Reload",
+      saving: "Saving…",
+      save: "Save",
+      applying: "Applying…",
+      apply: "Apply",
+      updating: "Updating…",
+      update: "Update",
+    },
+    diff: {
+      viewPendingOne: "View 1 pending change",
+      viewPendingMany: "View {count} pending changes",
+    },
+    subnav: {
+      all: "All",
+    },
+    loading: {
+      schema: "Loading schema…",
+    },
+    warnings: {
+      formUnsafe:
+        "Form view can't safely edit some fields. Use Raw to avoid losing config entries.",
+    },
+    form: {
+      schemaUnavailable: "Schema unavailable.",
+      unsupportedSchema: "Unsupported schema. Use Raw.",
+      noSettingsMatch: 'No settings match "{query}"',
+      noSettingsInSection: "No settings in this section",
+    },
+    fields: {
+      unsupportedNode: "Unsupported schema node. Use Raw mode.",
+      unsupportedType: "Unsupported type: {type}. Use Raw mode.",
+      defaultPlaceholder: "Default: {value}",
+      resetToDefault: "Reset to default",
+      selectPlaceholder: "Select...",
+      unsupportedArray: "Unsupported array schema. Use Raw mode.",
+      itemsCountOne: "1 item",
+      itemsCountMany: "{count} items",
+      add: "Add",
+      emptyArray: 'No items yet. Click "Add" to create one.',
+      removeItem: "Remove item",
+      customEntries: "Custom entries",
+      addEntry: "Add Entry",
+      noCustomEntries: "No custom entries.",
+      keyPlaceholder: "Key",
+      removeEntry: "Remove entry",
+      jsonValuePlaceholder: "JSON value",
+    },
+  },
+  update: {
+    available: "Update available",
+    runningVersion: "running v{version}",
+    updateNow: "Update now",
+    updating: "Updating…",
+  },
+  dialogs: {
+    gatewayUrl: {
+      title: "Change Gateway URL",
+      subtitle: "This will reconnect to a different gateway server",
+      warning: "Only confirm if you trust this URL. Malicious URLs can compromise your system.",
+    },
   },
 };

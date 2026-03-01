@@ -2190,6 +2190,108 @@
 }
 
 /* ===========================================
+   Control UI i18n Modal
+   =========================================== */
+
+.i18n-language-modal {
+  width: min(860px, 100%);
+  max-height: min(85vh, 900px);
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.i18n-language-modal__search input {
+  width: 100%;
+}
+
+.i18n-language-modal__custom {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--secondary);
+}
+
+.i18n-language-modal__list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  background: var(--bg-elevated);
+}
+
+.i18n-language-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.i18n-language-row:last-child {
+  border-bottom: none;
+}
+
+.i18n-language-row__meta {
+  min-width: 0;
+}
+
+.i18n-language-row__title {
+  font-weight: 600;
+}
+
+.i18n-language-row__sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.i18n-language-row__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.i18n-language-row__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.i18n-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--card);
+}
+
+.i18n-badge--info {
+  border-color: rgba(59, 130, 246, 0.25);
+  color: var(--info);
+}
+
+.i18n-badge--warn {
+  border-color: rgba(245, 158, 11, 0.25);
+  color: var(--warn);
+}
+
+@media (max-width: 900px) {
+  .i18n-language-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .i18n-language-row__badges,
+  .i18n-language-row__actions {
+    justify-content: flex-start;
+  }
+}
+
+/* ===========================================
    Agents
    =========================================== */
 

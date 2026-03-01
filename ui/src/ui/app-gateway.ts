@@ -1,9 +1,14 @@
 import {
+  GATEWAY_EVENT_CONTROL_UI_I18N,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { i18n } from "../i18n/index.ts";
+import { t } from "../i18n/index.ts";
+import { resolveLanguageLabel } from "../i18n/language-catalog.ts";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import { showTransientNotice } from "./app-notices.ts";
 import {
   applySettings,
   loadCron,
@@ -17,6 +22,13 @@ import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import {
+  loadControlUiI18nCatalog,
+  mergeControlUiI18nJobEvent,
+  parseControlUiI18nEventPayload,
+  type ControlUiI18nJob,
+  type ControlUiI18nListResult,
+} from "./controllers/control-ui-i18n.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -52,6 +64,11 @@ type GatewayHost = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  controlUiI18nCatalog: ControlUiI18nListResult | null;
+  controlUiI18nJobs: ControlUiI18nJob[];
+  controlUiI18nPendingAutoSelectLocale: string | null;
+  controlUiNotice: import("./app-notices.ts").AppNotice | null;
+  controlUiNoticeTimer: number | null;
   onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
@@ -172,6 +189,35 @@ export function connectGateway(host: GatewayHost) {
       void loadToolsCatalog(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      void (async () => {
+        try {
+          const catalog = await loadControlUiI18nCatalog(host as unknown as OpenClawApp);
+          if (!catalog) {
+            return;
+          }
+          const selectedLocale = host.settings.locale?.trim();
+          if (!selectedLocale || selectedLocale === "en") {
+            return;
+          }
+          const selected = catalog.generatedLocales.find(
+            (entry) => entry.locale === selectedLocale,
+          );
+          if (!selected?.stale) {
+            return;
+          }
+          showTransientNotice(host, {
+            kind: "info",
+            message: t("controlUiI18n.notices.staleSelected", {
+              language: resolveLanguageLabel(selectedLocale),
+            }),
+          });
+        } catch (err) {
+          console.warn("controlui.i18n.list failed", err);
+        }
+      })();
+      if (host.settings.locale) {
+        void i18n.setLocale(host.settings.locale);
+      }
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -317,6 +363,64 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const resolved = parseExecApprovalResolved(evt.payload);
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
+    return;
+  }
+
+  if (evt.event === GATEWAY_EVENT_CONTROL_UI_I18N) {
+    const payload = parseControlUiI18nEventPayload(evt.payload);
+    if (!payload) {
+      return;
+    }
+    host.controlUiI18nJobs = mergeControlUiI18nJobEvent(host.controlUiI18nJobs, payload);
+    void loadControlUiI18nCatalog(host as unknown as OpenClawApp).catch((err) => {
+      console.warn("controlui.i18n.list failed", err);
+    });
+
+    const selfConnId = host.hello?.server?.connId ?? null;
+    const isRequester = Boolean(payload.requesterConnId && payload.requesterConnId === selfConnId);
+    const label = resolveLanguageLabel(payload.locale);
+
+    if (isRequester && payload.status === "queued") {
+      showTransientNotice(host, {
+        kind: "info",
+        message: t("controlUiI18n.notices.started", { language: label }),
+      });
+    }
+    if (isRequester && payload.status === "completed") {
+      showTransientNotice(host, {
+        kind: "success",
+        message: t("controlUiI18n.notices.completed", { language: label }),
+      });
+    }
+    if (isRequester && payload.status === "failed") {
+      showTransientNotice(host, {
+        kind: "danger",
+        message: t("controlUiI18n.notices.failed", {
+          language: label,
+          error: payload.error || t("common.na"),
+        }),
+      });
+    }
+
+    if (
+      host.controlUiI18nPendingAutoSelectLocale === payload.locale &&
+      payload.status === "completed"
+    ) {
+      host.controlUiI18nPendingAutoSelectLocale = null;
+      void (async () => {
+        await i18n.setLocale(payload.locale);
+        applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+          ...host.settings,
+          locale: payload.locale,
+        });
+      })();
+    }
+    if (
+      host.controlUiI18nPendingAutoSelectLocale === payload.locale &&
+      payload.status === "failed"
+    ) {
+      host.controlUiI18nPendingAutoSelectLocale = null;
     }
     return;
   }

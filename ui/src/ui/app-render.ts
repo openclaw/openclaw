@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { t } from "../i18n/index.ts";
+import { BUILTIN_LOCALES, t } from "../i18n/index.ts";
+import { resolveLanguageLabel } from "../i18n/language-catalog.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
@@ -73,6 +74,7 @@ import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
+import { renderI18nLanguageModal } from "./views/i18n-language-modal.ts";
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
@@ -120,6 +122,22 @@ function uniquePreserveOrder(values: string[]): string[] {
   return output;
 }
 
+function builtinLocaleLabel(locale: string): string {
+  if (locale === "en") {
+    return t("languages.en");
+  }
+  if (locale === "zh-CN") {
+    return t("languages.zhCN");
+  }
+  if (locale === "zh-TW") {
+    return t("languages.zhTW");
+  }
+  if (locale === "pt-BR") {
+    return t("languages.ptBR");
+  }
+  return resolveLanguageLabel(locale);
+}
+
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -150,6 +168,42 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
+  const generatedLocales = state.controlUiI18nCatalog?.generatedLocales ?? [];
+  const availableLocales = Array.from(
+    new Map(
+      [
+        ...BUILTIN_LOCALES.map((locale) => ({
+          value: locale,
+          label: builtinLocaleLabel(locale),
+        })),
+        ...generatedLocales.map((entry) => ({
+          value: entry.locale,
+          label: resolveLanguageLabel(entry.locale),
+        })),
+        ...(state.settings.locale
+          ? [
+              {
+                value: state.settings.locale,
+                label: resolveLanguageLabel(state.settings.locale),
+              },
+            ]
+          : []),
+      ].map((entry) => [entry.value, entry]),
+    ).values(),
+  );
+  const activeLocaleJob =
+    state.controlUiI18nJobs.find(
+      (job) =>
+        (job.status === "queued" || job.status === "running") &&
+        job.locale === (state.controlUiI18nPendingAutoSelectLocale ?? state.settings.locale),
+    ) ??
+    state.controlUiI18nJobs.find((job) => job.status === "queued" || job.status === "running") ??
+    null;
+  const localeGenerationStatus = activeLocaleJob
+    ? t("overview.access.languageGenerating", {
+        language: resolveLanguageLabel(activeLocaleJob.locale),
+      })
+    : null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
@@ -304,14 +358,28 @@ export function renderApp(state: AppViewState) {
         ${
           availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
-              (running v${availableUpdate.currentVersion}).
+              <strong>${t("update.available")}:</strong> v${availableUpdate.latestVersion}
+              (${t("update.runningVersion", { version: availableUpdate.currentVersion })}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              >${state.updateRunning ? t("update.updating") : t("update.updateNow")}</button>
             </div>`
+            : nothing
+        }
+        ${
+          state.controlUiNotice
+            ? html`<div
+                class="callout ${state.controlUiNotice.kind}"
+                role="status"
+                style="margin-bottom: 12px; display: flex; justify-content: space-between; gap: 12px;"
+              >
+                <span>${state.controlUiNotice.message}</span>
+                <button class="btn btn--sm" @click=${() => state.dismissControlUiNotice()}>
+                  ${t("common.dismiss")}
+                </button>
+              </div>`
             : nothing
         }
         <section class="content-header">
@@ -339,6 +407,8 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                availableLocales,
+                localeGenerationStatus,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -354,6 +424,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onOpenLanguageModal: () => state.handleControlUiI18nOpenModal(),
               })
             : nothing
         }
@@ -1137,6 +1208,7 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${renderI18nLanguageModal(state)}
     </div>
   `;
 }
