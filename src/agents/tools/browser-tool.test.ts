@@ -93,6 +93,37 @@ vi.mock("./common.js", async () => {
   };
 });
 
+const browserActionMocks = vi.hoisted(() => ({
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/file.bin",
+      suggestedFilename: "file.bin",
+      path: "/tmp/download.bin",
+    },
+  })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "t1",
+    download: {
+      url: "https://example.com/file.bin",
+      suggestedFilename: "file.bin",
+      path: "/tmp/download.bin",
+    },
+  })),
+}));
+vi.mock("../../browser/client-actions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../browser/client-actions.js")>(
+    "../../browser/client-actions.js",
+  );
+  return {
+    ...actual,
+    browserDownload: browserActionMocks.browserDownload,
+    browserWaitForDownload: browserActionMocks.browserWaitForDownload,
+  };
+});
+
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { createBrowserTool } from "./browser-tool.js";
 
@@ -464,6 +495,72 @@ describe("browser tool external content wrapping", () => {
         source: "browser",
         kind: "console",
       }),
+    });
+  });
+});
+
+describe("browser tool download actions", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("waits for download and returns metadata", async () => {
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.(null, {
+      action: "waitForDownload",
+      targetId: "t-42",
+      path: "/tmp/out.bin",
+      timeoutMs: 15_000,
+      profile: "openclaw",
+    });
+
+    expect(browserActionMocks.browserWaitForDownload).toHaveBeenCalledWith(undefined, {
+      targetId: "t-42",
+      path: "/tmp/out.bin",
+      timeoutMs: 15_000,
+      profile: "openclaw",
+    });
+    expect(result?.details).toMatchObject({
+      ok: true,
+      targetId: "t1",
+      download: {
+        path: "/tmp/download.bin",
+        url: "https://example.com/file.bin",
+        suggestedFilename: "file.bin",
+      },
+    });
+  });
+
+  it("downloads by ref and returns metadata", async () => {
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.(null, {
+      action: "download",
+      ref: "e12",
+      path: "/tmp/saved.bin",
+      targetId: "t-42",
+      timeoutMs: 12_000,
+      profile: "openclaw",
+    });
+
+    expect(browserActionMocks.browserDownload).toHaveBeenCalledWith(undefined, {
+      ref: "e12",
+      path: "/tmp/saved.bin",
+      targetId: "t-42",
+      timeoutMs: 12_000,
+      profile: "openclaw",
+    });
+    expect(result?.details).toMatchObject({
+      ok: true,
+      targetId: "t1",
+      download: {
+        path: "/tmp/download.bin",
+        url: "https://example.com/file.bin",
+        suggestedFilename: "file.bin",
+      },
     });
   });
 });
