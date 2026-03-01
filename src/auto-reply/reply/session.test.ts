@@ -1026,48 +1026,55 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("does NOT carry over modelOverride/providerOverride on /new", async () => {
-    const storePath = await createStorePath("openclaw-reset-model-override-");
-    const sessionKey = "agent:main:telegram:dm:user-model-override";
-    const existingSessionId = "existing-session-model";
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: {
-        modelOverride: "fallback-model",
-        providerOverride: "fallback-provider",
-        verboseLevel: "on",
-      },
-    });
+  it("does NOT carry over modelOverride/providerOverride on /new or /reset", async () => {
+    const cases = [
+      { name: "/new clears model overrides", body: "/new" },
+      { name: "/reset clears model overrides", body: "/reset" },
+    ] as const;
 
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
+    for (const testCase of cases) {
+      const storePath = await createStorePath("openclaw-reset-model-override-");
+      const sessionKey = "agent:main:telegram:dm:user-model-override";
+      const existingSessionId = "existing-session-model";
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          modelOverride: "fallback-model",
+          providerOverride: "fallback-provider",
+          verboseLevel: "on",
+        },
+      });
 
-    const result = await initSessionState({
-      ctx: {
-        Body: "/new",
-        RawBody: "/new",
-        CommandBody: "/new",
-        From: "user-model-override",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    // Model overrides should NOT persist — new session uses configured primary.
-    expect(result.sessionEntry.modelOverride).toBeUndefined();
-    expect(result.sessionEntry.providerOverride).toBeUndefined();
-    // Behavior overrides (verbose, thinking, etc.) SHOULD persist.
-    expect(result.sessionEntry.verboseLevel).toBe("on");
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-model-override",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      // Model overrides should NOT persist — new session uses configured primary.
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+      // Behavior overrides (verbose, thinking, etc.) SHOULD persist.
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe("on");
+    }
   });
 
   it("archives the old session store entry on /new", async () => {
