@@ -429,7 +429,11 @@ export function parseTtsDirectives(
   if (deferredGenericModel) {
     if (overrides.provider === "openai") {
       if (!overrides.openai?.model) {
-        overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+        if (!isValidOpenAIModel(deferredGenericModel)) {
+          warnings.push(`invalid OpenAI model "${deferredGenericModel}"`);
+        } else {
+          overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+        }
       }
     } else if (overrides.provider === "elevenlabs") {
       if (!overrides.elevenlabs?.modelId) {
