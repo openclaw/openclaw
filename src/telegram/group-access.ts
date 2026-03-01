@@ -130,6 +130,14 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   if (groupPolicy === "disabled") {
     return { allowed: false, reason: "group-policy-disabled", groupPolicy };
   }
+  // Check chat allowlist first - if the chat ID is explicitly configured with enabled: true,
+  // it should be allowed regardless of sender allowlist entries
+  if (params.checkChatAllowlist) {
+    const groupAllowlist = params.resolveGroupPolicy(params.chatId);
+    if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+      return { allowed: false, reason: "group-chat-not-allowed", groupPolicy };
+    }
+  }
   if (groupPolicy === "allowlist" && params.enforceAllowlistAuthorization) {
     const senderId = params.senderId ?? "";
     if (params.requireSenderForAllowlistAuthorization && !senderId) {
@@ -147,12 +155,6 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
       })
     ) {
       return { allowed: false, reason: "group-policy-allowlist-unauthorized", groupPolicy };
-    }
-  }
-  if (params.checkChatAllowlist) {
-    const groupAllowlist = params.resolveGroupPolicy(params.chatId);
-    if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
-      return { allowed: false, reason: "group-chat-not-allowed", groupPolicy };
     }
   }
   return { allowed: true, groupPolicy };
