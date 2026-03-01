@@ -9,8 +9,12 @@ import android.content.Intent
 import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
+private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
@@ -133,12 +137,47 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onNotificationPosted(sbn)
     val entry = sbn?.toEntry() ?: return
     DeviceNotificationStore.upsert(entry)
+    if (entry.packageName == packageName) {
+      return
+    }
+    emitNotificationsChanged(
+      buildJsonObject {
+        put("change", JsonPrimitive("posted"))
+        put("key", JsonPrimitive(entry.key))
+        put("packageName", JsonPrimitive(entry.packageName))
+        put("postTimeMs", JsonPrimitive(entry.postTimeMs))
+        put("isOngoing", JsonPrimitive(entry.isOngoing))
+        put("isClearable", JsonPrimitive(entry.isClearable))
+        entry.title?.let { put("title", JsonPrimitive(it)) }
+        entry.text?.let { put("text", JsonPrimitive(it)) }
+        entry.subText?.let { put("subText", JsonPrimitive(it)) }
+        entry.category?.let { put("category", JsonPrimitive(it)) }
+        entry.channelId?.let { put("channelId", JsonPrimitive(it)) }
+      }.toString(),
+    )
   }
 
   override fun onNotificationRemoved(sbn: StatusBarNotification?) {
     super.onNotificationRemoved(sbn)
-    val key = sbn?.key ?: return
+    val removed = sbn ?: return
+    val key = removed.key.trim()
+    if (key.isEmpty()) {
+      return
+    }
     DeviceNotificationStore.remove(key)
+    if (removed.packageName == packageName) {
+      return
+    }
+    emitNotificationsChanged(
+      buildJsonObject {
+        put("change", JsonPrimitive("removed"))
+        put("key", JsonPrimitive(key))
+        val packageName = removed.packageName.trim()
+        if (packageName.isNotEmpty()) {
+          put("packageName", JsonPrimitive(packageName))
+        }
+      }.toString(),
+    )
   }
 
   private fun refreshActiveNotifications() {
@@ -175,9 +214,14 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
   companion object {
     @Volatile private var activeService: DeviceNotificationListenerService? = null
+    @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
     private fun serviceComponent(context: Context): ComponentName {
       return ComponentName(context, DeviceNotificationListenerService::class.java)
+    }
+
+    fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
+      nodeEventSink = sink
     }
 
     fun isAccessEnabled(context: Context): Boolean {
@@ -213,6 +257,12 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           message = "NOTIFICATIONS_UNAVAILABLE: notification listener not connected",
         )
       return service.executeActionInternal(request)
+    }
+
+    private fun emitNotificationsChanged(payloadJson: String) {
+      runCatching {
+        nodeEventSink?.invoke(NOTIFICATIONS_CHANGED_EVENT, payloadJson)
+      }
     }
   }
 

@@ -12,12 +12,8 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk";
 import { AcpRuntimeError } from "openclaw/plugin-sdk";
-import {
-  ACPX_LOCAL_INSTALL_COMMAND,
-  ACPX_PINNED_VERSION,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
-import { checkPinnedAcpxVersion } from "./ensure.js";
+import { type ResolvedAcpxPluginConfig } from "./config.js";
+import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
@@ -121,10 +117,10 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async probeAvailability(): Promise<void> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -247,6 +243,9 @@ export class AcpxRuntime implements AcpRuntime {
           continue;
         }
         if (parsed.type === "done") {
+          if (sawDone) {
+            continue;
+          }
           sawDone = true;
         }
         if (parsed.type === "error") {
@@ -376,15 +375,15 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
       const details = [
-        `expected=${versionCheck.expectedVersion}`,
+        versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
         versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
       ].filter((detail): detail is string => Boolean(detail));
       return {
@@ -410,7 +409,7 @@ export class AcpxRuntime implements AcpRuntime {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
             message: `acpx command not found: ${this.config.command}`,
-            installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+            installCommand: this.config.installCommand,
           };
         }
         if (spawnFailure === "missing-cwd") {
@@ -440,7 +439,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.healthy = true;
       return {
         ok: true,
-        message: `acpx command available (${this.config.command}, version ${versionCheck.version})`,
+        message: `acpx command available (${this.config.command}, version ${versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
       };
     } catch (error) {
       this.healthy = false;

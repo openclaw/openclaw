@@ -166,11 +166,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
-  "acp.stream": "ACP streaming projection controls for chunk sizing and coalescer flush timing.",
+  "acp.stream":
+    "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":
     "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
   "acp.stream.maxChunkChars":
     "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
+  "acp.stream.repeatSuppression":
+    "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
+  "acp.stream.deliveryMode":
+    "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
+  "acp.stream.hiddenBoundarySeparator":
+    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
+  "acp.stream.maxOutputChars":
+    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
+  "acp.stream.maxSessionUpdateChars":
+    "Maximum characters for projected ACP session/update lines (tool/status updates).",
+  "acp.stream.tagVisibility":
+    "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.ttlMinutes":
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
@@ -630,7 +643,7 @@ export const FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
-    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing.',
+    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing; matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
   "models.providers":
     "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
   "models.providers.*.baseUrl":
@@ -641,6 +654,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+  "models.providers.*.injectNumCtxForOpenAICompat":
+    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
@@ -1062,6 +1077,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
   "cron.maxConcurrentRuns":
     "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+  "cron.retry":
+    "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
+  "cron.retry.maxAttempts":
+    "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
+  "cron.retry.backoffMs":
+    "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
+  "cron.retry.retryOn":
+    "Error types to retry: rate_limit, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
   "cron.webhook":
     'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',
   "cron.webhookToken":
