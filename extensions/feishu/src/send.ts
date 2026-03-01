@@ -331,3 +331,81 @@ export async function editMessageFeishu(params: {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
 }
+
+
+export type SendFeishuImageParams = {
+  cfg: ClawdbotConfig;
+  to: string;
+  imagePath: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  accountId?: string;
+};
+
+/**
+ * Upload image to Feishu and get image key
+ */
+async function uploadImageFeishu(params: {
+  client: ReturnType<typeof createFeishuClient>;
+  imagePath: string;
+}): Promise<string> {
+  const { client, imagePath } = params;
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+
+  const imageData = fs.readFileSync(imagePath);
+  const imageType = path.extname(imagePath).slice(1).toLowerCase() || "jpg";
+  const mimeType = imageType === "png" ? "image/png" : "image/jpeg";
+
+  const response = await client.im.image.create({
+    data: {
+      image: new Blob([imageData]),
+      image_type: mimeType,
+    } as unknown as Record<string, unknown>,
+  });
+
+  if (response.code !== 0 || !response.data?.image_key) {
+    throw new Error(`Feishu image upload failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return response.data.image_key as string;
+}
+
+/**
+ * Send an image message to Feishu
+ */
+export async function sendImageFeishu(params: SendFeishuImageParams): Promise<FeishuSendResult> {
+  const { cfg, to, imagePath, replyToMessageId, replyInThread, accountId } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+
+  // Upload image to get image_key
+  const imageKey = await uploadImageFeishu({ client, imagePath });
+
+  const content = JSON.stringify({
+    image_key: imageKey,
+  });
+
+  if (replyToMessageId) {
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "image",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    return toFeishuSendResult(response, receiveId);
+  }
+
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: "image",
+    },
+  });
+  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  return toFeishuSendResult(response, receiveId);
+}
