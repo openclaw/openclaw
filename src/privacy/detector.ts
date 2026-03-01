@@ -69,6 +69,9 @@ const FALSE_POSITIVE_PATTERNS = [
   /^\/[\w/]+$/, // file paths
 ];
 
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * Validate a bare password candidate: must have password-like complexity
  * and not match common false-positive patterns.
@@ -95,6 +98,10 @@ export function validateBarePassword(s: string): boolean {
  */
 export function validateHighEntropy(s: string): boolean {
   if (s.length < 16) {
+    return false;
+  }
+  // UUIDs are common identifiers (filenames, session IDs) and are not secrets by default.
+  if (UUID_V4_PATTERN.test(s)) {
     return false;
   }
   const entropy = shannonEntropy(s);

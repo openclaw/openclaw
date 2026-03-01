@@ -188,6 +188,11 @@ describe("PrivacyDetector", () => {
       const result = detector.detect("aaaaaaaaaaaaaaaa");
       expect(result.matches.some((m) => m.type === "high_entropy_string")).toBe(false);
     });
+
+    it("rejects UUID identifiers to avoid false positives", () => {
+      const result = detector.detect("71334644-5cd2-424a-9926-2a909b0362f8");
+      expect(result.matches.some((m) => m.type === "high_entropy_string")).toBe(false);
+    });
   });
 
   describe("edge cases", () => {
