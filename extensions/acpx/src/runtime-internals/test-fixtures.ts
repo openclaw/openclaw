@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
@@ -255,7 +255,9 @@ export async function createMockRuntimeFixture(params?: {
   logPath: string;
   config: ResolvedAcpxPluginConfig;
 }> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-test-"));
+  const dir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-acpx-runtime-test-"),
+  );
   tempDirs.push(dir);
   const scriptPath = path.join(dir, "mock-acpx.cjs");
   const logPath = path.join(dir, "calls.log");
