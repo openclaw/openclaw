@@ -154,7 +154,7 @@ describe("fs-safe", () => {
         rootDir: root,
         relativePath: path.join("..", path.basename(outside), "outside.txt"),
       }),
-    ).rejects.toMatchObject({ code: "outside-workspace" });
+    ).rejects.toMatchObject({ code: "invalid-path" });
   });
 
   it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
@@ -358,7 +358,7 @@ describe("fs-safe", () => {
         relativePath: "../escape.txt",
         data: "x",
       }),
-    ).rejects.toMatchObject({ code: "outside-workspace" });
+    ).rejects.toMatchObject({ code: "invalid-path" });
   });
 
   it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {

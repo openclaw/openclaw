@@ -109,8 +109,6 @@ On **Permissions**, click **Batch import** and paste:
       "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
       "application:bot.menu:write",
-      "cardkit:card:read",
-      "cardkit:card:write",
       "contact:user.employee_id:readonly",
       "corehr:file:download",
       "event:ip_list",
@@ -197,17 +195,6 @@ Edit `~/.openclaw/openclaw.json`:
 
 If you use `connectionMode: "webhook"`, set `verificationToken`. The Feishu webhook server binds to `127.0.0.1` by default; set `webhookHost` only if you intentionally need a different bind address.
 
-#### Verification Token (webhook mode)
-
-When using webhook mode, set `channels.feishu.verificationToken` in your config. To get the value:
-
-1. In Feishu Open Platform, open your app
-2. Go to **Development** → **Events & Callbacks** (开发配置 → 事件与回调)
-3. Open the **Encryption** tab (加密策略)
-4. Copy **Verification Token**
-
-![Verification Token location](../images/feishu-verification-token.png)
-
 ### Configure via environment variables
 
 ```bash
@@ -228,34 +215,6 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-        },
-      },
-    },
-  },
-}
-```
-
-### Quota optimization flags
-
-You can reduce Feishu API usage with two optional flags:
-
-- `typingIndicator` (default `true`): when `false`, skip typing reaction calls.
-- `resolveSenderNames` (default `true`): when `false`, skip sender profile lookup calls.
-
-Set them at top level or per account:
-
-```json5
-{
-  channels: {
-    feishu: {
-      typingIndicator: false,
-      resolveSenderNames: false,
-      accounts: {
-        main: {
-          appId: "cli_xxx",
-          appSecret: "xxx",
-          typingIndicator: true,
-          resolveSenderNames: false,
         },
       },
     },
@@ -356,36 +315,14 @@ After approval, you can chat normally.
 }
 ```
 
-### Allow specific groups only
+### Allow specific users in groups only
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "allowlist",
-      // Feishu group IDs (chat_id) look like: oc_xxx
-      groupAllowFrom: ["oc_xxx", "oc_yyy"],
-    },
-  },
-}
-```
-
-### Restrict which senders can message in a group (sender allowlist)
-
-In addition to allowing the group itself, **all messages** in that group are gated by the sender open_id: only users listed in `groups.<chat_id>.allowFrom` have their messages processed; messages from other members are ignored (this is full sender-level gating, not only for control commands like /reset or /new).
-
-```json5
-{
-  channels: {
-    feishu: {
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["oc_xxx"],
-      groups: {
-        oc_xxx: {
-          // Feishu user IDs (open_id) look like: ou_xxx
-          allowFrom: ["ou_user1", "ou_user2"],
-        },
-      },
+      groupAllowFrom: ["ou_xxx", "ou_yyy"],
     },
   },
 }

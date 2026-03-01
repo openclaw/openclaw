@@ -658,13 +658,18 @@ async function agentCommandInternal(
       cfg,
       agentId: sessionAgentId,
     });
+    // Treat a configured non-default provider as explicit so the openai->openai-codex
+    // auto-remap is skipped when the user has intentionally chosen a different provider
+    // (e.g. "openai/gpt-5.3-codex" in config for a custom OpenAI-compatible endpoint) (#22819).
+    const configuredProviderExplicit = configuredDefaultRef.provider !== DEFAULT_PROVIDER;
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,
       configuredDefaultRef.model,
+      { providerExplicit: configuredProviderExplicit },
     );
     let provider = defaultProvider;
     let model = defaultModel;
-    let providerExplicit = false;
+    let providerExplicit = configuredProviderExplicit;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,

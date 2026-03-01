@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { z } from "zod";
 export { z };
-import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
 const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
@@ -84,7 +83,6 @@ const DynamicAgentCreationSchema = z
 const FeishuToolsConfigSchema = z
   .object({
     doc: z.boolean().optional(), // Document operations (default: true)
-    chat: z.boolean().optional(), // Chat info + member query operations (default: true)
     wiki: z.boolean().optional(), // Knowledge base operations (default: true, requires doc)
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
@@ -94,39 +92,14 @@ const FeishuToolsConfigSchema = z
   .optional();
 
 /**
- * Group session scope for routing Feishu group messages.
- * - "group" (default): one session per group chat
- * - "group_sender": one session per (group + sender)
- * - "group_topic": one session per group topic thread (falls back to group if no topic)
- * - "group_topic_sender": one session per (group + topic thread + sender),
- *   falls back to (group + sender) if no topic
- */
-const GroupSessionScopeSchema = z
-  .enum(["group", "group_sender", "group_topic", "group_topic_sender"])
-  .optional();
-
-/**
- * @deprecated Use groupSessionScope instead.
- *
  * Topic session isolation mode for group chats.
  * - "disabled" (default): All messages in a group share one session
  * - "enabled": Messages in different topics get separate sessions
  *
- * Topic routing uses `root_id` when present to keep session continuity and
- * falls back to `thread_id` when `root_id` is unavailable.
+ * When enabled, the session key becomes `chat:{chatId}:topic:{rootId}`
+ * for messages within a topic thread, allowing isolated conversations.
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
-const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
-
-/**
- * Reply-in-thread mode for group chats.
- * - "disabled" (default): Bot replies are normal inline replies
- * - "enabled": Bot replies create or continue a Feishu topic thread
- *
- * When enabled, the Feishu reply API is called with `reply_in_thread: true`,
- * causing the reply to appear as a topic (话题) under the original message.
- */
-const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
 export const FeishuGroupSchema = z
   .object({
@@ -136,9 +109,7 @@ export const FeishuGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
-    groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
-    replyInThread: ReplyInThreadSchema,
   })
   .strict();
 
@@ -152,7 +123,6 @@ const FeishuSharedConfigShape = {
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: GroupPolicySchema.optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
@@ -166,10 +136,6 @@ const FeishuSharedConfigShape = {
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
-  replyInThread: ReplyInThreadSchema,
-  reactionNotifications: ReactionNotificationModeSchema,
-  typingIndicator: z.boolean().optional(),
-  resolveSenderNames: z.boolean().optional(),
 };
 
 /**
@@ -181,15 +147,13 @@ export const FeishuAccountConfigSchema = z
     enabled: z.boolean().optional(),
     name: z.string().optional(), // Display name for this account
     appId: z.string().optional(),
-    appSecret: buildSecretInputSchema().optional(),
+    appSecret: z.string().optional(),
     encryptKey: z.string().optional(),
-    verificationToken: buildSecretInputSchema().optional(),
+    verificationToken: z.string().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
     webhookPath: z.string().optional(),
     ...FeishuSharedConfigShape,
-    groupSessionScope: GroupSessionScopeSchema,
-    topicSessionMode: TopicSessionModeSchema,
   })
   .strict();
 
@@ -199,24 +163,19 @@ export const FeishuConfigSchema = z
     defaultAccount: z.string().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
-    appSecret: buildSecretInputSchema().optional(),
+    appSecret: z.string().optional(),
     encryptKey: z.string().optional(),
-    verificationToken: buildSecretInputSchema().optional(),
+    verificationToken: z.string().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
     webhookPath: z.string().optional().default("/feishu/events"),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional().default(true),
-    groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
-    typingIndicator: z.boolean().optional().default(true),
-    resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
@@ -235,8 +194,8 @@ export const FeishuConfigSchema = z
     }
 
     const defaultConnectionMode = value.connectionMode ?? "websocket";
-    const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
-    if (defaultConnectionMode === "webhook" && !defaultVerificationTokenConfigured) {
+    const defaultVerificationToken = value.verificationToken?.trim();
+    if (defaultConnectionMode === "webhook" && !defaultVerificationToken) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["verificationToken"],
@@ -253,9 +212,9 @@ export const FeishuConfigSchema = z
       if (accountConnectionMode !== "webhook") {
         continue;
       }
-      const accountVerificationTokenConfigured =
-        hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
-      if (!accountVerificationTokenConfigured) {
+      const accountVerificationToken =
+        account.verificationToken?.trim() || defaultVerificationToken;
+      if (!accountVerificationToken) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["accounts", accountId, "verificationToken"],

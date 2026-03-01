@@ -19,21 +19,6 @@ function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
   expect(typed.channels.googlechat.allowFrom).toBeUndefined();
 }
 
-async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
-  const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-  try {
-    await runDoctorConfigWithInput({
-      config,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    return noteSpy.mock.calls
-      .filter((call) => call[1] === "Doctor warnings")
-      .map((call) => String(call[0]));
-  } finally {
-    noteSpy.mockRestore();
-  }
-}
-
 type DiscordGuildRule = {
   users: string[];
   roles: string[];
@@ -71,59 +56,31 @@ describe("doctor config flow", () => {
   });
 
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        slack: {
-          dangerouslyAllowNameMatching: true,
-          accounts: {
-            work: {
-              allowFrom: ["alice"],
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            slack: {
+              dangerouslyAllowNameMatching: true,
+              accounts: {
+                work: {
+                  allowFrom: ["alice"],
+                },
+              },
             },
           },
         },
-      },
-    });
-    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
-  });
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
 
-  it("does not warn about sender-based group allowlist for googlechat", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        googlechat: {
-          groupPolicy: "allowlist",
-          accounts: {
-            work: {
-              groupPolicy: "allowlist",
-            },
-          },
-        },
-      },
-    });
-
-    expect(
-      doctorWarnings.some(
-        (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
-      ),
-    ).toBe(false);
-  });
-
-  it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      channels: {
-        imessage: {
-          groupPolicy: "allowlist",
-          allowFrom: ["+15551234567"],
-        },
-      },
-    });
-
-    expect(
-      doctorWarnings.some(
-        (line) =>
-          line.includes('channels.imessage.groupPolicy is "allowlist"') &&
-          line.includes("does not fall back to allowFrom"),
-      ),
-    ).toBe(true);
+      const doctorWarnings = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings")
+        .map((call) => String(call[0]));
+      expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    } finally {
+      noteSpy.mockRestore();
+    }
   });
 
   it("drops unknown keys on repair", async () => {

@@ -22,9 +22,9 @@ const sourceRoots = [
 const allowedRawFetchCallsites = new Set([
   "extensions/bluebubbles/src/types.ts:133",
   "extensions/feishu/src/streaming-card.ts:31",
-  "extensions/feishu/src/streaming-card.ts:101",
-  "extensions/feishu/src/streaming-card.ts:143",
-  "extensions/feishu/src/streaming-card.ts:199",
+  "extensions/feishu/src/streaming-card.ts:100",
+  "extensions/feishu/src/streaming-card.ts:141",
+  "extensions/feishu/src/streaming-card.ts:197",
   "extensions/google-gemini-cli-auth/oauth.ts:372",
   "extensions/google-gemini-cli-auth/oauth.ts:408",
   "extensions/google-gemini-cli-auth/oauth.ts:447",

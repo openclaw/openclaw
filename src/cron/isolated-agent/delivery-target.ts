@@ -42,9 +42,8 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
-    /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
-    accountId?: string;
     sessionKey?: string;
+    accountId?: string;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -102,14 +101,11 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   let toCandidate = resolved.to;
 
-  // Prefer an explicit accountId from the job's delivery config (set via
-  // --account on cron add/edit). Fall back to the session's lastAccountId,
-  // then to the agent's bound account from bindings config.
-  const explicitAccountId =
-    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
-      ? jobPayload.accountId.trim()
-      : undefined;
-  let accountId = explicitAccountId ?? resolved.accountId;
+  // When the session has no lastAccountId (e.g. first-run isolated cron
+  // session), fall back to the agent's bound account from bindings config.
+  // This ensures the message tool in isolated sessions resolves the correct
+  // bot token for multi-account setups.
+  let accountId = resolved.accountId;
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);
     const byAgent = bindings.get(channel);
@@ -119,7 +115,7 @@ export async function resolveDeliveryTarget(
     }
   }
 
-  // job.delivery.accountId takes highest precedence — explicitly set by the job author.
+  // Explicit delivery account should override inferred session/binding account.
   if (jobPayload.accountId) {
     accountId = jobPayload.accountId;
   }
@@ -148,6 +144,20 @@ export async function resolveDeliveryTarget(
     };
   }
 
+  if (!toCandidate) {
+    return {
+      ok: false,
+      channel,
+      to: undefined,
+      accountId,
+      threadId,
+      mode,
+      error:
+        channelResolutionError ??
+        new Error(`No delivery target resolved for channel "${channel}". Set delivery.to.`),
+    };
+  }
+
   let allowFromOverride: string[] | undefined;
   if (channel === "whatsapp") {
     const resolvedAccountId = normalizeAccountId(accountId);
@@ -163,7 +173,7 @@ export async function resolveDeliveryTarget(
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];
 
-    if (toCandidate && mode === "implicit" && allowFromOverride.length > 0) {
+    if (mode === "implicit" && allowFromOverride.length > 0) {
       const normalizedCurrentTarget = normalizeWhatsAppTarget(toCandidate);
       if (!normalizedCurrentTarget || !allowFromOverride.includes(normalizedCurrentTarget)) {
         toCandidate = allowFromOverride[0];

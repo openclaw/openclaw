@@ -2,7 +2,6 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/feishu";
 import { registerFeishuBitableTools } from "./src/bitable.js";
 import { feishuPlugin } from "./src/channel.js";
-import { registerFeishuChatTools } from "./src/chat.js";
 import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
@@ -54,7 +53,6 @@ const plugin = {
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin });
     registerFeishuDocTools(api);
-    registerFeishuChatTools(api);
     registerFeishuWikiTools(api);
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);

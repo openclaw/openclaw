@@ -57,8 +57,6 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
-    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
-    heartbeat?: { target?: string };
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning

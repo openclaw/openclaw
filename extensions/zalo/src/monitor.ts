@@ -175,7 +175,7 @@ function startPollingLoop(params: {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
-        runtime.error?.(`[${account.accountId}] Zalo polling error: ${String(err)}`);
+        console.error(`[${account.accountId}] Zalo polling error:`, err);
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
@@ -222,12 +222,10 @@ async function processUpdate(
       );
       break;
     case "message.sticker.received":
-      logVerbose(core, runtime, `[${account.accountId}] Received sticker from ${message.from.id}`);
+      console.log(`[${account.accountId}] Received sticker from ${message.from.id}`);
       break;
     case "message.unsupported.received":
-      logVerbose(
-        core,
-        runtime,
+      console.log(
         `[${account.accountId}] Received unsupported message type from ${message.from.id}`,
       );
       break;
@@ -293,7 +291,7 @@ async function handleImageMessage(
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {
-      runtime.error?.(`[${account.accountId}] Failed to download Zalo image: ${String(err)}`);
+      console.error(`[${account.accountId}] Failed to download Zalo image:`, err);
     }
   }
 

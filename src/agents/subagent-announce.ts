@@ -80,17 +80,12 @@ function buildCompletionDeliveryMessage(params: {
   subagentName: string;
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
-  announceType?: SubagentAnnounceType;
 }): string {
   const findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  // Cron completions are standalone messages — skip the subagent status header.
-  if (params.announceType === "cron job") {
-    return hasFindings ? findingsText : "";
-  }
   const header = (() => {
     if (params.outcome?.status === "error") {
       return params.spawnMode === "session"
@@ -1336,7 +1331,6 @@ export async function runSubagentAnnounceFlow(params: {
       subagentName,
       spawnMode: params.spawnMode,
       outcome,
-      announceType,
     });
     internalEvents = [
       {
@@ -1410,17 +1404,7 @@ export async function runSubagentAnnounceFlow(params: {
       currentRunId: params.childRunId,
       signal: params.signal,
     });
-    // Cron delivery state should only be marked as delivered when we have a
-    // direct path result. Queue/steer means "accepted for later processing",
-    // not a confirmed channel send, and can otherwise produce false positives.
-    if (
-      announceType === "cron job" &&
-      (delivery.path === "queued" || delivery.path === "steered")
-    ) {
-      didAnnounce = false;
-    } else {
-      didAnnounce = delivery.delivered;
-    }
+    didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

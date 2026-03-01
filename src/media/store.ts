@@ -244,10 +244,6 @@ function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
       return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
-    case "outside-workspace":
-      return new SaveMediaSourceError("invalid-path", "Media path is outside workspace root", {
-        cause: err,
-      });
     case "invalid-path":
     default:
       return new SaveMediaSourceError("invalid-path", "Media path is not safe to read", {

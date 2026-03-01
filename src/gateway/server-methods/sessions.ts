@@ -23,7 +23,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -85,9 +84,6 @@ function rejectWebchatSessionMutation(params: {
   respond: RespondFn;
 }): boolean {
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
     return false;
   }
   params.respond(
