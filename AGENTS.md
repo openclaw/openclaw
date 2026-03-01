@@ -254,3 +254,65 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## Corporate Bedrock Proxy (bedrock-invoke API mode)
+
+Custom `bedrock-invoke` API mode for corporate Bedrock proxies (e.g. Kong-based GenAI Nexus at `genai-nexus.int.api.corpinter.net`) that expose the Bedrock native invoke path with Bearer token auth.
+
+### How it works
+
+- Sends Anthropic Messages format request body (same as `anthropic-messages`)
+- Routes to `POST {baseUrl}/model/{modelId}/invoke-with-response-stream`
+- Body includes `anthropic_version: "bedrock-2023-05-31"`, excludes `model` and `stream` fields
+- Auth: sends both `Authorization: Bearer {token}` and `api-key: {token}` headers (Kong routing)
+- Parses AWS binary event stream (`application/vnd.amazon.eventstream`) response, where each frame contains base64-encoded Anthropic JSON events
+
+### Files
+
+- `src/config/types.models.ts` — `"bedrock-invoke"` in `MODEL_APIS`
+- `src/agents/bedrock-invoke-stream.ts` — StreamFn factory (AWS event stream parser + Anthropic message conversion)
+- `src/agents/pi-embedded-runner/run/attempt.ts` — wires `bedrock-invoke` StreamFn alongside Ollama
+- `src/agents/transcript-policy.ts` — `"bedrock-invoke"` in `isAnthropicApi()`
+
+### Config (`~/.openclaw/openclaw.json`)
+
+```json
+{
+  "models": {
+    "providers": {
+      "corp-bedrock": {
+        "baseUrl": "https://genai-nexus.int.api.corpinter.net",
+        "api": "bedrock-invoke",
+        "authHeader": true,
+        "apiKey": "${AWS_BEARER_TOKEN_BEDROCK}",
+        "models": [
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": { "defaults": { "model": { "primary": "corp-bedrock/claude-opus-4-6" } } }
+}
+```
+
+### Notes
+
+- Model IDs use short Anthropic format (`claude-opus-4-6`), not Bedrock ARN format (`us.anthropic.claude-opus-4-6-v1`)
+- The proxy uses Kong API gateway; `api-key` header is required for route matching
+- Response is AWS binary event stream (not SSE); each frame wraps base64-encoded Anthropic JSON
+- Local dev CLI: run `pnpm build && npm link` to use `openclaw` globally from this repo

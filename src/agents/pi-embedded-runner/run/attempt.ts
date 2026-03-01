@@ -29,6 +29,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { createBedrockInvokeStreamFn } from "../../bedrock-invoke-stream.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
@@ -866,6 +867,21 @@ export async function runEmbeddedAttempt(
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else if (params.model.api === "bedrock-invoke") {
+        // Bedrock native invoke: Anthropic Messages format routed to
+        // /model/{modelId}/invoke-with-response-stream (Bearer token auth).
+        const providerConfig = params.config?.models?.providers?.[params.model.provider];
+        const modelBaseUrl =
+          typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+        const providerBaseUrl =
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
+        const bedrockBaseUrl = modelBaseUrl || providerBaseUrl || "";
+        if (!bedrockBaseUrl) {
+          log.warn(
+            `bedrock-invoke: no baseUrl configured for provider "${params.model.provider}"; requests will fail`,
+          );
+        }
+        activeSession.agent.streamFn = createBedrockInvokeStreamFn(bedrockBaseUrl);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
