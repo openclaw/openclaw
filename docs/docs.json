@@ -1877,12 +1877,531 @@
             "tab": "はじめに",
             "groups": [
               {
-                "group": "概要",
+                "group": "トップ",
                 "pages": ["ja-JP/index"]
               },
               {
-                "group": "初回セットアップ",
-                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
+                "group": "概要",
+                "pages": ["ja-JP/start/showcase"]
+              },
+              {
+                "group": "主な機能",
+                "pages": ["ja-JP/concepts/features"]
+              },
+              {
+                "group": "最初のステップ",
+                "pages": [
+                  "ja-JP/start/getting-started",
+                  "ja-JP/start/wizard",
+                  "ja-JP/start/onboarding"
+                ]
+              },
+              {
+                "group": "ガイド",
+                "pages": ["ja-JP/start/openclaw"]
+              }
+            ]
+          },
+          {
+            "tab": "インストール",
+            "groups": [
+              {
+                "group": "インストール概要",
+                "pages": ["ja-JP/install/index", "ja-JP/install/installer"]
+              },
+              {
+                "group": "インストール方法",
+                "pages": [
+                  "ja-JP/install/docker",
+                  "ja-JP/install/nix",
+                  "ja-JP/install/ansible",
+                  "ja-JP/install/bun"
+                ]
+              },
+              {
+                "group": "メンテナンス",
+                "pages": [
+                  "ja-JP/install/updating",
+                  "ja-JP/install/migrating",
+                  "ja-JP/install/uninstall"
+                ]
+              },
+              {
+                "group": "ホスティングとデプロイ",
+                "pages": [
+                  "ja-JP/install/fly",
+                  "ja-JP/install/hetzner",
+                  "ja-JP/install/gcp",
+                  "ja-JP/install/macos-vm",
+                  "ja-JP/install/exe-dev"
+                ]
+              },
+              {
+                "group": "詳細設定",
+                "pages": ["ja-JP/install/development-channels"]
+              }
+            ]
+          },
+          {
+            "tab": "チャンネル",
+            "groups": [
+              {
+                "group": "概要",
+                "pages": ["ja-JP/channels/index"]
+              },
+              {
+                "group": "メッセージングプラットフォーム",
+                "pages": [
+                  "ja-JP/channels/whatsapp",
+                  "ja-JP/channels/telegram",
+                  "ja-JP/channels/discord",
+                  "ja-JP/channels/slack",
+                  "ja-JP/channels/feishu",
+                  "ja-JP/channels/googlechat",
+                  "ja-JP/channels/mattermost",
+                  "ja-JP/channels/signal",
+                  "ja-JP/channels/imessage",
+                  "ja-JP/channels/msteams",
+                  "ja-JP/channels/line",
+                  "ja-JP/channels/matrix",
+                  "ja-JP/channels/zalo",
+                  "ja-JP/channels/zalouser",
+                  "ja-JP/channels/grammy"
+                ]
+              },
+              {
+                "group": "設定",
+                "pages": [
+                  "ja-JP/channels/pairing",
+                  "ja-JP/channels/group-messages",
+                  "ja-JP/channels/groups",
+                  "ja-JP/channels/broadcast-groups",
+                  "ja-JP/channels/channel-routing",
+                  "ja-JP/channels/location",
+                  "ja-JP/channels/troubleshooting"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "エージェント",
+            "groups": [
+              {
+                "group": "基本",
+                "pages": [
+                  "ja-JP/concepts/architecture",
+                  "ja-JP/concepts/agent",
+                  "ja-JP/concepts/agent-loop",
+                  "ja-JP/concepts/system-prompt",
+                  "ja-JP/concepts/context",
+                  "ja-JP/concepts/agent-workspace",
+                  "ja-JP/concepts/oauth"
+                ]
+              },
+              {
+                "group": "ブートストラップ",
+                "pages": ["ja-JP/start/bootstrapping"]
+              },
+              {
+                "group": "セッションとメモリ",
+                "pages": [
+                  "ja-JP/concepts/session",
+                  "ja-JP/concepts/sessions",
+                  "ja-JP/concepts/session-pruning",
+                  "ja-JP/concepts/session-tool",
+                  "ja-JP/concepts/memory",
+                  "ja-JP/concepts/compaction"
+                ]
+              },
+              {
+                "group": "マルチエージェント",
+                "pages": ["ja-JP/concepts/multi-agent", "ja-JP/concepts/presence"]
+              },
+              {
+                "group": "メッセージと配信",
+                "pages": [
+                  "ja-JP/concepts/messages",
+                  "ja-JP/concepts/streaming",
+                  "ja-JP/concepts/retry",
+                  "ja-JP/concepts/queue"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "ツール",
+            "groups": [
+              {
+                "group": "概要",
+                "pages": ["ja-JP/tools/index"]
+              },
+              {
+                "group": "組み込みツール",
+                "pages": [
+                  "ja-JP/tools/lobster",
+                  "ja-JP/tools/llm-task",
+                  "ja-JP/tools/exec",
+                  "ja-JP/tools/web",
+                  "ja-JP/tools/apply-patch",
+                  "ja-JP/tools/elevated",
+                  "ja-JP/tools/thinking",
+                  "ja-JP/tools/reactions"
+                ]
+              },
+              {
+                "group": "ブラウザ",
+                "pages": [
+                  "ja-JP/tools/browser",
+                  "ja-JP/tools/browser-login",
+                  "ja-JP/tools/chrome-extension",
+                  "ja-JP/tools/browser-linux-troubleshooting"
+                ]
+              },
+              {
+                "group": "エージェント連携",
+                "pages": [
+                  "ja-JP/tools/agent-send",
+                  "ja-JP/tools/subagents",
+                  "ja-JP/tools/multi-agent-sandbox-tools"
+                ]
+              },
+              {
+                "group": "スキル",
+                "pages": [
+                  "ja-JP/tools/slash-commands",
+                  "ja-JP/tools/skills",
+                  "ja-JP/tools/skills-config",
+                  "ja-JP/tools/clawhub",
+                  "ja-JP/tools/plugin"
+                ]
+              },
+              {
+                "group": "エクステンション",
+                "pages": ["ja-JP/plugins/voice-call", "ja-JP/plugins/zalouser"]
+              },
+              {
+                "group": "オートメーション",
+                "pages": [
+                  "ja-JP/automation/hooks",
+                  "ja-JP/automation/cron-jobs",
+                  "ja-JP/automation/cron-vs-heartbeat",
+                  "ja-JP/automation/troubleshooting",
+                  "ja-JP/automation/webhook",
+                  "ja-JP/automation/gmail-pubsub",
+                  "ja-JP/automation/poll",
+                  "ja-JP/automation/auth-monitoring"
+                ]
+              },
+              {
+                "group": "メディアとデバイス",
+                "pages": [
+                  "ja-JP/nodes/index",
+                  "ja-JP/nodes/troubleshooting",
+                  "ja-JP/nodes/images",
+                  "ja-JP/nodes/audio",
+                  "ja-JP/nodes/camera",
+                  "ja-JP/nodes/talk",
+                  "ja-JP/nodes/voicewake",
+                  "ja-JP/nodes/location-command"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "モデル",
+            "groups": [
+              {
+                "group": "概要",
+                "pages": ["ja-JP/providers/index", "ja-JP/providers/models"]
+              },
+              {
+                "group": "モデルコンセプト",
+                "pages": ["ja-JP/concepts/models"]
+              },
+              {
+                "group": "設定",
+                "pages": ["ja-JP/concepts/model-providers", "ja-JP/concepts/model-failover"]
+              },
+              {
+                "group": "プロバイダー",
+                "pages": [
+                  "ja-JP/providers/anthropic",
+                  "ja-JP/providers/openai",
+                  "ja-JP/providers/openrouter",
+                  "ja-JP/providers/bedrock",
+                  "ja-JP/providers/vercel-ai-gateway",
+                  "ja-JP/providers/ollama",
+                  "ja-JP/providers/github-copilot",
+                  "ja-JP/providers/moonshot",
+                  "ja-JP/providers/minimax",
+                  "ja-JP/providers/opencode",
+                  "ja-JP/providers/glm",
+                  "ja-JP/providers/zai",
+                  "ja-JP/providers/qwen",
+                  "ja-JP/providers/deepgram",
+                  "ja-JP/providers/venice",
+                  "ja-JP/providers/xiaomi",
+                  "ja-JP/providers/synthetic",
+                  "ja-JP/providers/qianfan",
+                  "ja-JP/providers/claude-max-api-proxy"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "プラットフォーム",
+            "groups": [
+              {
+                "group": "プラットフォーム概要",
+                "pages": [
+                  "ja-JP/platforms/index",
+                  "ja-JP/platforms/macos",
+                  "ja-JP/platforms/linux",
+                  "ja-JP/platforms/windows",
+                  "ja-JP/platforms/android",
+                  "ja-JP/platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS コンパニオンアプリ",
+                "pages": [
+                  "ja-JP/platforms/mac/dev-setup",
+                  "ja-JP/platforms/mac/menu-bar",
+                  "ja-JP/platforms/mac/voicewake",
+                  "ja-JP/platforms/mac/voice-overlay",
+                  "ja-JP/platforms/mac/webchat",
+                  "ja-JP/platforms/mac/canvas",
+                  "ja-JP/platforms/mac/child-process",
+                  "ja-JP/platforms/mac/health",
+                  "ja-JP/platforms/mac/icon",
+                  "ja-JP/platforms/mac/logging",
+                  "ja-JP/platforms/mac/permissions",
+                  "ja-JP/platforms/mac/remote",
+                  "ja-JP/platforms/mac/signing",
+                  "ja-JP/platforms/mac/release",
+                  "ja-JP/platforms/mac/bundled-gateway",
+                  "ja-JP/platforms/mac/xpc",
+                  "ja-JP/platforms/mac/skills",
+                  "ja-JP/platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Gatewayと運用",
+            "groups": [
+              {
+                "group": "Gateway",
+                "pages": [
+                  "ja-JP/gateway/index",
+                  {
+                    "group": "設定と運用",
+                    "pages": [
+                      "ja-JP/gateway/configuration",
+                      "ja-JP/gateway/configuration-examples",
+                      "ja-JP/gateway/authentication",
+                      "ja-JP/gateway/health",
+                      "ja-JP/gateway/heartbeat",
+                      "ja-JP/gateway/doctor",
+                      "ja-JP/gateway/logging",
+                      "ja-JP/gateway/gateway-lock",
+                      "ja-JP/gateway/background-process",
+                      "ja-JP/gateway/multiple-gateways",
+                      "ja-JP/gateway/troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "セキュリティとサンドボックス",
+                    "pages": [
+                      "ja-JP/gateway/security/index",
+                      "ja-JP/gateway/sandboxing",
+                      "ja-JP/gateway/sandbox-vs-tool-policy-vs-elevated"
+                    ]
+                  },
+                  {
+                    "group": "プロトコルとAPI",
+                    "pages": [
+                      "ja-JP/gateway/protocol",
+                      "ja-JP/gateway/bridge-protocol",
+                      "ja-JP/gateway/openai-http-api",
+                      "ja-JP/gateway/openresponses-http-api",
+                      "ja-JP/gateway/tools-invoke-http-api",
+                      "ja-JP/gateway/cli-backends",
+                      "ja-JP/gateway/local-models"
+                    ]
+                  },
+                  {
+                    "group": "ネットワークとディスカバリー",
+                    "pages": [
+                      "ja-JP/gateway/network-model",
+                      "ja-JP/gateway/pairing",
+                      "ja-JP/gateway/discovery",
+                      "ja-JP/gateway/bonjour"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "リモートアクセス",
+                "pages": [
+                  "ja-JP/gateway/remote",
+                  "ja-JP/gateway/remote-gateway-readme",
+                  "ja-JP/gateway/tailscale"
+                ]
+              },
+              {
+                "group": "セキュリティ",
+                "pages": ["ja-JP/security/formal-verification"]
+              },
+              {
+                "group": "Webインターフェース",
+                "pages": [
+                  "ja-JP/web/index",
+                  "ja-JP/web/control-ui",
+                  "ja-JP/web/dashboard",
+                  "ja-JP/web/webchat",
+                  "ja-JP/web/tui"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "リファレンス",
+            "groups": [
+              {
+                "group": "CLIコマンド",
+                "pages": [
+                  "ja-JP/cli/index",
+                  "ja-JP/cli/agent",
+                  "ja-JP/cli/agents",
+                  "ja-JP/cli/approvals",
+                  "ja-JP/cli/browser",
+                  "ja-JP/cli/channels",
+                  "ja-JP/cli/config",
+                  "ja-JP/cli/configure",
+                  "ja-JP/cli/cron",
+                  "ja-JP/cli/dashboard",
+                  "ja-JP/cli/devices",
+                  "ja-JP/cli/directory",
+                  "ja-JP/cli/dns",
+                  "ja-JP/cli/docs",
+                  "ja-JP/cli/doctor",
+                  "ja-JP/cli/gateway",
+                  "ja-JP/cli/health",
+                  "ja-JP/cli/hooks",
+                  "ja-JP/cli/logs",
+                  "ja-JP/cli/memory",
+                  "ja-JP/cli/message",
+                  "ja-JP/cli/models",
+                  "ja-JP/cli/node",
+                  "ja-JP/cli/nodes",
+                  "ja-JP/cli/onboard",
+                  "ja-JP/cli/pairing",
+                  "ja-JP/cli/plugins",
+                  "ja-JP/cli/reset",
+                  "ja-JP/cli/sandbox",
+                  "ja-JP/cli/security",
+                  "ja-JP/cli/sessions",
+                  "ja-JP/cli/setup",
+                  "ja-JP/cli/skills",
+                  "ja-JP/cli/status",
+                  "ja-JP/cli/system",
+                  "ja-JP/cli/tui",
+                  "ja-JP/cli/uninstall",
+                  "ja-JP/cli/update",
+                  "ja-JP/cli/voicecall",
+                  "ja-JP/cli/webhooks",
+                  "ja-JP/cli/acp"
+                ]
+              },
+              {
+                "group": "RPCとAPI",
+                "pages": ["ja-JP/reference/rpc", "ja-JP/reference/device-models"]
+              },
+              {
+                "group": "テンプレート",
+                "pages": [
+                  "ja-JP/reference/AGENTS.default",
+                  "ja-JP/reference/templates/AGENTS",
+                  "ja-JP/reference/templates/BOOT",
+                  "ja-JP/reference/templates/BOOTSTRAP",
+                  "ja-JP/reference/templates/HEARTBEAT",
+                  "ja-JP/reference/templates/IDENTITY",
+                  "ja-JP/reference/templates/SOUL",
+                  "ja-JP/reference/templates/TOOLS",
+                  "ja-JP/reference/templates/USER"
+                ]
+              },
+              {
+                "group": "技術リファレンス",
+                "pages": ["ja-JP/reference/wizard", "ja-JP/reference/token-use"]
+              },
+              {
+                "group": "コンセプト内部詳細",
+                "pages": [
+                  "ja-JP/concepts/typebox",
+                  "ja-JP/concepts/markdown-formatting",
+                  "ja-JP/concepts/typing-indicators",
+                  "ja-JP/concepts/usage-tracking",
+                  "ja-JP/concepts/timezone"
+                ]
+              },
+              {
+                "group": "プロジェクト",
+                "pages": ["ja-JP/reference/credits"]
+              },
+              {
+                "group": "リリースノート",
+                "pages": ["ja-JP/reference/RELEASING", "ja-JP/reference/test"]
+              },
+              {
+                "group": "実験的機能",
+                "pages": [
+                  "ja-JP/experiments/onboarding-config-protocol",
+                  "ja-JP/experiments/plans/openresponses-gateway",
+                  "ja-JP/experiments/plans/cron-add-hardening",
+                  "ja-JP/experiments/plans/group-policy-hardening",
+                  "ja-JP/experiments/research/memory",
+                  "ja-JP/experiments/proposals/model-config"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "ヘルプ",
+            "groups": [
+              {
+                "group": "ヘルプ",
+                "pages": ["ja-JP/help/index", "ja-JP/help/troubleshooting", "ja-JP/help/faq"]
+              },
+              {
+                "group": "コミュニティ",
+                "pages": ["ja-JP/start/lore"]
+              },
+              {
+                "group": "環境とデバッグ",
+                "pages": [
+                  "ja-JP/help/environment",
+                  "ja-JP/help/debugging",
+                  "ja-JP/help/testing",
+                  "ja-JP/help/scripts"
+                ]
+              },
+              {
+                "group": "Nodeランタイム",
+                "pages": ["ja-JP/install/node"]
+              },
+              {
+                "group": "コンパクション内部リファレンス",
+                "pages": ["ja-JP/reference/session-management-compaction"]
+              },
+              {
+                "group": "開発者セットアップ",
+                "pages": ["ja-JP/start/setup"]
+              },
+              {
+                "group": "ドキュメントメタ情報",
+                "pages": ["ja-JP/start/hubs", "ja-JP/start/docs-directory"]
               }
             ]
           }
