@@ -108,6 +108,25 @@ describe("normalizeReplyPayload", () => {
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
   });
+
+  it("does not prepend unresolved template prefixes without context", () => {
+    const noContext = normalizeReplyPayload(
+      { text: "hello" },
+      {
+        responsePrefix: "[{model}]",
+      },
+    );
+    expect(noContext?.text).toBe("hello");
+
+    const withContext = normalizeReplyPayload(
+      { text: "hello" },
+      {
+        responsePrefix: "[{model}]",
+        responsePrefixContext: { model: "gpt-5.2" },
+      },
+    );
+    expect(withContext?.text).toBe("[gpt-5.2] hello");
+  });
 });
 
 describe("typing controller", () => {

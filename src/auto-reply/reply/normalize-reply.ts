@@ -4,6 +4,7 @@ import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../token
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
+  hasTemplateVariables,
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
@@ -76,10 +77,15 @@ export function normalizeReplyPayload(
     text = enrichedPayload.text;
   }
 
-  // Resolve template variables in responsePrefix if context is provided
-  const effectivePrefix = opts.responsePrefixContext
-    ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
-    : opts.responsePrefix;
+  // Avoid leaking unresolved template variables (e.g. "{model}") into user-visible
+  // text when prefix context is not available yet.
+  const skipTemplatePrefix =
+    !opts.responsePrefixContext && hasTemplateVariables(opts.responsePrefix);
+  const effectivePrefix = skipTemplatePrefix
+    ? undefined
+    : opts.responsePrefixContext
+      ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
+      : opts.responsePrefix;
 
   if (
     effectivePrefix &&

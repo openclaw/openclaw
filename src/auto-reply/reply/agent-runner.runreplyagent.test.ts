@@ -313,6 +313,38 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 });
 
+describe("runReplyAgent model selection callback", () => {
+  it("updates onModelSelected with runtime model metadata", async () => {
+    const onModelSelected = vi.fn();
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+        },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onModelSelected },
+    });
+    await run();
+
+    expect(onModelSelected).toHaveBeenCalledTimes(2);
+    expect(onModelSelected).toHaveBeenNthCalledWith(1, {
+      provider: "anthropic",
+      model: "claude",
+      thinkLevel: "low",
+    });
+    expect(onModelSelected).toHaveBeenNthCalledWith(2, {
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      thinkLevel: "low",
+    });
+  });
+});
+
 describe("runReplyAgent typing (heartbeat)", () => {
   async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
     return await withStateDirEnv(

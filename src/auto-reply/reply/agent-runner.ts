@@ -440,6 +440,13 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    // Re-emit model selection with the resolved runtime model so downstream
+    // consumers (e.g. responsePrefix templates) track the actual model used.
+    opts?.onModelSelected?.({
+      provider: providerUsed,
+      model: modelUsed,
+      thinkLevel: followupRun.run.thinkLevel,
+    });
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
