@@ -97,6 +97,16 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  /** Delivery metadata (idempotency key, turn id) injected by the outbound pipeline. */
+  delivery?: ChannelOutboundDeliveryMetadata;
+};
+
+/** Metadata attached to outbound context for delivery tracking. */
+export type ChannelOutboundDeliveryMetadata = {
+  /** Idempotency key for dedup on the channel provider side. */
+  idempotencyKey?: string;
+  /** Durable turn id for outbox/recovery linking. */
+  turnId?: string;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
@@ -109,6 +119,8 @@ export type ChannelOutboundAdapter = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   pollMaxOptions?: number;
+  /** Whether the channel adapter supports idempotency keys for dedup. */
+  supportsIdempotencyKey?: boolean;
   resolveTarget?: (params: {
     cfg?: OpenClawConfig;
     to?: string;
