@@ -266,6 +266,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
     );
+    expect(prompt).toContain(
+      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
+    );
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
