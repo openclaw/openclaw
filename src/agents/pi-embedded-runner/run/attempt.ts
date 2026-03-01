@@ -242,7 +242,10 @@ function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
       continue;
     }
     const trimmed = typedBlock.name.trim();
-    if (trimmed !== typedBlock.name) {
+    // Keep whitespace-only names untouched here: some providers stream
+    // incomplete tool-call names that would otherwise collapse to "", which
+    // then propagates as toolName="" and triggers "Tool not found" loops.
+    if (trimmed && trimmed !== typedBlock.name) {
       typedBlock.name = trimmed;
     }
   }
