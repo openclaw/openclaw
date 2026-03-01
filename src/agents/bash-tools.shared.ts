@@ -14,6 +14,31 @@ export type BashSandboxConfig = {
   env?: Record<string, string>;
 };
 
+function mapContainerWorkdirToHost(params: {
+  workdir: string;
+  sandbox: BashSandboxConfig;
+}): { hostWorkdir: string; containerWorkdir: string } | null {
+  const requestedContainerPath = path.posix.normalize(params.workdir.replace(/\\/g, "/"));
+  if (!path.posix.isAbsolute(requestedContainerPath)) {
+    return null;
+  }
+  const containerRoot = path.posix.normalize(params.sandbox.containerWorkdir);
+  const relativeToRoot = path.posix.relative(containerRoot, requestedContainerPath);
+  if (
+    relativeToRoot !== "" &&
+    (relativeToRoot.startsWith("..") || path.posix.isAbsolute(relativeToRoot))
+  ) {
+    return null;
+  }
+  const hostWorkdir = relativeToRoot
+    ? path.join(params.sandbox.workspaceDir, ...relativeToRoot.split("/"))
+    : params.sandbox.workspaceDir;
+  return {
+    hostWorkdir,
+    containerWorkdir: requestedContainerPath,
+  };
+}
+
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
@@ -86,6 +111,14 @@ export async function resolveSandboxWorkdir(params: {
 }) {
   const fallback = params.sandbox.workspaceDir;
   try {
+    const mappedContainerWorkdir = mapContainerWorkdirToHost(params);
+    if (mappedContainerWorkdir) {
+      const stats = await fs.stat(mappedContainerWorkdir.hostWorkdir);
+      if (!stats.isDirectory()) {
+        throw new Error("workdir is not a directory");
+      }
+      return mappedContainerWorkdir;
+    }
     const resolved = await assertSandboxPath({
       filePath: params.workdir,
       cwd: process.cwd(),
