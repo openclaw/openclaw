@@ -152,13 +152,39 @@ export async function resolveSandboxContext(params: {
     resolveSandboxContextInner(resolved, params, controller.signal),
     timeoutPromise,
   ]).finally(() => {
+    // Only clear the timer — do NOT abort the controller here.
+    // The signal is captured by onEnsureAttachTarget in ensureSandboxBrowser
+    // for future attach/restart paths; aborting it on success would
+    // permanently pre-abort those operations and break browser recovery.
+    // The controller is only aborted by the timeout handler on failure.
     clearTimeout(timer);
-    // Abort on the success path too so the controller is always cleaned up
-    // and any lingering listeners attached to the signal are released.
-    if (!controller.signal.aborted) {
-      controller.abort();
-    }
   });
+}
+
+/** Race a promise against an AbortSignal — resolves/rejects with whichever wins first. */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    const reason =
+      signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+    return Promise.reject(reason);
+  }
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          const r =
+            signal.reason instanceof Error ? signal.reason : new Error("Sandbox init aborted");
+          reject(r);
+        },
+        { once: true },
+      );
+    }),
+  ]);
 }
 
 async function resolveSandboxContextInner(
@@ -176,13 +202,7 @@ async function resolveSandboxContextInner(
       : new Error("Sandbox init aborted");
   }
 
-  await maybePruneSandboxes(cfg);
-
-  if (abortSignal?.aborted) {
-    throw abortSignal.reason instanceof Error
-      ? abortSignal.reason
-      : new Error("Sandbox init aborted");
-  }
+  await raceAbort(maybePruneSandboxes(cfg), abortSignal);
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
