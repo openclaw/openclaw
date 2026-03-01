@@ -18,6 +18,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/sessions": "Sessions",
   "/cron": "Cron Jobs",
   "/agents": "Agents",
+  "/memory": "Memory",
   "/skills": "Skills",
   "/nodes": "Nodes",
   "/config": "Config",

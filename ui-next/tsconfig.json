@@ -15,7 +15,6 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "baseUrl": ".",
     "allowJs": true,
     "incremental": true
   },

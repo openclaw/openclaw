@@ -88,7 +88,10 @@ function resolveAgentWorkspaceFileOrRespondError(
   const name = (
     typeof rawName === "string" || typeof rawName === "number" ? String(rawName) : ""
   ).trim();
-  if (!ALLOWED_FILE_NAMES.has(name)) {
+  const isAllowed =
+    ALLOWED_FILE_NAMES.has(name) ||
+    (name.startsWith("memory/") && name.endsWith(".md") && !name.includes(".."));
+  if (!isAllowed) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unsupported file "${name}"`));
     return null;
   }
@@ -306,6 +309,31 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
         missing: true,
       });
     }
+  }
+
+  // Scan memory/ subdirectory for additional .md files
+  try {
+    const memorySubdir = path.join(workspaceDir, "memory");
+    const entries = await fs.readdir(memorySubdir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".md")) {
+        continue;
+      }
+      const name = `memory/${entry.name}`;
+      const filePath = path.join(workspaceDir, name);
+      const meta = await statFileSafely(filePath);
+      if (meta) {
+        files.push({
+          name,
+          path: filePath,
+          missing: false,
+          size: meta.size,
+          updatedAtMs: meta.updatedAtMs,
+        });
+      }
+    }
+  } catch {
+    // memory/ subdirectory may not exist — that's fine
   }
 
   return files;

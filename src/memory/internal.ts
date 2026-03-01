@@ -50,7 +50,8 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "MEMORY.md" || normalized === "memory.md") {
+  // Any .md file at workspace root or in the memory/ subdirectory
+  if (normalized.endsWith(".md") && !normalized.includes("/")) {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -82,25 +83,24 @@ export async function listMemoryFiles(
   extraPaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
-  const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
-  const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await fs.lstat(absPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
-        return;
+  // Collect all *.md files at the workspace root (MEMORY.md, AGENTS.md,
+  // SOUL.md, IDENTITY.md, TOOLS.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, etc.)
+  try {
+    const rootEntries = await fs.readdir(workspaceDir, { withFileTypes: true });
+    for (const entry of rootEntries) {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        continue;
       }
-      if (!absPath.endsWith(".md")) {
-        return;
+      if (!entry.name.endsWith(".md")) {
+        continue;
       }
-      result.push(absPath);
-    } catch {}
-  };
+      result.push(path.join(workspaceDir, entry.name));
+    }
+  } catch {}
 
-  await addMarkdownFile(memoryFile);
-  await addMarkdownFile(altMemoryFile);
+  // Collect everything in memory/ subdirectory
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {

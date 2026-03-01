@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Brain,
   Bug,
   FileText,
   FolderOpen,
@@ -81,6 +82,12 @@ const navData = {
       url: "/agents",
       icon: FolderOpen,
       subtitle: "Agent workspaces and identities",
+    },
+    {
+      title: "Memory",
+      url: "/memory",
+      icon: Brain,
+      subtitle: "Memory files, search, and index",
     },
     {
       title: "Skills",

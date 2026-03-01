@@ -4,6 +4,32 @@ Docs: https://docs.openclaw.ai
 
 ---
 
+## [Operator1] 2026.3.1
+
+> Fork-specific changes. Upstream sync base: `v2026.2.26`.
+
+### Memory Dashboard (ui-next)
+
+- **feat(memory)**: new Memory page with tabbed dashboard — Index Status, Files, Search, and Activity Log.
+- **feat(memory)**: Files tab lists memory content files (`MEMORY.md`, `memory/*.md` journals) separately from agent identity files (`AGENTS.md`, `SOUL.md`, etc.) with section grouping.
+- **feat(memory)**: memory journal files (`memory/2026-02-13.md`) display as formatted dates; sorted newest-first with `MEMORY.md` pinned at top.
+- **feat(memory)**: missing `MEMORY.md` shown with create affordance — click to open empty editor, save creates the file.
+- **feat(memory)**: Agent Identity section collapsible (collapsed by default) to keep focus on memory content.
+- **feat(memory)**: file filter input for quick lookup when memory files grow large; truncation with "Show all" toggle at 10+ files.
+- **feat(memory)**: inline file editor with save/revert for all workspace files including `memory/` subdirectory.
+- **feat(memory)**: search with text fallback — when QMD semantic search returns empty (e.g. embeddings not computed), falls back to case-insensitive text grep across memory files with indicator badge.
+- **feat(memory)**: activity log scans recent session transcripts for memory tool calls (read, write, edit, search) with operation badges and timestamps.
+- **feat(memory)**: re-index button triggers `memory.reindex` RPC for on-demand QMD re-indexing without gateway restart.
+
+### Gateway
+
+- **feat(gateway)**: `memory.status`, `memory.search`, `memory.reindex` RPC handlers for the memory dashboard.
+- **feat(gateway)**: `agents.files.list` now scans `memory/` subdirectory for `.md` journal files.
+- **feat(gateway)**: `agents.files.get`/`set` accept `memory/*.md` paths (with path traversal prevention).
+- **fix(gateway)**: memory search fallback — text search activates when QMD returns empty results but indexed files exist.
+
+---
+
 ## [Operator1] 2026.2.15
 
 > Fork-specific changes. Upstream sync base: `v2026.2.12`.
