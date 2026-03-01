@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { deliverReplies } from "./replies.js";
+import { deliverReplies, deliverSlackSlashReplies } from "./replies.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
+}));
+
+vi.mock("../format.js", () => ({
+  markdownToSlackMrkdwnChunks: (text: string) => [text],
 }));
 
 describe("deliverReplies suppressOutbound", () => {
@@ -40,5 +44,33 @@ describe("deliverReplies suppressOutbound", () => {
     });
 
     expect(sendMessageSlackMock).toHaveBeenCalled();
+  });
+});
+
+describe("deliverSlackSlashReplies suppressOutbound", () => {
+  it("blocks slash reply when suppressOutbound is true", async () => {
+    const respond = vi.fn();
+    await deliverSlackSlashReplies({
+      replies: [{ text: "hello" }],
+      respond,
+      ephemeral: true,
+      textLimit: 4000,
+      cfg: { channels: { slack: { suppressOutbound: true } } } as OpenClawConfig,
+      accountId: "default",
+    });
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("allows slash reply when not suppressed", async () => {
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await deliverSlackSlashReplies({
+      replies: [{ text: "hello" }],
+      respond,
+      ephemeral: true,
+      textLimit: 4000,
+      cfg: { channels: { slack: {} } } as OpenClawConfig,
+      accountId: "default",
+    });
+    expect(respond).toHaveBeenCalled();
   });
 });

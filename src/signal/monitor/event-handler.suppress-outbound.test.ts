@@ -142,4 +142,53 @@ describe("signal suppressOutbound guards", () => {
       expect(sendTypingSignalMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
     });
   });
+
+  describe("pairing replies", () => {
+    it("blocks pairing reply when suppressed", async () => {
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 0 } },
+            channels: { signal: { suppressOutbound: true } },
+          } as OpenClawConfig,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          account: "+15550009999",
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: { message: "hello", timestamp: 1700000000000 },
+        }),
+      );
+
+      expect(upsertMock).toHaveBeenCalled();
+      expect(sendMessageSignalMock).not.toHaveBeenCalled();
+    });
+
+    it("sends pairing reply when not suppressed", async () => {
+      sendMessageSignalMock.mockResolvedValue(undefined);
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: {
+            messages: { inbound: { debounceMs: 0 } },
+            channels: { signal: {} },
+          } as OpenClawConfig,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          account: "+15550009999",
+        }),
+      );
+
+      await handler(
+        createSignalReceiveEvent({
+          dataMessage: { message: "hello", timestamp: 1700000000000 },
+        }),
+      );
+
+      expect(upsertMock).toHaveBeenCalled();
+      expect(sendMessageSignalMock).toHaveBeenCalled();
+    });
+  });
 });

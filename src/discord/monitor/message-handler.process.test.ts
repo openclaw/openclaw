@@ -574,3 +574,57 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 });
+
+describe("suppressOutbound guards", () => {
+  it("disables ack reactions when suppressed", async () => {
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-suppress-test.json" },
+        channels: { discord: { suppressOutbound: true } },
+      },
+      ackReactionScope: "all",
+      effectiveWasMentioned: true,
+      shouldRequireMention: false,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("disables draft streaming when suppressed", async () => {
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-suppress-test.json" },
+        channels: { discord: { suppressOutbound: true } },
+      },
+      discordConfig: { streamMode: "partial" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("allows reactions when not suppressed", async () => {
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-suppress-test.json" },
+        channels: { discord: {} },
+      },
+      ackReactionScope: "all",
+      effectiveWasMentioned: true,
+      shouldRequireMention: false,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+  });
+});
