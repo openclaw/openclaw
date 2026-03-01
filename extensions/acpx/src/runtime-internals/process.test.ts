@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSpawnCommand } from "./process.js";
+import { createWindowsCmdShimFixture } from "../../../shared/windows-cmd-shim-test-fixtures.js";
+import { resolveSpawnCommand, type SpawnCommandCache } from "./process.js";
 
 const tempDirs: string[] = [];
 
@@ -42,6 +43,7 @@ describe("resolveSpawnCommand", () => {
         command: "acpx",
         args: ["--help"],
       },
+      undefined,
       {
         platform: "darwin",
         env: {},
@@ -61,6 +63,7 @@ describe("resolveSpawnCommand", () => {
         command: "C:/tools/acpx/cli.js",
         args: ["--help"],
       },
+      undefined,
       winRuntime({}),
     );
 
@@ -74,21 +77,19 @@ describe("resolveSpawnCommand", () => {
     const dir = await createTempDir();
     const binDir = path.join(dir, "bin");
     const scriptPath = path.join(dir, "acpx", "dist", "index.js");
-    await mkdir(path.dirname(scriptPath), { recursive: true });
-    await mkdir(binDir, { recursive: true });
-    await writeFile(scriptPath, "console.log('ok');", "utf8");
     const shimPath = path.join(binDir, "acpx.cmd");
-    await writeFile(
+    await createWindowsCmdShimFixture({
       shimPath,
-      ["@ECHO off", '"%~dp0\\..\\acpx\\dist\\index.js" %*', ""].join("\r\n"),
-      "utf8",
-    );
+      scriptPath,
+      shimLine: '"%~dp0\\..\\acpx\\dist\\index.js" %*',
+    });
 
     const resolved = resolveSpawnCommand(
       {
         command: "acpx",
         args: ["--format", "json", "agent", "status"],
       },
+      undefined,
       winRuntime({
         PATH: binDir,
         PATHEXT: ".CMD;.EXE;.BAT",
@@ -114,6 +115,7 @@ describe("resolveSpawnCommand", () => {
         command: wrapperPath,
         args: ["--help"],
       },
+      undefined,
       winRuntime({}),
     );
 
@@ -134,6 +136,7 @@ describe("resolveSpawnCommand", () => {
         command: wrapperPath,
         args: ["--arg", "value"],
       },
+      undefined,
       winRuntime({}),
     );
 
@@ -142,5 +145,58 @@ describe("resolveSpawnCommand", () => {
       args: ["--arg", "value"],
       shell: true,
     });
+  });
+
+  it("fails closed in strict mode when wrapper cannot be safely unwrapped", async () => {
+    const dir = await createTempDir();
+    const wrapperPath = path.join(dir, "strict-wrapper.cmd");
+    await writeFile(wrapperPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+
+    expect(() =>
+      resolveSpawnCommand(
+        {
+          command: wrapperPath,
+          args: ["--arg", "value"],
+        },
+        { strictWindowsCmdWrapper: true },
+        winRuntime({}),
+      ),
+    ).toThrow(/without shell execution/);
+  });
+
+  it("reuses resolved command when cache is provided", async () => {
+    const dir = await createTempDir();
+    const wrapperPath = path.join(dir, "acpx.cmd");
+    const scriptPath = path.join(dir, "acpx", "dist", "index.js");
+    await createWindowsCmdShimFixture({
+      shimPath: wrapperPath,
+      scriptPath,
+      shimLine: '"%~dp0\\acpx\\dist\\index.js" %*',
+    });
+
+    const cache: SpawnCommandCache = {};
+    const first = resolveSpawnCommand(
+      {
+        command: wrapperPath,
+        args: ["--help"],
+      },
+      { cache },
+      winRuntime({}),
+    );
+    await rm(scriptPath, { force: true });
+
+    const second = resolveSpawnCommand(
+      {
+        command: wrapperPath,
+        args: ["--version"],
+      },
+      { cache },
+      winRuntime({}),
+    );
+
+    expect(first.command).toBe("C:\\node\\node.exe");
+    expect(second.command).toBe("C:\\node\\node.exe");
+    expect(first.args[0]).toBe(scriptPath);
+    expect(second.args[0]).toBe(scriptPath);
   });
 });
