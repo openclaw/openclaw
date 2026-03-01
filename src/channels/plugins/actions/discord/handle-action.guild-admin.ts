@@ -12,6 +12,20 @@ import {
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 
+const VALID_AUTO_ARCHIVE_DURATIONS = [60, 1440, 4320, 10080] as const;
+
+/** Throws if value is set but not one of the Discord-allowed durations. */
+function validateAutoArchiveDuration(value: number | null | undefined, label: string): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (!(VALID_AUTO_ARCHIVE_DURATIONS as readonly number[]).includes(value)) {
+    throw new Error(
+      `Invalid ${label}: ${value}. Must be one of ${VALID_AUTO_ARCHIVE_DURATIONS.join(", ")}.`,
+    );
+  }
+}
+
 type Ctx = Pick<
   ChannelMessageActionContext,
   "action" | "params" | "cfg" | "accountId" | "requesterSenderId"
@@ -164,6 +178,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const defaultAutoArchiveDuration = readNumberParam(actionParams, "defaultAutoArchiveDuration", {
       integer: true,
     });
+    validateAutoArchiveDuration(defaultAutoArchiveDuration, "default-auto-archive-duration");
     return await handleDiscordAction(
       {
         action: "channelCreate",
@@ -203,6 +218,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const defaultAutoArchiveDuration = readNumberParam(actionParams, "defaultAutoArchiveDuration", {
       integer: true,
     });
+    validateAutoArchiveDuration(defaultAutoArchiveDuration, "default-auto-archive-duration");
     const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {

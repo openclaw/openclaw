@@ -79,6 +79,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Discord/Channel ops: support `default_auto_archive_duration` on `channel-create` and `channel-edit`, and add `--no-nsfw`, `--no-archived`, and `--no-locked` negation flags to `channel-edit` so boolean fields can be explicitly cleared from the CLI.
+
 ### Fixes
 
 - Cron/Failure alerts: add configurable repeated-failure alerting with per-job overrides and Web UI cron editor support (`inherit|disabled|custom` with threshold/cooldown/channel/target fields). (#24789) Thanks xbrak.

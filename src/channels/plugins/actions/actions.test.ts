@@ -451,6 +451,48 @@ describe("handleDiscordMessageAction", () => {
       expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
   });
+
+  it.each([
+    ["archived=false (--no-archived)", { archived: false }, { archived: false }],
+    ["locked=false (--no-locked)", { locked: false }, { locked: false }],
+    ["nsfw=false (--no-nsfw)", { nsfw: false }, { nsfw: false }],
+    [
+      "archived=false and locked=false together",
+      { archived: false, locked: false },
+      { archived: false, locked: false },
+    ],
+  ])(
+    "channel-edit: forwards boolean false for %s",
+    async (_label, boolParams, expectedPartial) => {
+      await handleDiscordMessageAction({
+        action: "channel-edit",
+        params: { channelId: "C1", ...boolParams },
+        cfg: {} as OpenClawConfig,
+      });
+      const call = handleDiscordAction.mock.calls.at(-1);
+      expect(call?.[0]).toEqual(expect.objectContaining({ action: "channelEdit", ...expectedPartial }));
+    },
+  );
+
+  it("channel-edit: rejects invalid default-auto-archive-duration", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-edit",
+        params: { channelId: "C1", defaultAutoArchiveDuration: 9999 },
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/Invalid default-auto-archive-duration: 9999/);
+  });
+
+  it("channel-create: rejects invalid default-auto-archive-duration", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-create",
+        params: { guildId: "G1", name: "test", defaultAutoArchiveDuration: 30 },
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/Invalid default-auto-archive-duration: 30/);
+  });
 });
 
 describe("telegramMessageActions", () => {

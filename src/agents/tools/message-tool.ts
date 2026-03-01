@@ -21,7 +21,7 @@ import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js"
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
-import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import { channelTargetSchema, channelTargetsSchema, optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
@@ -382,18 +382,13 @@ function buildChannelManagementSchema() {
     position: Type.Optional(Type.Number()),
     nsfw: Type.Optional(Type.Boolean()),
     rateLimitPerUser: Type.Optional(Type.Number()),
-    autoArchiveDuration: Type.Optional(
-      Type.Number({
-        description:
-          "The duration in minutes to automatically archive the thread after recent activity. Valid: 60, 1440, 4320, 10080.",
-      }),
-    ),
-    defaultAutoArchiveDuration: Type.Optional(
-      Type.Number({
-        description:
-          "Default duration, in minutes, for threads in this channel to stay active. Valid: 60, 1440, 4320, 10080.",
-      }),
-    ),
+    autoArchiveDuration: optionalStringEnum("60", "1440", "4320", "10080", {
+      description:
+        "The duration in minutes to automatically archive the thread after recent activity.",
+    }),
+    defaultAutoArchiveDuration: optionalStringEnum("60", "1440", "4320", "10080", {
+      description: "Default duration, in minutes, for threads in this channel to stay active.",
+    }),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({
