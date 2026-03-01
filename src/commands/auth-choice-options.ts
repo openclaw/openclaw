@@ -24,10 +24,16 @@ const AUTH_CHOICE_GROUP_DEFS: {
   choices: AuthChoice[];
 }[] = [
   {
-    value: "openai",
-    label: "OpenAI",
-    hint: "Codex OAuth + API key",
-    choices: ["openai-codex", "openai-api-key"],
+    value: "openai-api-key",
+    label: "OpenAI API",
+    hint: "API key (provider: openai)",
+    choices: ["openai-api-key"],
+  },
+  {
+    value: "openai-codex",
+    label: "OpenAI Codex",
+    hint: "ChatGPT OAuth (provider: openai-codex)",
+    choices: ["openai-codex"],
   },
   {
     value: "anthropic",

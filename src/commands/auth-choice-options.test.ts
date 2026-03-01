@@ -80,4 +80,16 @@ describe("buildAuthChoiceOptions", () => {
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
   });
+
+  it("separates OpenAI API key and OpenAI Codex OAuth groups", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const openaiApiGroup = groups.find((group) => group.value === "openai-api-key");
+    const openaiCodexGroup = groups.find((group) => group.value === "openai-codex");
+
+    expect(openaiApiGroup?.options.map((opt) => opt.value)).toEqual(["openai-api-key"]);
+    expect(openaiCodexGroup?.options.map((opt) => opt.value)).toEqual(["openai-codex"]);
+  });
 });

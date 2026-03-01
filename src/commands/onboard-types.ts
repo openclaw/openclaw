@@ -53,6 +53,8 @@ export type AuthChoice =
   | "skip";
 export type AuthChoiceGroupId =
   | "openai"
+  | "openai-api-key"
+  | "openai-codex"
   | "anthropic"
   | "chutes"
   | "vllm"
