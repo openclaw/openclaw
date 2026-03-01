@@ -17,6 +17,7 @@ export type MattermostSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   replyToId?: string;
+  mediaLocalRoots?: readonly string[];
 };
 
 export type MattermostSendResult = {
@@ -176,7 +177,7 @@ export async function sendMessageMattermost(
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
     try {
-      const media = await core.media.loadWebMedia(mediaUrl);
+      const media = await core.media.loadWebMedia(mediaUrl, { localRoots: opts.mediaLocalRoots });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
         buffer: media.buffer,
