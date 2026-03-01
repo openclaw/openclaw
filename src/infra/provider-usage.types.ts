@@ -6,6 +6,7 @@ export type UsageWindow = {
 
 export type ProviderUsageSnapshot = {
   provider: UsageProviderId;
+  providerAlias?: string;
   displayName: string;
   windows: UsageWindow[];
   plan?: string;

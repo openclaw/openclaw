@@ -19,6 +19,7 @@ export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
   accountId?: string;
+  providerAlias?: string;
 };
 
 function parseGoogleToken(apiKey: string): { token: string } | null {
@@ -90,6 +91,76 @@ function resolveXiaomiApiKey(): string | undefined {
     providerId: "xiaomi",
     envDirect: [process.env.XIAOMI_API_KEY],
   });
+}
+
+function resolveAliasesForProvider(providerId: "zai" | "minimax" | "xiaomi"): string[] {
+  const cfg = loadConfig();
+  const providerKeys = Object.keys(cfg.models?.providers ?? {});
+  const matchesProvider = (key: string): boolean => {
+    const lower = key.trim().toLowerCase();
+    if (providerId === "zai") {
+      return (
+        lower === "zai" || lower === "z-ai" || /^zai-\d+$/.test(lower) || /^z-ai-\d+$/.test(lower)
+      );
+    }
+    return lower === providerId || new RegExp(`^${providerId}-\\d+$`).test(lower);
+  };
+  const aliases = providerKeys.filter(matchesProvider);
+  if (!aliases.includes(providerId)) {
+    aliases.unshift(providerId);
+  } else {
+    aliases.sort((a, b) => (a === providerId ? -1 : b === providerId ? 1 : a.localeCompare(b)));
+  }
+  return aliases;
+}
+
+function resolveProviderApiKeysFromConfigAndStore(params: {
+  providerId: "zai" | "minimax" | "xiaomi";
+  envDirect: Array<string | undefined>;
+}): ProviderAuth[] {
+  const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
+  if (envDirect) {
+    return [{ provider: params.providerId, token: envDirect }];
+  }
+
+  const cfg = loadConfig();
+  const store = ensureAuthProfileStore();
+  const auths: ProviderAuth[] = [];
+  for (const alias of resolveAliasesForProvider(params.providerId)) {
+    const key = getCustomProviderApiKey(cfg, alias);
+    if (key) {
+      auths.push({
+        provider: params.providerId,
+        token: key,
+        providerAlias: alias === params.providerId ? undefined : alias,
+      });
+      continue;
+    }
+    const cred = listProfilesForProvider(store, alias)
+      .map((id) => store.profiles[id])
+      .find(
+        (
+          profile,
+        ): profile is
+          | { type: "api_key"; provider: string; key: string }
+          | { type: "token"; provider: string; token: string } =>
+          profile?.type === "api_key" || profile?.type === "token",
+      );
+    if (!cred) {
+      continue;
+    }
+    const token =
+      cred.type === "api_key" ? normalizeSecretInput(cred.key) : normalizeSecretInput(cred.token);
+    if (!token) {
+      continue;
+    }
+    auths.push({
+      provider: params.providerId,
+      token,
+      providerAlias: alias === params.providerId ? undefined : alias,
+    });
+  }
+  return auths;
 }
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
@@ -222,23 +293,47 @@ export async function resolveProviderAuths(params: {
 
   for (const provider of params.providers) {
     if (provider === "zai") {
-      const apiKey = resolveZaiApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
+      const authsForProvider = resolveProviderApiKeysFromConfigAndStore({
+        providerId: "zai",
+        envDirect: [process.env.ZAI_API_KEY, process.env.Z_AI_API_KEY],
+      });
+      if (authsForProvider.length > 0) {
+        auths.push(...authsForProvider);
+      } else {
+        const apiKey = resolveZaiApiKey();
+        if (apiKey) {
+          auths.push({ provider, token: apiKey });
+        }
       }
       continue;
     }
     if (provider === "minimax") {
-      const apiKey = resolveMinimaxApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
+      const authsForProvider = resolveProviderApiKeysFromConfigAndStore({
+        providerId: "minimax",
+        envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
+      });
+      if (authsForProvider.length > 0) {
+        auths.push(...authsForProvider);
+      } else {
+        const apiKey = resolveMinimaxApiKey();
+        if (apiKey) {
+          auths.push({ provider, token: apiKey });
+        }
       }
       continue;
     }
     if (provider === "xiaomi") {
-      const apiKey = resolveXiaomiApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
+      const authsForProvider = resolveProviderApiKeysFromConfigAndStore({
+        providerId: "xiaomi",
+        envDirect: [process.env.XIAOMI_API_KEY],
+      });
+      if (authsForProvider.length > 0) {
+        auths.push(...authsForProvider);
+      } else {
+        const apiKey = resolveXiaomiApiKey();
+        if (apiKey) {
+          auths.push({ provider, token: apiKey });
+        }
       }
       continue;
     }

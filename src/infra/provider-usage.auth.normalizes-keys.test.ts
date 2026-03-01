@@ -283,6 +283,64 @@ describe("resolveProviderAuths key normalization", () => {
     );
   });
 
+  it("discovers numbered provider aliases from config api keys", async () => {
+    await withSuiteHome(
+      async (home) => {
+        const modelDef = {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1024,
+          maxTokens: 256,
+        };
+        await writeConfig(home, {
+          models: {
+            providers: {
+              zai: {
+                baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                models: [modelDef],
+                apiKey: "cfg-zai-1",
+              },
+              "zai-2": {
+                baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                models: [modelDef],
+                apiKey: "cfg-zai-2",
+              },
+              minimax: {
+                baseUrl: "https://api.minimaxi.com/v1",
+                models: [modelDef],
+                apiKey: "cfg-minimax-1",
+              },
+              "minimax-2": {
+                baseUrl: "https://api.minimaxi.com/v1",
+                models: [modelDef],
+                apiKey: "cfg-minimax-2",
+              },
+            },
+          },
+        });
+
+        const auths = await resolveProviderAuths({
+          providers: ["zai", "minimax"],
+        });
+        expect(auths).toEqual([
+          { provider: "zai", token: "cfg-zai-1" },
+          { provider: "zai", token: "cfg-zai-2", providerAlias: "zai-2" },
+          { provider: "minimax", token: "cfg-minimax-1" },
+          { provider: "minimax", token: "cfg-minimax-2", providerAlias: "minimax-2" },
+        ]);
+      },
+      {
+        ZAI_API_KEY: undefined,
+        Z_AI_API_KEY: undefined,
+        MINIMAX_API_KEY: undefined,
+        MINIMAX_CODE_PLAN_KEY: undefined,
+      },
+    );
+  });
+
   it("returns no auth when providers have no configured credentials", async () => {
     await withSuiteHome(
       async () => {

@@ -181,6 +181,54 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
+  it("labels usage snapshots with alias provider names", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.z.ai")) {
+        return makeResponse(200, {
+          success: true,
+          code: 200,
+          data: {
+            limits: [
+              {
+                type: "TOKENS_LIMIT",
+                percentage: 25,
+                unit: 3,
+                number: 6,
+                nextResetTime: "2026-01-07T06:00:00Z",
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes(minimaxRemainsEndpoint)) {
+        return makeResponse(200, {
+          base_resp: { status_code: 0, status_msg: "ok" },
+          data: {
+            total: 200,
+            remain: 50,
+            reset_at: "2026-01-07T05:00:00Z",
+            plan_name: "Coding Plan",
+          },
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      [
+        { provider: "zai", providerAlias: "zai-2", token: "token-z2" },
+        { provider: "minimax", providerAlias: "minimax-2", token: "token-m2" },
+      ],
+      mockFetch,
+    );
+
+    expect(summary.providers).toHaveLength(2);
+    expect(summary.providers[0]?.displayName).toBe("z.ai (zai-2)");
+    expect(summary.providers[0]?.providerAlias).toBe("zai-2");
+    expect(summary.providers[1]?.displayName).toBe("MiniMax (minimax-2)");
+    expect(summary.providers[1]?.providerAlias).toBe("minimax-2");
+  });
+
   it("handles nested MiniMax usage payloads", async () => {
     await expectMinimaxUsage(
       {

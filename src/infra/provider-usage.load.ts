@@ -52,37 +52,48 @@ export async function loadProviderUsageSummary(
   const tasks = auths.map((auth) =>
     withTimeout(
       (async (): Promise<ProviderUsageSnapshot> => {
-        switch (auth.provider) {
-          case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
-          case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
-          case "google-gemini-cli":
-            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
-          case "openai-codex":
-            return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
-          case "minimax":
-            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
-          case "xiaomi":
-            return {
-              provider: "xiaomi",
-              displayName: PROVIDER_LABELS.xiaomi,
-              windows: [],
-            };
-          case "zai":
-            return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
-          default:
-            return {
-              provider: auth.provider,
-              displayName: PROVIDER_LABELS[auth.provider],
-              windows: [],
-              error: "Unsupported provider",
-            };
+        const snapshot = await (async (): Promise<ProviderUsageSnapshot> => {
+          switch (auth.provider) {
+            case "anthropic":
+              return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
+            case "github-copilot":
+              return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
+            case "google-gemini-cli":
+              return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
+            case "openai-codex":
+              return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
+            case "minimax":
+              return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
+            case "xiaomi":
+              return {
+                provider: "xiaomi",
+                displayName: PROVIDER_LABELS.xiaomi,
+                windows: [],
+              };
+            case "zai":
+              return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
+            default:
+              return {
+                provider: auth.provider,
+                displayName: PROVIDER_LABELS[auth.provider],
+                windows: [],
+                error: "Unsupported provider",
+              };
+          }
+        })();
+        if (!auth.providerAlias || auth.providerAlias === auth.provider) {
+          return snapshot;
         }
+        return {
+          ...snapshot,
+          providerAlias: auth.providerAlias,
+          displayName: `${snapshot.displayName} (${auth.providerAlias})`,
+        };
       })(),
       timeoutMs + 1000,
       {
         provider: auth.provider,
+        providerAlias: auth.providerAlias,
         displayName: PROVIDER_LABELS[auth.provider],
         windows: [],
         error: "Timeout",
