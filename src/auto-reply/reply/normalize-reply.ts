@@ -1,6 +1,11 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripThinkPrefix,
+} from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
@@ -8,7 +13,7 @@ import {
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "think";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
@@ -34,8 +39,21 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
+  // Strip [THINK]...[/THINK] blocks before other checks so agents can prefix
+  // internal reasoning that gets silently suppressed.
   let text = payload.text ?? undefined;
+  if (text) {
+    const thinkResult = stripThinkPrefix(text);
+    if (thinkResult.hadThinkPrefix) {
+      if (!thinkResult.text && !hasMedia && !hasChannelData) {
+        opts.onSkip?.("think");
+        return null;
+      }
+      text = thinkResult.text || undefined;
+    }
+  }
+
+  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   if (text && isSilentReplyText(text, silentToken)) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
