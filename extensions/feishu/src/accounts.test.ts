@@ -33,11 +33,26 @@ describe("resolveDefaultFeishuAccountId", () => {
     expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("router-d");
   });
 
-  it("falls back to literal default account id when preferred is missing", () => {
+  it("keeps configured defaultAccount even when not present in accounts map", () => {
     const cfg = {
       channels: {
         feishu: {
-          defaultAccount: "missing",
+          defaultAccount: "router-d",
+          accounts: {
+            default: { appId: "cli_default", appSecret: "secret_default" },
+            zeta: { appId: "cli_zeta", appSecret: "secret_zeta" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("router-d");
+  });
+
+  it("falls back to literal default account id when present", () => {
+    const cfg = {
+      channels: {
+        feishu: {
           accounts: {
             default: { appId: "cli_default", appSecret: "secret_default" },
             zeta: { appId: "cli_zeta", appSecret: "secret_zeta" },
