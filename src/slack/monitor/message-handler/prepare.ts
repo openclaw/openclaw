@@ -357,8 +357,25 @@ export async function prepareSlackMessage(params: {
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
 
+  // Bot messages (e.g. Prometheus, Gatus webhooks) often carry content only in
+  // non-forwarded attachments (is_share !== true).  Extract their text/fallback
+  // so the message isn't silently dropped when `allowBots: true` (#27616).
+  const botAttachmentText =
+    isBotMessage && !attachmentContent?.text
+      ? (message.attachments ?? [])
+          .map((a) => a.text?.trim() || a.fallback?.trim())
+          .filter(Boolean)
+          .join("\n")
+      : undefined;
+
   const rawBody =
-    [(message.text ?? "").trim(), attachmentContent?.text, mediaPlaceholder, fileOnlyPlaceholder]
+    [
+      (message.text ?? "").trim(),
+      attachmentContent?.text,
+      botAttachmentText,
+      mediaPlaceholder,
+      fileOnlyPlaceholder,
+    ]
       .filter(Boolean)
       .join("\n") || "";
   if (!rawBody) {
