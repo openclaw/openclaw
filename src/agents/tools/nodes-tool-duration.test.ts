@@ -15,7 +15,7 @@ const nodeMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
 }));
 vi.mock("./nodes-utils.js", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<typeof import("./nodes-utils.js")>();
   return { ...actual, resolveNodeId: nodeMocks.resolveNodeId };
 });
 
@@ -47,7 +47,7 @@ const cameraMocks = vi.hoisted(() => ({
   })),
 }));
 vi.mock("../../cli/nodes-camera.js", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<typeof import("../../cli/nodes-camera.js")>();
   return {
     ...actual,
     parseCameraClipPayload: cameraMocks.parseCameraClipPayload,
