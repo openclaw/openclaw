@@ -90,7 +90,7 @@ describe("channel-bootstrap handler", () => {
       agentsMdContent: "# Global AGENTS\n\nGlobal stuff.",
     });
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
     const agents = context.bootstrapFiles.find((f) => f.name === "AGENTS.md");
@@ -121,7 +121,7 @@ describe("channel-bootstrap handler", () => {
     // Replace with known reference so we can check identity
     context.bootstrapFiles[0] = originalEntry;
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
     // The slot in the array should be a new object, not the original reference
@@ -144,7 +144,7 @@ describe("channel-bootstrap handler", () => {
       agentsMdMissing: true,
     });
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
     const nonMissingAgents = context.bootstrapFiles.filter(
@@ -165,7 +165,7 @@ describe("channel-bootstrap handler", () => {
       agentsMdContent: "Global.",
     });
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
     expect(context.bootstrapFiles).toHaveLength(1);
@@ -181,7 +181,7 @@ describe("channel-bootstrap handler", () => {
       agentsMdContent: "Global.",
     });
 
-    const event = createHookEvent("agent", "bootstrap", context.sessionKey, context);
+    const event = createHookEvent("agent", "bootstrap", context.sessionKey!, context);
     await handler(event);
 
     expect(context.bootstrapFiles).toHaveLength(1);
@@ -197,7 +197,7 @@ describe("channel-bootstrap handler", () => {
       agentsMdContent: "Global.",
     });
 
-    const event = createHookEvent("command", "new", context.sessionKey, context as never);
+    const event = createHookEvent("command", "new", context.sessionKey!, context as never);
     await handler(event as never);
 
     expect(context.bootstrapFiles[0].content).toBe("Global.");
