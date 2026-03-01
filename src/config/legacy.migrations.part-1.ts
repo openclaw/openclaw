@@ -185,14 +185,23 @@ function migrateDiscordGuildChannelLegacyConfigWriteKeys(params: {
         const model = typeof channel.model === "string" ? channel.model.trim() : "";
         if (model) {
           const modelByChannel = ensureDiscordModelByChannel();
-          const existing =
+          const scopedChannelKey = `${guildId}:${channelId}`;
+          const existingScoped =
+            typeof modelByChannel[scopedChannelKey] === "string"
+              ? String(modelByChannel[scopedChannelKey]).trim()
+              : "";
+          const existingUnscoped =
             typeof modelByChannel[channelId] === "string"
               ? String(modelByChannel[channelId]).trim()
               : "";
-          if (!existing) {
-            modelByChannel[channelId] = model;
+          if (!existingScoped && !existingUnscoped) {
+            modelByChannel[scopedChannelKey] = model;
             params.changes.push(
-              `Moved ${pathPrefix}.model → channels.modelByChannel.discord.${channelId}.`,
+              `Moved ${pathPrefix}.model → channels.modelByChannel.discord.${scopedChannelKey}.`,
+            );
+          } else if (existingScoped) {
+            params.changes.push(
+              `Removed ${pathPrefix}.model (channels.modelByChannel.discord.${scopedChannelKey} already set).`,
             );
           } else {
             params.changes.push(

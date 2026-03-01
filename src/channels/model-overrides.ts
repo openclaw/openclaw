@@ -23,6 +23,7 @@ type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
   channel?: string | null;
   groupId?: string | null;
+  groupSpace?: string | null;
   groupChannel?: string | null;
   groupSubject?: string | null;
   parentSessionKey?: string | null;
@@ -65,13 +66,23 @@ function resolveGroupIdFromSessionKey(sessionKey?: string | null): string | unde
   return id || undefined;
 }
 
+function buildScopedKey(scope: string | undefined, key: string | undefined): string | undefined {
+  if (!scope || !key) {
+    return undefined;
+  }
+  return `${scope}:${key}`;
+}
+
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "groupId" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    "channel" | "groupId" | "groupSpace" | "groupChannel" | "groupSubject" | "parentSessionKey"
   >,
 ) {
+  const normalizedChannel =
+    normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
+  const groupSpace = params.groupSpace?.trim();
   const parentGroupId = resolveParentGroupId(groupId);
   const parentGroupIdFromSession = resolveGroupIdFromSessionKey(params.parentSessionKey);
   const parentGroupIdResolved =
@@ -82,8 +93,24 @@ function buildChannelCandidates(
   const subjectBare = groupSubject ? groupSubject.replace(/^#/, "") : undefined;
   const channelSlug = channelBare ? normalizeChannelSlug(channelBare) : undefined;
   const subjectSlug = subjectBare ? normalizeChannelSlug(subjectBare) : undefined;
+  const scopedDiscordCandidates =
+    normalizedChannel === "discord"
+      ? buildChannelKeyCandidates(
+          buildScopedKey(groupSpace, groupId),
+          buildScopedKey(groupSpace, parentGroupId),
+          buildScopedKey(groupSpace, parentGroupIdResolved),
+          buildScopedKey(groupSpace, groupChannel),
+          buildScopedKey(groupSpace, channelBare),
+          buildScopedKey(groupSpace, channelSlug),
+          buildScopedKey(groupSpace, groupSubject),
+          buildScopedKey(groupSpace, subjectBare),
+          buildScopedKey(groupSpace, subjectSlug),
+          buildScopedKey(groupSpace, "*"),
+        )
+      : [];
 
   return buildChannelKeyCandidates(
+    ...scopedDiscordCandidates,
     groupId,
     parentGroupId,
     parentGroupIdResolved,

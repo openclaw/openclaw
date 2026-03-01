@@ -598,7 +598,7 @@ describe("legacy config detection", () => {
       'Mapped channels.discord.guilds.100.channels.200.groupPolicy="disabled" → channels.discord.guilds.100.channels.200.allow=false.',
     );
     expect(res.changes).toContain(
-      "Moved channels.discord.guilds.100.channels.200.model → channels.modelByChannel.discord.200.",
+      "Moved channels.discord.guilds.100.channels.200.model → channels.modelByChannel.discord.100:200.",
     );
 
     const channel = res.config?.channels?.discord?.guilds?.["100"]?.channels?.["200"] as
@@ -615,7 +615,41 @@ describe("legacy config detection", () => {
     expect(channel?.allowFrom).toBeUndefined();
     expect(channel?.groupPolicy).toBeUndefined();
     expect(channel?.model).toBeUndefined();
-    expect(res.config?.channels?.modelByChannel?.discord?.["200"]).toBe("openai/gpt-5.1");
+    expect(res.config?.channels?.modelByChannel?.discord?.["100:200"]).toBe("openai/gpt-5.1");
+  });
+
+  it("migrates discord guild channel model keys without cross-guild collisions", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          guilds: {
+            guildA: {
+              channels: {
+                general: { model: "openai/gpt-4.1" },
+              },
+            },
+            guildB: {
+              channels: {
+                general: { model: "anthropic/claude-sonnet-4-6" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.guildA.channels.general.model → channels.modelByChannel.discord.guildA:general.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.guildB.channels.general.model → channels.modelByChannel.discord.guildB:general.",
+    );
+    expect(res.config?.channels?.modelByChannel?.discord?.["guildA:general"]).toBe(
+      "openai/gpt-4.1",
+    );
+    expect(res.config?.channels?.modelByChannel?.discord?.["guildB:general"]).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
   });
 
   it("normalizes discord streaming fields during validation", async () => {
