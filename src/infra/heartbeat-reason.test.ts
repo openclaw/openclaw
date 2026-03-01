@@ -34,6 +34,7 @@ describe("heartbeat-reason", () => {
 
   it("matches event-driven behavior used by heartbeat preflight", () => {
     expect(isHeartbeatEventDrivenReason("exec-event")).toBe(true);
+    expect(isHeartbeatEventDrivenReason("exec:abc:exit")).toBe(true);
     expect(isHeartbeatEventDrivenReason("cron:job-1")).toBe(true);
     expect(isHeartbeatEventDrivenReason("wake")).toBe(true);
     expect(isHeartbeatEventDrivenReason("hook:gmail:sync")).toBe(true);
@@ -45,6 +46,7 @@ describe("heartbeat-reason", () => {
   it("matches action-priority wake behavior", () => {
     expect(isHeartbeatActionWakeReason("manual")).toBe(true);
     expect(isHeartbeatActionWakeReason("exec-event")).toBe(true);
+    expect(isHeartbeatActionWakeReason("exec:abc:exit")).toBe(true);
     expect(isHeartbeatActionWakeReason("hook:wake")).toBe(true);
     expect(isHeartbeatActionWakeReason("interval")).toBe(false);
     expect(isHeartbeatActionWakeReason("cron:job-1")).toBe(false);
