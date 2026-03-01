@@ -117,7 +117,9 @@ export function shouldSkipMessageByAbortCutoff(params: {
     typeof params.timestamp === "number" &&
     Number.isFinite(params.timestamp)
   ) {
-    return params.timestamp <= params.cutoffTimestamp;
+    // Timestamp-only channels can share second-level precision across distinct messages.
+    // Treat strictly older messages as stale and allow equal timestamps through.
+    return params.timestamp < params.cutoffTimestamp;
   }
   return false;
 }

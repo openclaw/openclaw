@@ -276,7 +276,7 @@ describe("abort detection", () => {
         cutoffTimestamp: 2000,
         timestamp: 2000,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSkipMessageByAbortCutoff({
         cutoffTimestamp: 2000,

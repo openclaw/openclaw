@@ -221,4 +221,41 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not skip equal-timestamp messages when cutoff only has timestamp", async () => {
+    const typing = createTypingController();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-3",
+      updatedAt: Date.now(),
+      abortCutoffTimestamp: 2000,
+      abortedLastRun: true,
+    };
+    const sessionStore = { "s:main": sessionEntry };
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "ok" } });
+    const ctx = buildTestCtx({
+      Body: "follow-up",
+      CommandBody: "follow-up",
+      Timestamp: 2000,
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "follow-up",
+        command: {
+          rawBodyNormalized: "follow-up",
+          commandBodyNormalized: "follow-up",
+        },
+        overrides: {
+          sessionEntry,
+          sessionStore,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+  });
 });
