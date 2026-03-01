@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
@@ -396,6 +399,17 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
+    function withPrefsFile<T>(prefs: Record<string, unknown>, run: (prefsPath: string) => T): T {
+      const dir = mkdtempSync(path.join(tmpdir(), "openclaw-tts-provider-"));
+      const prefsPath = path.join(dir, "tts.json");
+      writeFileSync(prefsPath, JSON.stringify(prefs, null, 2), "utf8");
+      try {
+        return run(prefsPath);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
     it("selects provider based on available API keys", () => {
       const cases = [
         {
@@ -434,6 +448,31 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+
+    it("prefers explicit config provider over persisted prefs provider", () => {
+      const config = resolveTtsConfig({
+        ...baseCfg,
+        messages: {
+          tts: {
+            provider: "openai",
+          },
+        },
+      });
+
+      withPrefsFile({ tts: { provider: "edge" } }, (prefsPath) => {
+        const provider = getTtsProvider(config, prefsPath);
+        expect(provider).toBe("openai");
+      });
+    });
+
+    it("uses persisted prefs provider when config provider is not explicitly set", () => {
+      const config = resolveTtsConfig(baseCfg);
+
+      withPrefsFile({ tts: { provider: "elevenlabs" } }, (prefsPath) => {
+        const provider = getTtsProvider(config, prefsPath);
+        expect(provider).toBe("elevenlabs");
+      });
     });
   });
 

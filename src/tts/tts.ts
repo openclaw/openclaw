@@ -428,11 +428,11 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
-  if (prefs.tts?.provider) {
-    return prefs.tts.provider;
-  }
   if (config.providerSource === "config") {
     return config.provider;
+  }
+  if (prefs.tts?.provider) {
+    return prefs.tts.provider;
   }
 
   if (resolveTtsApiKey(config, "openai")) {
