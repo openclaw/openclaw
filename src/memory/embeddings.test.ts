@@ -469,6 +469,37 @@ describe("local embedding normalization", () => {
       expect(magnitude).toBeCloseTo(1.0, 5);
     }
   });
+
+  it("serializes local embedding context calls across concurrent batch/query requests", async () => {
+    let activeCalls = 0;
+    let maxActiveCalls = 0;
+    const getEmbeddingFor = vi.fn(async () => {
+      activeCalls += 1;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeCalls -= 1;
+      return { vector: new Float32Array([1, 0, 0]) };
+    });
+
+    importNodeLlamaCppMock.mockResolvedValue({
+      getLlama: async () => ({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue({
+            getEmbeddingFor,
+          }),
+        }),
+      }),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    });
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+    await Promise.all([provider.embedBatch(["text1", "text2"]), provider.embedQuery("text3")]);
+
+    expect(getEmbeddingFor).toHaveBeenCalledTimes(3);
+    expect(maxActiveCalls).toBe(1);
+  });
 });
 
 describe("FTS-only fallback when no provider available", () => {

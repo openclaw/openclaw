@@ -105,6 +105,7 @@ async function createLocalEmbeddingProvider(
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
+  let embeddingCallLock: Promise<void> = Promise.resolve();
 
   const ensureContext = async () => {
     if (!llama) {
@@ -120,24 +121,39 @@ async function createLocalEmbeddingProvider(
     return embeddingContext;
   };
 
+  const withEmbeddingCallLock = async <T>(fn: () => Promise<T>): Promise<T> => {
+    let release: (() => void) | undefined;
+    const wait = embeddingCallLock;
+    embeddingCallLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await wait;
+    try {
+      return await fn();
+    } finally {
+      release?.();
+    }
+  };
+
   return {
     id: "local",
     model: modelPath,
-    embedQuery: async (text) => {
-      const ctx = await ensureContext();
-      const embedding = await ctx.getEmbeddingFor(text);
-      return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-    },
-    embedBatch: async (texts) => {
-      const ctx = await ensureContext();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
+    embedQuery: async (text) =>
+      await withEmbeddingCallLock(async () => {
+        const ctx = await ensureContext();
+        const embedding = await ctx.getEmbeddingFor(text);
+        return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+      }),
+    embedBatch: async (texts) =>
+      await withEmbeddingCallLock(async () => {
+        const ctx = await ensureContext();
+        const embeddings: number[][] = [];
+        for (const text of texts) {
           const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
-      return embeddings;
-    },
+          embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+        }
+        return embeddings;
+      }),
   };
 }
 
