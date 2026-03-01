@@ -73,7 +73,12 @@ describe("memory cli", () => {
   }
 
   function mockManager(manager: Record<string, unknown>) {
-    getMemorySearchManager.mockResolvedValueOnce({ manager });
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        status: () => makeMemoryStatus(),
+        ...manager,
+      },
+    });
   }
 
   async function runMemoryCli(args: string[]) {
@@ -374,6 +379,29 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs();
     await runMemoryCli(["search", "hello"]);
 
+    expect(search).toHaveBeenCalledWith("hello", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("No matches.");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("syncs dirty index before running search", async () => {
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({
+      status: () => makeMemoryStatus({ dirty: true }),
+      sync,
+      search,
+      close,
+    });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["search", "hello"]);
+
+    expect(sync).toHaveBeenCalledWith({ reason: "search" });
     expect(search).toHaveBeenCalledWith("hello", {
       maxResults: undefined,
       minScore: undefined,

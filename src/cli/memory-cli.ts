@@ -733,6 +733,9 @@ export function registerMemoryCli(program: Command) {
           run: async (manager) => {
             let results: Awaited<ReturnType<typeof manager.search>>;
             try {
+              if (manager.sync && manager.status().dirty) {
+                await manager.sync({ reason: "search" });
+              }
               results = await manager.search(query, {
                 maxResults: opts.maxResults,
                 minScore: opts.minScore,
