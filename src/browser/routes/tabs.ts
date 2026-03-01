@@ -1,4 +1,6 @@
+import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME } from "../constants.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { isProfileExplicitlyRequested, isRelayAttachedTabMissingError } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
@@ -123,9 +125,24 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       mapTabError: true,
       run: async (profileCtx) => {
-        await profileCtx.ensureBrowserAvailable();
-        const tab = await profileCtx.openTab(url);
-        res.json(tab);
+        try {
+          await profileCtx.ensureBrowserAvailable();
+          const tab = await profileCtx.openTab(url);
+          res.json(tab);
+          return;
+        } catch (err) {
+          const requestedExplicitly = isProfileExplicitlyRequested(req);
+          if (!requestedExplicitly && profileCtx.profile.driver === "extension") {
+            if (isRelayAttachedTabMissingError(err)) {
+              const managedCtx = ctx.forProfile(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+              await managedCtx.ensureBrowserAvailable();
+              const tab = await managedCtx.openTab(url);
+              res.json(tab);
+              return;
+            }
+          }
+          throw err;
+        }
       },
     });
   });
