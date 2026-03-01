@@ -8,6 +8,10 @@ enum class HanzoBotCapability(val rawValue: String) {
   VoiceWake("voiceWake"),
   Location("location"),
   Device("device"),
+  Photos("photos"),
+  Contacts("contacts"),
+  Calendar("calendar"),
+  Motion("motion"),
 }
 
 enum class HanzoBotCanvasCommand(val rawValue: String) {
@@ -94,6 +98,54 @@ enum class HanzoBotNotificationsCommand(val rawValue: String) {
   }
 }
 
+enum class HanzoBotSystemCommand(val rawValue: String) {
+  Notify("system.notify"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "system."
+  }
+}
+
+enum class HanzoBotPhotosCommand(val rawValue: String) {
+  Latest("photos.latest"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "photos."
+  }
+}
+
+enum class HanzoBotContactsCommand(val rawValue: String) {
+  Search("contacts.search"),
+  Add("contacts.add"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "contacts."
+  }
+}
+
+enum class HanzoBotCalendarCommand(val rawValue: String) {
+  Events("calendar.events"),
+  Add("calendar.add"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "calendar."
+  }
+}
+
+enum class HanzoBotMotionCommand(val rawValue: String) {
+  Activity("motion.activity"),
+  Pedometer("motion.pedometer"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "motion."
+  }
+}
+
 // Short aliases for concise usage across the codebase
 typealias BotCapability = HanzoBotCapability
 typealias BotCanvasCommand = HanzoBotCanvasCommand
@@ -104,3 +156,8 @@ typealias BotSmsCommand = HanzoBotSmsCommand
 typealias BotLocationCommand = HanzoBotLocationCommand
 typealias BotDeviceCommand = HanzoBotDeviceCommand
 typealias BotNotificationsCommand = HanzoBotNotificationsCommand
+typealias BotSystemCommand = HanzoBotSystemCommand
+typealias BotPhotosCommand = HanzoBotPhotosCommand
+typealias BotContactsCommand = HanzoBotContactsCommand
+typealias BotCalendarCommand = HanzoBotCalendarCommand
+typealias BotMotionCommand = HanzoBotMotionCommand

@@ -1,20 +1,26 @@
 package ai.hanzo.bot.android.node
 
+import ai.hanzo.bot.android.protocol.HanzoBotCalendarCommand
 import ai.hanzo.bot.android.protocol.HanzoBotCanvasA2UICommand
 import ai.hanzo.bot.android.protocol.HanzoBotCanvasCommand
 import ai.hanzo.bot.android.protocol.HanzoBotCameraCommand
 import ai.hanzo.bot.android.protocol.HanzoBotCapability
+import ai.hanzo.bot.android.protocol.HanzoBotContactsCommand
 import ai.hanzo.bot.android.protocol.HanzoBotDeviceCommand
 import ai.hanzo.bot.android.protocol.HanzoBotLocationCommand
+import ai.hanzo.bot.android.protocol.HanzoBotMotionCommand
 import ai.hanzo.bot.android.protocol.HanzoBotNotificationsCommand
+import ai.hanzo.bot.android.protocol.HanzoBotPhotosCommand
 import ai.hanzo.bot.android.protocol.HanzoBotScreenCommand
 import ai.hanzo.bot.android.protocol.HanzoBotSmsCommand
+import ai.hanzo.bot.android.protocol.HanzoBotSystemCommand
 
 data class NodeRuntimeFlags(
   val cameraEnabled: Boolean,
   val locationEnabled: Boolean,
   val smsAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
+  val motionAvailable: Boolean,
   val debugBuild: Boolean,
 )
 
@@ -23,6 +29,7 @@ enum class InvokeCommandAvailability {
   CameraEnabled,
   LocationEnabled,
   SmsAvailable,
+  MotionAvailable,
   DebugBuild,
 }
 
@@ -32,6 +39,7 @@ enum class NodeCapabilityAvailability {
   LocationEnabled,
   SmsAvailable,
   VoiceWakeEnabled,
+  MotionAvailable,
 }
 
 data class NodeCapabilitySpec(
@@ -66,6 +74,13 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = HanzoBotCapability.Location.rawValue,
         availability = NodeCapabilityAvailability.LocationEnabled,
+      ),
+      NodeCapabilitySpec(name = HanzoBotCapability.Photos.rawValue),
+      NodeCapabilitySpec(name = HanzoBotCapability.Contacts.rawValue),
+      NodeCapabilitySpec(name = HanzoBotCapability.Calendar.rawValue),
+      NodeCapabilitySpec(
+        name = HanzoBotCapability.Motion.rawValue,
+        availability = NodeCapabilityAvailability.MotionAvailable,
       ),
     )
 
@@ -108,6 +123,9 @@ object InvokeCommandRegistry {
         requiresForeground = true,
       ),
       InvokeCommandSpec(
+        name = HanzoBotSystemCommand.Notify.rawValue,
+      ),
+      InvokeCommandSpec(
         name = HanzoBotCameraCommand.List.rawValue,
         requiresForeground = true,
         availability = InvokeCommandAvailability.CameraEnabled,
@@ -145,6 +163,29 @@ object InvokeCommandRegistry {
         name = HanzoBotNotificationsCommand.Actions.rawValue,
       ),
       InvokeCommandSpec(
+        name = HanzoBotPhotosCommand.Latest.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotContactsCommand.Search.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotContactsCommand.Add.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotCalendarCommand.Events.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotCalendarCommand.Add.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotMotionCommand.Activity.rawValue,
+        availability = InvokeCommandAvailability.MotionAvailable,
+      ),
+      InvokeCommandSpec(
+        name = HanzoBotMotionCommand.Pedometer.rawValue,
+        availability = InvokeCommandAvailability.MotionAvailable,
+      ),
+      InvokeCommandSpec(
         name = HanzoBotSmsCommand.Send.rawValue,
         availability = InvokeCommandAvailability.SmsAvailable,
       ),
@@ -172,6 +213,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.LocationEnabled -> flags.locationEnabled
           NodeCapabilityAvailability.SmsAvailable -> flags.smsAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
+          NodeCapabilityAvailability.MotionAvailable -> flags.motionAvailable
         }
       }
       .map { it.name }
@@ -185,6 +227,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.CameraEnabled -> flags.cameraEnabled
           InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
           InvokeCommandAvailability.SmsAvailable -> flags.smsAvailable
+          InvokeCommandAvailability.MotionAvailable -> flags.motionAvailable
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }
