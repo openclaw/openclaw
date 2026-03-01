@@ -127,13 +127,22 @@ for agent in $(list_agents); do
   tmp="$(mktemp)"
   jq \
     --arg pid "$PROFILE_ID" \
+    --arg provider "openai-codex" \
     --argjson profile "$source_profile_json" \
     '
       .version = (.version // 1) |
       .profiles = (.profiles // {}) |
+      .order = (.order // {}) |
       .lastGood = (.lastGood // {}) |
       .usageStats = (.usageStats // {}) |
-      .profiles[$pid] = $profile
+      .profiles[$pid] = $profile |
+      # Ensure per-provider order exists and keeps this profile first without
+      # dropping any existing entries.
+      .order[$provider] = (
+        ([ $pid ] + (.order[$provider] // []))
+        | map(select(type == "string" and length > 0))
+        | reduce .[] as $x ([]; if index($x) then . else . + [$x] end)
+      )
     ' "$auth_file" > "$tmp"
 
   mv "$tmp" "$auth_file"
