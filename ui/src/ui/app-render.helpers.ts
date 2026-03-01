@@ -128,6 +128,8 @@ function renderCronFilterIcon(hiddenCount: number) {
         : ""}
     </span>
   `;
+}
+
 function resolveModelDisplayName(provider: string, modelId: string): string {
   // Strip provider prefix if present in modelId
   const shortId = modelId.replace(/^.*\//, "");
@@ -140,7 +142,8 @@ function resolveModelDisplayName(provider: string, modelId: string): string {
     "claude-sonnet-4-0": "Sonnet 4.0",
     "claude-haiku-4-0": "Haiku 4.0",
   };
-  return friendlyNames[shortId] ?? shortId;}
+  return friendlyNames[shortId] ?? shortId;
+}
 
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
