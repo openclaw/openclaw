@@ -79,6 +79,18 @@ description: Use anime style IMPORTANT: Must be kawaii
     expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
   });
 
+  it("preserves YAML block scalars starting with {", () => {
+    const content = `---
+name: block-test
+description: |
+  {json-ish text here}
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("block-test");
+    expect(result.description).toBe("{json-ish text here}");
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});

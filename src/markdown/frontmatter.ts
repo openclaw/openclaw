@@ -151,9 +151,17 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   for (const [key, value] of Object.entries(lineParsed)) {
     if (value.startsWith("{") || value.startsWith("[")) {
       merged[key] = value;
-    } else if (merged[key] !== undefined && merged[key].startsWith("{") && !value.includes("\n")) {
+    } else if (
+      merged[key] !== undefined &&
+      merged[key].startsWith("{") &&
+      !value.includes("\n") &&
+      value !== "|" &&
+      value !== ">"
+    ) {
       // YAML misinterpreted an unquoted colon as a nested key and produced
       // a JSON object; prefer the line-parsed plain string instead.
+      // Skip when the line-parsed value is a block scalar indicator (| or >)
+      // since YAML correctly handled those.
       merged[key] = value;
     }
   }
