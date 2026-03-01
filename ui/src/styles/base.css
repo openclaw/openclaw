@@ -1,75 +1,75 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
 
 :root {
-  /* Background - Warmer dark with depth */
-  --bg: #12141a;
-  --bg-accent: #14161d;
-  --bg-elevated: #1a1d25;
-  --bg-hover: #262a35;
-  --bg-muted: #262a35;
+  /* Background - Deep dark neutral (Nabiler) */
+  --bg: oklch(0.14 0 0);
+  --bg-accent: oklch(0.16 0 0);
+  --bg-elevated: oklch(0.20 0 0);
+  --bg-hover: oklch(0.24 0 0);
+  --bg-muted: oklch(0.22 0 0);
 
-  /* Card / Surface - More contrast between levels */
-  --card: #181b22;
-  --card-foreground: #f4f4f5;
+  /* Card / Surface */
+  --card: oklch(0.17 0 0);
+  --card-foreground: oklch(0.95 0 0);
   --card-highlight: rgba(255, 255, 255, 0.05);
-  --popover: #181b22;
-  --popover-foreground: #f4f4f5;
+  --popover: oklch(0.17 0 0);
+  --popover-foreground: oklch(0.95 0 0);
 
   /* Panel */
-  --panel: #12141a;
-  --panel-strong: #1a1d25;
-  --panel-hover: #262a35;
-  --chrome: rgba(18, 20, 26, 0.95);
-  --chrome-strong: rgba(18, 20, 26, 0.98);
+  --panel: oklch(0.14 0 0);
+  --panel-strong: oklch(0.20 0 0);
+  --panel-hover: oklch(0.24 0 0);
+  --chrome: rgba(20, 20, 20, 0.95);
+  --chrome-strong: rgba(20, 20, 20, 0.98);
 
-  /* Text - Slightly warmer */
-  --text: #e4e4e7;
-  --text-strong: #fafafa;
-  --chat-text: #e4e4e7;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
+  /* Text - High contrast off-white */
+  --text: oklch(0.90 0 0);
+  --text-strong: oklch(0.95 0 0);
+  --chat-text: oklch(0.90 0 0);
+  --muted: oklch(0.55 0 0);
+  --muted-strong: oklch(0.45 0 0);
+  --muted-foreground: oklch(0.55 0 0);
 
-  /* Border - Subtle but defined */
-  --border: #27272a;
-  --border-strong: #3f3f46;
-  --border-hover: #52525b;
-  --input: #27272a;
-  --ring: #ff5c5c;
+  /* Border - Subtle dark */
+  --border: oklch(0.26 0 0);
+  --border-strong: oklch(0.34 0 0);
+  --border-hover: oklch(0.42 0 0);
+  --input: oklch(0.26 0 0);
+  --ring: oklch(0.82 0.18 160);
 
-  /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.15);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.25);
-  --primary: #ff5c5c;
-  --primary-foreground: #ffffff;
+  /* Accent - Mint green (Nabiler brand) */
+  --accent: oklch(0.82 0.18 160);
+  --accent-hover: oklch(0.87 0.18 160);
+  --accent-muted: oklch(0.72 0.15 160);
+  --accent-subtle: rgba(47, 241, 145, 0.15);
+  --accent-foreground: oklch(0.14 0 0);
+  --accent-glow: rgba(47, 241, 145, 0.25);
+  --primary: oklch(0.82 0.18 160);
+  --primary-foreground: oklch(0.14 0 0);
 
-  /* Secondary - Teal accent for variety */
-  --secondary: #1e2028;
-  --secondary-foreground: #f4f4f5;
-  --accent-2: #14b8a6;
-  --accent-2-muted: rgba(20, 184, 166, 0.7);
-  --accent-2-subtle: rgba(20, 184, 166, 0.15);
+  /* Secondary - Dark neutral */
+  --secondary: oklch(0.22 0 0);
+  --secondary-foreground: oklch(0.95 0 0);
+  --accent-2: oklch(0.65 0.15 200);
+  --accent-2-muted: rgba(56, 189, 248, 0.7);
+  --accent-2-subtle: rgba(56, 189, 248, 0.15);
 
-  /* Semantic - More saturated */
+  /* Semantic */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.12);
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
+  --destructive: oklch(0.577 0.245 27);
+  --destructive-foreground: oklch(0.95 0 0);
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.12);
-  --danger: #ef4444;
+  --danger: oklch(0.577 0.245 27);
   --danger-muted: rgba(239, 68, 68, 0.75);
   --danger-subtle: rgba(239, 68, 68, 0.12);
   --info: #3b82f6;
 
-  /* Focus - With glow */
-  --focus: rgba(255, 92, 92, 0.25);
+  /* Focus - Mint glow */
+  --focus: rgba(47, 241, 145, 0.25);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 20px var(--accent-glow);
 
@@ -80,25 +80,25 @@
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
 
-  /* Typography - Space Grotesk for personality */
+  /* Typography - Inter + Be Vietnam Pro (Nabiler) */
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
-  --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-display: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Be Vietnam Pro", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 
-  /* Shadows - Richer with subtle color */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  /* Shadows - Dark mode deeper shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03);
   --shadow-glow: 0 0 30px var(--accent-glow);
 
-  /* Radii - Slightly larger for friendlier feel */
+  /* Radii - Friendly rounded feel (Nabiler: 10px light, 16px dark) */
   --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
   --radius-full: 9999px;
-  --radius: 8px;
+  --radius: 10px;
 
   /* Transitions - Snappy but smooth */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -111,73 +111,74 @@
   color-scheme: dark;
 }
 
-/* Light theme - Clean with subtle warmth */
+/* Light theme - Clean Nabiler light mode */
 :root[data-theme="light"] {
-  --bg: #fafafa;
-  --bg-accent: #f5f5f5;
-  --bg-elevated: #ffffff;
-  --bg-hover: #f0f0f0;
-  --bg-muted: #f0f0f0;
-  --bg-content: #f5f5f5;
+  --bg: oklch(1 0 0);
+  --bg-accent: oklch(0.97 0.003 165);
+  --bg-elevated: oklch(1 0 0);
+  --bg-hover: oklch(0.94 0.003 165);
+  --bg-muted: oklch(0.945 0.003 165);
+  --bg-content: oklch(0.97 0.003 165);
 
-  --card: #ffffff;
-  --card-foreground: #18181b;
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.02 165);
   --card-highlight: rgba(0, 0, 0, 0.03);
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.02 165);
 
-  --panel: #fafafa;
-  --panel-strong: #f5f5f5;
-  --panel-hover: #ebebeb;
-  --chrome: rgba(250, 250, 250, 0.95);
-  --chrome-strong: rgba(250, 250, 250, 0.98);
+  --panel: oklch(0.98 0 0);
+  --panel-strong: oklch(0.96 0.003 165);
+  --panel-hover: oklch(0.93 0.003 165);
+  --chrome: rgba(255, 255, 255, 0.95);
+  --chrome-strong: rgba(255, 255, 255, 0.98);
 
-  --text: #3f3f46;
-  --text-strong: #18181b;
-  --chat-text: #3f3f46;
-  --muted: #71717a;
-  --muted-strong: #52525b;
-  --muted-foreground: #71717a;
+  --text: oklch(0.37 0.02 165);
+  --text-strong: oklch(0.22 0.02 165);
+  --chat-text: oklch(0.37 0.02 165);
+  --muted: oklch(0.55 0.01 165);
+  --muted-strong: oklch(0.45 0.01 165);
+  --muted-foreground: oklch(0.55 0.01 165);
 
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --border-hover: #a1a1aa;
-  --input: #e4e4e7;
+  --border: oklch(0.92 0.003 165);
+  --border-strong: oklch(0.86 0.003 165);
+  --border-hover: oklch(0.72 0.01 165);
+  --input: oklch(0.92 0.003 165);
 
-  --accent: #dc2626;
-  --accent-hover: #ef4444;
-  --accent-muted: #dc2626;
-  --accent-subtle: rgba(220, 38, 38, 0.12);
-  --accent-foreground: #ffffff;
-  --accent-glow: rgba(220, 38, 38, 0.15);
-  --primary: #dc2626;
-  --primary-foreground: #ffffff;
+  /* Same mint green brand in light mode */
+  --accent: oklch(0.82 0.18 160);
+  --accent-hover: oklch(0.76 0.18 160);
+  --accent-muted: oklch(0.72 0.15 160);
+  --accent-subtle: rgba(47, 241, 145, 0.12);
+  --accent-foreground: oklch(0.14 0 0);
+  --accent-glow: rgba(47, 241, 145, 0.15);
+  --primary: oklch(0.82 0.18 160);
+  --primary-foreground: oklch(0.14 0 0);
 
-  --secondary: #f4f4f5;
-  --secondary-foreground: #3f3f46;
-  --accent-2: #0d9488;
-  --accent-2-muted: rgba(13, 148, 136, 0.75);
-  --accent-2-subtle: rgba(13, 148, 136, 0.12);
+  --secondary: oklch(0.945 0.003 165);
+  --secondary-foreground: oklch(0.37 0.02 165);
+  --accent-2: oklch(0.55 0.15 200);
+  --accent-2-muted: rgba(14, 165, 233, 0.75);
+  --accent-2-subtle: rgba(14, 165, 233, 0.12);
 
   --ok: #16a34a;
   --ok-muted: rgba(22, 163, 74, 0.75);
   --ok-subtle: rgba(22, 163, 74, 0.1);
-  --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
+  --destructive: oklch(0.577 0.245 27);
+  --destructive-foreground: oklch(0.95 0 0);
   --warn: #d97706;
   --warn-muted: rgba(217, 119, 6, 0.75);
   --warn-subtle: rgba(217, 119, 6, 0.1);
-  --danger: #dc2626;
+  --danger: oklch(0.577 0.245 27);
   --danger-muted: rgba(220, 38, 38, 0.75);
   --danger-subtle: rgba(220, 38, 38, 0.1);
   --info: #2563eb;
 
-  --focus: rgba(220, 38, 38, 0.2);
+  --focus: rgba(47, 241, 145, 0.2);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ring), 0 0 16px var(--accent-glow);
 
   --grid-line: rgba(0, 0, 0, 0.05);
 
-  /* Light shadows */
+  /* Light shadows - subtle */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
@@ -350,7 +351,7 @@ select {
 
 @keyframes glow-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 rgba(255, 92, 92, 0);
+    box-shadow: 0 0 0 rgba(47, 241, 145, 0);
   }
   50% {
     box-shadow: 0 0 20px var(--accent-glow);
