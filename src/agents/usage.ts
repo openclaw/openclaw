@@ -73,7 +73,11 @@ const asFiniteNumber = (value: unknown): number | undefined => {
   if (!Number.isFinite(value)) {
     return undefined;
   }
-  return value;
+  // Token counts must never be negative. Some providers intermittently report
+  // negative values (likely integer overflow or accounting bugs on their side).
+  // Clamp to zero so downstream consumers (session store, /status) never see
+  // nonsensical negative token counts.
+  return Math.max(0, value);
 };
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {

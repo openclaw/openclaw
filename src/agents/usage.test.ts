@@ -88,6 +88,37 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it("clamps negative token values to zero", () => {
+    const usage = normalizeUsage({
+      input: -284957,
+      output: 500,
+      cacheRead: -100,
+      cacheWrite: 200,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 500,
+      cacheRead: 0,
+      cacheWrite: 200,
+      total: undefined,
+    });
+  });
+
+  it("clamps negative values from alternate naming", () => {
+    const usage = normalizeUsage({
+      input_tokens: -296318,
+      output_tokens: -50,
+      total_tokens: -346368,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 0,
+    });
+  });
+
   it("returns undefined when no valid fields are provided", () => {
     const usage = normalizeUsage(null);
     expect(usage).toBeUndefined();
