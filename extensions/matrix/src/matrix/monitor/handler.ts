@@ -17,7 +17,6 @@ import {
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { resolveMatrixAccount } from "../accounts.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
@@ -44,6 +43,7 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
 
 export type MatrixMonitorHandlerParams = {
