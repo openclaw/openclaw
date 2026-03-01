@@ -160,6 +160,15 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        announceReplyStyle: z
+          .enum(["synthesize", "passthrough"])
+          .optional()
+          .describe(
+            "How nested subagents handle announce replies from their children. " +
+              '"synthesize" (default): parent converts child result into an internal update. ' +
+              '"passthrough": parent forwards child result verbatim. ' +
+              "Use passthrough for formatter/personality chains where the child output IS the final response.",
+          ),
       })
       .strict()
       .optional(),

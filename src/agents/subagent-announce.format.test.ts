@@ -1569,6 +1569,32 @@ describe("subagent announce formatting", () => {
     );
   });
 
+  it("uses passthrough reply instruction for nested subagent when announceReplyStyle is passthrough", async () => {
+    configOverride = {
+      agents: { defaults: { subagents: { announceReplyStyle: "passthrough" } } },
+    } as typeof configOverride;
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:orchestrator:subagent:formatter",
+      childRunId: "run-formatter-passthrough",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
+      requesterDisplayKey: "agent:main:subagent:orchestrator",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.sessionKey).toBe("agent:main:subagent:orchestrator");
+    expect(call?.params?.deliver).toBe(false);
+    const message = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain("Forward the subagent's result text above VERBATIM");
+    expect(message).not.toContain("Convert this completion into a concise internal orchestration");
+  });
+
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(true);

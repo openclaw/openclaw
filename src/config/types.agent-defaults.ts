@@ -263,6 +263,13 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /**
+     * How nested subagents handle announce replies from their children.
+     * - "synthesize" (default): the parent agent converts the child's result into an internal orchestration update.
+     * - "passthrough": the parent agent forwards the child's result verbatim without modification.
+     * Use "passthrough" for formatter/personality chains where the child's output IS the final response.
+     */
+    announceReplyStyle?: "synthesize" | "passthrough";
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
