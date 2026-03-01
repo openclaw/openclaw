@@ -21,7 +21,6 @@ import ai.hanzo.bot.android.protocol.HanzoBotCanvasA2UIAction
 import ai.hanzo.bot.android.voice.MicCaptureManager
 import ai.hanzo.bot.android.voice.TalkModeManager
 import ai.hanzo.bot.android.voice.VoiceConversationEntry
-import ai.hanzo.bot.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,7 +37,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomicCapture.AtomicLong
 
 class NodeRuntime(context: Context) {
   private val appContext = context.applicationContext
@@ -81,34 +80,34 @@ class NodeRuntime(context: Context) {
     get() = voiceWake.statusText
 
   val talkStatusText: StateFlow<String>
-    get() = talkMode.statusText
+    get() = voiceReplySpeaker.statusText
 
   val talkIsListening: StateFlow<Boolean>
-    get() = talkMode.isListening
+    get() = voiceReplySpeaker.isListening
 
   val talkIsSpeaking: StateFlow<Boolean>
-    get() = talkMode.isSpeaking
+    get() = voiceReplySpeaker.isSpeaking
 
   val micEnabled: StateFlow<Boolean>
-    get() = mic.micEnabled
+    get() = micCapture.micEnabled
 
   val micStatusText: StateFlow<String>
-    get() = mic.statusText
+    get() = micCapture.statusText
 
   val micLiveTranscript: StateFlow<String?>
-    get() = mic.liveTranscript
+    get() = micCapture.liveTranscript
 
   val micQueuedMessages: StateFlow<List<String>>
-    get() = mic.queuedMessages
+    get() = micCapture.queuedMessages
 
   val micConversation: StateFlow<List<VoiceConversationEntry>>
-    get() = mic.conversation
+    get() = micCapture.conversation
 
   val micInputLevel: StateFlow<Float>
-    get() = mic.inputLevel
+    get() = micCapture.inputLevel
 
   val micIsSending: StateFlow<Boolean>
-    get() = mic.isSending
+    get() = micCapture.isSending
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -308,7 +307,7 @@ class NodeRuntime(context: Context) {
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         applyMainSessionKey(mainSessionKey)
         updateStatus()
-        mic.onGatewayConnectionChanged(true)
+        micCapture.onGatewayConnectionChanged(true)
         scope.launch { refreshBrandingFromGateway() }
         scope.launch { gatewayEventHandler.refreshWakeWordsFromGateway() }
       },
@@ -322,10 +321,10 @@ class NodeRuntime(context: Context) {
           _mainSessionKey.value = "main"
         }
         val mainKey = resolveMainSessionKey()
-        talkMode.setMainSessionKey(mainKey)
+        voiceReplySpeaker.setMainSessionKey(mainKey)
         chat.applyMainSessionKey(mainKey)
         chat.onDisconnected(message)
-        mic.onGatewayConnectionChanged(false)
+        micCapture.onGatewayConnectionChanged(false)
         updateStatus()
       },
       onEvent = { event, payloadJson ->
@@ -376,7 +375,9 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
-  private val talkMode: TalkModeManager by lazy {
+  private val voiceReplySpeaker: TalkModeManager by lazy {
+    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
       scope = scope,
@@ -386,7 +387,7 @@ class NodeRuntime(context: Context) {
     )
   }
 
-  private val mic: MicCaptureManager by lazy {
+  private val micCapture: MicCaptureManager by lazy {
     MicCaptureManager(
       context = appContext,
       scope = scope,
@@ -408,6 +409,9 @@ class NodeRuntime(context: Context) {
         }
         parsed ?: runId
       },
+      speakAssistantReply = { text ->
+        voiceReplySpeaker.speakAssistantReply(text)
+      },
     )
   }
 
@@ -416,7 +420,7 @@ class NodeRuntime(context: Context) {
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
+    voiceReplySpeaker.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -527,7 +531,7 @@ class NodeRuntime(context: Context) {
 
     scope.launch {
       talkEnabled.collect { enabled ->
-        talkMode.setEnabled(enabled)
+        voiceReplySpeaker.setEnabled(enabled)
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -653,7 +657,7 @@ class NodeRuntime(context: Context) {
   }
 
   fun setMicEnabled(enabled: Boolean) {
-    mic.setMicEnabled(enabled)
+    micCapture.setMicEnabled(enabled)
   }
 
   fun setGatewayPassword(password: String) {
@@ -882,9 +886,9 @@ class NodeRuntime(context: Context) {
       return
     }
 
-    talkMode.handleGatewayEvent(event, payloadJson)
+    voiceReplySpeaker.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
-    mic.handleGatewayEvent(event, payloadJson)
+    micCapture.handleGatewayEvent(event, payloadJson)
   }
 
   private suspend fun refreshBrandingFromGateway() {
