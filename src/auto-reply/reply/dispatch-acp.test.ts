@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
+import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -15,8 +17,10 @@ const managerMocks = vi.hoisted(() => ({
 }));
 
 const policyMocks = vi.hoisted(() => ({
-  resolveAcpDispatchPolicyError: vi.fn(() => null),
-  resolveAcpAgentPolicyError: vi.fn(() => null),
+  resolveAcpDispatchPolicyError: vi.fn<(cfg: OpenClawConfig) => AcpRuntimeError | null>(() => null),
+  resolveAcpAgentPolicyError: vi.fn<(cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null>(
+    () => null,
+  ),
 }));
 
 const routeMocks = vi.hoisted(() => ({
@@ -36,11 +40,13 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const sessionMetaMocks = vi.hoisted(() => ({
-  readAcpSessionEntry: vi.fn(() => null),
+  readAcpSessionEntry: vi.fn<
+    (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
+  >(() => null),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
-  listBySession: vi.fn(() => []),
+  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -68,7 +74,8 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (params: unknown) => sessionMetaMocks.readAcpSessionEntry(params),
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
 }));
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
