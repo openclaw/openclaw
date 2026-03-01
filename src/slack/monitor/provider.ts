@@ -225,7 +225,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     log: (message) => runtime.log?.(warn(message)),
   });
 
-  const resolveToken = slackCfg.userToken?.trim() || botToken;
+  const resolveToken = account.userToken || botToken;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
@@ -337,9 +337,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     removeAckAfterReply,
   });
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account });
+  // Wire up event liveness tracking: update lastEventAt on every inbound event
+  // so the health monitor can detect "half-dead" sockets that pass health checks
+  // but silently stop delivering events.
+  const trackEvent = opts.setStatus
+    ? () => {
+        opts.setStatus!({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
+      }
+    : undefined;
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
+  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+
+  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
   await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({

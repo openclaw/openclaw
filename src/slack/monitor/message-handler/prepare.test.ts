@@ -101,6 +101,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     enabled: true,
     botTokenSource: "config",
     appTokenSource: "config",
+    userTokenSource: "none",
     config: {},
   };
 
@@ -119,6 +120,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      userTokenSource: "none",
       config,
       replyToMode: config.replyToMode,
       replyToModeByChatType: config.replyToModeByChatType,
@@ -165,6 +167,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      userTokenSource: "none",
       config: {
         replyToMode: "all",
         thread: { initialHistoryLimit: 20 },
@@ -378,6 +381,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      userTokenSource: "none",
       config: {},
     };
 
@@ -461,6 +465,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      userTokenSource: "none",
       config: {},
     };
 
