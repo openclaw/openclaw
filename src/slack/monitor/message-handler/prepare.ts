@@ -32,6 +32,7 @@ import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
+import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -210,7 +211,8 @@ export async function prepareSlackMessage(params: {
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId ||
+      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -259,7 +261,10 @@ export async function prepareSlackMessage(params: {
     useAccessGroups: ctx.useAccessGroups,
     authorizers: [
       { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
-      { configured: channelUsersAllowlistConfigured, allowed: channelCommandAuthorized },
+      {
+        configured: channelUsersAllowlistConfigured,
+        allowed: channelCommandAuthorized,
+      },
     ],
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
