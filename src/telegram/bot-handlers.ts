@@ -1096,6 +1096,7 @@ export const registerTelegramHandlers = ({
         const cbIsForum = callbackMessage.chat.is_forum === true;
         const authContext = await resolveTelegramEventAuthorizationContext({
           chatId: cbChatId,
+          isGroup: cbIsGroup,
           isForum: cbIsForum,
           messageThreadId: cbMessageThreadId,
         });
@@ -1164,15 +1165,6 @@ export const registerTelegramHandlers = ({
       if (inlineButtonsScope === "group" && !isGroup) {
         return;
       }
-
-      const messageThreadId = callbackMessage.message_thread_id;
-      const isForum = callbackMessage.chat.is_forum === true;
-      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
-        chatId,
-        isGroup,
-        isForum,
-        messageThreadId,
-      });
       const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
       if (!isGroup && requireTopic === true && dmThreadId == null) {
@@ -1181,19 +1173,6 @@ export const registerTelegramHandlers = ({
         );
         return;
       }
-      const senderId = callback.from?.id ? String(callback.from.id) : "";
-      const senderUsername = callback.from?.username ?? "";
-      const authorizationMode: TelegramEventAuthorizationMode =
-        inlineButtonsScope === "allowlist" ? "callback-allowlist" : "callback-scope";
-      const senderAuthorization = authorizeTelegramEventSender({
-        chatId,
-        chatTitle: callbackMessage.chat.title,
-        isGroup,
-        senderId,
-        senderUsername,
-        mode: authorizationMode,
-        context: eventAuthContext,
-      });
       if (!senderAuthorization.allowed) {
         return;
       }
