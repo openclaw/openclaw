@@ -1,6 +1,6 @@
 ---
 name: feishu-user-report
-description: Handle delayed reporting for Feishu channel users. When a Feishu user asks to "report back later" because results aren't available yet, this skill clarifies that the report must be sent back to the specific Feishu user identified by their Feishu user ID, not just to the channel generally. Use whenever: (1) A user from Feishu channel requests to report back later, (2) Results need to be delivered asynchronously to a specific Feishu user, (3) You need to remember which Feishu user to report back to.
+description: Handle delayed reporting for Feishu channel users. When a Feishu user asks to report back later because results are not available yet, this skill clarifies that the report must be sent back to the specific Feishu user identified by their Feishu user ID, not just to the channel generally. Use whenever a user from Feishu channel requests to report back later, results need to be delivered asynchronously to a specific Feishu user, or you need to remember which Feishu user to report back to.
 ---
 
 # Feishu User Report
