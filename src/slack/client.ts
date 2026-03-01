@@ -18,3 +18,15 @@ export function resolveSlackWebClientOptions(options: WebClientOptions = {}): We
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWebClientOptions(options));
 }
+
+/**
+ * Create a WebClient that rejects rate-limited calls immediately instead of
+ * retrying for minutes. Use this for bulk operations (like users.list pagination)
+ * where a 429 retry loop would starve the WebSocket connection.
+ */
+export function createSlackWebClientBulk(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, {
+    ...resolveSlackWebClientOptions(options),
+    rejectRateLimitedCalls: true,
+  });
+}

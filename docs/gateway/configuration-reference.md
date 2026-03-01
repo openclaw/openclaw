@@ -402,6 +402,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       streaming: "partial", // off | partial | block | progress (preview mode)
       nativeStreaming: true, // use Slack native streaming API when streaming=partial
       mediaMaxMb: 20,
+      rateLimitPolicy: "retry", // retry (default) | fail-fast
     },
   },
 }
@@ -411,6 +412,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
 - `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `rateLimitPolicy: "fail-fast"` uses targeted APIs (`users.info`, `conversations.info`) for ID entries instead of paginating all workspace users/channels. Prevents 429 retry loops from starving the WebSocket connection on large workspaces.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
