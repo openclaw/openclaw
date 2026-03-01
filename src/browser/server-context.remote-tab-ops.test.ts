@@ -320,6 +320,46 @@ describe("browser server-context remote profile tab operations", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not enforce managed tab cap for remote openclaw profiles", async () => {
+    const listPagesViaPlaywright = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { targetId: "T1", title: "1", url: "https://1.example", type: "page" },
+      ])
+      .mockResolvedValueOnce([
+        { targetId: "T1", title: "1", url: "https://1.example", type: "page" },
+        { targetId: "T2", title: "2", url: "https://2.example", type: "page" },
+        { targetId: "T3", title: "3", url: "https://3.example", type: "page" },
+        { targetId: "T4", title: "4", url: "https://4.example", type: "page" },
+        { targetId: "T5", title: "5", url: "https://5.example", type: "page" },
+        { targetId: "T6", title: "6", url: "https://6.example", type: "page" },
+        { targetId: "T7", title: "7", url: "https://7.example", type: "page" },
+        { targetId: "T8", title: "8", url: "https://8.example", type: "page" },
+        { targetId: "T9", title: "9", url: "https://9.example", type: "page" },
+      ]);
+
+    const createPageViaPlaywright = vi.fn(async () => ({
+      targetId: "T1",
+      title: "Tab 1",
+      url: "https://1.example",
+      type: "page",
+    }));
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const fetchMock = vi.fn(async (url: unknown) => {
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+
+    const { remote } = createRemoteRouteHarness(fetchMock);
+    const opened = await remote.openTab("https://1.example");
+    expect(opened.targetId).toBe("T1");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser server-context tab selection state", () => {
@@ -480,6 +520,101 @@ describe("browser server-context tab selection state", () => {
     const openclaw = ctx.forProfile("openclaw");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
+    expect(opened.targetId).toBe("NEW");
+  });
+
+  it("does not block openTab on slow best-effort cleanup closes", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+
+    const existingTabs = [
+      {
+        id: "OLD1",
+        title: "1",
+        url: "http://127.0.0.1:3001",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
+        type: "page",
+      },
+      {
+        id: "OLD2",
+        title: "2",
+        url: "http://127.0.0.1:3002",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
+        type: "page",
+      },
+      {
+        id: "OLD3",
+        title: "3",
+        url: "http://127.0.0.1:3003",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
+        type: "page",
+      },
+      {
+        id: "OLD4",
+        title: "4",
+        url: "http://127.0.0.1:3004",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
+        type: "page",
+      },
+      {
+        id: "OLD5",
+        title: "5",
+        url: "http://127.0.0.1:3005",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
+        type: "page",
+      },
+      {
+        id: "OLD6",
+        title: "6",
+        url: "http://127.0.0.1:3006",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
+        type: "page",
+      },
+      {
+        id: "OLD7",
+        title: "7",
+        url: "http://127.0.0.1:3007",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
+        type: "page",
+      },
+      {
+        id: "OLD8",
+        title: "8",
+        url: "http://127.0.0.1:3008",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
+        type: "page",
+      },
+      {
+        id: "NEW",
+        title: "9",
+        url: "http://127.0.0.1:3009",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+        type: "page",
+      },
+    ];
+
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        return { ok: true, json: async () => existingTabs } as unknown as Response;
+      }
+      if (value.includes("/json/close/OLD1")) {
+        return new Promise<Response>(() => {});
+      }
+      throw new Error(`unexpected fetch: ${value}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await Promise.race([
+      openclaw.openTab("http://127.0.0.1:3009"),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("openTab timed out waiting for cleanup")), 300),
+      ),
+    ]);
+
     expect(opened.targetId).toBe("NEW");
   });
 

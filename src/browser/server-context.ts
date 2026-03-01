@@ -139,7 +139,7 @@ function createProfileContext(
   };
 
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
-    if (profile.driver !== "openclaw") {
+    if (profile.driver !== "openclaw" || !profile.cdpIsLoopback) {
       return;
     }
 
@@ -153,7 +153,7 @@ function createProfileContext(
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MAX_MANAGED_BROWSER_PAGE_TABS;
     for (const tab of candidates.slice(0, excessCount)) {
-      await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
+      void fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
         // best-effort cleanup only
       });
     }
