@@ -25,6 +25,20 @@ import {
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
+function isLikelyPlaywrightCdpTimeout(error: unknown): boolean {
+  const text =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`.toLowerCase()
+      : typeof error === "string"
+        ? error.toLowerCase()
+        : "";
+  return (
+    text.includes("connectovercdp") ||
+    text.includes("can't reach the openclaw browser control service") ||
+    (text.includes("cdp") && text.includes("timeout"))
+  );
+}
+
 async function saveBrowserMediaResponse(params: {
   res: BrowserResponse;
   buffer: Buffer;
@@ -280,21 +294,47 @@ export function registerBrowserAgentSnapshotRoutes(
           },
         };
 
-        const snap = wantsRoleSnapshot
-          ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
-          : await pw
-              .snapshotAiViaPlaywright({
-                cdpUrl: profileCtx.profile.cdpUrl,
-                targetId: tab.targetId,
-                ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-              })
-              .catch(async (err) => {
-                // Public-API fallback when Playwright's private _snapshotForAI is missing.
-                if (String(err).toLowerCase().includes("_snapshotforai")) {
-                  return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
-                }
-                throw err;
-              });
+        let snap:
+          | Awaited<ReturnType<typeof pw.snapshotRoleViaPlaywright>>
+          | Awaited<ReturnType<typeof pw.snapshotAiViaPlaywright>>;
+        try {
+          snap = wantsRoleSnapshot
+            ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
+            : await pw
+                .snapshotAiViaPlaywright({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                  ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                })
+                .catch(async (err) => {
+                  // Public-API fallback when Playwright's private _snapshotForAI is missing.
+                  if (String(err).toLowerCase().includes("_snapshotforai")) {
+                    return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
+                  }
+                  throw err;
+                });
+        } catch (err) {
+          const canFallbackToAria =
+            !wantsRoleSnapshot &&
+            !labels &&
+            Boolean(tab.wsUrl) &&
+            isLikelyPlaywrightCdpTimeout(err);
+          if (!canFallbackToAria) {
+            throw err;
+          }
+          const aria = await snapshotAria({
+            wsUrl: tab.wsUrl ?? "",
+            ...(typeof limit === "number" ? { limit } : {}),
+          });
+          return res.json({
+            ok: true,
+            format: "aria",
+            targetId: tab.targetId,
+            url: tab.url,
+            fallbackFrom: "ai",
+            ...aria,
+          });
+        }
         if (labels) {
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,

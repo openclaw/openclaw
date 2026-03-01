@@ -56,6 +56,27 @@ describe("browser control server", () => {
     });
   });
 
+  it("falls back to aria snapshot when ai snapshot hits a CDP connect timeout", async () => {
+    const base = await startServerAndBase();
+    pwMocks.snapshotAiViaPlaywright.mockRejectedValueOnce(
+      new Error("TimeoutError: browserType.connectOverCDP: Timeout 9000ms exceeded"),
+    );
+
+    const snap = (await realFetch(`${base}/snapshot?format=ai&limit=2`).then((r) => r.json())) as {
+      ok: boolean;
+      format?: string;
+      fallbackFrom?: string;
+    };
+
+    expect(snap.ok).toBe(true);
+    expect(snap.format).toBe("aria");
+    expect(snap.fallbackFrom).toBe("ai");
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      limit: 2,
+    });
+  });
+
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
