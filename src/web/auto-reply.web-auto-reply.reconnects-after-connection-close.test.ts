@@ -9,6 +9,7 @@ import {
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundMessage } from "./inbound.js";
+import * as webSession from "./session.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -193,6 +194,45 @@ describe("web auto-reply", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 440"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session conflict"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+  });
+
+  it("clears cached auth when close reason is logged out", async () => {
+    const logoutSpy = vi.spyOn(webSession, "logoutWeb").mockResolvedValue(true);
+    try {
+      const closeResolvers: Array<(reason?: unknown) => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<unknown>((res) => {
+          closeResolvers.push(res);
+        });
+        return { close: vi.fn(), onClose };
+      });
+      const { runtime, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      closeResolvers.shift()?.({
+        status: 401,
+        isLoggedOut: true,
+        error: { output: { statusCode: 401 } },
+      });
+      await run;
+
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(logoutSpy).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Cleared cached web session"),
+      );
+    } finally {
+      logoutSpy.mockRestore();
+    }
   });
 
   it("forces reconnect when watchdog closes without onClose", async () => {
