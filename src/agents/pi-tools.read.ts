@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -434,6 +435,16 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
+  // Expand tilde prefix in file path parameters.
+  // Some models emit paths like "~/Documents/file.txt" — Node's path.resolve()
+  // treats "~" as a literal directory name, causing misleading "File not found" errors.
+  if (typeof normalized.path === "string" && normalized.path.startsWith("~/")) {
+    const home = os.homedir();
+    if (home) {
+      normalized.path = normalized.path.replace(/^~(?=[\\/])/, home);
+    }
+  }
+
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");

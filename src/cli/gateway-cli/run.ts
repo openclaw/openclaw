@@ -15,7 +15,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -364,20 +364,26 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
+      // Idempotent: if the gateway is already running, the desired state is
+      // achieved — exit 0 with an informational message instead of failing.
+      // This prevents automation loops from retrying endlessly when
+      // `openclaw gateway` is called to verify/ensure the gateway is up.
       const errMessage = describeUnknownError(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
       try {
         const diagnostics = await inspectPortUsage(port);
         if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
+          // Gateway is genuinely running → idempotent success
+          defaultRuntime.log(`Gateway is already running (${errMessage.replace(/;.*$/, "")})`);
+          defaultRuntime.exit(0);
+          return;
         }
       } catch {
-        // ignore diagnostics failures
+        // ignore diagnostics failures — fall through to error path
       }
+      // Port is free but lock exists → stale lock or race condition → error
+      defaultRuntime.error(
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
+      );
       await maybeExplainGatewayServiceStop();
       defaultRuntime.exit(1);
       return;
