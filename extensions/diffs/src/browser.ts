@@ -6,15 +6,43 @@ import { chromium } from "playwright-core";
 import type { DiffTheme } from "./types.js";
 import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
+const DEFAULT_BROWSER_IDLE_MS = 30_000;
+const SHARED_BROWSER_KEY = "__default__";
+
 export type DiffScreenshotter = {
   screenshotHtml(params: { html: string; outputPath: string; theme: DiffTheme }): Promise<string>;
 };
 
+type BrowserInstance = Awaited<ReturnType<typeof chromium.launch>>;
+
+type BrowserLease = {
+  browser: BrowserInstance;
+  release(): Promise<void>;
+};
+
+type SharedBrowserState = {
+  browser?: BrowserInstance;
+  browserPromise: Promise<BrowserInstance>;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  key: string;
+  users: number;
+};
+
+type ExecutablePathCache = {
+  key: string;
+  valuePromise: Promise<string | undefined>;
+};
+
+let sharedBrowserState: SharedBrowserState | null = null;
+let executablePathCache: ExecutablePathCache | null = null;
+
 export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
   private readonly config: OpenClawConfig;
+  private readonly browserIdleMs: number;
 
-  constructor(params: { config: OpenClawConfig }) {
+  constructor(params: { config: OpenClawConfig; browserIdleMs?: number }) {
     this.config = params.config;
+    this.browserIdleMs = params.browserIdleMs ?? DEFAULT_BROWSER_IDLE_MS;
   }
 
   async screenshotHtml(params: {
@@ -23,18 +51,16 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     theme: DiffTheme;
   }): Promise<string> {
     await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
-    const executablePath = await resolveBrowserExecutablePath(this.config);
-    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    const lease = await acquireSharedBrowser({
+      config: this.config,
+      idleMs: this.browserIdleMs,
+    });
+    let page: Awaited<ReturnType<BrowserInstance["newPage"]>> | undefined;
 
     try {
-      browser = await chromium.launch({
-        headless: true,
-        ...(executablePath ? { executablePath } : {}),
-        args: ["--disable-dev-shm-usage", "--disable-gpu"],
-      });
-
-      const page = await browser.newPage({
+      page = await lease.browser.newPage({
         viewport: { width: 1200, height: 900 },
+        deviceScaleFactor: 2,
         colorScheme: params.theme,
       });
       await page.route(`http://127.0.0.1${VIEWER_ASSET_PREFIX}*`, async (route) => {
@@ -96,14 +122,29 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         throw new Error("Diff frame was lost after resizing.");
       }
 
+      const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
+
+      // Raw clip in CSS px
+      const rawX = Math.max(box.x - padding, 0);
+      const rawY = Math.max(box.y - padding, 0);
+      const rawRight = rawX + clipWidth;
+      const rawBottom = rawY + clipHeight;
+
+      // Snap to device-pixel grid to avoid soft text from sub-pixel crop
+      const x = Math.floor(rawX * dpr) / dpr;
+      const y = Math.floor(rawY * dpr) / dpr;
+      const right = Math.ceil(rawRight * dpr) / dpr;
+      const bottom = Math.ceil(rawBottom * dpr) / dpr;
+
       await page.screenshot({
         path: params.outputPath,
         type: "png",
+        scale: "device",
         clip: {
-          x: Math.max(box.x - padding, 0),
-          y: Math.max(box.y - padding, 0),
-          width: clipWidth,
-          height: clipHeight,
+          x,
+          y,
+          width: right - x,
+          height: bottom - y,
         },
       });
       return params.outputPath;
@@ -113,9 +154,15 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         `Diff image rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
       );
     } finally {
-      await browser?.close().catch(() => {});
+      await page?.close().catch(() => {});
+      await lease.release();
     }
   }
+}
+
+export async function resetSharedBrowserStateForTests(): Promise<void> {
+  executablePathCache = null;
+  await closeSharedBrowser();
 }
 
 function injectBaseHref(html: string): string {
@@ -126,6 +173,36 @@ function injectBaseHref(html: string): string {
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {
+  const cacheKey = JSON.stringify({
+    configPath: config.browser?.executablePath?.trim() || "",
+    env: [
+      process.env.OPENCLAW_BROWSER_EXECUTABLE_PATH ?? "",
+      process.env.BROWSER_EXECUTABLE_PATH ?? "",
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? "",
+    ],
+    path: process.env.PATH ?? "",
+  });
+
+  if (executablePathCache?.key === cacheKey) {
+    return await executablePathCache.valuePromise;
+  }
+
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error) => {
+    if (executablePathCache?.valuePromise === valuePromise) {
+      executablePathCache = null;
+    }
+    throw error;
+  });
+  executablePathCache = {
+    key: cacheKey,
+    valuePromise,
+  };
+  return await valuePromise;
+}
+
+async function resolveBrowserExecutablePathUncached(
+  config: OpenClawConfig,
+): Promise<string | undefined> {
   const configPath = config.browser?.executablePath?.trim();
   if (configPath) {
     await assertExecutable(configPath, "browser.executablePath");
@@ -153,6 +230,99 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
   }
 
   return undefined;
+}
+
+async function acquireSharedBrowser(params: {
+  config: OpenClawConfig;
+  idleMs: number;
+}): Promise<BrowserLease> {
+  const executablePath = await resolveBrowserExecutablePath(params.config);
+  const desiredKey = executablePath || SHARED_BROWSER_KEY;
+  if (sharedBrowserState && sharedBrowserState.key !== desiredKey) {
+    await closeSharedBrowser();
+  }
+
+  if (!sharedBrowserState) {
+    const browserPromise = chromium
+      .launch({
+        headless: true,
+        ...(executablePath ? { executablePath } : {}),
+        args: ["--disable-dev-shm-usage"],
+      })
+      .then((browser) => {
+        if (sharedBrowserState?.browserPromise === browserPromise) {
+          sharedBrowserState.browser = browser;
+          browser.on("disconnected", () => {
+            if (sharedBrowserState?.browser === browser) {
+              clearIdleTimer(sharedBrowserState);
+              sharedBrowserState = null;
+            }
+          });
+        }
+        return browser;
+      })
+      .catch((error) => {
+        if (sharedBrowserState?.browserPromise === browserPromise) {
+          sharedBrowserState = null;
+        }
+        throw error;
+      });
+
+    sharedBrowserState = {
+      browserPromise,
+      idleTimer: null,
+      key: desiredKey,
+      users: 0,
+    };
+  }
+
+  clearIdleTimer(sharedBrowserState);
+  const state = sharedBrowserState;
+  const browser = await state.browserPromise;
+  state.users += 1;
+
+  let released = false;
+  return {
+    browser,
+    release: async () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      state.users = Math.max(0, state.users - 1);
+      if (state.users === 0) {
+        scheduleIdleBrowserClose(state, params.idleMs);
+      }
+    },
+  };
+}
+
+function scheduleIdleBrowserClose(state: SharedBrowserState, idleMs: number): void {
+  clearIdleTimer(state);
+  state.idleTimer = setTimeout(() => {
+    if (sharedBrowserState === state && state.users === 0) {
+      void closeSharedBrowser();
+    }
+  }, idleMs);
+}
+
+function clearIdleTimer(state: SharedBrowserState): void {
+  if (!state.idleTimer) {
+    return;
+  }
+  clearTimeout(state.idleTimer);
+  state.idleTimer = null;
+}
+
+async function closeSharedBrowser(): Promise<void> {
+  const state = sharedBrowserState;
+  if (!state) {
+    return;
+  }
+  sharedBrowserState = null;
+  clearIdleTimer(state);
+  const browser = state.browser ?? (await state.browserPromise.catch(() => null));
+  await browser?.close().catch(() => {});
 }
 
 async function collectExecutableCandidates(): Promise<string[]> {
