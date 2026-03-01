@@ -329,18 +329,15 @@ describe("doctor config flow", () => {
       expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
       expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
       expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
-      expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
-      expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
-      expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
-      expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
-        "1111",
-      ]);
-      expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
-        "1212",
-      ]);
+      const work = cfg.channels.discord.accounts.work;
+      expect(work.allowFrom).toEqual(["555"]);
+      expect(work.dm.allowFrom).toEqual(["666"]);
+      expect(work.dm.groupChannels).toEqual(["777"]);
+      expect(work.execApprovals.approvers).toEqual(["888"]);
+      expect(work.guilds["200"].users).toEqual(["999"]);
+      expect(work.guilds["200"].roles).toEqual(["1010"]);
+      expect(work.guilds["200"].channels.help.users).toEqual(["1111"]);
+      expect(work.guilds["200"].channels.help.roles).toEqual(["1212"]);
     });
   });
 

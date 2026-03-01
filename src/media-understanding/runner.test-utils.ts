@@ -19,15 +19,16 @@ export async function withMediaFixture(
   },
   run: (params: MediaFixtureParams) => Promise<void>,
 ) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-fixture-"));
   const tmpPath = path.join(
-    os.tmpdir(),
+    tmpDir,
     `${params.filePrefix}-${Date.now().toString()}.${params.extension}`,
   );
   await fs.writeFile(tmpPath, params.fileContents);
   const ctx = { MediaPath: tmpPath, MediaType: params.mediaType };
   const media = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
+    localPathRoots: [tmpDir],
   });
 
   try {
@@ -37,6 +38,7 @@ export async function withMediaFixture(
   } finally {
     await cache.cleanup();
     await fs.unlink(tmpPath).catch(() => {});
+    await fs.rmdir(tmpDir).catch(() => {});
   }
 }
 
