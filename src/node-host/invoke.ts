@@ -532,6 +532,18 @@ export async function handleInvoke(
     return;
   }
 
+  if (command === "shutdown") {
+    const graceful = frame.paramsJSON
+      ? decodeParams<{ graceful?: boolean }>(frame.paramsJSON).graceful !== false
+      : true;
+    await sendInvokeResult(client, frame, { ok: true });
+    // Trigger graceful shutdown via SIGTERM (handled by existing signal handlers)
+    setTimeout(() => {
+      process.kill(process.pid, graceful ? "SIGTERM" : "SIGTERM");
+    }, 200);
+    return;
+  }
+
   if (command !== "system.run") {
     await sendInvokeResult(client, frame, {
       ok: false,

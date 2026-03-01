@@ -183,6 +183,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       "system.which",
       "system.execApprovals.get",
       "system.execApprovals.set",
+      "shutdown",
       ...(browserProxyEnabled ? ["browser.proxy"] : []),
       ...(marketplaceEnabled ? ["marketplace.proxy"] : []),
     ],
