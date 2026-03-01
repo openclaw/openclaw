@@ -10,6 +10,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../../config/config.js";
+import { INCLUDE_KEY } from "../../config/includes.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   channelToNpmTag,
@@ -501,6 +502,58 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 }
 
+function hasIncludeDirectives(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasIncludeDirectives(entry));
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, INCLUDE_KEY)) {
+    return true;
+  }
+  return Object.values(record).some((entry) => hasIncludeDirectives(entry));
+}
+
+async function touchConfigMetaAfterUpdate(params: {
+  jsonMode: boolean;
+  updatedVersion?: string | null;
+}): Promise<void> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.exists) {
+    return;
+  }
+  if (!snapshot.valid) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.warn("Skipping config metadata refresh: config is invalid (run openclaw doctor)."),
+      );
+    }
+    return;
+  }
+  if (hasIncludeDirectives(snapshot.parsed)) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.warn(
+          "Skipping config metadata refresh: config uses $include (run openclaw doctor to migrate/update config explicitly).",
+        ),
+      );
+    }
+    return;
+  }
+
+  try {
+    await writeConfigFile(snapshot.config, {
+      metaVersionOverride: params.updatedVersion ?? undefined,
+    });
+  } catch (err) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(theme.warn(`Failed to refresh config metadata: ${String(err)}`));
+    }
+  }
+}
+
 async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
@@ -905,6 +958,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     refreshServiceEnv: refreshGatewayServiceEnv,
     gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
     restartScriptPath,
+  });
+
+  await touchConfigMetaAfterUpdate({
+    jsonMode: Boolean(opts.json),
+    updatedVersion: result.after?.version ?? targetVersion ?? null,
   });
 
   if (!opts.json) {

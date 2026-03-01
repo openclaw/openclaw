@@ -131,6 +131,11 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Optional version to stamp into meta.lastTouchedVersion.
+   * Defaults to the current runtime VERSION when omitted.
+   */
+  metaVersionOverride?: string;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -559,13 +564,14 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
+function stampConfigVersion(cfg: OpenClawConfig, versionOverride?: string): OpenClawConfig {
   const now = new Date().toISOString();
+  const version = versionOverride?.trim() || VERSION;
   return {
     ...cfg,
     meta: {
       ...cfg.meta,
-      lastTouchedVersion: VERSION,
+      lastTouchedVersion: version,
       lastTouchedAt: now,
     },
   };
@@ -1128,7 +1134,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const stampedOutputConfig = stampConfigVersion(outputConfig, options.metaVersionOverride);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
@@ -1396,5 +1402,6 @@ export async function writeConfigFile(
   await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
+    metaVersionOverride: options.metaVersionOverride,
   });
 }
