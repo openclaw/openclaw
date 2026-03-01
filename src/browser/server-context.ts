@@ -139,7 +139,13 @@ function createProfileContext(
   };
 
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
-    if (profile.driver !== "openclaw" || !profile.cdpIsLoopback || state().resolved.attachOnly) {
+    const profileState = getProfileState();
+    if (
+      profile.driver !== "openclaw" ||
+      !profile.cdpIsLoopback ||
+      state().resolved.attachOnly ||
+      !profileState.running
+    ) {
       return;
     }
 
