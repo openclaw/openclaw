@@ -450,7 +450,7 @@ describe("createAcpReplyProjector", () => {
           enabled: true,
           stream: {
             deliveryMode: "live",
-            maxToolSummaryChars: 48,
+            maxSessionUpdateChars: 48,
             tagVisibility: {
               tool_call: true,
               tool_call_update: true,
@@ -649,7 +649,7 @@ describe("createAcpReplyProjector", () => {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
             deliveryMode: "live",
-            maxTurnChars: 5,
+            maxOutputChars: 5,
           },
         },
       }),

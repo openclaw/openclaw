@@ -8,9 +8,8 @@ const DEFAULT_ACP_REPEAT_SUPPRESSION = true;
 const DEFAULT_ACP_DELIVERY_MODE = "final_only";
 const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR = "paragraph";
 const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
-const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
-const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
-const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
+const DEFAULT_ACP_MAX_OUTPUT_CHARS = 24_000;
+const DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS = 320;
 
 export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_message_chunk: true,
@@ -32,9 +31,8 @@ export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
   hiddenBoundarySeparator: AcpHiddenBoundarySeparator;
   repeatSuppression: boolean;
-  maxTurnChars: number;
-  maxToolSummaryChars: number;
-  maxStatusChars: number;
+  maxOutputChars: number;
+  maxSessionUpdateChars: number;
   tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
 };
 
@@ -109,22 +107,18 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
       hiddenBoundaryFallback,
     ),
     repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
-    maxTurnChars: clampPositiveInteger(stream?.maxTurnChars, DEFAULT_ACP_MAX_TURN_CHARS, {
+    maxOutputChars: clampPositiveInteger(stream?.maxOutputChars, DEFAULT_ACP_MAX_OUTPUT_CHARS, {
       min: 1,
       max: 500_000,
     }),
-    maxToolSummaryChars: clampPositiveInteger(
-      stream?.maxToolSummaryChars,
-      DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS,
+    maxSessionUpdateChars: clampPositiveInteger(
+      stream?.maxSessionUpdateChars,
+      DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS,
       {
         min: 64,
         max: 8_000,
       },
     ),
-    maxStatusChars: clampPositiveInteger(stream?.maxStatusChars, DEFAULT_ACP_MAX_STATUS_CHARS, {
-      min: 64,
-      max: 8_000,
-    }),
     tagVisibility: stream?.tagVisibility ?? {},
   };
 }
