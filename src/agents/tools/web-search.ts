@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "linkup"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -41,6 +41,9 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const DEFAULT_LINKUP_BASE_URL = "https://api.linkup.so/v1";
+const DEFAULT_LINKUP_DEPTH = "standard" as const;
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -78,7 +81,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'. Linkup supports date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
     }),
   ),
 });
@@ -192,6 +195,31 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type LinkupConfig = {
+  apiKey?: string;
+  depth?: "standard" | "deep";
+  outputType?: "sourcedAnswer" | "searchResults";
+  baseUrl?: string;
+};
+
+type LinkupSourcedAnswerResponse = {
+  answer?: string;
+  sources?: Array<{
+    name?: string;
+    url?: string;
+    snippet?: string;
+  }>;
+};
+
+type LinkupSearchResultsResponse = {
+  results?: Array<{
+    type?: string;
+    name?: string;
+    url?: string;
+    content?: string;
+  }>;
+};
+
 function extractGrokContent(data: GrokSearchResponse): {
   text: string | undefined;
   annotationCitations: string[];
@@ -294,6 +322,14 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
 }
 
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+  if (provider === "linkup") {
+    return {
+      error: "missing_linkup_api_key",
+      message:
+        "web_search (linkup) needs a Linkup API key. Set LINKUP_API_KEY in the Gateway environment, or configure tools.web.search.linkup.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -350,6 +386,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "kimi") {
     return "kimi";
   }
+  if (raw === "linkup") {
+    return "linkup";
+  }
   if (raw === "brave") {
     return "brave";
   }
@@ -395,6 +434,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";
+    }
+    // 6. Linkup
+    const linkupAutoConfig = resolveLinkupConfig(search);
+    if (resolveLinkupApiKey(linkupAutoConfig)) {
+      defaultRuntime.log(
+        'web_search: no provider configured, auto-detected "linkup" from available API keys',
+      );
+      return "linkup";
     }
   }
 
@@ -728,6 +775,50 @@ async function resolveRedirectUrl(url: string): Promise<string> {
   } catch {
     return url;
   }
+}
+
+function resolveLinkupConfig(search?: WebSearchConfig): LinkupConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const linkup = "linkup" in search ? search.linkup : undefined;
+  if (!linkup || typeof linkup !== "object") {
+    return {};
+  }
+  return linkup as LinkupConfig;
+}
+
+function resolveLinkupApiKey(linkup?: LinkupConfig): string | undefined {
+  const fromConfig = normalizeApiKey(linkup?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.LINKUP_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveLinkupDepth(linkup?: LinkupConfig): "standard" | "deep" {
+  const raw = linkup?.depth;
+  if (raw === "deep") {
+    return "deep";
+  }
+  return DEFAULT_LINKUP_DEPTH;
+}
+
+function resolveLinkupOutputType(linkup?: LinkupConfig): "sourcedAnswer" | "searchResults" {
+  const raw = linkup?.outputType;
+  if (raw === "searchResults") {
+    return "searchResults";
+  }
+  return "sourcedAnswer";
+}
+
+function resolveLinkupBaseUrl(linkup?: LinkupConfig): string {
+  const fromConfig =
+    linkup && "baseUrl" in linkup && typeof linkup.baseUrl === "string"
+      ? linkup.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_LINKUP_BASE_URL;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -1135,6 +1226,89 @@ async function runKimiSearch(params: {
   };
 }
 
+type LinkupSearchResult =
+  | { mode: "sourcedAnswer"; content: string; citations: string[] }
+  | {
+      mode: "searchResults";
+      results: Array<{
+        title: string;
+        url: string;
+        description: string;
+        siteName: string | undefined;
+      }>;
+    };
+
+async function runLinkupSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  depth: "standard" | "deep";
+  outputType: "sourcedAnswer" | "searchResults";
+  count: number;
+  timeoutSeconds: number;
+  freshness?: string;
+}): Promise<LinkupSearchResult> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/search`;
+
+  const body: Record<string, unknown> = {
+    q: params.query,
+    depth: params.depth,
+    outputType: params.outputType,
+    maxResults: params.count,
+  };
+
+  // Map freshness date range (YYYY-MM-DDtoYYYY-MM-DD) to Linkup fromDate/toDate
+  if (params.freshness) {
+    const rangeMatch = params.freshness.match(/^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/);
+    if (rangeMatch) {
+      body.fromDate = rangeMatch[1];
+      body.toDate = rangeMatch[2];
+    }
+  }
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`Linkup API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  if (params.outputType === "searchResults") {
+    const data = (await res.json()) as LinkupSearchResultsResponse;
+    const results = (data.results ?? [])
+      .filter((r) => r.type !== "image")
+      .map((entry) => {
+        const title = entry.name ?? "";
+        const url = entry.url ?? "";
+        return {
+          title: title ? wrapWebContent(title, "web_search") : "",
+          url,
+          description: entry.content ? wrapWebContent(entry.content, "web_search") : "",
+          siteName: resolveSiteName(url),
+        };
+      });
+    return { mode: "searchResults", results };
+  }
+
+  const data = (await res.json()) as LinkupSourcedAnswerResponse;
+  const content = data.answer ?? "No response";
+  const citations = (data.sources ?? [])
+    .map((s) => s.url)
+    .filter((url): url is string => typeof url === "string" && url.length > 0);
+
+  return { mode: "sourcedAnswer", content, citations };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1153,6 +1327,9 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  linkupBaseUrl?: string;
+  linkupDepth?: "standard" | "deep";
+  linkupOutputType?: "sourcedAnswer" | "searchResults";
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -1163,7 +1340,9 @@ async function runWebSearch(params: {
           ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "gemini"
             ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
-            : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+            : params.provider === "linkup"
+              ? `${params.provider}:${params.query}:${params.linkupDepth ?? DEFAULT_LINKUP_DEPTH}:${params.linkupOutputType ?? "sourcedAnswer"}:${params.count}:${params.freshness || "default"}`
+              : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1281,6 +1460,58 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "linkup") {
+    const linkupOutputType = params.linkupOutputType ?? "sourcedAnswer";
+    const result = await runLinkupSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.linkupBaseUrl ?? DEFAULT_LINKUP_BASE_URL,
+      depth: params.linkupDepth ?? DEFAULT_LINKUP_DEPTH,
+      outputType: linkupOutputType,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+      freshness: params.freshness,
+    });
+
+    if (result.mode === "searchResults") {
+      const payload = {
+        query: params.query,
+        provider: params.provider,
+        depth: params.linkupDepth ?? DEFAULT_LINKUP_DEPTH,
+        outputType: linkupOutputType,
+        count: result.results.length,
+        tookMs: Date.now() - start,
+        externalContent: {
+          untrusted: true,
+          source: "web_search",
+          provider: params.provider,
+          wrapped: true,
+        },
+        results: result.results,
+      };
+      writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    }
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      depth: params.linkupDepth ?? DEFAULT_LINKUP_DEPTH,
+      outputType: linkupOutputType,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(result.content),
+      citations: result.citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1369,6 +1600,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const linkupConfig = resolveLinkupConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1379,7 +1611,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "linkup"
+              ? resolveLinkupOutputType(linkupConfig) === "searchResults"
+                ? "Search the web using Linkup. Returns titles, URLs, and content snippets. Supports standard and deep search depths."
+                : "Search the web using Linkup. Returns AI-synthesized answers with citations from real-time web search. Supports standard and deep search depths."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1398,7 +1634,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "linkup"
+                  ? resolveLinkupApiKey(linkupConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1432,10 +1670,16 @@ export function createWebSearchTool(options?: {
       const search_lang = normalizedBraveLanguageParams.search_lang;
       const ui_lang = normalizedBraveLanguageParams.ui_lang;
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "linkup"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
+          message:
+            "freshness is only supported by the Brave, Perplexity, and Linkup web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1470,6 +1714,9 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        linkupBaseUrl: resolveLinkupBaseUrl(linkupConfig),
+        linkupDepth: resolveLinkupDepth(linkupConfig),
+        linkupOutputType: resolveLinkupOutputType(linkupConfig),
       });
       return jsonResult(result);
     },
@@ -1494,4 +1741,8 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl,
+  resolveLinkupApiKey,
+  resolveLinkupDepth,
+  resolveLinkupOutputType,
+  resolveLinkupBaseUrl,
 } as const;

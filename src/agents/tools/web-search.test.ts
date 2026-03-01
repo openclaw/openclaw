@@ -18,6 +18,10 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveLinkupApiKey,
+  resolveLinkupDepth,
+  resolveLinkupOutputType,
+  resolveLinkupBaseUrl,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -320,5 +324,55 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search linkup config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveLinkupApiKey({ apiKey: "linkup-test-key" })).toBe("linkup-test-key");
+  });
+
+  it("falls back to LINKUP_API_KEY env var", () => {
+    withEnv({ LINKUP_API_KEY: "env-linkup-key" }, () => {
+      expect(resolveLinkupApiKey({})).toBe("env-linkup-key");
+    });
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ LINKUP_API_KEY: undefined }, () => {
+      expect(resolveLinkupApiKey({})).toBeUndefined();
+      expect(resolveLinkupApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("defaults depth to standard", () => {
+    expect(resolveLinkupDepth({})).toBe("standard");
+    expect(resolveLinkupDepth(undefined)).toBe("standard");
+  });
+
+  it("uses config depth when provided", () => {
+    expect(resolveLinkupDepth({ depth: "deep" })).toBe("deep");
+    expect(resolveLinkupDepth({ depth: "standard" })).toBe("standard");
+  });
+
+  it("defaults outputType to sourcedAnswer", () => {
+    expect(resolveLinkupOutputType({})).toBe("sourcedAnswer");
+    expect(resolveLinkupOutputType(undefined)).toBe("sourcedAnswer");
+  });
+
+  it("uses config outputType when provided", () => {
+    expect(resolveLinkupOutputType({ outputType: "searchResults" })).toBe("searchResults");
+    expect(resolveLinkupOutputType({ outputType: "sourcedAnswer" })).toBe("sourcedAnswer");
+  });
+
+  it("defaults baseUrl to Linkup API", () => {
+    expect(resolveLinkupBaseUrl({})).toBe("https://api.linkup.so/v1");
+    expect(resolveLinkupBaseUrl(undefined)).toBe("https://api.linkup.so/v1");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveLinkupBaseUrl({ baseUrl: "https://custom.linkup.example/v1" })).toBe(
+      "https://custom.linkup.example/v1",
+    );
   });
 });

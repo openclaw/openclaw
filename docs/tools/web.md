@@ -1,10 +1,11 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, Gemini Google Search grounding)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity, Grok, Gemini, Kimi, Linkup)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
   - You want to use Perplexity Sonar for web search
   - You want to use Gemini with Google Search grounding
+  - You want to use Linkup for web search
 title: "Web Tools"
 ---
 
@@ -12,7 +13,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, or Gemini with Google Search grounding.
+- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, xAI Grok, Gemini with Google Search grounding, Kimi, or Linkup.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -23,7 +24,10 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 - `web_search` calls your configured provider and returns results.
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
+  - **Grok**: returns AI-synthesized answers with citations via xAI.
   - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
+  - **Kimi**: returns AI-synthesized answers with citations via Moonshot.
+  - **Linkup**: returns AI-synthesized answers with citations (default), or structured results. Supports standard and deep search depths.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -31,11 +35,14 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 ## Choosing a search provider
 
-| Provider            | Pros                                         | Cons                                     | API Key                                      |
-| ------------------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
-| **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
-| **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
+| Provider            | Pros                                                        | Cons                                     | API Key                                      |
+| ------------------- | ----------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| **Brave** (default) | Fast, structured results, free tier                         | Traditional search results               | `BRAVE_API_KEY`                              |
+| **Perplexity**      | AI-synthesized answers, citations, real-time                | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **Grok**            | AI-synthesized answers, citations via xAI                   | Requires xAI API access                  | `XAI_API_KEY`                                |
+| **Gemini**          | Google Search grounding, AI-synthesized                     | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
+| **Kimi**            | AI-synthesized answers, built-in web search                 | Requires Moonshot API key                | `KIMI_API_KEY` or `MOONSHOT_API_KEY`         |
+| **Linkup**          | Both modes (answers + raw results), deep search, date range | Requires Linkup API key                  | `LINKUP_API_KEY`                             |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
@@ -47,6 +54,7 @@ If no `provider` is explicitly set, OpenClaw auto-detects which provider to use 
 2. **Gemini** — `GEMINI_API_KEY` env var or `search.gemini.apiKey` config
 3. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `search.perplexity.apiKey` config
 4. **Grok** — `XAI_API_KEY` env var or `search.grok.apiKey` config
+5. **Linkup** — `LINKUP_API_KEY` env var or `search.linkup.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -59,7 +67,7 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave", // or "perplexity" or "gemini"
+        provider: "brave", // or "perplexity", "grok", "gemini", "kimi", "linkup"
       },
     },
   },
@@ -78,6 +86,25 @@ Example: switch to Perplexity Sonar (direct API):
           apiKey: "pplx-...",
           baseUrl: "https://api.perplexity.ai",
           model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
+}
+```
+
+Example: switch to Linkup:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "linkup",
+        linkup: {
+          apiKey: "...", // or set LINKUP_API_KEY env var
+          depth: "standard", // "standard" (fast) or "deep" (thorough)
+          outputType: "sourcedAnswer", // "sourcedAnswer" or "searchResults"
         },
       },
     },
@@ -208,6 +235,8 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
+  - **Linkup**: `LINKUP_API_KEY` or `tools.web.search.linkup.apiKey`
 
 ### Config
 
@@ -237,6 +266,7 @@ Search the web using your configured provider.
 - `freshness` (optional): filter by discovery time
   - Brave: `pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`
   - Perplexity: `pd`, `pw`, `pm`, `py`
+  - Linkup: `YYYY-MM-DDtoYYYY-MM-DD` (date range)
 
 **Examples:**
 
@@ -321,4 +351,4 @@ Notes:
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
-- If the Brave key is missing, `web_search` returns a short setup hint with a docs link.
+- If the API key for the configured provider is missing, `web_search` returns a short setup hint with a docs link.

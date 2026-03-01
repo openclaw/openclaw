@@ -139,7 +139,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Supported providers: Brave (default), Perplexity, Grok, Linkup. Set provider via tools.web.search.provider in openclaw.json.",
+      "This wizard configures Brave; for other providers set the matching API key env var (PERPLEXITY_API_KEY, XAI_API_KEY, LINKUP_API_KEY).",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
