@@ -1356,7 +1356,10 @@ export async function handleFeishuMessage(params: {
               }),
           });
         } else {
-          // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply)
+          // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
+          // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
+          // mutate observer sessions — only the active agent should execute commands.
+          delete (agentCtx as Record<string, unknown>).CommandAuthorized;
           const noopDispatcher = {
             sendToolResult: () => false,
             sendBlockReply: () => false,
