@@ -102,6 +102,7 @@ public struct AgentDeepLink: Codable, Sendable, Equatable {
     public let channel: String?
     public let timeoutSeconds: Int?
     public let key: String?
+    public let metadata: [String: String]?
 
     public init(
         message: String,
@@ -111,7 +112,8 @@ public struct AgentDeepLink: Codable, Sendable, Equatable {
         to: String?,
         channel: String?,
         timeoutSeconds: Int?,
-        key: String?)
+        key: String?,
+        metadata: [String: String]? = nil)
     {
         self.message = message
         self.sessionKey = sessionKey
@@ -121,6 +123,7 @@ public struct AgentDeepLink: Codable, Sendable, Equatable {
         self.channel = channel
         self.timeoutSeconds = timeoutSeconds
         self.key = key
+        self.metadata = metadata
     }
 }
 

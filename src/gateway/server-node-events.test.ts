@@ -525,6 +525,58 @@ describe("agent request events", () => {
     );
   });
 
+  it("passes metadata as extraSystemPrompt when present", async () => {
+    const ctx = buildCtx();
+
+    await handleNodeEvent(ctx, "node-meta", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "hello with meta",
+        sessionKey: "agent:main:main",
+        metadata: { inputMode: "voice", locale: "en-US" },
+      }),
+    });
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const [opts] = agentCommandMock.mock.calls[0] ?? [];
+    expect(opts?.extraSystemPrompt).toBeDefined();
+    expect(opts?.extraSystemPrompt).toContain("## Node Request Metadata (trusted)");
+    expect(opts?.extraSystemPrompt).toContain('"inputMode":"voice"');
+    expect(opts?.extraSystemPrompt).toContain('"locale":"en-US"');
+  });
+
+  it("omits extraSystemPrompt when metadata is null or empty", async () => {
+    const ctx = buildCtx();
+
+    await handleNodeEvent(ctx, "node-meta-null", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "no meta null",
+        sessionKey: "agent:main:main",
+        metadata: null,
+      }),
+    });
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const [opts1] = agentCommandMock.mock.calls[0] ?? [];
+    expect(opts1?.extraSystemPrompt).toBeUndefined();
+
+    agentCommandMock.mockClear();
+
+    await handleNodeEvent(ctx, "node-meta-empty", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "no meta empty",
+        sessionKey: "agent:main:main",
+        metadata: {},
+      }),
+    });
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const [opts2] = agentCommandMock.mock.calls[0] ?? [];
+    expect(opts2?.extraSystemPrompt).toBeUndefined();
+  });
+
   it("reuses the current session route when delivery target is omitted", async () => {
     const ctx = buildCtx();
     loadSessionEntryMock.mockReturnValueOnce({
