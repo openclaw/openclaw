@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripTrailingSilentReplyToken,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -54,5 +58,42 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("stripTrailingSilentReplyToken", () => {
+  it("strips trailing NO_REPLY after a newline", () => {
+    const { text, didStrip } = stripTrailingSilentReplyToken(
+      "File's there. Same false failure as before.\n\nNO_REPLY",
+    );
+    expect(didStrip).toBe(true);
+    expect(text).toBe("File's there. Same false failure as before.");
+  });
+
+  it("strips trailing NO_REPLY with surrounding whitespace", () => {
+    const { text, didStrip } = stripTrailingSilentReplyToken("Done.\n  NO_REPLY  ");
+    expect(didStrip).toBe(true);
+    expect(text).toBe("Done.");
+  });
+
+  it("does not strip NO_REPLY that is the entire message", () => {
+    const { text, didStrip } = stripTrailingSilentReplyToken("NO_REPLY");
+    expect(didStrip).toBe(false);
+    expect(text).toBe("NO_REPLY");
+  });
+
+  it("does not strip NO_REPLY embedded mid-sentence", () => {
+    const { text, didStrip } = stripTrailingSilentReplyToken("Please NO_REPLY to this");
+    expect(didStrip).toBe(false);
+    expect(text).toBe("Please NO_REPLY to this");
+  });
+
+  it("works with a custom token", () => {
+    const { text, didStrip } = stripTrailingSilentReplyToken(
+      "Checked inbox.\nHEARTBEAT_OK",
+      "HEARTBEAT_OK",
+    );
+    expect(didStrip).toBe(true);
+    expect(text).toBe("Checked inbox.");
   });
 });

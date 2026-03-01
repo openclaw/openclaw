@@ -255,7 +255,11 @@ export type { RoutePeerKind } from "../routing/resolve-route.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
-export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
+export {
+  SILENT_REPLY_TOKEN,
+  isSilentReplyText,
+  stripTrailingSilentReplyToken,
+} from "../auto-reply/tokens.js";
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
   approveDevicePairing,

@@ -1,6 +1,11 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripTrailingSilentReplyToken,
+} from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
@@ -36,6 +41,18 @@ export function normalizeReplyPayload(
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
+
+  // Strip a trailing NO_REPLY token from substantive content before checking
+  // for an exact-match silent reply. This handles the case where the LLM
+  // appends NO_REPLY to real content instead of returning it as the entire
+  // message (#30916).
+  if (text && !isSilentReplyText(text, silentToken)) {
+    const stripped = stripTrailingSilentReplyToken(text, silentToken);
+    if (stripped.didStrip) {
+      text = stripped.text;
+    }
+  }
+
   if (text && isSilentReplyText(text, silentToken)) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
