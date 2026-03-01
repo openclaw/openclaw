@@ -161,7 +161,7 @@ export function renderChatControls(state: AppViewState) {
             (entry) => entry.key,
             (entry) =>
               html`<option value=${entry.key} title=${entry.key}>
-                ${entry.displayName ?? entry.key}
+                ${entry.isMain ? `★ ${entry.displayName ?? entry.key}` : (entry.displayName ?? entry.key)}
               </option>`,
           )}
         </select>
@@ -355,7 +355,7 @@ function resolveSessionOptions(
   mainSessionKey?: string | null,
 ) {
   const seen = new Set<string>();
-  const options: Array<{ key: string; displayName?: string }> = [];
+  const options: Array<{ key: string; displayName?: string; isMain?: boolean }> = [];
 
   const resolvedMain = mainSessionKey && sessions?.sessions?.find((s) => s.key === mainSessionKey);
   const resolvedCurrent = sessions?.sessions?.find((s) => s.key === sessionKey);
@@ -366,6 +366,7 @@ function resolveSessionOptions(
     options.push({
       key: mainSessionKey,
       displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
+      isMain: true,
     });
   }
 
@@ -375,6 +376,7 @@ function resolveSessionOptions(
     options.push({
       key: sessionKey,
       displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
+      isMain: isMainSession(sessionKey),
     });
   }
 
@@ -386,12 +388,18 @@ function resolveSessionOptions(
         options.push({
           key: s.key,
           displayName: resolveSessionDisplayName(s.key, s),
+          isMain: isMainSession(s.key),
         });
       }
     }
   }
 
   return options;
+}
+
+/** Check if a session key represents the main session. */
+export function isMainSession(key: string): boolean {
+  return key === "main" || key === "agent:main:main";
 }
 
 const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
