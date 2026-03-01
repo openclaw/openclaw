@@ -325,6 +325,27 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
   });
+
+  it("allows ws:// remote URL when transport is ssh with sshTarget configured", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: {
+          url: "ws://203.0.113.9:18789",
+          transport: "ssh",
+          sshTarget: "root@203.0.113.9",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://203.0.113.9:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
+  });
 });
 
 describe("callGateway error details", () => {

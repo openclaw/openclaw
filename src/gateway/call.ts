@@ -127,6 +127,12 @@ export function buildGatewayConnectionDetails(
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+  const usesSshTunnelTransport =
+    isRemoteMode &&
+    !urlOverride &&
+    remote?.transport === "ssh" &&
+    typeof remote?.sshTarget === "string" &&
+    remote.sshTarget.trim().length > 0;
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
     ? "cli --url"
@@ -143,7 +149,7 @@ export function buildGatewayConnectionDetails(
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  if (!isSecureWebSocketUrl(url) && !usesSshTunnelTransport) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
