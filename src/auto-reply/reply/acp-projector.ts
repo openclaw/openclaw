@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import type { ReplyPayload } from "../types.js";
 import {
+  type AcpHiddenBoundarySeparator,
   isAcpTagVisible,
   resolveAcpProjectionSettings,
   resolveAcpStreamingConfig,
@@ -15,6 +16,7 @@ import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
 
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
+const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
@@ -54,6 +56,47 @@ function normalizeToolStatus(status: string | undefined): string | undefined {
   }
   const normalized = status.trim().toLowerCase();
   return normalized || undefined;
+}
+
+function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
+  if (mode === "space") {
+    return " ";
+  }
+  if (mode === "newline") {
+    return "\n";
+  }
+  if (mode === "paragraph") {
+    return "\n\n";
+  }
+  return "";
+}
+
+function shouldInsertSeparator(params: {
+  separator: string;
+  previousTail: string | undefined;
+  nextText: string;
+}): boolean {
+  if (!params.separator) {
+    return false;
+  }
+  if (!params.nextText) {
+    return false;
+  }
+  const firstChar = params.nextText[0];
+  if (typeof firstChar === "string" && /\s/.test(firstChar)) {
+    return false;
+  }
+  const tail = params.previousTail ?? "";
+  if (!tail) {
+    return false;
+  }
+  if (params.separator === " " && /\s$/.test(tail)) {
+    return false;
+  }
+  if ((params.separator === "\n" || params.separator === "\n\n") && tail.endsWith("\n")) {
+    return false;
+  }
+  return true;
 }
 
 function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
@@ -114,6 +157,8 @@ export function createAcpReplyProjector(params: {
   let lastStatusHash: string | undefined;
   let lastToolHash: string | undefined;
   let lastUsageTuple: string | undefined;
+  let lastVisibleOutputTail: string | undefined;
+  let pendingHiddenBoundary = false;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
 
@@ -124,6 +169,8 @@ export function createAcpReplyProjector(params: {
     lastStatusHash = undefined;
     lastToolHash = undefined;
     lastUsageTuple = undefined;
+    lastVisibleOutputTail = undefined;
+    pendingHiddenBoundary = false;
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
   };
@@ -291,10 +338,21 @@ export function createAcpReplyProjector(params: {
       if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
-      const text = event.text;
+      let text = event.text;
       if (!text) {
         return;
       }
+      if (
+        pendingHiddenBoundary &&
+        shouldInsertSeparator({
+          separator: resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator),
+          previousTail: lastVisibleOutputTail,
+          nextText: text,
+        })
+      ) {
+        text = `${resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator)}${text}`;
+      }
+      pendingHiddenBoundary = false;
       if (emittedTurnChars >= settings.maxTurnChars) {
         await emitTruncationNotice();
         return;
@@ -304,6 +362,7 @@ export function createAcpReplyProjector(params: {
       if (accepted.length > 0) {
         chunker.append(accepted);
         emittedTurnChars += accepted.length;
+        lastVisibleOutputTail = accepted.slice(-1);
         drainChunker(false);
       }
       if (accepted.length < text.length) {
@@ -333,6 +392,12 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "tool_call") {
+      if (!isAcpTagVisible(settings, event.tag)) {
+        if (event.tag && HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
+          pendingHiddenBoundary = true;
+        }
+        return;
+      }
       await emitToolSummary(event);
       return;
     }

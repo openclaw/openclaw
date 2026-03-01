@@ -10,6 +10,7 @@ describe("acp stream settings", () => {
   it("resolves stable defaults", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
     expect(settings.deliveryMode).toBe("final_only");
+    expect(settings.hiddenBoundarySeparator).toBe("newline");
     expect(settings.repeatSuppression).toBe(true);
     expect(settings.maxTurnChars).toBe(24_000);
     expect(settings.maxMetaEventsPerTurn).toBe(64);
@@ -22,6 +23,7 @@ describe("acp stream settings", () => {
           enabled: true,
           stream: {
             deliveryMode: "final_only",
+            hiddenBoundarySeparator: "space",
             repeatSuppression: false,
             maxTurnChars: 500,
             maxMetaEventsPerTurn: 7,
@@ -33,6 +35,7 @@ describe("acp stream settings", () => {
       }),
     );
     expect(settings.deliveryMode).toBe("final_only");
+    expect(settings.hiddenBoundarySeparator).toBe("space");
     expect(settings.repeatSuppression).toBe(false);
     expect(settings.maxTurnChars).toBe(500);
     expect(settings.maxMetaEventsPerTurn).toBe(7);
