@@ -401,11 +401,21 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
-      await logoutWeb({
-        authDir: account.authDir,
-        isLegacyAuthDir: account.isLegacyAuthDir,
-        runtime,
-      });
+      try {
+        await logoutWeb({
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+          runtime,
+        });
+      } catch (err) {
+        reconnectLogger.warn(
+          {
+            connectionId,
+            error: formatError(err),
+          },
+          "web reconnect: failed to clear cached auth after logged-out disconnect",
+        );
+      }
       runtime.error(
         `WhatsApp session logged out. Cleared cached web session. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
       );

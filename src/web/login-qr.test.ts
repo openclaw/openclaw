@@ -27,6 +27,10 @@ vi.mock("./session.js", () => {
       if (typeof outputStatus === "number") {
         return outputStatus;
       }
+      const statusCode = (current as { statusCode?: unknown })?.statusCode;
+      if (typeof statusCode === "number") {
+        return statusCode;
+      }
       const status = (current as { status?: unknown })?.status;
       if (typeof status === "number") {
         return status;
