@@ -1,4 +1,5 @@
 import {
+  normalizeGatewayPasswordInput,
   normalizeGatewayTokenInput,
   randomToken,
   validateGatewayPasswordInput,
@@ -172,7 +173,8 @@ export async function configureGatewayForOnboarding(
   let gatewayToken: string | undefined;
   if (authMode === "token") {
     if (flow === "quickstart") {
-      gatewayToken = quickstartGateway.token ?? randomToken();
+      // Normalize to reject literal "undefined"/"null" strings from config
+      gatewayToken = normalizeGatewayTokenInput(quickstartGateway.token) || randomToken();
     } else {
       const tokenInput = await prompter.text({
         message: "Gateway token (blank to generate)",
@@ -186,7 +188,7 @@ export async function configureGatewayForOnboarding(
   if (authMode === "password") {
     const password =
       flow === "quickstart" && quickstartGateway.password
-        ? quickstartGateway.password
+        ? normalizeGatewayPasswordInput(quickstartGateway.password)
         : await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,

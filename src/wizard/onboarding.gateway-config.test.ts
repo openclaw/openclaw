@@ -57,6 +57,41 @@ describe("configureGatewayForOnboarding", () => {
     };
   }
 
+  it("rejects literal 'undefined' string from config in quickstart mode", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const prompter = createPrompter({
+      selectQueue: [],
+      textQueue: [],
+    });
+    const runtime = createRuntime();
+
+    const result = await configureGatewayForOnboarding({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: {
+        hasExisting: false,
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        tailscaleMode: "off",
+        // Simulate config file with literal "undefined" string (e.g., from JS coercion bug)
+        token: "undefined",
+        password: undefined,
+        customBindHost: undefined,
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime,
+    });
+
+    // Should NOT use the literal "undefined" string; should generate a real token
+    expect(result.settings.gatewayToken).toBe("generated-token");
+    expect(result.settings.gatewayToken).not.toBe("undefined");
+  });
+
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 

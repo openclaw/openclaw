@@ -84,6 +84,17 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   return trimmed;
 }
 
+export function normalizeGatewayPasswordInput(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+  return trimmed;
+}
+
 export function validateGatewayPasswordInput(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return "Required";

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeGatewayPasswordInput,
   normalizeGatewayTokenInput,
   openUrl,
   resolveBrowserOpenCommand,
@@ -131,6 +132,31 @@ describe("normalizeGatewayTokenInput", () => {
   it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
     expect(normalizeGatewayTokenInput("undefined")).toBe("");
     expect(normalizeGatewayTokenInput("null")).toBe("");
+  });
+});
+
+describe("normalizeGatewayPasswordInput", () => {
+  it("returns empty string for undefined or null", () => {
+    expect(normalizeGatewayPasswordInput(undefined)).toBe("");
+    expect(normalizeGatewayPasswordInput(null)).toBe("");
+  });
+
+  it("returns empty string for empty or whitespace-only input", () => {
+    expect(normalizeGatewayPasswordInput("")).toBe("");
+    expect(normalizeGatewayPasswordInput("   ")).toBe("");
+  });
+
+  it("trims string input", () => {
+    expect(normalizeGatewayPasswordInput("  secret  ")).toBe("secret");
+  });
+
+  it("returns empty string for non-string input", () => {
+    expect(normalizeGatewayPasswordInput(123)).toBe("");
+  });
+
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
+    expect(normalizeGatewayPasswordInput("undefined")).toBe("");
+    expect(normalizeGatewayPasswordInput("null")).toBe("");
   });
 });
 
