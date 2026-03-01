@@ -314,12 +314,18 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+  const resolvedDelivery: Awaited<ReturnType<typeof resolveDeliveryTarget>> = deliveryRequested
+    ? await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
+        channel: deliveryPlan.channel ?? "last",
+        to: deliveryPlan.to,
+        accountId: deliveryPlan.accountId,
+        sessionKey: params.job.sessionKey,
+      })
+    : {
+        ok: false,
+        mode: "implicit",
+        error: new Error("cron delivery disabled (delivery.mode=none)"),
+      };
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
