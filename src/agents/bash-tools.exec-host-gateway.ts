@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { loadConfig } from "../config/config.js";
 import {
   addAllowlistEntry,
   type ExecAsk,
@@ -16,6 +18,7 @@ import {
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   registerExecApprovalRequestForHost,
@@ -61,6 +64,46 @@ export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
+
+/**
+ * Checks whether the source channel has interactive (button-based) exec
+ * approvals configured.  When active, the agent tool result text should tell
+ * the LLM to emit NO_REPLY so the redundant text message is suppressed.
+ */
+function hasInteractiveExecApprovals(turnSourceChannel?: string): boolean {
+  if (!turnSourceChannel) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(turnSourceChannel) ?? turnSourceChannel;
+  try {
+    const cfg = loadConfig();
+    type ChannelCfg = {
+      execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+      accounts?: Record<
+        string,
+        { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+      >;
+    };
+    const channelCfg = (cfg.channels as Record<string, unknown> | undefined)?.[channel] as
+      | ChannelCfg
+      | undefined;
+    if (!channelCfg) {
+      return false;
+    }
+    const ea = channelCfg.execApprovals;
+    if (ea?.enabled && (ea.approvers?.length ?? 0) > 0) {
+      return true;
+    }
+    if (channelCfg.accounts) {
+      return Object.values(channelCfg.accounts).some(
+        (acc) => acc.execApprovals?.enabled && (acc.execApprovals.approvers?.length ?? 0) > 0,
+      );
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
@@ -304,14 +347,20 @@ export async function processGatewayAllowlist(
       emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
     })();
 
+    const interactiveApprovals = hasInteractiveExecApprovals(params.turnSourceChannel);
+    const pendingText = interactiveApprovals
+      ? `${warningText}Approval required (id ${approvalSlug}). ` +
+        `An interactive approval prompt with buttons has been sent to the user. ` +
+        `Reply with ONLY: ${SILENT_REPLY_TOKEN}`
+      : `${warningText}Approval required (id ${approvalSlug}). ` +
+        "Approve to run; updates will arrive after completion.";
+
     return {
       pendingResult: {
         content: [
           {
             type: "text",
-            text:
-              `${warningText}Approval required (id ${approvalSlug}). ` +
-              "Approve to run; updates will arrive after completion.",
+            text: pendingText,
           },
         ],
         details: {
