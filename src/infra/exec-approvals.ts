@@ -382,10 +382,19 @@ export function grantTrustWindow(params: {
   force?: boolean;
 }): GrantTrustResult {
   const agentId = params.agentId?.trim() || "main";
-  const { minutes } = params;
+  if (agentId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    return {
+      ok: false,
+      error: "agentId must be 1-64 alphanumeric, dash, or underscore characters",
+    };
+  }
 
-  if (minutes <= 0 || minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
-    return { ok: false, error: `minutes must be between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}` };
+  const { minutes } = params;
+  if (!Number.isFinite(minutes) || minutes <= 0 || minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
+    return {
+      ok: false,
+      error: `minutes must be a finite number between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}`,
+    };
   }
 
   if (minutes > DEFAULT_MAX_TRUST_MINUTES && !params.force) {
@@ -410,7 +419,7 @@ export function grantTrustWindow(params: {
     status: "active" as const,
     expiresAt,
     grantedAt: now,
-    grantedBy: params.grantedBy,
+    grantedBy: params.grantedBy?.slice(0, 256),
     security: "full" as ExecSecurity,
     ask: "off" as ExecAsk,
     expiredNotified: false,
@@ -428,6 +437,12 @@ export function revokeTrustWindow(params: {
   keepAudit?: boolean;
 }): RevokeTrustResult {
   const agentId = params.agentId?.trim() || "main";
+  if (agentId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    return {
+      ok: false,
+      error: "agentId must be 1-64 alphanumeric, dash, or underscore characters",
+    };
+  }
 
   const trustWindow = trustWindowCache.get(agentId);
   if (!trustWindow || trustWindow.status !== "active") {

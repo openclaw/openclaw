@@ -507,9 +507,6 @@ export function registerExecApprovalsCli(program: Command) {
         }
 
         const minutes = parseInt(String(opts.minutes), 10);
-        if (isNaN(minutes) || minutes <= 0) {
-          exitWithError("--minutes must be a positive integer.");
-        }
 
         const agentKey = opts.agent?.trim() || "main";
 
