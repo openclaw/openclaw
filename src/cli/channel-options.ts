@@ -26,10 +26,6 @@ function loadPrecomputedChannelOptions(): string[] | null {
   if (precomputedChannelOptions !== undefined) {
     return precomputedChannelOptions;
   }
-  if (process.env.OPENCLAW_PLUGIN_CATALOG_PATHS || process.env.OPENCLAW_MPM_CATALOG_PATHS) {
-    precomputedChannelOptions = null;
-    return null;
-  }
   try {
     const metadataPath = path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -60,11 +56,10 @@ export function resolveCliChannelOptions(): string[] {
     return dedupe([...base, ...pluginIds]);
   }
   const precomputed = loadPrecomputedChannelOptions();
-  if (precomputed) {
-    return precomputed;
-  }
   const catalog = listChannelPluginCatalogEntries().map((entry) => entry.id);
-  const base = dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
+  const base = precomputed
+    ? dedupe([...precomputed, ...catalog])
+    : dedupe([...CHAT_CHANNEL_ORDER, ...catalog]);
   return base;
 }
 
