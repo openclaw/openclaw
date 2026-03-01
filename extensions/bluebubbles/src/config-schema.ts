@@ -31,7 +31,7 @@ const bluebubblesAccountSchema = z
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     serverUrl: z.string().optional(),
-    password: buildSecretInputSchema(z).optional(),
+    password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
     dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
     allowFrom: z.array(allowFromEntry).optional(),
