@@ -250,6 +250,24 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
+    // If the user explicitly specified a provider in the fallback string
+    // (e.g. "openai/gpt-5.3-codex"), preserve it rather than letting
+    // normalizeModelRef rewrite it to a different provider (e.g. openai-codex).
+    // This ensures cross-provider fallback works even when model slugs match.
+    const rawTrimmed = String(raw ?? "").trim();
+    const hasExplicitProvider = rawTrimmed.includes("/");
+    if (hasExplicitProvider) {
+      const slash = rawTrimmed.indexOf("/");
+      const explicitProvider = rawTrimmed.slice(0, slash).trim();
+      const explicitModel = rawTrimmed.slice(slash + 1).trim();
+      if (explicitProvider && explicitModel) {
+        const preserved = normalizeModelRef(explicitProvider, explicitModel, {
+          preserveProvider: true,
+        });
+        addExplicitCandidate(preserved);
+        continue;
+      }
+    }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
     addExplicitCandidate(resolved.ref);

@@ -146,10 +146,17 @@ function shouldUseOpenAICodexProvider(provider: string, model: string): boolean 
   );
 }
 
-export function normalizeModelRef(provider: string, model: string): ModelRef {
+export function normalizeModelRef(
+  provider: string,
+  model: string,
+  options?: { preserveProvider?: boolean },
+): ModelRef {
   const normalizedProvider = normalizeProviderId(provider);
   const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
-  if (shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)) {
+  if (
+    !options?.preserveProvider &&
+    shouldUseOpenAICodexProvider(normalizedProvider, normalizedModel)
+  ) {
     return { provider: "openai-codex", model: normalizedModel };
   }
   return { provider: normalizedProvider, model: normalizedModel };

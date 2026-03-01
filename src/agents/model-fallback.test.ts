@@ -190,6 +190,34 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
   });
 
+  it("preserves explicit provider in fallback even when model slug matches codex pattern", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.3-codex",
+            fallbacks: ["openai/gpt-5.3-codex"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+    const run = vi.fn().mockRejectedValueOnce(new Error("rate limit")).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    // First attempt: primary (openai-codex)
+    expect(run).toHaveBeenNthCalledWith(1, "openai-codex", "gpt-5.3-codex");
+    // Second attempt: fallback should preserve "openai" provider, not rewrite to openai-codex
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-5.3-codex");
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
