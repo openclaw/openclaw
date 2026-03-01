@@ -92,6 +92,24 @@ describe("extractAssistantText", () => {
     expect(result).toBe("HTTP 500: Internal Server Error");
   });
 
+  it("does not rewrite normal text that references billing plans", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
+    );
+  });
+
   it("strips Minimax tool invocations with extra attributes", () => {
     const msg: AssistantMessage = {
       role: "assistant",

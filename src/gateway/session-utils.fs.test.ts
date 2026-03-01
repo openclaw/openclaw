@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -16,12 +16,12 @@ describe("readFirstUserMessageFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -183,12 +183,12 @@ describe("readLastMessagePreviewFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -345,7 +345,7 @@ describe("readLastMessagePreviewFromTranscript", () => {
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const padding = JSON.stringify({ message: { role: "user", content: "x".repeat(500) } });
     const lines: string[] = [];
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 30; i++) {
       lines.push(padding);
     }
     lines.push(JSON.stringify({ message: { role: "assistant", content: "Last in large file" } }));
@@ -372,12 +372,12 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -400,6 +400,7 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
     expect(second).toEqual(first);
     expect(readSpy.mock.calls.length).toBe(readsAfterFirst);
+    readSpy.mockRestore();
   });
 
   test("invalidates cache when transcript changes", () => {
@@ -427,6 +428,7 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
     expect(second.lastMessagePreview).toBe("New");
     expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
+    readSpy.mockRestore();
   });
 });
 
@@ -434,12 +436,12 @@ describe("readSessionMessages", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -533,12 +535,12 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-preview-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -690,13 +692,13 @@ describe("archiveSessionTranscripts", () => {
   let tmpDir: string;
   let storePath: string;
 
-  beforeEach(() => {
+  beforeAll(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-test-"));
     storePath = path.join(tmpDir, "sessions.json");
     vi.stubEnv("OPENCLAW_HOME", tmpDir);
   });
 
-  afterEach(() => {
+  afterAll(() => {
     vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

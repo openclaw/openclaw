@@ -43,6 +43,7 @@ export {
   sendStickerDiscord,
   sendVoiceMessageDiscord,
 } from "./send.outbound.js";
+export { sendDiscordComponentMessage } from "./send.components.js";
 export {
   fetchChannelPermissionsDiscord,
   fetchReactionsDiscord,

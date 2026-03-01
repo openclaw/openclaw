@@ -175,19 +175,7 @@ class MemoryManagerEmbeddingOps {
     if (chunks.length === 0) {
       return [];
     }
-    const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
-    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
-    const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
-
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunk = chunks[i];
-      const hit = chunk?.hash ? cached.get(chunk.hash) : undefined;
-      if (hit && hit.length > 0) {
-        embeddings[i] = hit;
-      } else if (chunk) {
-        missing.push({ index: i, chunk });
-      }
-    }
+    const { embeddings, missing } = this.collectCachedEmbeddings(chunks);
 
     if (missing.length === 0) {
       return embeddings;
@@ -339,6 +327,31 @@ class MemoryManagerEmbeddingOps {
     this.upsertEmbeddingCache(toCache);
   }
 
+  private buildEmbeddingBatchRunnerOptions<TRequest>(params: {
+    requests: TRequest[];
+    chunks: MemoryChunk[];
+    source: MemorySource;
+  }): {
+    agentId: string | undefined;
+    requests: TRequest[];
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+    debug: (message: string, data: Record<string, unknown>) => void;
+  } {
+    const { requests, chunks, source } = params;
+    return {
+      agentId: this.agentId,
+      requests,
+      wait: this.batch.wait,
+      concurrency: this.batch.concurrency,
+      pollIntervalMs: this.batch.pollIntervalMs,
+      timeoutMs: this.batch.timeoutMs,
+      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+    };
+  }
+
   private async embedChunksWithVoyageBatch(
     chunks: MemoryChunk[],
     entry: MemoryFileEntry | SessionFileEntry,
@@ -364,18 +377,13 @@ class MemoryManagerEmbeddingOps {
         body: { input: chunk.text },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "voyage",
       run: async () =>
         await runVoyageEmbeddingBatches({
           client: voyage,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -416,18 +424,13 @@ class MemoryManagerEmbeddingOps {
         },
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
     const batchResult = await this.runBatchWithFallback({
       provider: "openai",
       run: async () =>
         await runOpenAiEmbeddingBatches({
           openAi,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });
@@ -464,19 +467,14 @@ class MemoryManagerEmbeddingOps {
         taskType: "RETRIEVAL_DOCUMENT",
       }),
     });
+    const runnerOptions = this.buildEmbeddingBatchRunnerOptions({ requests, chunks, source });
 
     const batchResult = await this.runBatchWithFallback({
       provider: "gemini",
       run: async () =>
         await runGeminiEmbeddingBatches({
           gemini,
-          agentId: this.agentId,
-          requests,
-          wait: this.batch.wait,
-          concurrency: this.batch.concurrency,
-          pollIntervalMs: this.batch.pollIntervalMs,
-          timeoutMs: this.batch.timeoutMs,
-          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+          ...runnerOptions,
         }),
       fallback: async () => await this.embedChunksInBatches(chunks),
     });

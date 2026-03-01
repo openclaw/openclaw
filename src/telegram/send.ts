@@ -36,6 +36,7 @@ type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
@@ -73,6 +74,8 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -179,6 +182,10 @@ function normalizeMessageId(raw: string | number): number {
 
 function isTelegramThreadNotFoundError(err: unknown): boolean {
   return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
 function hasMessageThreadIdParam(params?: Record<string, unknown>): boolean {
@@ -384,7 +391,10 @@ export async function sendMessageTelegram(
   };
 
   if (mediaUrl) {
-    const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+    const media = await loadWebMedia(mediaUrl, {
+      maxBytes: opts.maxBytes,
+      localRoots: opts.mediaLocalRoots,
+    });
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -696,6 +706,8 @@ type TelegramEditOpts = {
   api?: Bot["api"];
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Controls whether link previews are shown in the edited message. */
+  linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: Array<Array<{ text: string; callback_data: string }>>;
   /** Optional config injection to avoid global loadConfig() (improves testability). */
@@ -724,10 +736,15 @@ export async function editMessageTelegram(
     verbose: opts.verbose,
   });
   const logHttpError = createTelegramHttpLogger(cfg);
-  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+  const requestWithDiag = <T>(
+    fn: () => Promise<T>,
+    label?: string,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
     withTelegramApiErrorLogging({
       operation: label ?? "request",
       fn: () => request(fn, label),
+      shouldLog,
     }).catch((err) => {
       logHttpError(label ?? "request", err);
       throw err;
@@ -752,6 +769,9 @@ export async function editMessageTelegram(
   const editParams: Record<string, unknown> = {
     parse_mode: "HTML",
   };
+  if (opts.linkPreview === false) {
+    editParams.link_preview_options = { is_disabled: true };
+  }
   if (replyMarkup !== undefined) {
     editParams.reply_markup = replyMarkup;
   }
@@ -759,7 +779,12 @@ export async function editMessageTelegram(
   await requestWithDiag(
     () => api.editMessageText(chatId, messageId, htmlText, editParams),
     "editMessage",
+    (err) => !isTelegramMessageNotModifiedError(err),
   ).catch(async (err) => {
+    if (isTelegramMessageNotModifiedError(err)) {
+      return;
+    }
+
     // Telegram rejects malformed HTML. Fall back to plain text.
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
@@ -767,6 +792,9 @@ export async function editMessageTelegram(
         console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
       }
       const plainParams: Record<string, unknown> = {};
+      if (opts.linkPreview === false) {
+        plainParams.link_preview_options = { is_disabled: true };
+      }
       if (replyMarkup !== undefined) {
         plainParams.reply_markup = replyMarkup;
       }
@@ -776,7 +804,13 @@ export async function editMessageTelegram(
             ? api.editMessageText(chatId, messageId, text, plainParams)
             : api.editMessageText(chatId, messageId, text),
         "editMessage-plain",
-      );
+        (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+      ).catch((plainErr) => {
+        if (isTelegramMessageNotModifiedError(plainErr)) {
+          return;
+        }
+        throw plainErr;
+      });
     }
     throw err;
   });

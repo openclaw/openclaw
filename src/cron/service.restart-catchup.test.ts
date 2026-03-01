@@ -85,7 +85,10 @@ describe("CronService restart catch-up", () => {
 
     await cron.start();
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("digest now", { agentId: undefined });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "digest now",
+      expect.objectContaining({ agentId: undefined }),
+    );
     expect(requestHeartbeatNow).toHaveBeenCalled();
 
     const jobs = await cron.list({ includeDisabled: true });

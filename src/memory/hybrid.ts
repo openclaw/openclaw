@@ -23,7 +23,7 @@ export type HybridKeywordResult = {
 export function buildFtsQuery(raw: string): string | null {
   const tokens =
     raw
-      .match(/[A-Za-z0-9_]+/g)
+      .match(/[\p{L}\p{N}_]+/gu)
       ?.map((t) => t.trim())
       .filter(Boolean) ?? [];
   if (tokens.length === 0) {

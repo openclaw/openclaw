@@ -3,6 +3,7 @@ import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -69,38 +70,13 @@ function truncateText(input: string, maxLen: number) {
   return `${truncated}...`;
 }
 
-function normalizeContextText(raw: string) {
-  return raw.replace(/\s+/g, " ").trim();
-}
-
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
   const role = typeof message.role === "string" ? message.role : "";
   if (role !== "user" && role !== "assistant") {
     return null;
   }
-  const content = message.content;
-  if (typeof content === "string") {
-    const normalized = normalizeContextText(content);
-    return normalized ? { role, text: normalized } : null;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const chunks: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text === "string" && text.trim()) {
-      chunks.push(text);
-    }
-  }
-  const joined = normalizeContextText(chunks.join(" "));
-  return joined ? { role, text: joined } : null;
+  const text = extractTextFromChatContent(message.content);
+  return text ? { role, text } : null;
 }
 
 async function buildReminderContextLines(params: {
@@ -243,7 +219,8 @@ JOB SCHEMA (for add action):
   "payload": { ... },       // Required: what to execute
   "delivery": { ... },      // Optional: announce summary (isolated only)
   "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
+  "enabled": true | false,  // Optional, default true
+  "notify": true | false    // Optional webhook opt-in; set true for user-facing reminders
 }
 
 SCHEDULE TYPES (schedule.kind):
@@ -270,6 +247,7 @@ DELIVERY (isolated-only, top-level):
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- For reminders users should be notified about, set notify=true.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
 
 WAKE MODES (for wake action):
@@ -316,6 +294,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "payload",
               "delivery",
               "enabled",
+              "notify",
               "description",
               "deleteAfterRun",
               "agentId",

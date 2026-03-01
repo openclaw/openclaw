@@ -1,9 +1,9 @@
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
+  mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  resolveExecApprovalsSocketPath,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -11,22 +11,18 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateExecApprovalsGetParams,
   validateExecApprovalsNodeGetParams,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "../protocol/index.js";
-import { respondUnavailableOnThrow, safeParseJson } from "./nodes.helpers.js";
-
-function resolveBaseHash(params: unknown): string | null {
-  const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : null;
-}
+import { resolveBaseHashParam } from "./base-hash.js";
+import {
+  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnThrow,
+  safeParseJson,
+} from "./nodes.helpers.js";
+import { assertValidParams } from "./validation.js";
 
 function requireApprovalsBaseHash(
   params: unknown,
@@ -47,7 +43,7 @@ function requireApprovalsBaseHash(
     );
     return false;
   }
-  const baseHash = resolveBaseHash(params);
+  const baseHash = resolveBaseHashParam(params);
   if (!baseHash) {
     respond(
       false,
@@ -83,15 +79,7 @@ function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
   "exec.approvals.get": ({ params, respond }) => {
-    if (!validateExecApprovalsGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid exec.approvals.get params: ${formatValidationErrors(validateExecApprovalsGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
       return;
     }
     ensureExecApprovals();
@@ -108,15 +96,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     );
   },
   "exec.approvals.set": ({ params, respond }) => {
-    if (!validateExecApprovalsSetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid exec.approvals.set params: ${formatValidationErrors(validateExecApprovalsSetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
       return;
     }
     ensureExecApprovals();
@@ -134,18 +114,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-    const currentSocketPath = snapshot.file.socket?.path?.trim();
-    const currentToken = snapshot.file.socket?.token?.trim();
-    const socketPath =
-      normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-    const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
-    const next: ExecApprovalsFile = {
-      ...normalized,
-      socket: {
-        path: socketPath,
-        token,
-      },
-    };
+    const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
     saveExecApprovals(next);
     const nextSnapshot = readExecApprovalsSnapshot();
     respond(
@@ -160,15 +129,14 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     );
   },
   "exec.approvals.node.get": async ({ params, respond, context }) => {
-    if (!validateExecApprovalsNodeGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid exec.approvals.node.get params: ${formatValidationErrors(validateExecApprovalsNodeGetParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsNodeGetParams,
+        "exec.approvals.node.get",
+        respond,
+      )
+    ) {
       return;
     }
     const { nodeId } = params as { nodeId: string };
@@ -183,14 +151,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         command: "system.execApprovals.get",
         params: {},
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
@@ -198,15 +159,14 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     });
   },
   "exec.approvals.node.set": async ({ params, respond, context }) => {
-    if (!validateExecApprovalsNodeSetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid exec.approvals.node.set params: ${formatValidationErrors(validateExecApprovalsNodeSetParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsNodeSetParams,
+        "exec.approvals.node.set",
+        respond,
+      )
+    ) {
       return;
     }
     const { nodeId, file, baseHash } = params as {
@@ -225,14 +185,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
         command: "system.execApprovals.set",
         params: { file, baseHash },
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = safeParseJson(res.payloadJSON ?? null);

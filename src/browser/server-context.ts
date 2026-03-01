@@ -10,8 +10,8 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
-import { createConfigIO, loadConfig } from "../config/config.js";
-import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import { fetchJson, fetchOk } from "./cdp.helpers.js";
+import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -19,12 +19,16 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
+import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  refreshResolvedBrowserConfigFromDisk,
+  resolveBrowserProfileWithHotReload,
+} from "./resolved-config-refresh.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -56,35 +60,6 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
     return normalizeCdpWsUrl(raw, cdpBaseUrl);
   } catch {
     return raw;
-  }
-}
-
-async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  } finally {
-    clearTimeout(t);
   }
 }
 
@@ -579,52 +554,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     return current;
   };
 
-  const applyResolvedConfig = (
-    current: BrowserServerState,
-    freshResolved: BrowserServerState["resolved"],
-  ) => {
-    current.resolved = freshResolved;
-    for (const [name, runtime] of current.profiles) {
-      const nextProfile = resolveProfile(freshResolved, name);
-      if (nextProfile) {
-        runtime.profile = nextProfile;
-        continue;
-      }
-      if (!runtime.running) {
-        current.profiles.delete(name);
-      }
-    }
-  };
-
-  const refreshResolvedConfig = (current: BrowserServerState) => {
-    if (!refreshConfigFromDisk) {
-      return;
-    }
-    const cfg = loadConfig();
-    const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
-    applyResolvedConfig(current, freshResolved);
-  };
-
-  const refreshResolvedConfigFresh = (current: BrowserServerState) => {
-    if (!refreshConfigFromDisk) {
-      return;
-    }
-    const freshCfg = createConfigIO().loadConfig();
-    const freshResolved = resolveBrowserConfig(freshCfg.browser, freshCfg);
-    applyResolvedConfig(current, freshResolved);
-  };
-
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
-    refreshResolvedConfig(current);
     const name = profileName ?? current.resolved.defaultProfile;
-    let profile = resolveProfile(current.resolved, name);
-
-    // Hot-reload: try fresh config if profile not found
-    if (!profile) {
-      refreshResolvedConfigFresh(current);
-      profile = resolveProfile(current.resolved, name);
-    }
+    const profile = resolveBrowserProfileWithHotReload({
+      current,
+      refreshConfigFromDisk,
+      name,
+    });
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
@@ -635,7 +572,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     const current = state();
-    refreshResolvedConfig(current);
+    refreshResolvedBrowserConfigFromDisk({
+      current,
+      refreshConfigFromDisk,
+      mode: "cached",
+    });
     const result: ProfileStatus[] = [];
 
     for (const name of Object.keys(current.resolved.profiles)) {

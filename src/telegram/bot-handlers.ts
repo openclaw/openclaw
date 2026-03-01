@@ -29,6 +29,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   resolveTelegramForumThreadId,
+  resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
@@ -226,7 +227,11 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        accountId,
+      ).catch(() => []);
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
@@ -257,7 +262,11 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       };
 
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        accountId,
+      ).catch(() => []);
       const baseCtx = first.ctx;
       const getFile =
         typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
@@ -327,17 +336,16 @@ export const registerTelegramHandlers = ({
 
       const messageThreadId = callbackMessage.message_thread_id;
       const isForum = callbackMessage.chat.is_forum === true;
-      const resolvedThreadId = resolveTelegramForumThreadId({
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
         isForum,
         messageThreadId,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
       });
-      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFromWithStore({
-        allowFrom: groupAllowOverride ?? groupAllowFrom,
-        storeAllowFrom,
-      });
+      const { resolvedThreadId, storeAllowFrom, groupConfig, topicConfig, effectiveGroupAllow } =
+        groupAllowContext;
       const effectiveDmAllow = normalizeAllowFromWithStore({
         allowFrom: telegramCfg.allowFrom,
         storeAllowFrom,
@@ -357,7 +365,7 @@ export const registerTelegramHandlers = ({
           );
           return;
         }
-        if (typeof groupAllowOverride !== "undefined") {
+        if (groupAllowContext.hasGroupAllowOverride) {
           const allowed =
             senderId &&
             isSenderAllowed({
@@ -698,18 +706,22 @@ export const registerTelegramHandlers = ({
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
       const messageThreadId = msg.message_thread_id;
       const isForum = msg.chat.is_forum === true;
-      const resolvedThreadId = resolveTelegramForumThreadId({
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
         isForum,
         messageThreadId,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
       });
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFromWithStore({
-        allowFrom: groupAllowOverride ?? groupAllowFrom,
+      const {
+        resolvedThreadId,
         storeAllowFrom,
-      });
-      const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+        groupConfig,
+        topicConfig,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+      } = groupAllowContext;
 
       if (isGroup) {
         if (groupConfig?.enabled === false) {

@@ -1,24 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SyncProgressState } from "./sync-progress.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 import { indexFileEntryIfChanged } from "./sync-index.js";
+import { bumpSyncProgressTotal } from "./sync-progress.js";
 import { deleteStaleIndexedPaths } from "./sync-stale.js";
 
 const log = createSubsystemLogger("memory");
-
-type ProgressState = {
-  completed: number;
-  total: number;
-  label?: string;
-  report: (update: { completed: number; total: number; label?: string }) => void;
-};
 
 export async function syncMemoryFiles(params: {
   workspaceDir: string;
   extraPaths?: string[];
   db: DatabaseSync;
   needsFullReindex: boolean;
-  progress?: ProgressState;
+  progress?: SyncProgressState;
   batchEnabled: boolean;
   concurrency: number;
   runWithConcurrency: <T>(tasks: Array<() => Promise<T>>, concurrency: number) => Promise<T[]>;
@@ -42,14 +37,11 @@ export async function syncMemoryFiles(params: {
   });
 
   const activePaths = new Set(fileEntries.map((entry) => entry.path));
-  if (params.progress) {
-    params.progress.total += fileEntries.length;
-    params.progress.report({
-      completed: params.progress.completed,
-      total: params.progress.total,
-      label: params.batchEnabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
-    });
-  }
+  bumpSyncProgressTotal(
+    params.progress,
+    fileEntries.length,
+    params.batchEnabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
+  );
 
   const tasks = fileEntries.map((entry) => async () => {
     await indexFileEntryIfChanged({

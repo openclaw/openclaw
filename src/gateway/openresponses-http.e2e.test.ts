@@ -13,30 +13,26 @@ let enabledPort: number;
 
 beforeAll(async () => {
   enabledPort = await getFreePort();
-  enabledServer = await startServer(enabledPort);
+  enabledServer = await startServer(enabledPort, { openResponsesEnabled: true });
 });
 
 afterAll(async () => {
   await enabledServer.close({ reason: "openresponses enabled suite done" });
 });
 
-async function startServerWithDefaultConfig(port: number) {
-  const { startGatewayServer } = await import("./server.js");
-  return await startGatewayServer(port, {
-    host: "127.0.0.1",
-    auth: { mode: "token", token: "secret" },
-    controlUiEnabled: false,
-  });
-}
-
 async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
   const { startGatewayServer } = await import("./server.js");
-  return await startGatewayServer(port, {
+  const serverOpts = {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
     controlUiEnabled: false,
-    openResponsesEnabled: opts?.openResponsesEnabled ?? true,
-  });
+  } as const;
+  return await startGatewayServer(
+    port,
+    opts?.openResponsesEnabled === undefined
+      ? serverOpts
+      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
+  );
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -96,7 +92,7 @@ async function ensureResponseConsumed(res: Response) {
 describe("OpenResponses HTTP API (e2e)", () => {
   it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
     const port = await getFreePort();
-    const _server = await startServerWithDefaultConfig(port);
+    const _server = await startServer(port);
     try {
       const res = await postResponses(port, {
         model: "openclaw",

@@ -31,6 +31,15 @@ export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) 
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
+type DiscordReactionListenerParams = {
+  cfg: LoadedConfig;
+  accountId: string;
+  runtime: RuntimeEnv;
+  botUserId?: string;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  logger: Logger;
+};
+
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
@@ -94,78 +103,66 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(
-    private params: {
-      cfg: LoadedConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-      logger: Logger;
-    },
-  ) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    const startedAt = Date.now();
-    try {
-      await handleDiscordReactionEvent({
-        data,
-        client,
-        action: "added",
-        cfg: this.params.cfg,
-        accountId: this.params.accountId,
-        botUserId: this.params.botUserId,
-        guildEntries: this.params.guildEntries,
-        logger: this.params.logger,
-      });
-    } finally {
-      logSlowDiscordListener({
-        logger: this.params.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        durationMs: Date.now() - startedAt,
-      });
-    }
+    await runDiscordReactionHandler({
+      data,
+      client,
+      action: "added",
+      handlerParams: this.params,
+      listener: this.constructor.name,
+      event: this.type,
+    });
   }
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(
-    private params: {
-      cfg: LoadedConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
-      logger: Logger;
-    },
-  ) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    const startedAt = Date.now();
-    try {
-      await handleDiscordReactionEvent({
-        data,
-        client,
-        action: "removed",
-        cfg: this.params.cfg,
-        accountId: this.params.accountId,
-        botUserId: this.params.botUserId,
-        guildEntries: this.params.guildEntries,
-        logger: this.params.logger,
-      });
-    } finally {
-      logSlowDiscordListener({
-        logger: this.params.logger,
-        listener: this.constructor.name,
-        event: this.type,
-        durationMs: Date.now() - startedAt,
-      });
-    }
+    await runDiscordReactionHandler({
+      data,
+      client,
+      action: "removed",
+      handlerParams: this.params,
+      listener: this.constructor.name,
+      event: this.type,
+    });
+  }
+}
+
+async function runDiscordReactionHandler(params: {
+  data: DiscordReactionEvent;
+  client: Client;
+  action: "added" | "removed";
+  handlerParams: DiscordReactionListenerParams;
+  listener: string;
+  event: string;
+}): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await handleDiscordReactionEvent({
+      data: params.data,
+      client: params.client,
+      action: params.action,
+      cfg: params.handlerParams.cfg,
+      accountId: params.handlerParams.accountId,
+      botUserId: params.handlerParams.botUserId,
+      guildEntries: params.handlerParams.guildEntries,
+      logger: params.handlerParams.logger,
+    });
+  } finally {
+    logSlowDiscordListener({
+      logger: params.handlerParams.logger,
+      listener: params.listener,
+      event: params.event,
+      durationMs: Date.now() - startedAt,
+    });
   }
 }
 
@@ -275,8 +272,8 @@ async function handleDiscordReactionEvent(params: {
     const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
     const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-    const memberRoleIds = Array.isArray(data.member?.roles)
-      ? data.member.roles.map((roleId: string) => String(roleId))
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => String(roleId))
       : [];
     const route = resolveAgentRoute({
       cfg: params.cfg,
