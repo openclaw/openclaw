@@ -78,6 +78,37 @@ export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
   1012: "service restart",
 };
 
+const CONNECT_FAILED_CLOSE_REASON_MAX_LEN = 120;
+
+function replaceControlChars(value: string): string {
+  let cleaned = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
+      cleaned += " ";
+      continue;
+    }
+    cleaned += char;
+  }
+  return cleaned;
+}
+
+function sanitizeConnectFailureCloseReason(err: unknown): string {
+  const rawValue =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "connect failed";
+  const normalized = replaceControlChars(rawValue).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "connect failed";
+  }
+  if (normalized.length <= CONNECT_FAILED_CLOSE_REASON_MAX_LEN) {
+    return normalized;
+  }
+  return `${normalized.slice(0, CONNECT_FAILED_CLOSE_REASON_MAX_LEN - 1).trimEnd()}…`;
+}
+
 export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
@@ -345,7 +376,7 @@ export class GatewayClient {
         } else {
           logError(msg);
         }
-        this.ws?.close(1008, "connect failed");
+        this.ws?.close(1008, sanitizeConnectFailureCloseReason(err));
       });
   }
 

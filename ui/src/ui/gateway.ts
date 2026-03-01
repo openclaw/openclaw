@@ -90,6 +90,36 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const WS_CLOSE_REASON_MAX_LEN = 120;
+
+function replaceControlChars(value: string): string {
+  let cleaned = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
+      cleaned += " ";
+      continue;
+    }
+    cleaned += char;
+  }
+  return cleaned;
+}
+
+function sanitizeConnectFailureCloseReason(err: unknown): string {
+  const rawValue =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "connect failed";
+  const raw = replaceControlChars(rawValue).replace(/\s+/g, " ").trim();
+  if (!raw) {
+    return "connect failed";
+  }
+  if (raw.length <= WS_CLOSE_REASON_MAX_LEN) {
+    return raw;
+  }
+  return `${raw.slice(0, WS_CLOSE_REASON_MAX_LEN - 1).trimEnd()}…`;
+}
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -273,7 +303,8 @@ export class GatewayBrowserClient {
         if (canFallbackToShared && deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
-        this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
+        const closeReason = sanitizeConnectFailureCloseReason(err);
+        this.ws?.close(CONNECT_FAILED_CLOSE_CODE, closeReason);
       });
   }
 

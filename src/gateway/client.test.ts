@@ -23,6 +23,7 @@ class MockWebSocket {
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
+  closed: { code: number; reason: string } | null = null;
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -51,7 +52,12 @@ class MockWebSocket {
     }
   }
 
-  close(_code?: number, _reason?: string): void {}
+  close(code?: number, reason?: string): void {
+    this.closed = {
+      code: typeof code === "number" ? code : 1000,
+      reason: typeof reason === "string" ? reason : "",
+    };
+  }
 
   send(data: string): void {
     this.sent.push(data);
@@ -349,6 +355,40 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
+  function emitConnectResponse(
+    ws: MockWebSocket,
+    params: {
+      ok: boolean;
+      errorMessage?: string;
+      errorCode?: string;
+      payload?: unknown;
+    },
+  ) {
+    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
+    if (!raw) {
+      throw new Error("missing connect frame");
+    }
+    const parsed = JSON.parse(raw) as { id?: string };
+    if (!parsed.id) {
+      throw new Error("missing connect request id");
+    }
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: parsed.id,
+        ok: params.ok,
+        ...(params.ok
+          ? { payload: params.payload ?? {} }
+          : {
+              error: {
+                code: params.errorCode ?? "INVALID_REQUEST",
+                message: params.errorMessage ?? "request failed",
+              },
+            }),
+      }),
+    );
+  }
+
   it("uses explicit shared token and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
@@ -402,6 +442,53 @@ describe("GatewayClient connect auth payload", () => {
       token: "explicit-device-token",
       deviceToken: "explicit-device-token",
     });
+    client.stop();
+  });
+
+  it("preserves connect handshake error detail in close reason", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+    emitConnectResponse(ws, {
+      ok: false,
+      errorMessage: "provide gateway auth token",
+    });
+    await vi.waitFor(() => {
+      expect(ws.closed).not.toBeNull();
+    });
+
+    expect(ws.closed).toEqual({
+      code: 1008,
+      reason: "provide gateway auth token",
+    });
+    client.stop();
+  });
+
+  it("sanitizes and truncates connect close reason", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+    emitConnectResponse(ws, {
+      ok: false,
+      errorMessage: `bad\treason ${"x".repeat(200)}`,
+    });
+    await vi.waitFor(() => {
+      expect(ws.closed).not.toBeNull();
+    });
+
+    expect(ws.closed?.code).toBe(1008);
+    expect(ws.closed?.reason.includes("\t")).toBe(false);
+    expect((ws.closed?.reason.length ?? 0) <= 120).toBe(true);
     client.stop();
   });
 });
