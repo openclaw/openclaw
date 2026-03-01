@@ -4,6 +4,7 @@ import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
+import type { DiffToolDefaults } from "./types.js";
 import {
   DIFF_LAYOUTS,
   DIFF_MODES,
@@ -63,6 +64,7 @@ type DiffsToolParams = Static<typeof DiffsToolSchema>;
 export function createDiffsTool(params: {
   api: OpenClawPluginApi;
   store: DiffArtifactStore;
+  defaults: DiffToolDefaults;
   screenshotter?: DiffScreenshotter;
 }): AnyAgentTool {
   return {
@@ -74,16 +76,19 @@ export function createDiffsTool(params: {
     execute: async (_toolCallId, rawParams) => {
       const toolParams = rawParams as DiffsToolParams;
       const input = normalizeDiffInput(toolParams);
-      const mode = normalizeMode(toolParams.mode);
-      const theme = normalizeTheme(toolParams.theme);
-      const layout = normalizeLayout(toolParams.layout);
+      const mode = normalizeMode(toolParams.mode, params.defaults.mode);
+      const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
+      const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
       const ttlMs = normalizeTtlMs(toolParams.ttlSeconds);
 
       const rendered = await renderDiffDocument(input, {
-        layout,
+        presentation: {
+          ...params.defaults,
+          layout,
+          theme,
+        },
         expandUnchanged,
-        theme,
       });
 
       const artifact = await params.store.createArtifact({
@@ -218,16 +223,16 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   }
 }
 
-function normalizeMode(mode?: DiffMode): DiffMode {
-  return mode && DIFF_MODES.includes(mode) ? mode : "both";
+function normalizeMode(mode: DiffMode | undefined, fallback: DiffMode): DiffMode {
+  return mode && DIFF_MODES.includes(mode) ? mode : fallback;
 }
 
-function normalizeTheme(theme?: DiffTheme): DiffTheme {
-  return theme && DIFF_THEMES.includes(theme) ? theme : "dark";
+function normalizeTheme(theme: DiffTheme | undefined, fallback: DiffTheme): DiffTheme {
+  return theme && DIFF_THEMES.includes(theme) ? theme : fallback;
 }
 
-function normalizeLayout(layout?: DiffLayout): DiffLayout {
-  return layout && DIFF_LAYOUTS.includes(layout) ? layout : "unified";
+function normalizeLayout(layout: DiffLayout | undefined, fallback: DiffLayout): DiffLayout {
+  return layout && DIFF_LAYOUTS.includes(layout) ? layout : fallback;
 }
 
 function normalizeTtlMs(ttlSeconds?: number): number | undefined {
