@@ -83,7 +83,7 @@ Lark（グローバル）テナントは[https://open.larksuite.com/app](https:/
 2. アプリ名 + 説明を入力
 3. アプリアイコンを選択
 
-![Create enterprise app](../images/feishu-step2-create-app.png)
+![Create enterprise app](/images/feishu-step2-create-app.png)
 
 ### 3. 認証情報をコピーする
 
@@ -94,7 +94,7 @@ Lark（グローバル）テナントは[https://open.larksuite.com/app](https:/
 
 重要: App Secretは非公開にしてください。
 
-![Get credentials](../images/feishu-step3-credentials.png)
+![Get credentials](/images/feishu-step3-credentials.png)
 
 ### 4. 権限を設定する
 
@@ -128,7 +128,7 @@ Lark（グローバル）テナントは[https://open.larksuite.com/app](https:/
 }
 ```
 
-![Configure permissions](../images/feishu-step4-permissions.png)
+![Configure permissions](/images/feishu-step4-permissions.png)
 
 ### 5. ボット機能を有効にする
 
@@ -137,7 +137,7 @@ Lark（グローバル）テナントは[https://open.larksuite.com/app](https:/
 1. ボット機能を有効にする
 2. ボット名を設定する
 
-![Enable bot capability](../images/feishu-step5-bot-capability.png)
+![Enable bot capability](/images/feishu-step5-bot-capability.png)
 
 ### 6. イベントサブスクリプションを設定する
 
@@ -153,7 +153,7 @@ Lark（グローバル）テナントは[https://open.larksuite.com/app](https:/
 
 Gatewayが実行されていない場合、長時間接続のセットアップが保存に失敗する可能性があります。
 
-![Configure event subscription](../images/feishu-step6-event-subscription.png)
+![Configure event subscription](/images/feishu-step6-event-subscription.png)
 
 ### 7. アプリを公開する
 
