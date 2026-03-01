@@ -7,7 +7,7 @@ import { danger, logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import { MediaFetchError, fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -417,7 +417,7 @@ export async function resolveMedia(
     return null;
   }
 
-  let file: { file_path?: string };
+  let file: { file_path?: string; file_size?: number };
   try {
     file = await retryAsync(() => ctx.getFile(), {
       attempts: 3,
@@ -447,6 +447,12 @@ export async function resolveMedia(
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
+
+  // Reject before downloading: Telegram's getFile includes file_size when known.
+  if (typeof file.file_size === "number" && file.file_size > maxBytes) {
+    throw new MediaFetchError("max_bytes", `File size ${file.file_size} exceeds limit ${maxBytes}`);
+  }
+
   const fetchImpl = proxyFetch ?? globalThis.fetch;
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");

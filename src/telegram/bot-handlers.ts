@@ -65,6 +65,9 @@ import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 function isMediaSizeLimitError(err: unknown): boolean {
+  if (err instanceof MediaFetchError && err.code === "max_bytes") {
+    return true;
+  }
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
 }

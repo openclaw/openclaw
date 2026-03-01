@@ -10,9 +10,13 @@ vi.mock("../../media/store.js", () => ({
   saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
 }));
 
-vi.mock("../../media/fetch.js", () => ({
-  fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
-}));
+vi.mock("../../media/fetch.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../../media/fetch.js")>();
+  return {
+    MediaFetchError: orig.MediaFetchError,
+    fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
+  };
+});
 
 vi.mock("../../globals.js", () => ({
   danger: (s: string) => s,
@@ -202,5 +206,53 @@ describe("resolveMedia getFile retry", () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
     expect(result).not.toBeNull();
+  });
+
+  it("throws MediaFetchError(max_bytes) early when getFile reports file_size exceeding maxBytes", async () => {
+    const { MediaFetchError } = await import("../../media/fetch.js");
+    const getFile = vi.fn().mockResolvedValue({ file_path: "docs/big.zip", file_size: 12_100_000 });
+
+    await expect(
+      resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow(MediaFetchError);
+
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with download when getFile file_size is within maxBytes", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "docs/small.zip", file_size: 4_000_000 });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("data"),
+      contentType: "application/zip",
+      fileName: "small.zip",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/small.zip",
+      contentType: "application/zip",
+    });
+
+    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    expect(result).toEqual(expect.objectContaining({ path: "/tmp/small.zip" }));
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("proceeds with download when getFile does not include file_size", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "docs/unknown.zip" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("data"),
+      contentType: "application/zip",
+      fileName: "unknown.zip",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/unknown.zip",
+      contentType: "application/zip",
+    });
+
+    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    expect(result).toEqual(expect.objectContaining({ path: "/tmp/unknown.zip" }));
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
   });
 });
