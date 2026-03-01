@@ -494,8 +494,11 @@ async function discoverProject(accessToken: string): Promise<string> {
   let activeEndpoint = CODE_ASSIST_ENDPOINT_PROD;
   let loadError: Error | undefined;
   let loadStatus: number | undefined;
+  let sawLoadAttempt = false;
+  let sawOnlyHttp400Failures = true;
   for (const endpoint of LOAD_CODE_ASSIST_ENDPOINTS) {
     try {
+      sawLoadAttempt = true;
       const response = await fetchWithTimeout(`${endpoint}/v1internal:loadCodeAssist`, {
         method: "POST",
         headers,
@@ -504,6 +507,7 @@ async function discoverProject(accessToken: string): Promise<string> {
 
       if (!response.ok) {
         loadStatus = response.status;
+        sawOnlyHttp400Failures &&= response.status === 400;
         const errorPayload = await response.json().catch(() => null);
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
@@ -519,8 +523,10 @@ async function discoverProject(accessToken: string): Promise<string> {
       activeEndpoint = endpoint;
       loadError = undefined;
       loadStatus = undefined;
+      sawOnlyHttp400Failures = false;
       break;
     } catch (err) {
+      sawOnlyHttp400Failures = false;
       loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
@@ -533,7 +539,7 @@ async function discoverProject(accessToken: string): Promise<string> {
     if (envProject) {
       return envProject;
     }
-    if (loadStatus === 400) {
+    if (sawLoadAttempt && sawOnlyHttp400Failures && loadStatus === 400) {
       data = {
         allowedTiers: [{ id: TIER_FREE, isDefault: true }],
       };
