@@ -72,4 +72,17 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
   });
+
+  it("handles colons in description values", () => {
+    const content = `---
+name: test-skill
+description: Generate images using GLM's Cogview API. IMPORTANT: Must use anime style only
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("test-skill");
+    expect(result.description).toBe(
+      "Generate images using GLM's Cogview API. IMPORTANT: Must use anime style only",
+    );
+  });
 });

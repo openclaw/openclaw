@@ -252,7 +252,17 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      let loaded: unknown;
+      try {
+        loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      } catch (err) {
+        skillsLogger.warn("Failed to load skill from directory.", {
+          dir: baseDir,
+          error: String(err),
+          hint: "Check SKILL.md for YAML syntax errors (e.g., unquoted colons in description)",
+        });
+        return [];
+      }
       return unwrapLoadedSkills(loaded);
     }
 
@@ -303,7 +313,17 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      let loaded: unknown;
+      try {
+        loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      } catch (err) {
+        skillsLogger.warn("Failed to load skill from directory.", {
+          dir: skillDir,
+          error: String(err),
+          hint: "Check SKILL.md for YAML syntax errors (e.g., unquoted colons in description)",
+        });
+        continue;
+      }
       loadedSkills.push(...unwrapLoadedSkills(loaded));
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
