@@ -3,9 +3,10 @@ import path from "node:path";
 import type { ZodIssue } from "zod";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
+  buildModelAliasIndex,
   normalizeProviderId,
-  parseModelRef,
   resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { IMPLICIT_PROVIDER_IDS } from "../agents/models-config.providers.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
@@ -1813,16 +1814,31 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
   });
   const effectiveDefaultProvider = primaryRef.provider;
 
+  // Build the alias index so that fallback entries referencing model aliases
+  // (e.g. "backup") are resolved to their target provider, matching the runtime
+  // behavior in resolveFallbackCandidates / resolveModelRefFromString.
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: effectiveDefaultProvider,
+  });
+
   const checkFallback = (pathLabel: string, entry: string, defaultProvider: string) => {
     const trimmed = entry.trim();
     if (!trimmed) {
       return;
     }
-    const ref = parseModelRef(trimmed, defaultProvider);
-    if (!ref) {
+    // Use alias-aware resolution to match runtime behavior: if the entry is a
+    // configured model alias, resolve it to its target provider rather than
+    // treating it as a bare model name under the default provider.
+    const resolved = resolveModelRefFromString({
+      raw: trimmed,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (!resolved) {
       return;
     }
-    const normalized = normalizeProviderId(ref.provider);
+    const normalized = normalizeProviderId(resolved.ref.provider);
     if (!definedProviderIds.has(normalized)) {
       warnings.push({
         path: pathLabel,
