@@ -6,6 +6,7 @@ import type { sendMessageIMessage } from "../../imessage/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 import {
@@ -85,6 +86,7 @@ async function createChannelHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -101,6 +103,7 @@ async function createChannelHandler(params: {
     accountId: params.accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    identity: params.identity,
     deps: params.deps,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
@@ -119,6 +122,7 @@ function createPluginHandler(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   silent?: boolean;
@@ -145,6 +149,7 @@ function createPluginHandler(params: {
             accountId: params.accountId,
             replyToId: params.replyToId,
             threadId: params.threadId,
+            identity: params.identity,
             gifPlayback: params.gifPlayback,
             deps: params.deps,
             silent: params.silent,
@@ -159,6 +164,7 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        identity: params.identity,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
@@ -172,6 +178,7 @@ function createPluginHandler(params: {
         accountId: params.accountId,
         replyToId: params.replyToId,
         threadId: params.threadId,
+        identity: params.identity,
         gifPlayback: params.gifPlayback,
         deps: params.deps,
         silent: params.silent,
@@ -189,6 +196,7 @@ export async function deliverOutboundPayloads(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;
@@ -271,6 +279,7 @@ async function deliverOutboundPayloadsCore(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;
@@ -299,6 +308,7 @@ async function deliverOutboundPayloadsCore(params: {
     accountId,
     replyToId: params.replyToId,
     threadId: params.threadId,
+    identity: params.identity,
     gifPlayback: params.gifPlayback,
     silent: params.silent,
   });

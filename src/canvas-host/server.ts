@@ -9,7 +9,6 @@ import { type WebSocket, WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
@@ -18,6 +17,7 @@ import {
   handleA2uiHttpRequest,
   injectCanvasLiveReload,
 } from "./a2ui.js";
+import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -147,50 +147,6 @@ function defaultIndexHTML() {
 })();
 </script>
 `;
-}
-
-function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-async function resolveFilePath(rootReal: string, urlPath: string) {
-  const normalized = normalizeUrlPath(urlPath);
-  const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) {
-    return null;
-  }
-
-  const tryOpen = async (relative: string) => {
-    try {
-      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
-    } catch (err) {
-      if (err instanceof SafeOpenError) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  if (normalized.endsWith("/")) {
-    return await tryOpen(path.posix.join(rel, "index.html"));
-  }
-
-  const candidate = path.join(rootReal, rel);
-  try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
-      return null;
-    }
-    if (st.isDirectory()) {
-      return await tryOpen(path.posix.join(rel, "index.html"));
-    }
-  } catch {
-    // ignore
-  }
-
-  return await tryOpen(rel);
 }
 
 function isDisabledByEnv() {
@@ -372,7 +328,7 @@ export async function createCanvasHostHandler(
         return true;
       }
 
-      const opened = await resolveFilePath(rootReal, urlPath);
+      const opened = await resolveFileWithinRoot(rootReal, urlPath);
       if (!opened) {
         if (urlPath === "/" || urlPath.endsWith("/")) {
           res.statusCode = 404;

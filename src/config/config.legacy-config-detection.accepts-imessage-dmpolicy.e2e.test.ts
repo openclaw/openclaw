@@ -87,6 +87,21 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.path).toBe("channels.discord.dm.allowFrom");
     }
   });
+  it('rejects discord.dmPolicy="open" without allowFrom "*"', async () => {
+    const res = validateConfigObject({
+      channels: { discord: { dmPolicy: "open", allowFrom: ["123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.discord.allowFrom");
+    }
+  });
+  it('accepts discord dm.allowFrom="*" with top-level allowFrom alias', async () => {
+    const res = validateConfigObject({
+      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] }, allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
+  });
   it('rejects slack.dm.policy="open" without allowFrom "*"', async () => {
     const res = validateConfigObject({
       channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } },
@@ -95,6 +110,21 @@ describe("legacy config detection", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("channels.slack.dm.allowFrom");
     }
+  });
+  it('rejects slack.dmPolicy="open" without allowFrom "*"', async () => {
+    const res = validateConfigObject({
+      channels: { slack: { dmPolicy: "open", allowFrom: ["U123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.slack.allowFrom");
+    }
+  });
+  it('accepts slack dm.allowFrom="*" with top-level allowFrom alias', async () => {
+    const res = validateConfigObject({
+      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] }, allowFrom: ["*"] } },
+    });
+    expect(res.ok).toBe(true);
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({

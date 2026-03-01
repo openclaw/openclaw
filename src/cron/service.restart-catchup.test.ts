@@ -98,7 +98,7 @@ describe("CronService restart catch-up", () => {
     await store.cleanup();
   });
 
-  it("clears stale running markers and catches up overdue jobs on startup", async () => {
+  it("clears stale running markers without replaying interrupted startup jobs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -147,7 +147,7 @@ describe("CronService restart catch-up", () => {
 
     await cron.start();
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("resume stale marker", { agentId: undefined });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(noopLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "restart-stale-running" }),
       "cron: clearing stale running marker on startup",
@@ -156,8 +156,9 @@ describe("CronService restart catch-up", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((job) => job.id === "restart-stale-running");
     expect(updated?.state.runningAtMs).toBeUndefined();
-    expect(updated?.state.lastStatus).toBe("ok");
-    expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T17:00:00.000Z"));
+    expect(updated?.state.lastStatus).toBeUndefined();
+    expect(updated?.state.lastRunAtMs).toBeUndefined();
+    expect((updated?.state.nextRunAtMs ?? 0) > Date.parse("2025-12-13T17:00:00.000Z")).toBe(true);
 
     cron.stop();
     await store.cleanup();

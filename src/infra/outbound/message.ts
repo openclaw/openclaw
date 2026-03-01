@@ -69,8 +69,13 @@ type MessagePollParams = {
   question: string;
   options: string[];
   maxSelections?: number;
+  durationSeconds?: number;
   durationHours?: number;
   channel?: string;
+  accountId?: string;
+  threadId?: string;
+  silent?: boolean;
+  isAnonymous?: boolean;
   dryRun?: boolean;
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
@@ -83,6 +88,7 @@ export type MessagePollResult = {
   question: string;
   options: string[];
   maxSelections: number;
+  durationSeconds: number | null;
   durationHours: number | null;
   via: "gateway";
   result?: {
@@ -96,8 +102,15 @@ export type MessagePollResult = {
 };
 
 function resolveGatewayOptions(opts?: MessageGatewayOptions) {
+  // Security: backend callers (tools/agents) must not accept user-controlled gateway URLs.
+  // Use config-derived gateway target only.
+  const url =
+    opts?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    opts?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      ? undefined
+      : opts?.url;
   return {
-    url: opts?.url,
+    url,
     token: opts?.token,
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
@@ -239,6 +252,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     question: params.question,
     options: params.options,
     maxSelections: params.maxSelections,
+    durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
   const plugin = getChannelPlugin(channel);
@@ -257,6 +271,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       question: normalized.question,
       options: normalized.options,
       maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds ?? null,
       durationHours: normalized.durationHours ?? null,
       via: "gateway",
       dryRun: true,
@@ -279,8 +294,13 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       question: normalized.question,
       options: normalized.options,
       maxSelections: normalized.maxSelections,
+      durationSeconds: normalized.durationSeconds,
       durationHours: normalized.durationHours,
+      threadId: params.threadId,
+      silent: params.silent,
+      isAnonymous: params.isAnonymous,
       channel,
+      accountId: params.accountId,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },
     timeoutMs: gateway.timeoutMs,
@@ -295,6 +315,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     question: normalized.question,
     options: normalized.options,
     maxSelections: normalized.maxSelections,
+    durationSeconds: normalized.durationSeconds ?? null,
     durationHours: normalized.durationHours ?? null,
     via: "gateway",
     result,

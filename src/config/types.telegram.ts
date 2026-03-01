@@ -70,8 +70,9 @@ export type TelegramAccountConfig = {
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
+  /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
-  /** Optional allowlist for Telegram group senders (user ids or usernames). */
+  /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
@@ -150,7 +151,7 @@ export type TelegramTopicConfig = {
   skills?: string[];
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
-  /** Optional allowlist for topic senders (ids or usernames). */
+  /** Optional allowlist for topic senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
@@ -169,7 +170,7 @@ export type TelegramGroupConfig = {
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
-  /** Optional allowlist for group senders (ids or usernames). */
+  /** Optional allowlist for group senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;

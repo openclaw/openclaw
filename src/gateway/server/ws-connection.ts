@@ -6,6 +6,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import type { GatewayWsClient } from "./ws-types.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
+import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
@@ -243,6 +244,7 @@ export function attachGatewayWsConnectionHandler(params: {
         const context = buildRequestContext();
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {
+          removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
         }
       }

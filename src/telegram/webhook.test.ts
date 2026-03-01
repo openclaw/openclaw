@@ -9,6 +9,7 @@ const handlerSpy = vi.fn(
 );
 const setWebhookSpy = vi.fn();
 const stopSpy = vi.fn();
+const webhookCallbackSpy = vi.fn(() => handlerSpy);
 
 const createTelegramBotSpy = vi.fn(() => ({
   api: { setWebhook: setWebhookSpy },
@@ -17,7 +18,10 @@ const createTelegramBotSpy = vi.fn(() => ({
 
 vi.mock("grammy", async (importOriginal) => {
   const actual = await importOriginal<typeof import("grammy")>();
-  return { ...actual, webhookCallback: () => handlerSpy };
+  return {
+    ...actual,
+    webhookCallback: (...args: unknown[]) => webhookCallbackSpy(...args),
+  };
 });
 
 vi.mock("./bot.js", () => ({
@@ -27,10 +31,12 @@ vi.mock("./bot.js", () => ({
 describe("startTelegramWebhook", () => {
   it("starts server, registers webhook, and serves health", async () => {
     createTelegramBotSpy.mockClear();
+    webhookCallbackSpy.mockClear();
     const abort = new AbortController();
     const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
+      secret: "secret",
       accountId: "opie",
       config: cfg,
       port: 0, // random free port
@@ -51,6 +57,19 @@ describe("startTelegramWebhook", () => {
     const health = await fetch(`${url}/healthz`);
     expect(health.status).toBe(200);
     expect(setWebhookSpy).toHaveBeenCalled();
+    expect(webhookCallbackSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: expect.objectContaining({
+          setWebhook: expect.any(Function),
+        }),
+      }),
+      "http",
+      {
+        secretToken: "secret",
+        onTimeout: "return",
+        timeoutMilliseconds: 10_000,
+      },
+    );
 
     abort.abort();
   });
@@ -62,6 +81,7 @@ describe("startTelegramWebhook", () => {
     const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
+      secret: "secret",
       accountId: "opie",
       config: cfg,
       port: 0,
@@ -81,5 +101,13 @@ describe("startTelegramWebhook", () => {
     await fetch(`http://127.0.0.1:${addr.port}/hook`, { method: "POST" });
     expect(handlerSpy).toHaveBeenCalled();
     abort.abort();
+  });
+
+  it("rejects startup when webhook secret is missing", async () => {
+    await expect(
+      startTelegramWebhook({
+        token: "tok",
+      }),
+    ).rejects.toThrow(/requires a non-empty secret token/i);
   });
 });

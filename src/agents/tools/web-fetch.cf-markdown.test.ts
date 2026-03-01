@@ -3,6 +3,19 @@ import * as ssrf from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { createWebFetchTool } from "./web-tools.js";
 
+// Avoid dynamic-importing heavy readability deps in this unit test suite.
+vi.mock("./web-fetch-utils.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./web-fetch-utils.js")>("./web-fetch-utils.js");
+  return {
+    ...actual,
+    extractReadableContent: vi.fn().mockResolvedValue({
+      title: "HTML Page",
+      text: "HTML Page\n\nContent here.",
+    }),
+  };
+});
+
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const baseToolConfig = {
@@ -95,7 +108,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const tool = createWebFetchTool(baseToolConfig);
 
     const result = await tool?.execute?.("call", { url: "https://example.com/html" });
-    expect(result?.details?.extractor).not.toBe("cf-markdown");
+    expect(result?.details?.extractor).toBe("readability");
     expect(result?.details?.contentType).toBe("text/html");
   });
 

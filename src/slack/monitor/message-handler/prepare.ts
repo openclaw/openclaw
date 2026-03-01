@@ -342,7 +342,8 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
+  const mediaPlaceholder = media ? media.map((m) => m.placeholder).join(" ") : undefined;
+  const rawBody = (message.text ?? "").trim() || mediaPlaceholder || "";
   if (!rawBody) {
     return null;
   }
@@ -488,8 +489,9 @@ export async function prepareSlackMessage(params: {
           maxBytes: ctx.mediaMaxBytes,
         });
         if (threadStarterMedia) {
+          const starterPlaceholders = threadStarterMedia.map((m) => m.placeholder).join(", ");
           logVerbose(
-            `slack: hydrated thread starter file ${threadStarterMedia.placeholder} from root message`,
+            `slack: hydrated thread starter file ${starterPlaceholders} from root message`,
           );
         }
       }
@@ -558,6 +560,7 @@ export async function prepareSlackMessage(params: {
 
   // Use thread starter media if current message has none
   const effectiveMedia = media ?? threadStarterMedia;
+  const firstMedia = effectiveMedia?.[0];
 
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
@@ -599,9 +602,17 @@ export async function prepareSlackMessage(params: {
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
-    MediaPath: effectiveMedia?.path,
-    MediaType: effectiveMedia?.contentType,
-    MediaUrl: effectiveMedia?.path,
+    MediaPath: firstMedia?.path,
+    MediaType: firstMedia?.contentType,
+    MediaUrl: firstMedia?.path,
+    MediaPaths:
+      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
+    MediaUrls:
+      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
+    MediaTypes:
+      effectiveMedia && effectiveMedia.length > 0
+        ? effectiveMedia.map((m) => m.contentType ?? "")
+        : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,

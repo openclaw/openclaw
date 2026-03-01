@@ -8,21 +8,15 @@ vi.mock("../pi-model-discovery.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { discoverModels } from "../pi-model-discovery.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
-
-const makeModel = (id: string) => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"] as const,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1,
-  maxTokens: 1,
-});
+import {
+  makeModel,
+  mockDiscoveredModel,
+  OPENAI_CODEX_TEMPLATE_MODEL,
+  resetMockDiscoverModels,
+} from "./model.test-harness.js";
 
 beforeEach(() => {
-  vi.mocked(discoverModels).mockReturnValue({
-    find: vi.fn(() => null),
-  } as unknown as ReturnType<typeof discoverModels>);
+  resetMockDiscoverModels();
 });
 
 describe("buildInlineProviderModels", () => {
@@ -136,27 +130,11 @@ describe("resolveModel", () => {
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
-    const templateModel = {
-      id: "gpt-5.2-codex",
-      name: "GPT-5.2 Codex",
+    mockDiscoveredModel({
       provider: "openai-codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-      input: ["text", "image"] as const,
-      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-      contextWindow: 272000,
-      maxTokens: 128000,
-    };
-
-    vi.mocked(discoverModels).mockReturnValue({
-      find: vi.fn((provider: string, modelId: string) => {
-        if (provider === "openai-codex" && modelId === "gpt-5.2-codex") {
-          return templateModel;
-        }
-        return null;
-      }),
-    } as unknown as ReturnType<typeof discoverModels>);
+      modelId: "gpt-5.2-codex",
+      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    });
 
     const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 

@@ -1,38 +1,62 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawTools } from "./openclaw-tools.js";
+import "./test-helpers/fast-core-tools.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
-const callGatewayMock = vi.fn();
+type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+
+const hoisted = vi.hoisted(() => {
+  const callGatewayMock = vi.fn();
+  const defaultConfigOverride = {
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+    },
+  } as SessionsSpawnTestConfig;
+  const state = { configOverride: defaultConfigOverride };
+  return { callGatewayMock, defaultConfigOverride, state };
+});
+
+const callGatewayMock = hoisted.callGatewayMock;
+
+function resetConfigOverride() {
+  hoisted.state.configOverride = hoisted.defaultConfigOverride;
+}
+
+function setConfigOverride(next: SessionsSpawnTestConfig) {
+  hoisted.state.configOverride = next;
+}
+
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
-
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-};
+// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    loadConfig: () => hoisted.state.configOverride,
     resolveGatewayPort: () => 18789,
   };
 });
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+// Same module, different specifier (used by tools under src/agents/tools/*).
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
+    resolveGatewayPort: () => 18789,
+  };
+});
 
 describe("openclaw-tools: subagents", () => {
   beforeEach(() => {
-    configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-    };
+    resetConfigOverride();
   });
 
   it("sessions_spawn applies a model to the child session", async () => {
@@ -67,7 +91,7 @@ describe("openclaw-tools: subagents", () => {
 
     const tool = createOpenClawTools({
       agentSessionKey: "discord:group:req",
-      agentSurface: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) {
       throw new Error("missing sessions_spawn tool");
@@ -164,10 +188,10 @@ describe("openclaw-tools: subagents", () => {
   it("sessions_spawn applies default subagent model from defaults config", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    configOverride = {
+    setConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
-    };
+    });
     const calls: Array<{ method?: string; params?: unknown }> = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,54 +17,51 @@ describe("run-node script", () => {
     "preserves control-ui assets by building with tsdown --no-clean",
     async () => {
       await withTempDir(async (tmp) => {
-        const runNodeScript = path.join(process.cwd(), "scripts", "run-node.mjs");
-        const fakeBinDir = path.join(tmp, ".fake-bin");
-        const fakePnpmPath = path.join(fakeBinDir, "pnpm");
         const argsPath = path.join(tmp, ".pnpm-args.txt");
         const indexPath = path.join(tmp, "dist", "control-ui", "index.html");
 
-        await fs.mkdir(fakeBinDir, { recursive: true });
         await fs.mkdir(path.dirname(indexPath), { recursive: true });
         await fs.writeFile(indexPath, "<html>sentinel</html>\n", "utf-8");
 
-        await fs.writeFile(
-          path.join(tmp, "openclaw.mjs"),
-          "#!/usr/bin/env node\nif (process.argv.includes('--version')) console.log('9.9.9-test');\n",
-          "utf-8",
-        );
-        await fs.chmod(path.join(tmp, "openclaw.mjs"), 0o755);
-
-        const fakePnpm = `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const args = process.argv.slice(2);
-const cwd = process.cwd();
-fs.writeFileSync(path.join(cwd, ".pnpm-args.txt"), args.join(" "), "utf-8");
-if (!args.includes("--no-clean")) {
-  fs.rmSync(path.join(cwd, "dist", "control-ui"), { recursive: true, force: true });
-}
-fs.mkdirSync(path.join(cwd, "dist"), { recursive: true });
-fs.writeFileSync(path.join(cwd, "dist", "entry.js"), "export {}\\n", "utf-8");
-`;
-        await fs.writeFile(fakePnpmPath, fakePnpm, "utf-8");
-        await fs.chmod(fakePnpmPath, 0o755);
-
-        const env = {
-          ...process.env,
-          PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-          OPENCLAW_FORCE_BUILD: "1",
-          OPENCLAW_RUNNER_LOG: "0",
+        const nodeCalls: string[][] = [];
+        const spawn = (cmd: string, args: string[]) => {
+          if (cmd === "pnpm") {
+            void fs.writeFile(argsPath, args.join(" "), "utf-8");
+            if (!args.includes("--no-clean")) {
+              void fs.rm(path.join(tmp, "dist", "control-ui"), { recursive: true, force: true });
+            }
+          }
+          if (cmd === process.execPath) {
+            nodeCalls.push([cmd, ...args]);
+          }
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              if (event === "exit") {
+                queueMicrotask(() => cb(0, null));
+              }
+              return undefined;
+            },
+          };
         };
-        const result = spawnSync(process.execPath, [runNodeScript, "--version"], {
+
+        const { runNodeMain } = await import("../../scripts/run-node.mjs");
+        const exitCode = await runNodeMain({
           cwd: tmp,
-          env,
-          encoding: "utf-8",
+          args: ["--version"],
+          env: {
+            ...process.env,
+            OPENCLAW_FORCE_BUILD: "1",
+            OPENCLAW_RUNNER_LOG: "0",
+          },
+          spawn,
+          execPath: process.execPath,
+          platform: process.platform,
         });
 
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain("9.9.9-test");
+        expect(exitCode).toBe(0);
         await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain("exec tsdown --no-clean");
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
+        expect(nodeCalls).toEqual([[process.execPath, "openclaw.mjs", "--version"]]);
       });
     },
   );

@@ -25,6 +25,10 @@ const wsInflightOptimized = new Map<string, number>();
 const wsInflightSince = new Map<string, number>();
 const wsLog = createSubsystemLogger("gateway/ws");
 
+export function shouldLogWs(): boolean {
+  return shouldLogSubsystemToConsole("gateway/ws");
+}
+
 export function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {

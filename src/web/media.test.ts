@@ -108,6 +108,51 @@ describe("web media loading", () => {
     });
   });
 
+  it("strips MEDIA: prefix before reading local file", async () => {
+    const buffer = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+
+    const file = await writeTempFile(buffer, ".png");
+
+    const result = await loadWebMedia(`MEDIA:${file}`, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("strips MEDIA: prefix with whitespace after colon", async () => {
+    const buffer = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+
+    const file = await writeTempFile(buffer, ".png");
+
+    const result = await loadWebMedia(`MEDIA: ${file}`, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("strips MEDIA: prefix with extra whitespace (LLM-friendly)", async () => {
+    const buffer = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#0000ff" },
+    })
+      .png()
+      .toBuffer();
+
+    const file = await writeTempFile(buffer, ".png");
+
+    const result = await loadWebMedia(`  MEDIA :  ${file}`, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
   it("compresses large local images under the provided cap", async () => {
     const { buffer, file } = await createLargeTestJpeg();
 
@@ -159,6 +204,28 @@ describe("web media loading", () => {
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
     );
+
+    fetchMock.mockRestore();
+  });
+
+  it("blocks private network URL fetches (SSRF guard)", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(loadWebMedia("http://127.0.0.1:8080/internal-api", 1024 * 1024)).rejects.toThrow(
+      /blocked|private|internal/i,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fetchMock.mockRestore();
+  });
+
+  it("blocks cloud metadata hostnames (SSRF guard)", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await expect(
+      loadWebMedia("http://metadata.google.internal/computeMetadata/v1/", 1024 * 1024),
+    ).rejects.toThrow(/blocked|private|internal|metadata/i);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
   });
@@ -262,7 +329,46 @@ describe("local media root guard", () => {
   });
 
   it("allows any path when localRoots is 'any'", async () => {
-    const result = await loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: "any" });
+    const result = await loadWebMedia(tinyPngFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: (filePath) => fs.readFile(filePath),
+    });
     expect(result.kind).toBe("image");
+  });
+
+  it("rejects filesystem root entries in localRoots", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, 1024 * 1024, {
+        localRoots: [path.parse(tinyPngFile).root],
+      }),
+    ).rejects.toThrow(/refuses filesystem root/i);
+  });
+
+  it("allows default OpenClaw state workspace and sandbox roots", async () => {
+    const { STATE_DIR } = await import("../config/paths.js");
+    const readFile = vi.fn(async () => Buffer.from("generated-media"));
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "workspace", "tmp", "render.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
+
+    await expect(
+      loadWebMedia(path.join(STATE_DIR, "sandboxes", "session-1", "frame.bin"), {
+        maxBytes: 1024 * 1024,
+        readFile,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: "unknown",
+      }),
+    );
   });
 });

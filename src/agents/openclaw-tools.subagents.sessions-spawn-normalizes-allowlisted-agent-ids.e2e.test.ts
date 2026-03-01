@@ -1,45 +1,69 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
+import "./test-helpers/fast-core-tools.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
-const callGatewayMock = vi.fn();
+type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+
+const hoisted = vi.hoisted(() => {
+  const callGatewayMock = vi.fn();
+  const defaultConfigOverride = {
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+    },
+  } as SessionsSpawnTestConfig;
+  const state = { configOverride: defaultConfigOverride };
+  return { callGatewayMock, defaultConfigOverride, state };
+});
+
+const callGatewayMock = hoisted.callGatewayMock;
+
+function resetConfigOverride() {
+  hoisted.state.configOverride = hoisted.defaultConfigOverride;
+}
+
+function setConfigOverride(next: SessionsSpawnTestConfig) {
+  hoisted.state.configOverride = next;
+}
+
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
-
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-};
+// Some tools import callGateway via "../../gateway/call.js" (from nested folders). Mock that too.
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    loadConfig: () => hoisted.state.configOverride,
     resolveGatewayPort: () => 18789,
   };
 });
 
-import { emitAgentEvent } from "../infra/agent-events.js";
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+// Same module, different specifier (used by tools under src/agents/tools/*).
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => hoisted.state.configOverride,
+    resolveGatewayPort: () => 18789,
+  };
+});
 
 describe("openclaw-tools: subagents", () => {
   beforeEach(() => {
-    configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-    };
+    resetConfigOverride();
   });
 
   it("sessions_spawn normalizes allowlisted agent ids", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    configOverride = {
+    setConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -54,7 +78,7 @@ describe("openclaw-tools: subagents", () => {
           },
         ],
       },
-    };
+    });
 
     let childSessionKey: string | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -92,7 +116,7 @@ describe("openclaw-tools: subagents", () => {
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    configOverride = {
+    setConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
@@ -107,7 +131,7 @@ describe("openclaw-tools: subagents", () => {
           },
         ],
       },
-    };
+    });
 
     const tool = createOpenClawTools({
       agentSessionKey: "main",

@@ -1,59 +1,7 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Repository Overview
-
-OpenClaw is a personal AI assistant platform with a local-first Gateway architecture. It connects to messaging channels (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, etc.) and provides an AI agent runtime with tools, sessions, and multi-channel routing.
+# Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
-- Docs: https://docs.openclaw.ai (Mintlify)
-
-## Fork & Upstream Sync
-
-This repo is a fork of `openclaw/openclaw`. We track upstream for fixes and features.
-
-**Remotes:**
-
-- `origin` → our fork (`Interstellar-code/operator1`)
-- `upstream` → original repo (`openclaw/openclaw`)
-
-**Branches:**
-
-- `main` → our working branch (custom work goes here)
-
-**Current sync:** `v2026.2.9` (synced 2026-02-10)
-
-### Sync Workflow
-
-```bash
-# 1. Fetch upstream (tags + branches)
-git fetch upstream --tags
-
-# 2. Review what's new
-git log main..upstream/main --oneline     # new commits
-git diff main..upstream/main --stat       # file changes
-
-# 3. Merge upstream into main (prefer release tags)
-git merge v2026.X.XX                      # merge specific release tag
-# or: git merge upstream/main             # merge latest
-
-# 4. Tag the sync point and push
-git tag sync-YYYY.M.D
-git push origin main --tags
-
-# 5. Cherry-pick urgent security fixes (if needed between releases)
-git cherry-pick <commit-sha>
-```
-
-### Tracking Strategy
-
-- **Primary:** Track by releases (`vYYYY.M.D` tags) for stability
-- **Security:** Cherry-pick security fixes immediately (don't wait for releases)
-- **Watch:** `CHANGELOG.md` is well-maintained; check for security fixes
-- **Tag sync points:** After merging, tag with `sync-YYYY.M.D` for reference
-
----
+- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 
 ## Project Structure & Module Organization
 
@@ -79,7 +27,7 @@ git cherry-pick <commit-sha>
 - When Peter asks for links, reply with full `https://docs.openclaw.ai/...` URLs (not root-relative).
 - When you touch docs, end the reply with the `https://docs.openclaw.ai/...` URLs you referenced.
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
-- Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and "gateway host".
+- Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
 ## Docs i18n (zh-CN)
 
@@ -123,7 +71,7 @@ git cherry-pick <commit-sha>
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
 - Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
 - Add brief code comments for tricky or non-obvious logic.
-- Keep files concise; extract helpers instead of "V2" copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
+- Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
 
@@ -140,7 +88,7 @@ git cherry-pick <commit-sha>
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
 - Do not set test workers above 16; tried already.
 - Live tests (real keys): `CLAWDBOT_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
-- Full kit + what's covered: `docs/testing.md`.
+- Full kit + what’s covered: `docs/testing.md`.
 - Changelog: user-facing changes only; no internal/meta notes (version alignment, appcast reminders, release process).
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
@@ -152,20 +100,9 @@ git cherry-pick <commit-sha>
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
-- Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
-- Read this when submitting an issue: `docs/help/submitting-an-issue.md` ([Submitting an Issue](https://docs.openclaw.ai/help/submitting-an-issue))
-- PR review flow: when given a PR link, review via `gh pr view`/`gh pr diff` and do **not** change branches.
-- PR review calls: prefer a single `gh pr view --json ...` to batch metadata/comments; run `gh pr diff` only when needed.
-- Before starting a review when a GH Issue/PR is pasted: run `git pull`; if there are local changes or unpushed commits, stop and alert the user before reviewing.
-- Goal: merge PRs. Prefer **rebase** when commits are clean; **squash** when history is messy.
-- PR merge flow: create a temp branch from `main`, merge the PR branch into it (prefer squash unless commit history is important; use rebase/merge when it is). Always try to merge the PR unless it's truly difficult, then use another approach. If we squash, add the PR author as a co-contributor. Apply fixes, add changelog entry (include PR # + thanks), run full gate before the final commit, commit, merge back to `main`, delete the temp branch, and end on `main`.
-- If you review a PR and later do work on it, land via merge/squash (no direct-main commits) and always add the PR author as a co-contributor.
-- When working on a PR: add a changelog entry with the PR number and thank the contributor.
-- When working on an issue: reference the issue in the changelog entry.
-- When merging a PR: leave a PR comment that explains exactly what we did and include the SHA hashes.
-- When merging a PR from a new contributor: add their avatar to the README "Thanks to all clawtributors" thumbnail list.
-- After merging a PR: run `bun scripts/update-clawtributors.ts` if the contributor is missing, then commit the regenerated README.
-- GitHub issues/comments: use literal multiline strings or `-F - <<'EOF'` for real newlines.
+- PR submission template (canonical): `.github/pull_request_template.md`
+- Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
+- **MUST READ BEFORE SUBMITTING PR OR ISSUE:** [Agent Submission Control Policy](.agents/AGENT_SUBMISSION_CONTROL_POLICY.md)
 
 ## Shorthand Commands
 
@@ -198,16 +135,16 @@ git cherry-pick <commit-sha>
 - Never update the Carbon dependency.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
 - Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
-- CLI progress: use `src/cli/progress.ts` (`osc-progress` + `@clack/prompts` spinner); don't hand-roll spinners/bars.
+- CLI progress: use `src/cli/progress.ts` (`osc-progress` + `@clack/prompts` spinner); don’t hand-roll spinners/bars.
 - Status output: keep tables + ANSI-safe wrapping (`src/terminal/table.ts`); `status --all` = read-only/pasteable, `status --deep` = probes.
 - Gateway currently runs only as the menubar app; there is no separate LaunchAgent/helper label installed. Restart via the OpenClaw Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep openclaw` rather than assuming a fixed label. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
 - macOS logs: use `./scripts/clawlog.sh` to query unified logs for the OpenClaw subsystem; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - If shared guardrails are available locally, review them; otherwise follow this repo's guidance.
-- SwiftUI state management (iOS/macOS): prefer the `Observation` framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`; don't introduce new `ObservableObject` unless required for compatibility, and migrate existing usages when touching related code.
+- SwiftUI state management (iOS/macOS): prefer the `Observation` framework (`@Observable`, `@Bindable`) over `ObservableObject`/`@StateObject`; don’t introduce new `ObservableObject` unless required for compatibility, and migrate existing usages when touching related code.
 - Connection providers: when adding a new connection, update every UI surface and docs (macOS app, web UI, mobile if applicable, onboarding/overview docs) and add matching status + configuration forms so provider lists and settings stay in sync.
 - Version locations: `package.json` (CLI), `apps/android/app/build.gradle.kts` (versionName/versionCode), `apps/ios/Sources/Info.plist` + `apps/ios/Tests/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `apps/macos/Sources/OpenClaw/Resources/Info.plist` (CFBundleShortVersionString/CFBundleVersion), `docs/install/updating.md` (pinned npm version), `docs/platforms/mac/release.md` (APP_VERSION/APP_BUILD examples), Peekaboo Xcode projects/Info.plists (MARKETING_VERSION/CURRENT_PROJECT_VERSION).
 - "Bump version everywhere" means all version locations above **except** `appcast.xml` (only touch appcast when cutting a new macOS Sparkle release).
-- **Restart apps:** "restart iOS/Android apps" means rebuild (recompile/install) and relaunch, not just kill/launch.
+- **Restart apps:** “restart iOS/Android apps” means rebuild (recompile/install) and relaunch, not just kill/launch.
 - **Device checks:** before testing, verify connected real devices (iOS/Android) before reaching for simulators/emulators.
 - iOS Team ID lookup: `security find-identity -p codesigning -v` → use Apple Development (…) TEAMID. Fallback: `defaults read com.apple.dt.Xcode IDEProvisioningTeamIdentifiers`.
 - A2UI bundle hash: `src/canvas-host/a2ui/.bundle.hash` is auto-generated; ignore unexpected changes, and only regenerate via `pnpm canvas:a2ui:bundle` (or `scripts/bundle-a2ui.sh`) when needed. Commit the hash as a separate commit.
@@ -224,19 +161,19 @@ git cherry-pick <commit-sha>
   - If commit/push already requested, auto-stage and include formatting-only follow-ups in the same commit (or a tiny follow-up commit if needed), no extra confirmation.
   - Only ask when changes are semantic (logic/data/behavior).
 - Lobster seam: use the shared CLI palette in `src/terminal/palette.ts` (no hardcoded colors); apply palette to onboarding/config prompts and other TTY UI output as needed.
-- **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief "other files present" note only if relevant.
+- **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
 - Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
 - Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
 - Tool schema guardrails: avoid raw `format` property names in tool schemas; some validators treat `format` as a reserved keyword and reject the schema.
-- When asked to open a "session" file, open the Pi session logs under `~/.openclaw/agents/<agentId>/sessions/*.jsonl` (use the `agent=<id>` value in the Runtime line of the system prompt; newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from another machine, SSH via Tailscale and read the same path there.
+- When asked to open a “session” file, open the Pi session logs under `~/.openclaw/agents/<agentId>/sessions/*.jsonl` (use the `agent=<id>` value in the Runtime line of the system prompt; newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from another machine, SSH via Tailscale and read the same path there.
 - Do not rebuild the macOS app over SSH; rebuilds must be run directly on the Mac.
 - Never send streaming/partial replies to external messaging surfaces (WhatsApp, Telegram); only final replies should be delivered there. Streaming/tool events may still go to internal UIs/control channel.
 - Voice wake forwarding tips:
-  - Command template should stay `openclaw-mac agent --message "${text}" --thinking low`; `VoiceWakeForwarder` already shell-escapes `${text}`. Don't add extra quotes.
-  - launchd PATH is minimal; ensure the app's launch agent PATH includes standard system paths plus your pnpm bin (typically `$HOME/Library/pnpm`) so `pnpm`/`openclaw` binaries resolve when invoked via `openclaw-mac`.
-- For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool's escaping.
-- Release guardrails: do not change version numbers without operator's explicit consent; always ask permission before running any npm publish/release step.
+  - Command template should stay `openclaw-mac agent --message "${text}" --thinking low`; `VoiceWakeForwarder` already shell-escapes `${text}`. Don’t add extra quotes.
+  - launchd PATH is minimal; ensure the app’s launch agent PATH includes standard system paths plus your pnpm bin (typically `$HOME/Library/pnpm`) so `pnpm`/`openclaw` binaries resolve when invoked via `openclaw-mac`.
+- For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
+- Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 
 ## NPM + 1Password (publish/verify)
 

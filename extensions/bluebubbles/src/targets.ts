@@ -1,3 +1,10 @@
+import {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+} from "openclaw/plugin-sdk";
+
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
 export type BlueBubblesTarget =
@@ -205,54 +212,30 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   }
   const lower = trimmed.toLowerCase();
 
-  for (const { prefix, service } of SERVICE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const remainder = stripPrefix(trimmed, prefix);
-      if (!remainder) {
-        throw new Error(`${prefix} target is required`);
-      }
-      const remainderLower = remainder.toLowerCase();
-      const isChatTarget =
-        CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-        remainderLower.startsWith("group:");
-      if (isChatTarget) {
-        return parseBlueBubblesTarget(remainder);
-      }
-      return { kind: "handle", to: remainder, service };
-    }
+  const servicePrefixed = resolveServicePrefixedTarget({
+    trimmed,
+    lower,
+    servicePrefixes: SERVICE_PREFIXES,
+    isChatTarget: (remainderLower) =>
+      CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+      remainderLower.startsWith("group:"),
+    parseTarget: parseBlueBubblesTarget,
+  });
+  if (servicePrefixed) {
+    return servicePrefixed;
   }
 
-  for (const prefix of CHAT_ID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (!Number.isFinite(chatId)) {
-        throw new Error(`Invalid chat_id: ${value}`);
-      }
-      return { kind: "chat_id", chatId };
-    }
-  }
-
-  for (const prefix of CHAT_GUID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_guid is required");
-      }
-      return { kind: "chat_guid", chatGuid: value };
-    }
-  }
-
-  for (const prefix of CHAT_IDENTIFIER_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (!value) {
-        throw new Error("chat_identifier is required");
-      }
-      return { kind: "chat_identifier", chatIdentifier: value };
-    }
+  const chatTarget = parseChatTargetPrefixesOrThrow({
+    trimmed,
+    lower,
+    chatIdPrefixes: CHAT_ID_PREFIXES,
+    chatGuidPrefixes: CHAT_GUID_PREFIXES,
+    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+  });
+  if (chatTarget) {
+    return chatTarget;
   }
 
   if (lower.startsWith("group:")) {
@@ -293,42 +276,25 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
   }
   const lower = trimmed.toLowerCase();
 
-  for (const { prefix } of SERVICE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const remainder = stripPrefix(trimmed, prefix);
-      if (!remainder) {
-        return { kind: "handle", handle: "" };
-      }
-      return parseBlueBubblesAllowTarget(remainder);
-    }
+  const servicePrefixed = resolveServicePrefixedAllowTarget({
+    trimmed,
+    lower,
+    servicePrefixes: SERVICE_PREFIXES,
+    parseAllowTarget: parseBlueBubblesAllowTarget,
+  });
+  if (servicePrefixed) {
+    return servicePrefixed;
   }
 
-  for (const prefix of CHAT_ID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (Number.isFinite(chatId)) {
-        return { kind: "chat_id", chatId };
-      }
-    }
-  }
-
-  for (const prefix of CHAT_GUID_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (value) {
-        return { kind: "chat_guid", chatGuid: value };
-      }
-    }
-  }
-
-  for (const prefix of CHAT_IDENTIFIER_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const value = stripPrefix(trimmed, prefix);
-      if (value) {
-        return { kind: "chat_identifier", chatIdentifier: value };
-      }
-    }
+  const chatTarget = parseChatAllowTargetPrefixes({
+    trimmed,
+    lower,
+    chatIdPrefixes: CHAT_ID_PREFIXES,
+    chatGuidPrefixes: CHAT_GUID_PREFIXES,
+    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
+  });
+  if (chatTarget) {
+    return chatTarget;
   }
 
   if (lower.startsWith("group:")) {

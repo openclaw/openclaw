@@ -1,235 +1,271 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { monitorIMessageProvider } from "./monitor.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  flush,
+  getCloseResolve,
+  getConfigMock,
+  getReadAllowFromStoreMock,
+  getNotificationHandler,
+  getReplyMock,
+  getSendMock,
+  getUpsertPairingRequestMock,
+  installMonitorIMessageProviderTestHooks,
+  setConfigMock,
+  waitForSubscribe,
+} from "./monitor.test-harness.js";
 
-const requestMock = vi.fn();
-const stopMock = vi.fn();
-const sendMock = vi.fn();
-const replyMock = vi.fn();
-const updateLastRouteMock = vi.fn();
-const readAllowFromStoreMock = vi.fn();
-const upsertPairingRequestMock = vi.fn();
+installMonitorIMessageProviderTestHooks();
 
-let config: Record<string, unknown> = {};
-let notificationHandler: ((msg: { method: string; params?: unknown }) => void) | undefined;
-let closeResolve: (() => void) | undefined;
+let monitorIMessageProvider: typeof import("./monitor.js").monitorIMessageProvider;
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => config,
-  };
+beforeAll(async () => {
+  ({ monitorIMessageProvider } = await import("./monitor.js"));
 });
 
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
-}));
+function startMonitor() {
+  return monitorIMessageProvider();
+}
+const replyMock = getReplyMock();
+const sendMock = getSendMock();
+const readAllowFromStoreMock = getReadAllowFromStoreMock();
+const upsertPairingRequestMock = getUpsertPairingRequestMock();
 
-vi.mock("./send.js", () => ({
-  sendMessageIMessage: (...args: unknown[]) => sendMock(...args),
-}));
+type TestConfig = {
+  channels: Record<string, unknown> & { imessage: Record<string, unknown> };
+  messages: Record<string, unknown>;
+  session: Record<string, unknown>;
+  [k: string]: unknown;
+};
 
-vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
+function getConfig(): TestConfig {
+  return getConfigMock() as unknown as TestConfig;
+}
 
-vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-  updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-}));
+function notifyMessage(message: unknown) {
+  getNotificationHandler()?.({
+    method: "message",
+    params: { message },
+  });
+}
 
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: vi.fn(async (opts: { onNotification?: typeof notificationHandler }) => {
-    notificationHandler = opts.onNotification;
-    return {
-      request: (...args: unknown[]) => requestMock(...args),
-      waitForClose: () =>
-        new Promise<void>((resolve) => {
-          closeResolve = resolve;
-        }),
-      stop: (...args: unknown[]) => stopMock(...args),
-    };
-  }),
-}));
-
-vi.mock("./probe.js", () => ({
-  probeIMessage: vi.fn(async () => ({ ok: true })),
-}));
-
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-async function waitForSubscribe() {
-  for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
+async function closeMonitor() {
+  for (let i = 0; i < 20; i += 1) {
+    const close = getCloseResolve();
+    if (close) {
+      close();
       return;
     }
     await flush();
   }
+  throw new Error("imessage test harness: closeResolve not set");
 }
 
-beforeEach(() => {
-  config = {
-    channels: {
-      imessage: {
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        groups: { "*": { requireMention: true } },
-      },
-    },
-    session: { mainKey: "main" },
-    messages: {
-      groupChat: { mentionPatterns: ["@openclaw"] },
-    },
-  };
-  requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe") {
-      return Promise.resolve({ subscription: 1 });
-    }
-    return Promise.resolve({});
-  });
-  stopMock.mockReset().mockResolvedValue(undefined);
-  sendMock.mockReset().mockResolvedValue({ messageId: "ok" });
-  replyMock.mockReset().mockResolvedValue({ text: "ok" });
-  updateLastRouteMock.mockReset();
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  notificationHandler = undefined;
-  closeResolve = undefined;
-});
-
 describe("monitorIMessageProvider", () => {
-  it("skips group messages without a mention by default", async () => {
-    const run = monitorIMessageProvider();
+  it("handles default config gating, formatting, and reply context", async () => {
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 1,
-          chat_id: 99,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello group",
-          is_group: true,
-        },
-      },
+    notifyMessage({
+      id: 1,
+      sender: { nested: "not-a-string" },
+      text: "hello",
     });
-
     await flush();
-    closeResolve?.();
-    await run;
-
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
+    replyMock.mockClear();
+    sendMock.mockClear();
+
+    notifyMessage({
+      id: 2,
+      chat_id: 99,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello group",
+      is_group: true,
+    });
+    await flush();
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    replyMock.mockClear();
+    sendMock.mockClear();
+
+    replyMock.mockResolvedValueOnce({ text: "yo" });
+    notifyMessage({
+      id: 3,
+      chat_id: 42,
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+      chat_name: "Lobster Squad",
+      participants: ["+1555", "+1556"],
+    });
+    await flush();
+    expect(replyMock).toHaveBeenCalledOnce();
+    {
+      const ctx = replyMock.mock.calls[0]?.[0] as { Body?: string; ChatType?: string };
+      expect(ctx.ChatType).toBe("group");
+      // Sender should appear as prefix in group messages (no redundant [from:] suffix)
+      expect(String(ctx.Body ?? "")).toContain("+15550002222:");
+      expect(String(ctx.Body ?? "")).not.toContain("[from:");
+    }
+    expect(sendMock).toHaveBeenCalledWith(
+      "chat_id:42",
+      "yo",
+      expect.objectContaining({ client: expect.any(Object) }),
+    );
+    replyMock.mockClear();
+    sendMock.mockClear();
+
+    notifyMessage({
+      id: 4,
+      chat_id: 99,
+      chat_name: "Test Group",
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "@openclaw hi",
+      is_group: true,
+      created_at: "2026-01-17T00:00:00Z",
+    });
+    await flush();
+    expect(replyMock).toHaveBeenCalled();
+    {
+      const ctx = replyMock.mock.calls[0]?.[0];
+      const body = ctx?.Body ?? "";
+      expect(body).toContain("Test Group id:99");
+      expect(body).toContain("+15550001111: @openclaw hi");
+    }
+    replyMock.mockClear();
+    sendMock.mockClear();
+
+    notifyMessage({
+      id: 5,
+      chat_id: 55,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "replying now",
+      is_group: false,
+      reply_to_id: 9001,
+      reply_to_text: "original message",
+      reply_to_sender: "+15559998888",
+    });
+    await flush();
+    expect(replyMock).toHaveBeenCalled();
+    {
+      const ctx = replyMock.mock.calls[0]?.[0] as {
+        Body?: string;
+        ReplyToId?: string;
+        ReplyToBody?: string;
+        ReplyToSender?: string;
+      };
+      expect(ctx.ReplyToId).toBe("9001");
+      expect(ctx.ReplyToBody).toBe("original message");
+      expect(ctx.ReplyToSender).toBe("+15559998888");
+      expect(String(ctx.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
+      expect(String(ctx.Body ?? "")).toContain("original message");
+    }
+
+    await closeMonitor();
+    await run;
   });
 
   it("allows group messages when imessage groups default disables mention gating", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           groupPolicy: "open",
           groups: { "*": { requireMention: false } },
         },
       },
-    };
-    const run = monitorIMessageProvider();
+    });
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 11,
-          chat_id: 123,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello group",
-          is_group: true,
-        },
-      },
+    notifyMessage({
+      id: 11,
+      chat_id: 123,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello group",
+      is_group: true,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
   });
 
   it("allows group messages when requireMention is true but no mentionPatterns exist", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
-      messages: { groupChat: { mentionPatterns: [] } },
+      messages: {
+        ...config.messages,
+        groupChat: { mentionPatterns: [] },
+      },
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           groupPolicy: "open",
           groups: { "*": { requireMention: true } },
         },
       },
-    };
-    const run = monitorIMessageProvider();
+    });
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 12,
-          chat_id: 777,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello group",
-          is_group: true,
-        },
-      },
+    notifyMessage({
+      id: 12,
+      chat_id: 777,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello group",
+      is_group: true,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
   });
 
   it("blocks group messages when imessage.groups is set without a wildcard", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           groups: { "99": { requireMention: false } },
-        },
-      },
-    };
-    const run = monitorIMessageProvider();
-    await waitForSubscribe();
-
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 13,
-          chat_id: 123,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "@openclaw hello",
-          is_group: true,
         },
       },
     });
 
+    const run = startMonitor();
+    await waitForSubscribe();
+
+    notifyMessage({
+      id: 13,
+      chat_id: 123,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "@openclaw hello",
+      is_group: true,
+    });
+
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -237,38 +273,34 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("treats configured chat_id as a group session even when is_group is false", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           dmPolicy: "open",
           allowFrom: ["*"],
           groups: { "2": { requireMention: false } },
         },
       },
-    };
+    });
 
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 14,
-          chat_id: 2,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello",
-          is_group: false,
-        },
-      },
+    notifyMessage({
+      id: 14,
+      chat_id: 2,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello",
+      is_group: false,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).toHaveBeenCalled();
@@ -281,30 +313,30 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("prefixes final replies with responsePrefix", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
-      messages: { responsePrefix: "PFX" },
-    };
+      messages: {
+        ...config.messages,
+        responsePrefix: "PFX",
+      },
+    });
     replyMock.mockResolvedValue({ text: "final reply" });
-    const run = monitorIMessageProvider();
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 7,
-          chat_id: 77,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello",
-          is_group: false,
-        },
-      },
+    notifyMessage({
+      id: 7,
+      chat_id: 77,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello",
+      is_group: false,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -312,37 +344,34 @@ describe("monitorIMessageProvider", () => {
   });
 
   it("defaults to dmPolicy=pairing behavior when allowFrom is empty", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           dmPolicy: "pairing",
           allowFrom: [],
           groups: { "*": { requireMention: true } },
         },
       },
-    };
-    const run = monitorIMessageProvider();
+    });
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 99,
-          chat_id: 77,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "hello",
-          is_group: false,
-        },
-      },
+    notifyMessage({
+      id: 99,
+      chat_id: 77,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello",
+      is_group: false,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
@@ -354,183 +383,180 @@ describe("monitorIMessageProvider", () => {
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   });
 
-  it("delivers group replies when mentioned", async () => {
-    replyMock.mockResolvedValueOnce({ text: "yo" });
-    const run = monitorIMessageProvider();
-    await waitForSubscribe();
-
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 2,
-          chat_id: 42,
-          sender: "+15550002222",
-          is_from_me: false,
-          text: "@openclaw ping",
-          is_group: true,
-          chat_name: "Lobster Squad",
-          participants: ["+1555", "+1556"],
-        },
-      },
-    });
-
-    await flush();
-    closeResolve?.();
-    await run;
-
-    expect(replyMock).toHaveBeenCalledOnce();
-    const ctx = replyMock.mock.calls[0]?.[0] as { Body?: string; ChatType?: string };
-    expect(ctx.ChatType).toBe("group");
-    // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(ctx.Body ?? "")).toContain("+15550002222:");
-    expect(String(ctx.Body ?? "")).not.toContain("[from:");
-
-    expect(sendMock).toHaveBeenCalledWith(
-      "chat_id:42",
-      "yo",
-      expect.objectContaining({ client: expect.any(Object) }),
-    );
-  });
-
   it("honors group allowlist when groupPolicy is allowlist", async () => {
-    config = {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
+          ...config.channels.imessage,
           groupPolicy: "allowlist",
           groupAllowFrom: ["chat_id:101"],
         },
       },
-    };
-    const run = monitorIMessageProvider();
+    });
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 3,
-          chat_id: 202,
-          sender: "+15550003333",
-          is_from_me: false,
-          text: "@openclaw hi",
-          is_group: true,
-        },
-      },
+    notifyMessage({
+      id: 3,
+      chat_id: 202,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "@openclaw hi",
+      is_group: true,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("blocks group messages when groupPolicy is disabled", async () => {
-    config = {
+  it("does not allow group sender from pairing store when groupPolicy is allowlist", async () => {
+    const config = getConfig();
+    setConfigMock({
       ...config,
       channels: {
         ...config.channels,
         imessage: {
-          ...config.channels?.imessage,
-          groupPolicy: "disabled",
-        },
-      },
-    };
-    const run = monitorIMessageProvider();
-    await waitForSubscribe();
-
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 10,
-          chat_id: 303,
-          sender: "+15550003333",
-          is_from_me: false,
-          text: "@openclaw hi",
-          is_group: true,
+          ...config.channels.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
         },
       },
     });
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+
+    const run = startMonitor();
+    await waitForSubscribe();
+
+    notifyMessage({
+      id: 30,
+      chat_id: 909,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "@openclaw hi from paired sender",
+      is_group: true,
+    });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
     expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
-  it("prefixes group message bodies with sender", async () => {
-    const run = monitorIMessageProvider();
+  it("does not allow sender from pairing store when groupAllowFrom is restricted to a different chat_id", async () => {
+    const config = getConfig();
+    setConfigMock({
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_id:101"],
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 11,
-          chat_id: 99,
-          chat_name: "Test Group",
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "@openclaw hi",
-          is_group: true,
-          created_at: "2026-01-17T00:00:00Z",
+    notifyMessage({
+      id: 31,
+      chat_id: 202,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "@openclaw hi from paired sender",
+      is_group: true,
+    });
+
+    await flush();
+    await closeMonitor();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize control command via pairing-store sender in non-allowlisted chat", async () => {
+    const config = getConfig();
+    setConfigMock({
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_id:101"],
+        },
+      },
+    });
+    readAllowFromStoreMock.mockResolvedValue(["+15550003333"]);
+
+    const run = startMonitor();
+    await waitForSubscribe();
+
+    notifyMessage({
+      id: 32,
+      chat_id: 202,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "/status",
+      is_group: true,
+    });
+
+    await flush();
+    await closeMonitor();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks group messages when groupPolicy is disabled", async () => {
+    const config = getConfig();
+    setConfigMock({
+      ...config,
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels.imessage,
+          groupPolicy: "disabled",
         },
       },
     });
 
-    await flush();
-    closeResolve?.();
-    await run;
-
-    expect(replyMock).toHaveBeenCalled();
-    const ctx = replyMock.mock.calls[0]?.[0];
-    const body = ctx?.Body ?? "";
-    expect(body).toContain("Test Group id:99");
-    expect(body).toContain("+15550001111: @openclaw hi");
-  });
-
-  it("includes reply context when imessage reply metadata is present", async () => {
-    const run = monitorIMessageProvider();
+    const run = startMonitor();
     await waitForSubscribe();
 
-    notificationHandler?.({
-      method: "message",
-      params: {
-        message: {
-          id: 12,
-          chat_id: 55,
-          sender: "+15550001111",
-          is_from_me: false,
-          text: "replying now",
-          is_group: false,
-          reply_to_id: 9001,
-          reply_to_text: "original message",
-          reply_to_sender: "+15559998888",
-        },
-      },
+    notifyMessage({
+      id: 10,
+      chat_id: 303,
+      sender: "+15550003333",
+      is_from_me: false,
+      text: "@openclaw hi",
+      is_group: true,
     });
 
     await flush();
-    closeResolve?.();
+    await closeMonitor();
     await run;
 
-    expect(replyMock).toHaveBeenCalled();
-    const ctx = replyMock.mock.calls[0]?.[0] as {
-      Body?: string;
-      ReplyToId?: string;
-      ReplyToBody?: string;
-      ReplyToSender?: string;
-    };
-    expect(ctx.ReplyToId).toBe("9001");
-    expect(ctx.ReplyToBody).toBe("original message");
-    expect(ctx.ReplyToSender).toBe("+15559998888");
-    expect(String(ctx.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
-    expect(String(ctx.Body ?? "")).toContain("original message");
+    expect(replyMock).not.toHaveBeenCalled();
   });
 });

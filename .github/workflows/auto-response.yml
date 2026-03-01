@@ -132,16 +132,34 @@ jobs:
             }
 
             const invalidLabel = "invalid";
+            const dirtyLabel = "dirty";
+            const noisyPrMessage =
+              "Closing this PR because it looks dirty (too many unrelated commits). Please recreate the PR from a clean branch.";
 
             const pullRequest = context.payload.pull_request;
             if (pullRequest) {
+              if (labelSet.has(dirtyLabel)) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  body: noisyPrMessage,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  state: "closed",
+                });
+                return;
+              }
               const labelCount = labelSet.size;
               if (labelCount > 20) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
-                  body: "Closing this PR because it has more than 20 labels, which usually means the branch is too noisy. Please recreate the PR from a clean branch.",
+                  body: noisyPrMessage,
                 });
                 await github.rest.issues.update({
                   owner: context.repo.owner,

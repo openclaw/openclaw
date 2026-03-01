@@ -50,6 +50,10 @@ let previousSkipBrowserControl: string | undefined;
 let previousSkipGmailWatcher: string | undefined;
 let previousSkipCanvasHost: string | undefined;
 let previousBundledPluginsDir: string | undefined;
+let previousSkipChannels: string | undefined;
+let previousSkipProviders: string | undefined;
+let previousSkipCron: string | undefined;
+let previousMinimalGateway: string | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -90,6 +94,10 @@ async function setupGatewayTestHome() {
   previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
   previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+  previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+  previousSkipCron = process.env.OPENCLAW_SKIP_CRON;
+  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -101,6 +109,10 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+  process.env.OPENCLAW_SKIP_CHANNELS = "1";
+  process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+  process.env.OPENCLAW_SKIP_CRON = "1";
+  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
     ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
     : "openclaw-test-no-bundled-extensions";
@@ -202,6 +214,26 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    }
+    if (previousSkipChannels === undefined) {
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
+    } else {
+      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+    }
+    if (previousSkipProviders === undefined) {
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    } else {
+      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+    }
+    if (previousSkipCron === undefined) {
+      delete process.env.OPENCLAW_SKIP_CRON;
+    } else {
+      process.env.OPENCLAW_SKIP_CRON = previousSkipCron;
+    }
+    if (previousMinimalGateway === undefined) {
+      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    } else {
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
     }
   }
   if (options.restoreEnv && tempHome) {

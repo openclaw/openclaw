@@ -38,7 +38,7 @@ export async function checkInboundAccessControl(params: {
     cfg,
     accountId: params.accountId,
   });
-  const dmPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
+  const dmPolicy = account.dmPolicy ?? "pairing";
   const configuredAllowFrom = account.allowFrom;
   const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
   // Without user config, default to self-only DM access so the owner can talk to themselves.

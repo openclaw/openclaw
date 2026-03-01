@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
   loadSubagentRegistryFromDisk,
@@ -398,6 +399,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
+  resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;
   if (listenerStop) {

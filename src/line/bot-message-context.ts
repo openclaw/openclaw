@@ -136,6 +136,166 @@ function extractMediaPlaceholder(message: MessageEvent["message"]): string {
   }
 }
 
+type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
+type LineSourceInfo = ReturnType<typeof getSourceInfo> & { peerId: string };
+
+function resolveLineConversationLabel(params: {
+  isGroup: boolean;
+  groupId?: string;
+  roomId?: string;
+  senderLabel: string;
+}): string {
+  return params.isGroup
+    ? params.groupId
+      ? `group:${params.groupId}`
+      : params.roomId
+        ? `room:${params.roomId}`
+        : "unknown-group"
+    : params.senderLabel;
+}
+
+function resolveLineAddresses(params: {
+  isGroup: boolean;
+  groupId?: string;
+  roomId?: string;
+  userId?: string;
+  peerId: string;
+}): { fromAddress: string; toAddress: string; originatingTo: string } {
+  const fromAddress = params.isGroup
+    ? params.groupId
+      ? `line:group:${params.groupId}`
+      : params.roomId
+        ? `line:room:${params.roomId}`
+        : `line:${params.peerId}`
+    : `line:${params.userId ?? params.peerId}`;
+  const toAddress = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
+  const originatingTo = params.isGroup ? fromAddress : `line:${params.userId ?? params.peerId}`;
+  return { fromAddress, toAddress, originatingTo };
+}
+
+async function finalizeLineInboundContext(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedLineAccount;
+  event: MessageEvent | PostbackEvent;
+  route: LineRouteInfo;
+  source: LineSourceInfo;
+  rawBody: string;
+  timestamp: number;
+  messageSid: string;
+  media: {
+    firstPath: string | undefined;
+    firstContentType?: string;
+    paths?: string[];
+    types?: string[];
+  };
+  locationContext?: ReturnType<typeof toLocationContext>;
+  verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
+}) {
+  const { fromAddress, toAddress, originatingTo } = resolveLineAddresses({
+    isGroup: params.source.isGroup,
+    groupId: params.source.groupId,
+    roomId: params.source.roomId,
+    userId: params.source.userId,
+    peerId: params.source.peerId,
+  });
+
+  const senderId = params.source.userId ?? "unknown";
+  const senderLabel = params.source.userId ? `user:${params.source.userId}` : "unknown";
+  const conversationLabel = resolveLineConversationLabel({
+    isGroup: params.source.isGroup,
+    groupId: params.source.groupId,
+    roomId: params.source.roomId,
+    senderLabel,
+  });
+
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
+  const previousTimestamp = readSessionUpdatedAt({
+    storePath,
+    sessionKey: params.route.sessionKey,
+  });
+
+  const body = formatInboundEnvelope({
+    channel: "LINE",
+    from: conversationLabel,
+    timestamp: params.timestamp,
+    body: params.rawBody,
+    chatType: params.source.isGroup ? "group" : "direct",
+    sender: {
+      id: senderId,
+    },
+    previousTimestamp,
+    envelope: envelopeOptions,
+  });
+
+  const ctxPayload = finalizeInboundContext({
+    Body: body,
+    BodyForAgent: params.rawBody,
+    RawBody: params.rawBody,
+    CommandBody: params.rawBody,
+    From: fromAddress,
+    To: toAddress,
+    SessionKey: params.route.sessionKey,
+    AccountId: params.route.accountId,
+    ChatType: params.source.isGroup ? "group" : "direct",
+    ConversationLabel: conversationLabel,
+    GroupSubject: params.source.isGroup
+      ? (params.source.groupId ?? params.source.roomId)
+      : undefined,
+    SenderId: senderId,
+    Provider: "line",
+    Surface: "line",
+    MessageSid: params.messageSid,
+    Timestamp: params.timestamp,
+    MediaPath: params.media.firstPath,
+    MediaType: params.media.firstContentType,
+    MediaUrl: params.media.firstPath,
+    MediaPaths: params.media.paths,
+    MediaUrls: params.media.paths,
+    MediaTypes: params.media.types,
+    ...params.locationContext,
+    OriginatingChannel: "line" as const,
+    OriginatingTo: originatingTo,
+  });
+
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    logVerbose(`line: failed updating session meta: ${String(err)}`);
+  });
+
+  if (!params.source.isGroup) {
+    await updateLastRoute({
+      storePath,
+      sessionKey: params.route.mainSessionKey,
+      deliveryContext: {
+        channel: "line",
+        to: params.source.userId ?? params.source.peerId,
+        accountId: params.route.accountId,
+      },
+      ctx: ctxPayload,
+    });
+  }
+
+  if (shouldLogVerbose()) {
+    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const mediaInfo =
+      params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
+        ? ` mediaCount=${params.verboseLog.mediaCount}`
+        : "";
+    const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
+    logVerbose(
+      `${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
+    );
+  }
+
+  return { ctxPayload, replyToken: (params.event as { replyToken: string }).replyToken };
+}
+
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
   const { event, allMedia, cfg, account } = params;
 
@@ -176,43 +336,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     return null;
   }
 
-  // Build sender info
-  const senderId = userId ?? "unknown";
-  const senderLabel = userId ? `user:${userId}` : "unknown";
-
-  // Build conversation label
-  const conversationLabel = isGroup
-    ? groupId
-      ? `group:${groupId}`
-      : roomId
-        ? `room:${roomId}`
-        : "unknown-group"
-    : senderLabel;
-
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: route.agentId,
-  });
-
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-
-  const body = formatInboundEnvelope({
-    channel: "LINE",
-    from: conversationLabel,
-    timestamp,
-    body: rawBody,
-    chatType: isGroup ? "group" : "direct",
-    sender: {
-      id: senderId,
-    },
-    previousTimestamp,
-    envelope: envelopeOptions,
-  });
-
-  // Build location context if applicable
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {
     const loc = message;
@@ -224,75 +347,27 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     });
   }
 
-  const fromAddress = isGroup
-    ? groupId
-      ? `line:group:${groupId}`
-      : roomId
-        ? `line:room:${roomId}`
-        : `line:${peerId}`
-    : `line:${userId ?? peerId}`;
-  const toAddress = isGroup ? fromAddress : `line:${userId ?? peerId}`;
-  const originatingTo = isGroup ? fromAddress : `line:${userId ?? peerId}`;
-
-  const ctxPayload = finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: fromAddress,
-    To: toAddress,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: conversationLabel,
-    GroupSubject: isGroup ? (groupId ?? roomId) : undefined,
-    SenderId: senderId,
-    Provider: "line",
-    Surface: "line",
-    MessageSid: messageId,
-    Timestamp: timestamp,
-    MediaPath: allMedia[0]?.path,
-    MediaType: allMedia[0]?.contentType,
-    MediaUrl: allMedia[0]?.path,
-    MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaUrls: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      allMedia.length > 0
-        ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
-        : undefined,
-    ...locationContext,
-    OriginatingChannel: "line" as const,
-    OriginatingTo: originatingTo,
+  const { ctxPayload } = await finalizeLineInboundContext({
+    cfg,
+    account,
+    event,
+    route,
+    source: { userId, groupId, roomId, isGroup, peerId },
+    rawBody,
+    timestamp,
+    messageSid: messageId,
+    media: {
+      firstPath: allMedia[0]?.path,
+      firstContentType: allMedia[0]?.contentType,
+      paths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+      types:
+        allMedia.length > 0
+          ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+          : undefined,
+    },
+    locationContext,
+    verboseLog: { kind: "inbound", mediaCount: allMedia.length },
   });
-
-  void recordSessionMetaFromInbound({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`line: failed updating session meta: ${String(err)}`);
-  });
-
-  if (!isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "line",
-        to: userId ?? peerId,
-        accountId: route.accountId,
-      },
-      ctx: ctxPayload,
-    });
-  }
-
-  if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    logVerbose(
-      `line inbound: from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
-    );
-  }
 
   return {
     ctxPayload,
@@ -347,102 +422,24 @@ export async function buildLinePostbackContext(params: {
     rawBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
   }
 
-  const senderId = userId ?? "unknown";
-  const senderLabel = userId ? `user:${userId}` : "unknown";
-
-  const conversationLabel = isGroup
-    ? groupId
-      ? `group:${groupId}`
-      : roomId
-        ? `room:${roomId}`
-        : "unknown-group"
-    : senderLabel;
-
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: route.agentId,
-  });
-
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const previousTimestamp = readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-
-  const body = formatInboundEnvelope({
-    channel: "LINE",
-    from: conversationLabel,
+  const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
+  const { ctxPayload } = await finalizeLineInboundContext({
+    cfg,
+    account,
+    event,
+    route,
+    source: { userId, groupId, roomId, isGroup, peerId },
+    rawBody,
     timestamp,
-    body: rawBody,
-    chatType: isGroup ? "group" : "direct",
-    sender: {
-      id: senderId,
+    messageSid,
+    media: {
+      firstPath: "",
+      firstContentType: undefined,
+      paths: undefined,
+      types: undefined,
     },
-    previousTimestamp,
-    envelope: envelopeOptions,
+    verboseLog: { kind: "postback" },
   });
-
-  const fromAddress = isGroup
-    ? groupId
-      ? `line:group:${groupId}`
-      : roomId
-        ? `line:room:${roomId}`
-        : `line:${peerId}`
-    : `line:${userId ?? peerId}`;
-  const toAddress = isGroup ? fromAddress : `line:${userId ?? peerId}`;
-  const originatingTo = isGroup ? fromAddress : `line:${userId ?? peerId}`;
-
-  const ctxPayload = finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: fromAddress,
-    To: toAddress,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: conversationLabel,
-    GroupSubject: isGroup ? (groupId ?? roomId) : undefined,
-    SenderId: senderId,
-    Provider: "line",
-    Surface: "line",
-    MessageSid: event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`,
-    Timestamp: timestamp,
-    MediaPath: "",
-    MediaType: undefined,
-    MediaUrl: "",
-    MediaPaths: undefined,
-    MediaUrls: undefined,
-    MediaTypes: undefined,
-    OriginatingChannel: "line" as const,
-    OriginatingTo: originatingTo,
-  });
-
-  void recordSessionMetaFromInbound({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`line: failed updating session meta: ${String(err)}`);
-  });
-
-  if (!isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: route.mainSessionKey,
-      deliveryContext: {
-        channel: "line",
-        to: userId ?? peerId,
-        accountId: route.accountId,
-      },
-      ctx: ctxPayload,
-    });
-  }
-
-  if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
-    logVerbose(`line postback: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
-  }
 
   return {
     ctxPayload,

@@ -53,7 +53,9 @@ describe("resolveBootstrapContextForRun", () => {
 
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const result = await resolveBootstrapContextForRun({ workspaceDir });
-    const extra = result.contextFiles.find((file) => file.path === "EXTRA.md");
+    const extra = result.contextFiles.find(
+      (file) => file.path === path.join(workspaceDir, "EXTRA.md"),
+    );
 
     expect(extra?.content).toBe("extra");
   });

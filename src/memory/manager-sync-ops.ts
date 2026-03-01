@@ -55,8 +55,23 @@ const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
+const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
+  ".git",
+  "node_modules",
+  ".pnpm-store",
+  ".venv",
+  "venv",
+  ".tox",
+  "__pycache__",
+]);
 
 const log = createSubsystemLogger("memory");
+
+function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
+  const normalized = path.normalize(watchPath);
+  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
+  return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+}
 
 class MemoryManagerSyncOps {
   [key: string]: any;
@@ -263,24 +278,32 @@ class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
       return;
     }
-    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths)
-      .map((entry) => {
-        try {
-          const stat = fsSync.lstatSync(entry);
-          return stat.isSymbolicLink() ? null : entry;
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry): entry is string => Boolean(entry));
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory"),
-      ...additionalPaths,
+      path.join(this.workspaceDir, "memory", "**", "*.md"),
     ]);
+    const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
+    for (const entry of additionalPaths) {
+      try {
+        const stat = fsSync.lstatSync(entry);
+        if (stat.isSymbolicLink()) {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          watchPaths.add(path.join(entry, "**", "*.md"));
+          continue;
+        }
+        if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
+          watchPaths.add(entry);
+        }
+      } catch {
+        // Skip missing/unreadable additional paths.
+      }
+    }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
+      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
@@ -744,11 +767,22 @@ class MemoryManagerSyncOps {
       (vectorReady && !meta?.vectorDims);
     try {
       if (needsFullReindex) {
-        await this.runSafeReindex({
-          reason: params?.reason,
-          force: params?.force,
-          progress: progress ?? undefined,
-        });
+        if (
+          process.env.OPENCLAW_TEST_FAST === "1" &&
+          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
+        ) {
+          await this.runUnsafeReindex({
+            reason: params?.reason,
+            force: params?.force,
+            progress: progress ?? undefined,
+          });
+        } else {
+          await this.runSafeReindex({
+            reason: params?.reason,
+            force: params?.force,
+            progress: progress ?? undefined,
+          });
+        }
         return;
       }
 
@@ -956,6 +990,51 @@ class MemoryManagerSyncOps {
       restoreOriginalState();
       throw err;
     }
+  }
+
+  private async runUnsafeReindex(params: {
+    reason?: string;
+    force?: boolean;
+    progress?: MemorySyncProgressState;
+  }): Promise<void> {
+    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
+    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
+    this.resetIndex();
+
+    const shouldSyncMemory = this.sources.has("memory");
+    const shouldSyncSessions = this.shouldSyncSessions(
+      { reason: params.reason, force: params.force },
+      true,
+    );
+
+    if (shouldSyncMemory) {
+      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+      this.dirty = false;
+    }
+
+    if (shouldSyncSessions) {
+      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      this.sessionsDirty = false;
+      this.sessionsDirtyFiles.clear();
+    } else if (this.sessionsDirtyFiles.size > 0) {
+      this.sessionsDirty = true;
+    } else {
+      this.sessionsDirty = false;
+    }
+
+    const nextMeta: MemoryIndexMeta = {
+      model: this.provider.model,
+      provider: this.provider.id,
+      providerKey: this.providerKey,
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+    };
+    if (this.vector.available && this.vector.dims) {
+      nextMeta.vectorDims = this.vector.dims;
+    }
+
+    this.writeMeta(nextMeta);
+    this.pruneEmbeddingCacheIfNeeded();
   }
 
   private resetIndex() {
