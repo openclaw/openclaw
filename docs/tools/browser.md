@@ -529,6 +529,64 @@ When an action fails (e.g. “not visible”, “strict mode violation”, “co
    - reproduce the issue
    - `openclaw browser trace stop` (prints `TRACE:<path>`)
 
+## Browser automation best practices
+
+Use this checklist for reliable browser runs:
+
+1. Start each interaction cycle with a fresh snapshot.
+2. Use refs from that snapshot immediately (`click`/`type`/`drag`), then snapshot again after navigation or major DOM changes.
+3. Prefer role snapshots (`--interactive`) for action-heavy flows; refs are more stable than guessing selectors.
+4. Pair actions with explicit waits (`--url`, `--load`, `--fn`, selector/text wait) before the next step.
+5. Treat `upload`, `download`, and `dialog` as two-step flows: arm first, trigger second.
+
+### Common task patterns
+
+Form fill + submit:
+
+```bash
+openclaw browser snapshot --interactive
+openclaw browser type e12 "Ada Lovelace"
+openclaw browser click e18
+openclaw browser wait --url "**/success" --load networkidle
+```
+
+File upload (arm, then trigger):
+
+```bash
+openclaw browser upload /tmp/openclaw/uploads/report.pdf --ref e22
+openclaw browser click e22
+```
+
+File download (arm, then trigger):
+
+```bash
+openclaw browser download e31 report.pdf
+openclaw browser click e31
+openclaw browser waitfordownload report.pdf
+```
+
+Dialogs (arm, then trigger):
+
+```bash
+openclaw browser dialog --accept
+openclaw browser click e41
+```
+
+iFrame flow (no manual frame switching API required):
+
+```bash
+openclaw browser snapshot --frame "iframe#checkout" --interactive
+openclaw browser click e12
+```
+
+Dynamic content wait + extract:
+
+```bash
+openclaw browser wait --text "Ready" --timeout-ms 15000
+openclaw browser snapshot --interactive
+openclaw browser evaluate --fn "() => document.body.innerText.slice(0, 2000)"
+```
+
 ## JSON output
 
 `--json` is for scripting and structured tooling.

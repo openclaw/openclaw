@@ -75,6 +75,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Docs/Browser: add a browser automation best-practices playbook with explicit arming workflows for upload/download/dialog actions, iframe-scoped snapshot patterns, and dynamic-wait + extraction recipes. (#30502)
+
 ### Fixes
 
 - Onboarding/Custom providers: raise default custom-provider model context window to the runtime hard minimum (16k) and auto-heal existing custom model entries below that threshold during reconfiguration, preventing immediate `Model context window too small (4096 tokens)` failures. (#21653) Thanks @r4jiv007.
