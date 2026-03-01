@@ -4,7 +4,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import {
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
+  STEPFUN_BASE_URL,
+  STEPFUN_CN_BASE_URL,
+} from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -217,6 +222,59 @@ describe("onboard (non-interactive): provider auth", () => {
       });
     });
   });
+
+  it.each([
+    {
+      name: "stores StepFun API key and uses global baseUrl by default",
+      prefix: "openclaw-onboard-stepfun-",
+      options: { authChoice: "stepfun-api-key" },
+    },
+    {
+      name: "infers StepFun auth choice from --stepfun-api-key",
+      prefix: "openclaw-onboard-stepfun-infer-",
+      options: {},
+    },
+  ])(
+    "$name",
+    async ({ prefix, options }) => {
+      await withOnboardEnv(prefix, async (env) => {
+        const cfg = await runOnboardingAndReadConfig(env, {
+          stepfunApiKey: "sk-stepfun-test",
+          ...options,
+        });
+
+        expect(cfg.auth?.profiles?.["stepfun:default"]?.provider).toBe("stepfun");
+        expect(cfg.auth?.profiles?.["stepfun:default"]?.mode).toBe("api_key");
+        expect(cfg.models?.providers?.stepfun?.baseUrl).toBe(STEPFUN_BASE_URL);
+        expect(cfg.agents?.defaults?.model?.primary).toBe("stepfun/step-3.5-flash");
+        await expectApiKeyProfile({
+          profileId: "stepfun:default",
+          provider: "stepfun",
+          key: "sk-stepfun-test",
+        });
+      });
+    },
+    60_000,
+  );
+
+  it("supports StepFun CN auth choice", async () => {
+    await withOnboardEnv("openclaw-onboard-stepfun-cn-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        authChoice: "stepfun-cn",
+        stepfunApiKey: "sk-stepfun-test",
+      });
+
+      expect(cfg.auth?.profiles?.["stepfun:default"]?.provider).toBe("stepfun");
+      expect(cfg.auth?.profiles?.["stepfun:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.stepfun?.baseUrl).toBe(STEPFUN_CN_BASE_URL);
+      expect(cfg.agents?.defaults?.model?.primary).toBe("stepfun/step-3.5-flash");
+      await expectApiKeyProfile({
+        profileId: "stepfun:default",
+        provider: "stepfun",
+        key: "sk-stepfun-test",
+      });
+    });
+  }, 60_000);
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-zai-", async (env) => {

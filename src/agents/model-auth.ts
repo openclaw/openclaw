@@ -311,6 +311,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
     "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
     moonshot: "MOONSHOT_API_KEY",
+    stepfun: "STEPFUN_API_KEY",
     minimax: "MINIMAX_API_KEY",
     nvidia: "NVIDIA_API_KEY",
     xiaomi: "XIAOMI_API_KEY",

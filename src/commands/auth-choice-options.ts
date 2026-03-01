@@ -60,6 +60,11 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key"],
   },
   {
+    value: "stepfun",
+    label: "StepFun (Step 3.5 Flash)",
+    choices: ["stepfun-api-key", "stepfun-cn"],
+  },
+  {
     value: "google",
     label: "Google",
     hint: "Gemini API key + OAuth",
@@ -232,6 +237,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "moonshot-api-key-cn",
     label: "Kimi API key (.cn)",
+  },
+  {
+    value: "stepfun-cn",
+    label: "StepFun API key (CN)",
+    hint: "China endpoint (api.stepfun.com)",
   },
   {
     value: "github-copilot",

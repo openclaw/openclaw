@@ -92,6 +92,10 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/stepfun",
+      "destination": "/providers/stepfun"
+    },
+    {
       "source": "/mistral",
       "destination": "/providers/mistral"
     },
@@ -1109,6 +1113,7 @@
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
+                  "providers/stepfun",
                   "providers/mistral",
                   "providers/minimax",
                   "providers/nvidia",

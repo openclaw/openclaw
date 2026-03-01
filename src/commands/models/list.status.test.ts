@@ -59,6 +59,12 @@ const mocks = vi.hoisted(() => {
           source: "env: ANTHROPIC_OAUTH_TOKEN",
         };
       }
+      if (provider === "stepfun") {
+        return {
+          apiKey: "sk-stepfun-0123456789abcdefghijklmnopqrstuvwxyz",
+          source: "env: STEPFUN_API_KEY",
+        };
+      }
       return null;
     }),
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
@@ -220,6 +226,10 @@ describe("modelsStatusCommand auth overview", () => {
     const openai = providers.find((p) => p.provider === "openai");
     expect(openai?.env?.source).toContain("OPENAI_API_KEY");
     expect(openai?.env?.value).toContain("...");
+
+    const stepfun = providers.find((p) => p.provider === "stepfun");
+    expect(stepfun?.env?.source).toContain("STEPFUN_API_KEY");
+    expect(stepfun?.env?.value).toContain("...");
 
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),

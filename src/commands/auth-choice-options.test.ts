@@ -30,6 +30,8 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key",
       "moonshot-api-key-cn",
       "kimi-code-api-key",
+      "stepfun-api-key",
+      "stepfun-cn",
       "together-api-key",
       "ai-gateway-api-key",
       "cloudflare-ai-gateway-api-key",

@@ -333,4 +333,12 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("resolveEnvApiKey('stepfun') returns STEPFUN_API_KEY when set", async () => {
+    await withEnvAsync({ STEPFUN_API_KEY: "sk-stepfun-test" }, async () => {
+      const resolved = resolveEnvApiKey("stepfun");
+      expect(resolved?.apiKey).toBe("sk-stepfun-test");
+      expect(resolved?.source).toContain("STEPFUN_API_KEY");
+    });
+  });
 });

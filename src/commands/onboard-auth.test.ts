@@ -20,6 +20,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyStepfunConfig,
+  applyStepfunProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyXaiConfig,
@@ -30,6 +32,8 @@ import {
   applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
+  STEPFUN_BASE_URL,
+  STEPFUN_CN_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -482,6 +486,43 @@ describe("applyZaiConfig", () => {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
       expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
     }
+  });
+});
+
+describe("applyStepfunConfig", () => {
+  it("adds StepFun provider with correct settings", () => {
+    const cfg = applyStepfunConfig({});
+    expect(cfg.models?.providers?.stepfun).toMatchObject({
+      baseUrl: STEPFUN_BASE_URL,
+      api: "openai-completions",
+    });
+    expect(cfg.models?.providers?.stepfun?.models?.map((m) => m.id)).toContain("step-3.5-flash");
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      "stepfun/step-3.5-flash",
+    );
+  });
+
+  it("supports CN endpoint auth choice", () => {
+    const cfg = applyStepfunConfig({}, { endpoint: "cn" });
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe(STEPFUN_CN_BASE_URL);
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      "stepfun/step-3.5-flash",
+    );
+  });
+
+  it("keeps existing baseUrl when endpoint is not specified", () => {
+    const cfg = applyStepfunProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "stepfun",
+        api: "openai-completions",
+      }),
+    );
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://old.example.com");
+    expect(cfg.models?.providers?.stepfun?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.stepfun?.models?.map((m) => m.id)).toEqual([
+      "old-model",
+      "step-3.5-flash",
+    ]);
   });
 });
 

@@ -399,6 +399,13 @@ describe("applyAuthChoice", () => {
         expectedModelPrefix: "kimi-coding/",
       },
       {
+        tokenProvider: "STEPFUN",
+        token: "sk-stepfun-token-provider-test",
+        profileId: "stepfun:default",
+        provider: "stepfun",
+        expectedModel: "stepfun/step-3.5-flash",
+      },
+      {
         tokenProvider: " GOOGLE  ",
         token: "sk-gemini-token-provider-test",
         profileId: "google:default",
@@ -463,6 +470,13 @@ describe("applyAuthChoice", () => {
       profileId: "moonshot:default",
       provider: "moonshot",
       modelPrefix: "moonshot/",
+    },
+    {
+      authChoice: "stepfun-api-key",
+      tokenProvider: "stepfun",
+      profileId: "stepfun:default",
+      provider: "stepfun",
+      modelPrefix: "stepfun/",
     },
     {
       authChoice: "mistral-api-key",
