@@ -1,4 +1,8 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
+import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
+import type { TypingTtlCoordinator } from "../../gateway/typing-ttl-coordinator.js";
+import { gatewayTypingTtlCoordinator } from "../../gateway/typing-ttl-coordinator.js";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
   onReplyStart: () => Promise<void>;
@@ -18,6 +22,23 @@ export function createTypingController(params: {
   typingTtlMs?: number;
   silentToken?: string;
   log?: (message: string) => void;
+  /**
+   * Unique key for this typing session (e.g. session key or channel+session).
+   * When provided, the session is registered with the gateway-level TTL coordinator
+   * as defense-in-depth against leaked typing indicators.
+   * If omitted, coordinator registration is skipped.
+   */
+  coordinatorKey?: string;
+  /**
+   * Gateway-level TTL coordinator. Defaults to the process singleton.
+   * Override in tests to use an isolated instance.
+   */
+  coordinator?: TypingTtlCoordinator;
+  /**
+   * Hard TTL enforced by the gateway coordinator (ms). Defaults to coordinator default (120s).
+   * Only used when `coordinatorKey` is provided.
+   */
+  typingMaxTtlMs?: number;
 }): TypingController {
   const {
     onReplyStart,
@@ -26,6 +47,9 @@ export function createTypingController(params: {
     typingTtlMs = 2 * 60_000,
     silentToken = SILENT_REPLY_TOKEN,
     log,
+    coordinatorKey,
+    coordinator = coordinatorKey ? gatewayTypingTtlCoordinator : undefined,
+    typingMaxTtlMs,
   } = params;
   let started = false;
   let active = false;
@@ -35,9 +59,10 @@ export function createTypingController(params: {
   // especially when upstream event emitters don't await async listeners.
   // Once we stop typing, we "seal" the controller so late events can't restart typing forever.
   let sealed = false;
-  let typingTimer: NodeJS.Timeout | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = typingIntervalSeconds * 1000;
+  // Gateway-level coordinator deregister. Set when typing first starts; cleared on cleanup.
+  let coordinatorDeregister: (() => void) | undefined;
 
   const formatTypingTtl = (ms: number) => {
     if (ms % 60_000 === 0) {
@@ -61,10 +86,17 @@ export function createTypingController(params: {
       clearTimeout(typingTtlTimer);
       typingTtlTimer = undefined;
     }
-    if (typingTimer) {
-      clearInterval(typingTimer);
-      typingTimer = undefined;
+    if (dispatchIdleTimer) {
+      clearTimeout(dispatchIdleTimer);
+      dispatchIdleTimer = undefined;
     }
+    // Deregister from gateway-level coordinator on clean stop.
+    // This cancels the hard TTL so the coordinator won't fire a redundant forced cleanup.
+    if (coordinatorDeregister) {
+      coordinatorDeregister();
+      coordinatorDeregister = undefined;
+    }
+    typingLoop.stop();
     // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
     // This fires only once (sealed prevents re-entry).
     if (active) {
@@ -88,7 +120,7 @@ export function createTypingController(params: {
       clearTimeout(typingTtlTimer);
     }
     typingTtlTimer = setTimeout(() => {
-      if (!typingTimer) {
+      if (!typingLoop.isRunning()) {
         return;
       }
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
@@ -98,12 +130,22 @@ export function createTypingController(params: {
 
   const isActive = () => active && !sealed;
 
+  const startGuard = createTypingStartGuard({
+    isSealed: () => sealed,
+    shouldBlock: () => runComplete,
+    rethrowOnError: true,
+  });
+
   const triggerTyping = async () => {
-    if (sealed) {
-      return;
-    }
-    await onReplyStart?.();
+    await startGuard.run(async () => {
+      await onReplyStart?.();
+    });
   };
+
+  const typingLoop = createTypingKeepaliveLoop({
+    intervalMs: typingIntervalMs,
+    onTick: triggerTyping,
+  });
 
   const ensureStart = async () => {
     if (sealed) {
@@ -120,6 +162,13 @@ export function createTypingController(params: {
       return;
     }
     started = true;
+    // Register with the gateway-level TTL coordinator the first time typing starts.
+    // The coordinator is a defense-in-depth safety net: if all other cleanup paths fail
+    // (dispatcher hang, event-lane blockage, NO_REPLY path leak, etc.), the coordinator
+    // will unconditionally call cleanup() after the hard TTL and emit a diagnostic warning.
+    if (coordinator && coordinatorKey && !coordinatorDeregister) {
+      coordinatorDeregister = coordinator.register(coordinatorKey, cleanup, typingMaxTtlMs);
+    }
     await triggerTyping();
   };
 
@@ -146,16 +195,11 @@ export function createTypingController(params: {
     if (!onReplyStart) {
       return;
     }
-    if (typingIntervalMs <= 0) {
-      return;
-    }
-    if (typingTimer) {
+    if (typingLoop.isRunning()) {
       return;
     }
     await ensureStart();
-    typingTimer = setInterval(() => {
-      void triggerTyping();
-    }, typingIntervalMs);
+    typingLoop.start();
   };
 
   const startTypingOnText = async (text?: string) => {
@@ -166,20 +210,38 @@ export function createTypingController(params: {
     if (!trimmed) {
       return;
     }
-    if (silentToken && isSilentReplyText(trimmed, silentToken)) {
+    if (
+      silentToken &&
+      (isSilentReplyText(trimmed, silentToken) || isSilentReplyPrefixText(trimmed, silentToken))
+    ) {
       return;
     }
     refreshTypingTtl();
     await startTypingLoop();
   };
 
+  let dispatchIdleTimer: NodeJS.Timeout | undefined;
+  const DISPATCH_IDLE_GRACE_MS = 10_000;
+
   const markRunComplete = () => {
     runComplete = true;
     maybeStopOnIdle();
+    if (!sealed && !dispatchIdle) {
+      dispatchIdleTimer = setTimeout(() => {
+        if (!sealed && !dispatchIdle) {
+          log?.("typing: dispatch idle not received after run complete; forcing cleanup");
+          cleanup();
+        }
+      }, DISPATCH_IDLE_GRACE_MS);
+    }
   };
 
   const markDispatchIdle = () => {
     dispatchIdle = true;
+    if (dispatchIdleTimer) {
+      clearTimeout(dispatchIdleTimer);
+      dispatchIdleTimer = undefined;
+    }
     maybeStopOnIdle();
   };
 
