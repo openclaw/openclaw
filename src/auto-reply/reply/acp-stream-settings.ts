@@ -7,6 +7,7 @@ const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
 const DEFAULT_ACP_REPEAT_SUPPRESSION = true;
 const DEFAULT_ACP_DELIVERY_MODE = "final_only";
 const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR = "paragraph";
+const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
 const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
 const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
@@ -68,11 +69,14 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return DEFAULT_ACP_DELIVERY_MODE;
 }
 
-function resolveAcpHiddenBoundarySeparator(value: unknown): AcpHiddenBoundarySeparator {
+function resolveAcpHiddenBoundarySeparator(
+  value: unknown,
+  fallback: AcpHiddenBoundarySeparator,
+): AcpHiddenBoundarySeparator {
   if (value === "none" || value === "space" || value === "newline" || value === "paragraph") {
     return value;
   }
-  return DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR;
+  return fallback;
 }
 
 function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
@@ -95,9 +99,17 @@ function resolveAcpStreamMaxChunkChars(cfg: OpenClawConfig): number {
 
 export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
+  const deliveryMode = resolveAcpDeliveryMode(stream?.deliveryMode);
+  const hiddenBoundaryFallback: AcpHiddenBoundarySeparator =
+    deliveryMode === "live"
+      ? DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE
+      : DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR;
   return {
-    deliveryMode: resolveAcpDeliveryMode(stream?.deliveryMode),
-    hiddenBoundarySeparator: resolveAcpHiddenBoundarySeparator(stream?.hiddenBoundarySeparator),
+    deliveryMode,
+    hiddenBoundarySeparator: resolveAcpHiddenBoundarySeparator(
+      stream?.hiddenBoundarySeparator,
+      hiddenBoundaryFallback,
+    ),
     repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
     maxTurnChars: clampPositiveInteger(stream?.maxTurnChars, DEFAULT_ACP_MAX_TURN_CHARS, {
       min: 1,
