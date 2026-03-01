@@ -103,4 +103,6 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /** When true the current message is a heartbeat poll — include HEARTBEAT.md in context. */
+  isHeartbeat?: boolean;
 };

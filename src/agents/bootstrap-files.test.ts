@@ -7,7 +7,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
+import { DEFAULT_HEARTBEAT_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -62,6 +62,27 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+  });
+
+  it("excludes HEARTBEAT.md when isHeartbeat is false", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir, isHeartbeat: false });
+
+    expect(files.some((file) => file.name === DEFAULT_HEARTBEAT_FILENAME)).toBe(false);
+  });
+
+  it("excludes HEARTBEAT.md when isHeartbeat is omitted", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.some((file) => file.name === DEFAULT_HEARTBEAT_FILENAME)).toBe(false);
+  });
+
+  it("includes HEARTBEAT.md when isHeartbeat is true", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir, isHeartbeat: true });
+
+    expect(files.some((file) => file.name === DEFAULT_HEARTBEAT_FILENAME)).toBe(true);
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {

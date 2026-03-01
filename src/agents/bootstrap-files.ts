@@ -8,6 +8,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
@@ -47,6 +48,9 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  /** When true the current message is a heartbeat poll — include HEARTBEAT.md.
+   *  When false (or omitted) HEARTBEAT.md is excluded to save context tokens. */
+  isHeartbeat?: boolean;
   warn?: (message: string) => void;
 }): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
@@ -56,7 +60,12 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = filterBootstrapFilesForSession(rawFiles, sessionKey);
+  let bootstrapFiles = filterBootstrapFilesForSession(rawFiles, sessionKey);
+
+  // Skip HEARTBEAT.md for non-heartbeat messages to save ~400 context tokens.
+  if (!params.isHeartbeat) {
+    bootstrapFiles = bootstrapFiles.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
@@ -75,6 +84,8 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  /** When true the current message is a heartbeat poll — include HEARTBEAT.md. */
+  isHeartbeat?: boolean;
   warn?: (message: string) => void;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
