@@ -89,4 +89,47 @@ describe("normalizeReplyPayload – [THINK] prefix filtering", () => {
     expect(result).toBeNull();
     expect(onSkip).toHaveBeenCalledWith("silent");
   });
+
+  // [THINKING] variant tests
+  it("suppresses text that is entirely a [THINKING] block (no closing tag)", () => {
+    const { result, onSkip } = normalize("[THINKING] some internal reasoning");
+    expect(result).toBeNull();
+    expect(onSkip).toHaveBeenCalledWith("think");
+  });
+
+  it("suppresses [THINKING] alone", () => {
+    const { result, onSkip } = normalize("[THINKING]");
+    expect(result).toBeNull();
+    expect(onSkip).toHaveBeenCalledWith("think");
+  });
+
+  it("strips thinking block and delivers content after [/THINKING]", () => {
+    const { result } = normalize("[THINKING] reasoning here [/THINKING] actual reply");
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("actual reply");
+  });
+
+  it("suppresses when [THINKING]...[/THINKING] has no content after", () => {
+    const { result, onSkip } = normalize("[THINKING] reasoning [/THINKING]");
+    expect(result).toBeNull();
+    expect(onSkip).toHaveBeenCalledWith("think");
+  });
+
+  it("handles case insensitivity — [thinking]", () => {
+    const { result, onSkip } = normalize("[thinking] some reasoning");
+    expect(result).toBeNull();
+    expect(onSkip).toHaveBeenCalledWith("think");
+  });
+
+  it("handles case insensitivity for [thinking]...[/thinking] closing tag", () => {
+    const { result } = normalize("[thinking] reasoning [/thinking] reply text");
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("reply text");
+  });
+
+  it("handles leading whitespace before [THINKING]", () => {
+    const { result, onSkip } = normalize("   [THINKING] reasoning about things");
+    expect(result).toBeNull();
+    expect(onSkip).toHaveBeenCalledWith("think");
+  });
 });
