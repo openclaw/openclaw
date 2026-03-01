@@ -91,6 +91,38 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeToolResultName(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+  fallbackName?: string,
+): Extract<AgentMessage, { role: "toolResult" }> {
+  const rawToolName = (message as { toolName?: unknown }).toolName;
+  const normalizedToolName = trimNonEmptyString(rawToolName);
+  if (normalizedToolName) {
+    if (rawToolName === normalizedToolName) {
+      return message;
+    }
+    return { ...message, toolName: normalizedToolName };
+  }
+
+  const normalizedFallback = trimNonEmptyString(fallbackName);
+  if (normalizedFallback) {
+    return { ...message, toolName: normalizedFallback };
+  }
+
+  if (typeof rawToolName === "string") {
+    return { ...message, toolName: "unknown" };
+  }
+  return message;
+}
+
 export { makeMissingToolResult };
 
 export type ToolCallInputRepairReport = {
@@ -291,6 +323,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
+    const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
@@ -317,8 +350,15 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
             changed = true;
             continue;
           }
+          const normalizedToolResult = normalizeToolResultName(
+            toolResult,
+            toolCallNamesById.get(id),
+          );
+          if (normalizedToolResult !== toolResult) {
+            changed = true;
+          }
           if (!spanResultsById.has(id)) {
-            spanResultsById.set(id, toolResult);
+            spanResultsById.set(id, normalizedToolResult);
           }
           continue;
         }
