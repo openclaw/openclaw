@@ -167,6 +167,19 @@ function isPrivateIp(ip: string): boolean {
     return isPrivateIp(embeddedV4[1]);
   }
 
+  // Hex-encoded embedded IPv4 (Node.js normalizes dotted IPv4 to hex in IPv6)
+  // e.g. 2001:db8::5efe:127.0.0.1 → 2001:db8::5efe:7f00:1
+  const hexV4 = ipLower.match(/:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexV4) {
+    const hi = parseInt(hexV4[1], 16);
+    const a = hi >> 8;
+    const b = hi & 0xff;
+    if (a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) || (a === 169 && b === 254) || a === 0) {
+      return true;
+    }
+  }
+
   return false;
 }
 

@@ -812,13 +812,10 @@ export function attachGatewayWsMessageHandler(params: {
               remoteIp: reportedClientIp,
               // Browser-origin non-control-ui clients must not get silent auto-pairing,
               // even on loopback, to prevent malicious scripts from silently pairing.
-              // Non-browser connections with valid auth (IAM JWT or shared gateway token)
-              // get silent auto-approval — this covers cloud-provisioned bots that
-              // authenticate via BOT_GATEWAY_TOKEN.
+              // Token auth only auto-approves pairing for local connections to prevent
+              // stolen tokens from silently pairing remote devices.
               silent:
-                hasBrowserOrigin && !isControlUi
-                  ? false
-                  : isLocalClient || authMethod === "iam" || authMethod === "token",
+                hasBrowserOrigin && !isControlUi ? false : isLocalClient || authMethod === "iam",
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
