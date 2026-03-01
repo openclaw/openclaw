@@ -311,6 +311,10 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
+  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
+    "all";
+  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
+    "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;

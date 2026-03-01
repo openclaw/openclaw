@@ -29,9 +29,10 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
+import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
@@ -175,7 +176,9 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
+  const replyToMode = resolveSlackReplyToMode(account, chatType);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -208,7 +211,8 @@ export async function prepareSlackMessage(params: {
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId ||
+      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -257,7 +261,10 @@ export async function prepareSlackMessage(params: {
     useAccessGroups: ctx.useAccessGroups,
     authorizers: [
       { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
-      { configured: channelUsersAllowlistConfigured, allowed: channelCommandAuthorized },
+      {
+        configured: channelUsersAllowlistConfigured,
+        allowed: channelCommandAuthorized,
+      },
     ],
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
@@ -666,6 +673,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    replyToMode,
     isDirectMessage,
     isRoomish,
     historyKey,
