@@ -160,6 +160,140 @@ describe("subagent registry steer restarts", () => {
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
+  it("records atomic completion launch metadata for immediate cleanup start", async () => {
+    mod.registerSubagentRun({
+      runId: "run-atomic",
+      childSessionKey: "agent:main:subagent:atomic",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "atomic chain",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-atomic",
+      data: { phase: "end", endedAt: Date.now() },
+    });
+    await flushAnnounce();
+
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(run?.nextLaunchStartedAt).toEqual(expect.any(Number));
+    if (run?.blockReason) {
+      expect(run.blockReason).toContain("announce cleanup already in progress");
+      expect(run.unblockCondition).toContain("active cleanup flow");
+    }
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-launches follow-up after completion without waiting for user nudge", async () => {
+    mod.registerSubagentRun({
+      runId: "run-no-nudge",
+      childSessionKey: "agent:main:subagent:no-nudge",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "no user nudge",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-no-nudge",
+      data: { phase: "end", endedAt: Date.now() },
+    });
+    await flushAnnounce();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    expect(announceSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-no-nudge",
+      }),
+    );
+  });
+
+  it("stores explicit blocker metadata when steer suppression prevents launch", async () => {
+    mod.registerSubagentRun({
+      runId: "run-blocked",
+      childSessionKey: "agent:main:subagent:blocked",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "blocked chain",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    mod.markSubagentRunForSteerRestart("run-blocked");
+
+    lifecycleHandler?.({
+      stream: "lifecycle",
+      runId: "run-blocked",
+      data: { phase: "end", endedAt: Date.now() },
+    });
+    await flushAnnounce();
+
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(run?.blockReason).toContain("steer restart suppression");
+    expect(run?.unblockCondition).toContain("replacement run starts");
+    expect(announceSpy).not.toHaveBeenCalled();
+  });
+
+  it("watchdog auto-recovers stalled completed runs and logs incident", async () => {
+    await withPendingAgentWait(async () => {
+      vi.useFakeTimers();
+      const runtimeMod = await import("../runtime.js");
+      const configMod = await import("../config/config.js");
+      const logSpy = vi.spyOn(runtimeMod.defaultRuntime, "log").mockImplementation(() => undefined);
+      const loadConfigMock = vi.mocked(configMod.loadConfig);
+      const previous = loadConfigMock.getMockImplementation();
+      loadConfigMock.mockImplementation(
+        () =>
+          ({
+            agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+          }) as ReturnType<typeof configMod.loadConfig>,
+      );
+
+      try {
+        mod.registerSubagentRun({
+          runId: "run-watchdog",
+          childSessionKey: "agent:main:subagent:watchdog",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "watchdog recovery",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+        });
+        const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+        if (!run) {
+          throw new Error("expected run");
+        }
+        run.endedAt = Date.now() - 61_000;
+        run.cleanupHandled = false;
+        run.cleanupCompletedAt = undefined;
+
+        announceSpy.mockClear();
+        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STALL_AUTOCORRECT run=run-watchdog"),
+        );
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining("subagent_completion_to_next_launch_ms="),
+        );
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("source=watchdog"));
+      } finally {
+        if (previous) {
+          loadConfigMock.mockImplementation(previous);
+        }
+        logSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("suppresses announce for interrupted runs and only announces the replacement run", async () => {
     mod.registerSubagentRun({
       runId: "run-old",

@@ -32,4 +32,12 @@ export type SubagentRunRecord = {
   endedReason?: SubagentLifecycleEndedReason;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
+  /** Block reason when completion could not launch the next orchestration step immediately. */
+  blockReason?: string;
+  /** One-line condition that unblocks the next orchestration step. */
+  unblockCondition?: string;
+  /** Timestamp when completion->next-step launch was initiated. */
+  nextLaunchStartedAt?: number;
+  /** Timestamp when watchdog auto-recovery forced a stalled launch retry. */
+  stallAutocorrectedAt?: number;
 };

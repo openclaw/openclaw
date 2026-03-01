@@ -34,6 +34,7 @@ const embeddedRunMock = {
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  countActiveRunsForSession: vi.fn((_sessionKey: string) => 0),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 const subagentDeliveryTargetHookMock = vi.fn(
@@ -172,6 +173,7 @@ describe("subagent announce formatting", () => {
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.countActiveDescendantRuns.mockClear().mockReturnValue(0);
+    subagentRegistryMock.countActiveRunsForSession.mockClear().mockReturnValue(0);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
     hookRunnerMock.hasHooks.mockClear();
@@ -219,6 +221,9 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expect(msg).toContain("[System Message]");
     expect(msg).toContain("[sessionId: child-session-123]");
+    expect(msg).toContain("Tasks initiated: delivery follow-up (run id: run-123)");
+    expect(msg).toContain("Generation ETA:");
+    expect(msg).toContain("Workflow ETA:");
     expect(msg).toContain("subagent task");
     expect(msg).toContain("failed");
     expect(msg).toContain("boom");
@@ -228,6 +233,108 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("A completed subagent task is ready for user delivery.");
     expect(msg).toContain("Convert the result above into your normal assistant voice");
     expect(msg).toContain("Keep this internal context private");
+  });
+
+  it("emits blocker launch proof when other requester runs remain active", async () => {
+    subagentRegistryMock.countActiveDescendantRuns
+      .mockImplementationOnce((_sessionKey: string) => 0)
+      .mockImplementationOnce((_sessionKey: string) => 2);
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-blocked",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const params = await getSingleAgentCallParams();
+    const raw = params.message;
+    const msg = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
+    expect(msg).toContain("Tasks initiated: none (reason:");
+    expect(msg).toContain("unblock: wait for remaining runs to complete");
+  });
+
+  it("rewrites false running claims when requester has no active run", async () => {
+    subagentRegistryMock.countActiveRunsForSession.mockReturnValue(0);
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-truth-guard",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      roundOneReply: "Process still running.",
+      waitForCompletion: false,
+    });
+
+    const params = await getSingleAgentCallParams();
+    const raw = params.message;
+    const msg = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
+    expect(msg).toContain("Status correction: no active run is currently executing.");
+    expect(msg).not.toContain("Process still running.");
+  });
+
+  it("sanitizes internal syntax leakage from execution updates", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-hygiene",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      roundOneReply:
+        "recipient_name: functions.exec_command\ntool_uses: [x]\nVisible summary stays.",
+      waitForCompletion: false,
+    });
+
+    const params = await getSingleAgentCallParams();
+    const raw = params.message;
+    const msg = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
+    expect(msg).toContain("Visible summary stays.");
+    expect(msg).not.toContain("recipient_name");
+    expect(msg).not.toContain("tool_uses");
+  });
+
+  it("enforces pending policy metadata when pending is emitted without blocker details", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-pending-policy",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      roundOneReply: "pending",
+      waitForCompletion: false,
+    });
+
+    const params = await getSingleAgentCallParams();
+    const raw = params.message;
+    const msg = typeof raw === "string" ? raw : raw == null ? "" : JSON.stringify(raw);
+    expect(msg).toContain("blocked");
+    expect(msg).toContain("reason: hard blocker not specified");
+    expect(msg).toContain("unblock: provide approval, explicit pause, or resolve dependency");
+    expect(msg).toContain("Tasks initiated: delivery follow-up (run id: run-pending-policy)");
+    expect(msg).not.toContain("Tasks initiated: none");
+  });
+
+  it("logs ETA calibration event for short low-complexity completions", async () => {
+    const runtimeMod = await import("../runtime.js");
+    const logSpy = vi.spyOn(runtimeMod.defaultRuntime, "log").mockImplementation(() => undefined);
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-eta-cal",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "short",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 1_000,
+      endedAt: 9_000,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("subagent_eta_calibration_event=fast_completion run=run-eta-cal"),
+    );
+    logSpy.mockRestore();
   });
 
   it("includes success status when outcome is ok", async () => {

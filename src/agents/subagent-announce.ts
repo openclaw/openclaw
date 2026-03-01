@@ -51,6 +51,14 @@ const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
   ? ([8, 16, 32] as const)
   : ([5_000, 10_000, 20_000] as const);
+const RUNNING_CLAIM_RE = /\b(running|in progress|started)\b/i;
+const PENDING_RE = /\bpending\b/i;
+const INTERNAL_SYNTAX_LEAK_RE = /\b(recipient_name|tool_uses|functions\.[a-z_]+|session_id)\b/i;
+const LAUNCH_PROOF_LINE_RE = /^Tasks initiated:\s*(.+)$/im;
+const LAUNCH_PROOF_NONE_RE = /^Tasks initiated:\s*none\s*\(reason:\s*[^;]+;\s*unblock:\s*[^)]+\)$/i;
+const LAUNCH_PROOF_RUN_RE = /^Tasks initiated:\s*.+\(run id:\s*[^)]+\)$/i;
+const PENDING_ALLOWED_CONTEXT_RE =
+  /\b(pause|paused|defer|deferred|approval|approve|decision|hard blocker|external blocker|dependency)\b/i;
 
 type ToolResultMessage = {
   role?: unknown;
@@ -71,6 +79,7 @@ function buildCompletionDeliveryMessage(params: {
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  launchProofLine: string;
 }): string {
   const findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
@@ -97,9 +106,164 @@ function buildCompletionDeliveryMessage(params: {
       : `✅ Subagent ${params.subagentName} finished`;
   })();
   if (!hasFindings) {
-    return header;
+    return `${header}\n${params.launchProofLine}`;
   }
-  return `${header}\n\n${findingsText}`;
+  return `${header}\n${params.launchProofLine}\n\n${findingsText}`;
+}
+
+function buildLaunchProofLine(params: {
+  childRunId: string;
+  remainingActiveSubagentRuns: number;
+  requesterIsSubagent: boolean;
+}): string {
+  if (params.remainingActiveSubagentRuns > 0) {
+    const runsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
+    return `Tasks initiated: none (reason: ${params.remainingActiveSubagentRuns} active subagent ${runsLabel} still completing; unblock: wait for remaining runs to complete)`;
+  }
+  if (params.requesterIsSubagent) {
+    return `Tasks initiated: orchestration follow-up (run id: ${params.childRunId})`;
+  }
+  return `Tasks initiated: delivery follow-up (run id: ${params.childRunId})`;
+}
+
+function sanitizeExecutionUpdateText(params: { text: string; runId?: string }): string {
+  const trimmed = sanitizeTextContent(params.text).trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lines = trimmed.split("\n");
+  const kept = lines.filter((line) => !INTERNAL_SYNTAX_LEAK_RE.test(line));
+  const redactedLineCount = Math.max(0, lines.length - kept.length);
+  if (redactedLineCount > 0) {
+    defaultRuntime.log(
+      `[metric] subagent_output_hygiene_redaction_count=${redactedLineCount} run=${params.runId ?? "unknown"}`,
+    );
+  }
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function enforcePendingPolicy(params: { text: string; runId?: string }): string {
+  const text = params.text;
+  if (!PENDING_RE.test(text)) {
+    return text;
+  }
+  const hasExplicitReason = /\breason:\s*\S/i.test(text);
+  const hasUnblock = /\bunblock:\s*\S/i.test(text);
+  const isAllowedPending = PENDING_ALLOWED_CONTEXT_RE.test(text);
+  if (hasExplicitReason && hasUnblock && isAllowedPending) {
+    return text;
+  }
+  const normalized = text
+    .split("\n")
+    .map((line) => {
+      const normalizedLine = line.trimStart().toLowerCase();
+      if (
+        normalizedLine.startsWith("tasks initiated:") ||
+        normalizedLine.startsWith("next: tasks initiated:")
+      ) {
+        return line;
+      }
+      return line.replace(/\bpending\b/gi, "blocked");
+    })
+    .join("\n");
+  defaultRuntime.log(
+    `[metric] subagent_pending_policy_rewrite_count=1 run=${params.runId ?? "unknown"}`,
+  );
+  return `${normalized}\n\nreason: hard blocker not specified\nunblock: provide approval, explicit pause, or resolve dependency`;
+}
+
+async function enforceRunningClaimTruth(params: {
+  message: string;
+  requesterSessionKey: string;
+  runId?: string;
+}): Promise<string> {
+  if (!RUNNING_CLAIM_RE.test(params.message)) {
+    return params.message;
+  }
+  let activeRuns: number | undefined;
+  try {
+    const { countActiveRunsForSession } = await import("./subagent-registry.js");
+    activeRuns = countActiveRunsForSession(params.requesterSessionKey);
+  } catch {
+    defaultRuntime.log(
+      `[warn] subagent announce running-claim verification failed requester=${params.requesterSessionKey}`,
+    );
+  }
+  if (typeof activeRuns === "number" && activeRuns > 0) {
+    return params.message;
+  }
+  defaultRuntime.log(
+    `[warn] subagent announce running-claim rewrite requester=${params.requesterSessionKey}`,
+  );
+  defaultRuntime.log(
+    `[metric] subagent_false_running_claim_count=1 run=${params.runId ?? "unknown"}`,
+  );
+  const rewritten = params.message.replace(/\b(running|in progress|started)\b/gi, "completed");
+  return `Status correction: no active run is currently executing.\n\n${rewritten}`.trim();
+}
+
+function enforceLaunchProofContract(params: { text: string; runId?: string }): string {
+  const lines = params.text.split("\n");
+  const launchProofIdx = lines.findIndex((line) =>
+    line.toLowerCase().startsWith("tasks initiated:"),
+  );
+  const fallbackLine =
+    "Tasks initiated: none (reason: launch decision unavailable; unblock: retry orchestration step)";
+
+  if (launchProofIdx === -1) {
+    if (lines.length <= 1) {
+      const out = `${params.text}\n${fallbackLine}`.trim();
+      defaultRuntime.log(
+        `[metric] subagent_launch_proof_patch_count=1 run=${params.runId ?? "unknown"}`,
+      );
+      return out;
+    }
+    lines.splice(1, 0, fallbackLine);
+    defaultRuntime.log(
+      `[metric] subagent_launch_proof_patch_count=1 run=${params.runId ?? "unknown"}`,
+    );
+    return lines.join("\n");
+  }
+
+  const launchProofLine = lines[launchProofIdx] ?? "";
+  if (
+    LAUNCH_PROOF_LINE_RE.test(launchProofLine) &&
+    (LAUNCH_PROOF_NONE_RE.test(launchProofLine) || LAUNCH_PROOF_RUN_RE.test(launchProofLine))
+  ) {
+    return params.text;
+  }
+  lines[launchProofIdx] = fallbackLine;
+  defaultRuntime.log(
+    `[metric] subagent_launch_proof_patch_count=1 run=${params.runId ?? "unknown"}`,
+  );
+  return lines.join("\n");
+}
+
+async function guardExecutionUpdateMessage(params: {
+  message: string;
+  requesterSessionKey: string;
+  runId?: string;
+}): Promise<string> {
+  const sanitized = sanitizeExecutionUpdateText({
+    text: params.message,
+    runId: params.runId,
+  });
+  const pendingGuarded = enforcePendingPolicy({
+    text: sanitized,
+    runId: params.runId,
+  });
+  const launchProofGuarded = enforceLaunchProofContract({
+    text: pendingGuarded,
+    runId: params.runId,
+  });
+  return await enforceRunningClaimTruth({
+    message: launchProofGuarded,
+    requesterSessionKey: params.requesterSessionKey,
+    runId: params.runId,
+  });
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -434,6 +598,37 @@ async function buildCompactAnnounceStatsLine(params: {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
   return `Stats: ${parts.join(" • ")}`;
+}
+
+function resolveExecutionEtaLines(params: {
+  startedAt?: number;
+  endedAt?: number;
+  findings: string;
+}) {
+  const runtimeMs =
+    typeof params.startedAt === "number" && typeof params.endedAt === "number"
+      ? Math.max(0, params.endedAt - params.startedAt)
+      : undefined;
+  const lowComplexitySignal = params.findings.trim().length <= 240;
+  if (runtimeMs != null && runtimeMs <= 90_000 && lowComplexitySignal) {
+    return {
+      generationEta: "15-90s",
+      workflowEta: "1-3m",
+      completedMuchFasterThanDefault: true,
+    };
+  }
+  if (runtimeMs != null && runtimeMs <= 5 * 60_000) {
+    return {
+      generationEta: "1-3m",
+      workflowEta: "3-10m",
+      completedMuchFasterThanDefault: false,
+    };
+  }
+  return {
+    generationEta: "3-8m",
+    workflowEta: "10-30m",
+    completedMuchFasterThanDefault: false,
+  };
 }
 
 type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
@@ -1041,18 +1236,19 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  launchProofLine: string;
 }): string {
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
-    return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
+    return `${params.launchProofLine}\nThere are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
   }
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `${params.launchProofLine}\nConvert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `${params.launchProofLine}\nA completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `${params.launchProofLine}\nA completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the system message verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
 export async function runSubagentAnnounceFlow(params: {
@@ -1073,6 +1269,7 @@ export async function runSubagentAnnounceFlow(params: {
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
+  retrospectiveCorrection?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
 }): Promise<boolean> {
@@ -1267,11 +1464,27 @@ export async function runSubagentAnnounceFlow(params: {
     } catch {
       // Best-effort only; fall back to default announce instructions when unavailable.
     }
+    const launchProofLine = buildLaunchProofLine({
+      childRunId: params.childRunId,
+      remainingActiveSubagentRuns,
+      requesterIsSubagent,
+    });
+    const eta = resolveExecutionEtaLines({
+      startedAt: params.startedAt,
+      endedAt: params.endedAt,
+      findings,
+    });
+    if (eta.completedMuchFasterThanDefault) {
+      defaultRuntime.log(
+        `[metric] subagent_eta_calibration_event=fast_completion run=${params.childRunId}`,
+      );
+    }
     const replyInstruction = buildAnnounceReplyInstruction({
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      launchProofLine,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -1283,10 +1496,19 @@ export async function runSubagentAnnounceFlow(params: {
       subagentName,
       spawnMode: params.spawnMode,
       outcome,
+<<<<<<< HEAD
       announceType,
+=======
+      launchProofLine,
+>>>>>>> 0e2b9b004 (fix: autochain runtime + subagent lint/test updates)
     });
     const internalSummaryMessage = [
-      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
+      `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.${params.retrospectiveCorrection ? " [retrospective correction]" : ""}`,
+      launchProofLine,
+      `Status: ${statusLabel}`,
+      `Next: ${launchProofLine}`,
+      `Generation ETA: ${eta.generationEta}`,
+      `Workflow ETA: ${eta.workflowEta}`,
       "",
       "Result:",
       findings,
@@ -1325,11 +1547,21 @@ export async function runSubagentAnnounceFlow(params: {
     // catches duplicates if this announce is also queued by the gateway-
     // level message queue while the main session is busy (#17122).
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    const guardedTriggerMessage = await guardExecutionUpdateMessage({
+      message: triggerMessage,
+      requesterSessionKey: targetRequesterSessionKey,
+      runId: params.childRunId,
+    });
+    const guardedCompletionMessage = await guardExecutionUpdateMessage({
+      message: completionMessage,
+      requesterSessionKey: targetRequesterSessionKey,
+      runId: params.childRunId,
+    });
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
-      triggerMessage,
-      completionMessage,
+      triggerMessage: guardedTriggerMessage,
+      completionMessage: guardedCompletionMessage,
       summaryLine: taskLabel,
       requesterOrigin:
         expectsCompletionMessage && !requesterIsSubagent

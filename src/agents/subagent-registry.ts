@@ -65,6 +65,7 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+const AUTO_CHAIN_SLA_BREACH_MS = 60_000;
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
@@ -89,6 +90,41 @@ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "ex
   defaultRuntime.log(
     `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}`,
   );
+}
+
+function emitCompletionToNextLaunchMetric(params: {
+  runId: string;
+  requesterSessionKey: string;
+  childSessionKey: string;
+  completedAt?: number;
+  launchedAt: number;
+  source: "completion-handler" | "watchdog";
+}) {
+  const completedAt =
+    typeof params.completedAt === "number" ? params.completedAt : params.launchedAt;
+  const latencyMs = Math.max(0, params.launchedAt - completedAt);
+  defaultRuntime.log(
+    `[metric] subagent_completion_to_next_launch_ms=${latencyMs} source=${params.source} run=${params.runId} requester=${params.requesterSessionKey} child=${params.childSessionKey}`,
+  );
+}
+
+function markCompletionBlocked(params: {
+  entry: SubagentRunRecord;
+  reason: string;
+  unblockCondition: string;
+}) {
+  params.entry.blockReason = params.reason.trim() || "blocked";
+  params.entry.unblockCondition = params.unblockCondition.trim() || "manual retry";
+  persistSubagentRuns();
+}
+
+function clearCompletionBlock(entry: SubagentRunRecord) {
+  if (!entry.blockReason && !entry.unblockCondition) {
+    return;
+  }
+  entry.blockReason = undefined;
+  entry.unblockCondition = undefined;
+  persistSubagentRuns();
 }
 
 function persistSubagentRuns() {
@@ -369,18 +405,58 @@ async function completeSubagentRun(params: {
   }
 
   if (!params.triggerCleanup) {
+    markCompletionBlocked({
+      entry,
+      reason: "cleanup trigger disabled",
+      unblockCondition: "completion cleanup must be enabled",
+    });
     return;
   }
   if (suppressedForSteerRestart) {
+    markCompletionBlocked({
+      entry,
+      reason: "steer restart suppression active",
+      unblockCondition: "replacement run starts or suppression clears",
+    });
     return;
   }
-  startSubagentAnnounceCleanupFlow(params.runId, entry);
+  if (
+    !startSubagentAnnounceCleanupFlow(params.runId, entry, {
+      source: "completion-handler",
+    })
+  ) {
+    markCompletionBlocked({
+      entry,
+      reason: "announce cleanup already in progress",
+      unblockCondition: "active cleanup flow finishes",
+    });
+  }
 }
 
-function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean {
+function startSubagentAnnounceCleanupFlow(
+  runId: string,
+  entry: SubagentRunRecord,
+  opts?: {
+    source?: "completion-handler" | "watchdog";
+  },
+): boolean {
   if (!beginSubagentCleanup(runId)) {
     return false;
   }
+  const source = opts?.source ?? "completion-handler";
+  const launchStartedAt = Date.now();
+  if (typeof entry.nextLaunchStartedAt !== "number") {
+    entry.nextLaunchStartedAt = launchStartedAt;
+  }
+  clearCompletionBlock(entry);
+  emitCompletionToNextLaunchMetric({
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    childSessionKey: entry.childSessionKey,
+    completedAt: entry.endedAt,
+    launchedAt: launchStartedAt,
+    source,
+  });
   const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
   void runSubagentAnnounceFlow({
     childSessionKey: entry.childSessionKey,
@@ -398,6 +474,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     outcome: entry.outcome,
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
+    retrospectiveCorrection: source === "watchdog",
   })
     .then((didAnnounce) => {
       void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
@@ -554,6 +631,23 @@ function stopSweeper() {
 async function sweepSubagentRuns() {
   const now = Date.now();
   let mutated = false;
+  for (const [runId, entry] of subagentRuns.entries()) {
+    if (typeof entry.endedAt !== "number" || entry.cleanupCompletedAt || entry.cleanupHandled) {
+      continue;
+    }
+    if (suppressAnnounceForSteerRestart(entry)) {
+      continue;
+    }
+    if (now - entry.endedAt <= AUTO_CHAIN_SLA_BREACH_MS) {
+      continue;
+    }
+    entry.stallAutocorrectedAt = now;
+    defaultRuntime.log(
+      `[warn] STALL_AUTOCORRECT run=${runId} requester=${entry.requesterSessionKey} child=${entry.childSessionKey} ageMs=${Math.max(0, now - entry.endedAt)}`,
+    );
+    startSubagentAnnounceCleanupFlow(runId, entry, { source: "watchdog" });
+    mutated = true;
+  }
   for (const [runId, entry] of subagentRuns.entries()) {
     if (!entry.archiveAtMs || entry.archiveAtMs > now) {
       continue;
