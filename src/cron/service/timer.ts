@@ -1,3 +1,4 @@
+import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
@@ -5,6 +6,7 @@ import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
   CronJob,
+  CronMessageChannel,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -32,6 +34,8 @@ const MAX_TIMER_DELAY_MS = 60_000;
  * but always breaks an infinite re-trigger cycle.  (See #17821)
  */
 const MIN_REFIRE_GAP_MS = 2_000;
+const DEFAULT_FAILURE_ALERT_AFTER = 2;
+const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
@@ -91,7 +95,7 @@ function isAbortError(err: unknown): boolean {
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
  */
-const ERROR_BACKOFF_SCHEDULE_MS = [
+const DEFAULT_BACKOFF_SCHEDULE_MS = [
   30_000, // 1st error  →  30 s
   60_000, // 2nd error  →   1 min
   5 * 60_000, // 3rd error  →   5 min
@@ -99,9 +103,43 @@ const ERROR_BACKOFF_SCHEDULE_MS = [
   60 * 60_000, // 5th+ error →  60 min
 ];
 
-function errorBackoffMs(consecutiveErrors: number): number {
-  const idx = Math.min(consecutiveErrors - 1, ERROR_BACKOFF_SCHEDULE_MS.length - 1);
-  return ERROR_BACKOFF_SCHEDULE_MS[Math.max(0, idx)];
+function errorBackoffMs(
+  consecutiveErrors: number,
+  scheduleMs = DEFAULT_BACKOFF_SCHEDULE_MS,
+): number {
+  const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
+  return scheduleMs[Math.max(0, idx)];
+}
+
+/** Default max retries for one-shot jobs on transient errors (#24355). */
+const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
+
+const TRANSIENT_PATTERNS: Record<string, RegExp> = {
+  rate_limit: /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare)/i,
+  network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
+  timeout: /(timeout|etimedout)/i,
+  server_error: /\b5\d{2}\b/,
+};
+
+function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]): boolean {
+  if (!error || typeof error !== "string") {
+    return false;
+  }
+  const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
+  return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
+}
+
+function resolveRetryConfig(cronConfig?: CronConfig) {
+  const retry = cronConfig?.retry;
+  return {
+    maxAttempts:
+      typeof retry?.maxAttempts === "number" ? retry.maxAttempts : DEFAULT_MAX_TRANSIENT_RETRIES,
+    backoffMs:
+      Array.isArray(retry?.backoffMs) && retry.backoffMs.length > 0
+        ? retry.backoffMs
+        : DEFAULT_BACKOFF_SCHEDULE_MS.slice(0, 3),
+    retryOn: Array.isArray(retry?.retryOn) && retry.retryOn.length > 0 ? retry.retryOn : undefined,
+  };
 }
 
 function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
@@ -112,6 +150,106 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
     return "not-delivered";
   }
   return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+}
+
+function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const channel = input.trim().toLowerCase();
+  return channel ? (channel as CronMessageChannel) : undefined;
+}
+
+function normalizeTo(input: unknown): string | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const to = input.trim();
+  return to ? to : undefined;
+}
+
+function clampPositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  return floored >= 1 ? floored : fallback;
+}
+
+function clampNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  return floored >= 0 ? floored : fallback;
+}
+
+function resolveFailureAlert(
+  state: CronServiceState,
+  job: CronJob,
+): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
+  const globalConfig = state.deps.cronConfig?.failureAlert;
+  const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
+
+  if (job.failureAlert === false) {
+    return null;
+  }
+  if (!jobConfig && globalConfig?.enabled !== true) {
+    return null;
+  }
+
+  return {
+    after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
+    cooldownMs: clampNonNegativeInt(
+      jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
+      DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
+    ),
+    channel:
+      normalizeCronMessageChannel(jobConfig?.channel) ??
+      normalizeCronMessageChannel(job.delivery?.channel) ??
+      "last",
+    to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
+  };
+}
+
+function emitFailureAlert(
+  state: CronServiceState,
+  params: {
+    job: CronJob;
+    error?: string;
+    consecutiveErrors: number;
+    channel: CronMessageChannel;
+    to?: string;
+  },
+) {
+  const safeJobName = params.job.name || params.job.id;
+  const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const text = [
+    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
+    `Last error: ${truncatedError}`,
+  ].join("\n");
+
+  if (state.deps.sendCronFailureAlert) {
+    void state.deps
+      .sendCronFailureAlert({
+        job: params.job,
+        text,
+        channel: params.channel,
+        to: params.to,
+      })
+      .catch((err) => {
+        state.deps.log.warn(
+          { jobId: params.job.id, err: String(err) },
+          "cron: failure alert delivery failed",
+        );
+      });
+    return;
+  }
+
+  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
+  if (params.job.wakeMode === "now") {
+    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
+  }
 }
 
 /**
@@ -146,8 +284,26 @@ export function applyJobResult(
   // Track consecutive errors for backoff / auto-disable.
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    const alertConfig = resolveFailureAlert(state, job);
+    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
+      const now = state.deps.nowMs();
+      const lastAlert = job.state.lastFailureAlertAtMs;
+      const inCooldown =
+        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.error,
+          consecutiveErrors: job.state.consecutiveErrors,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+        });
+        job.state.lastFailureAlertAtMs = now;
+      }
+    }
   } else {
     job.state.consecutiveErrors = 0;
+    job.state.lastFailureAlertAtMs = undefined;
   }
 
   const shouldDelete =
@@ -155,21 +311,47 @@ export function applyJobResult(
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      // One-shot jobs are always disabled after ANY terminal status
-      // (ok, error, or skipped). This prevents tight-loop rescheduling
-      // when computeJobNextRunAtMs returns the past atMs value (#11452).
-      job.enabled = false;
-      job.state.nextRunAtMs = undefined;
-      if (result.status === "error") {
-        state.deps.log.warn(
-          {
-            jobId: job.id,
-            jobName: job.name,
-            consecutiveErrors: job.state.consecutiveErrors,
-            error: result.error,
-          },
-          "cron: disabling one-shot job after error",
-        );
+      if (result.status === "ok" || result.status === "skipped") {
+        // One-shot done or skipped: disable to prevent tight-loop (#11452).
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+      } else if (result.status === "error") {
+        const retryConfig = resolveRetryConfig(state.deps.cronConfig);
+        const transient = isTransientCronError(result.error, retryConfig.retryOn);
+        // consecutiveErrors is always set to ≥1 by the increment block above.
+        const consecutive = job.state.consecutiveErrors;
+        if (transient && consecutive <= retryConfig.maxAttempts) {
+          // Schedule retry with backoff (#24355).
+          const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
+          job.state.nextRunAtMs = result.endedAt + backoff;
+          state.deps.log.info(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveErrors: consecutive,
+              backoffMs: backoff,
+              nextRunAtMs: job.state.nextRunAtMs,
+            },
+            "cron: scheduling one-shot retry after transient error",
+          );
+        } else {
+          // Permanent error or max retries exhausted: disable.
+          // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
+          // so exhausted-retry jobs are disabled but intentionally kept in the store
+          // to preserve the error state for inspection.
+          job.enabled = false;
+          job.state.nextRunAtMs = undefined;
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveErrors: consecutive,
+              error: result.error,
+              reason: transient ? "max retries exhausted" : "permanent error",
+            },
+            "cron: disabling one-shot job after error",
+          );
+        }
       }
     } else if (result.status === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
@@ -474,9 +656,20 @@ function isRunnableJob(params: {
     return false;
   }
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
-    // Any terminal status (ok, error, skipped) means the job already ran at least once.
-    // Don't re-fire it on restart — applyJobResult disables one-shot jobs, but guard
-    // here defensively (#13845).
+    // One-shot with terminal status: skip unless it's a transient-error retry.
+    // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed run) (#24355).
+    // ok/skipped or error-without-retry always skip (#13845).
+    const lastRun = job.state.lastRunAtMs;
+    const nextRun = job.state.nextRunAtMs;
+    if (
+      job.state.lastStatus === "error" &&
+      job.enabled &&
+      typeof nextRun === "number" &&
+      typeof lastRun === "number" &&
+      nextRun > lastRun
+    ) {
+      return nowMs >= nextRun;
+    }
     return false;
   }
   const next = job.state.nextRunAtMs;
