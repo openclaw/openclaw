@@ -29,7 +29,9 @@ export type CronFieldKey =
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
-  | "deliveryTo";
+  | "deliveryTo"
+  | "failureAlertAfter"
+  | "failureAlertCooldownSeconds";
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
@@ -143,6 +145,22 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.deliveryTo = "cron.errors.webhookUrlRequired";
     } else if (!/^https?:\/\//i.test(target)) {
       errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    }
+  }
+  if (form.failureAlertMode === "custom") {
+    const afterRaw = form.failureAlertAfter.trim();
+    if (afterRaw) {
+      const after = toNumber(afterRaw, 0);
+      if (!Number.isFinite(after) || after <= 0) {
+        errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
+      }
+    }
+    const cooldownRaw = form.failureAlertCooldownSeconds.trim();
+    if (cooldownRaw) {
+      const cooldown = toNumber(cooldownRaw, -1);
+      if (!Number.isFinite(cooldown) || cooldown < 0) {
+        errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
+      }
     }
   }
   return errors;
@@ -374,6 +392,7 @@ function parseStaggerSchedule(
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
+  const failureAlert = job.failureAlert;
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -401,6 +420,27 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,
+    failureAlertMode:
+      failureAlert === false
+        ? "disabled"
+        : failureAlert && typeof failureAlert === "object"
+          ? "custom"
+          : "inherit",
+    failureAlertAfter:
+      failureAlert && typeof failureAlert === "object" && typeof failureAlert.after === "number"
+        ? String(failureAlert.after)
+        : DEFAULT_CRON_FORM.failureAlertAfter,
+    failureAlertCooldownSeconds:
+      failureAlert &&
+      typeof failureAlert === "object" &&
+      typeof failureAlert.cooldownMs === "number"
+        ? String(Math.floor(failureAlert.cooldownMs / 1000))
+        : DEFAULT_CRON_FORM.failureAlertCooldownSeconds,
+    failureAlertChannel:
+      failureAlert && typeof failureAlert === "object"
+        ? (failureAlert.channel ?? CRON_CHANNEL_LAST)
+        : CRON_CHANNEL_LAST,
+    failureAlertTo: failureAlert && typeof failureAlert === "object" ? (failureAlert.to ?? "") : "",
     timeoutSeconds:
       job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
@@ -495,6 +535,26 @@ export function buildCronPayload(form: CronFormState) {
   return payload;
 }
 
+function buildFailureAlert(form: CronFormState) {
+  if (form.failureAlertMode === "disabled") {
+    return false as const;
+  }
+  if (form.failureAlertMode !== "custom") {
+    return undefined;
+  }
+  const after = toNumber(form.failureAlertAfter.trim(), 0);
+  const cooldownSeconds = toNumber(form.failureAlertCooldownSeconds.trim(), 0);
+  return {
+    after: after > 0 ? Math.floor(after) : undefined,
+    channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
+    to: form.failureAlertTo.trim() || undefined,
+    cooldownMs:
+      Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
+        ? Math.floor(cooldownSeconds * 1000)
+        : undefined,
+  };
+}
+
 export async function addCronJob(state: CronState) {
   if (!state.client || !state.connected || state.cronBusy) {
     return;
@@ -527,6 +587,7 @@ export async function addCronJob(state: CronState) {
             bestEffort: form.deliveryBestEffort,
           }
         : undefined;
+    const failureAlert = buildFailureAlert(form);
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const job = {
       name: form.name.trim(),
@@ -539,6 +600,7 @@ export async function addCronJob(state: CronState) {
       wakeMode: form.wakeMode,
       payload,
       delivery,
+      failureAlert,
     };
     if (!job.name) {
       throw new Error(t("cron.errors.nameRequiredShort"));

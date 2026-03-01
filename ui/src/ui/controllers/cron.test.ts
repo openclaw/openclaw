@@ -298,6 +298,87 @@ describe("cron controller", () => {
     });
   });
 
+  it("includes custom failureAlert fields in cron.update patch", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-alert" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-alert" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-alert",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "alert job",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+        failureAlertMode: "custom",
+        failureAlertAfter: "3",
+        failureAlertCooldownSeconds: "120",
+        failureAlertChannel: "telegram",
+        failureAlertTo: "123456",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-alert",
+      patch: {
+        failureAlert: {
+          after: 3,
+          cooldownMs: 120_000,
+          channel: "telegram",
+          to: "123456",
+        },
+      },
+    });
+  });
+
+  it("includes failureAlert=false when disabled per job", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-no-alert" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-no-alert" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-no-alert",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "alert off",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+        failureAlertMode: "disabled",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-no-alert",
+      patch: { failureAlert: false },
+    });
+  });
+
   it("maps cron stagger, model, thinking, and best effort into form", () => {
     const state = createState();
     const job = {
@@ -329,6 +410,36 @@ describe("cron controller", () => {
     expect(state.cronForm.payloadModel).toBe("opus");
     expect(state.cronForm.payloadThinking).toBe("high");
     expect(state.cronForm.deliveryBestEffort).toBe(true);
+  });
+
+  it("maps failureAlert overrides into form fields", () => {
+    const state = createState();
+    const job = {
+      id: "job-11",
+      name: "Failure alerts",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "hello" },
+      failureAlert: {
+        after: 4,
+        cooldownMs: 30_000,
+        channel: "telegram",
+        to: "999",
+      },
+      state: {},
+    };
+
+    startCronEdit(state, job);
+
+    expect(state.cronForm.failureAlertMode).toBe("custom");
+    expect(state.cronForm.failureAlertAfter).toBe("4");
+    expect(state.cronForm.failureAlertCooldownSeconds).toBe("30");
+    expect(state.cronForm.failureAlertChannel).toBe("telegram");
+    expect(state.cronForm.failureAlertTo).toBe("999");
   });
 
   it("validates key cron form errors", () => {
