@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -51,11 +51,34 @@ function getToolResultText(messages: AgentMessage[]): string {
 }
 
 describe("installSessionToolResultGuard", () => {
+  let savedAbortMode: string | undefined;
+
+  beforeEach(() => {
+    savedAbortMode = process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+    // Default: discard mode (new default). Tests that need synthetic mode set it explicitly.
+    delete process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+  });
+
+  afterEach(() => {
+    if (savedAbortMode === undefined) {
+      delete process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE;
+    } else {
+      process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = savedAbortMode;
+    }
+  });
+
   it("inserts synthetic toolResult before non-tool message when pending", () => {
+    // In synthetic mode, explicitly flushing before a new turn produces a synthetic
+    // tool result for the pending call_1. The followup assistant message is then
+    // written directly (no pending).
+    process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = "synthetic";
     const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
+    const guard = installSessionToolResultGuard(sm);
 
     sm.appendMessage(toolCallMessage);
+    // Explicitly flush in synthetic mode to produce the synthetic toolResult before
+    // appending the follow-up message.
+    guard.flushPendingToolResults();
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
@@ -76,6 +99,9 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("flushes pending tool calls when asked explicitly", () => {
+    // In synthetic mode, flushPendingToolResults() synthesizes an error toolResult
+    // for the pending tool_use and commits the pair atomically to JSONL.
+    process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = "synthetic";
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
 
@@ -103,6 +129,10 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {
+    // In synthetic mode: when call_a result arrives but call_b is still pending,
+    // an explicit flush synthesizes a result for call_b, committing the full pair.
+    // The follow-up text assistant is then written directly.
+    process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = "synthetic";
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
 
@@ -123,6 +153,9 @@ describe("installSessionToolResultGuard", () => {
         isError: false,
       }),
     );
+    // call_b is still pending; flush in synthetic mode to produce a synthetic result
+    // and commit the complete pair before appending the next message.
+    guard.flushPendingToolResults();
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
@@ -229,6 +262,10 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("flushes pending tool results when a sanitized assistant message is dropped", () => {
+    // When a subsequent assistant message is sanitized to nothing (all tool calls
+    // are malformed/invalid), the pair-atomic buffer is discarded in its entirety.
+    // The incomplete pair (tool_use without tool_result) is never written to JSONL,
+    // preventing orphaned tool_use blocks.
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
@@ -239,6 +276,8 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
+    // Malformed: toolCall missing arguments — sanitizer drops it, resulting in an
+    // empty assistant message that triggers discardToolPairBuffer.
     sm.appendMessage(
       asAppendMessage({
         role: "assistant",
@@ -246,7 +285,9 @@ describe("installSessionToolResultGuard", () => {
       }),
     );
 
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    // Both the buffered assistant (call_1) and the incoming malformed message are
+    // discarded. Nothing is written to JSONL — no orphan tool_use.
+    expectPersistedRoles(sm, []);
   });
 
   it("caps oversized tool result text during persistence", () => {
@@ -311,13 +352,23 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("applies before_message_write to synthetic tool-result flushes", () => {
+    // In synthetic mode, before_message_write is applied to the synthesized toolResult
+    // during flushPendingToolResults(). This verifies that the hook intercepts the
+    // synthetic result and can modify it before it is committed to JSONL.
+    process.env.OPENCLAW_TOOL_GUARD_ABORT_MODE = "synthetic";
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) => {
         if ((message as { role?: string }).role !== "toolResult") {
           return undefined;
         }
-        return { block: true };
+        // Transform the synthetic tool result to confirm the hook is applied.
+        return {
+          message: {
+            ...(message as unknown as Record<string, unknown>),
+            content: [{ type: "text", text: "hook-modified synthetic" }],
+          } as unknown as AgentMessage,
+        };
       },
     });
 
@@ -325,7 +376,11 @@ describe("installSessionToolResultGuard", () => {
     guard.flushPendingToolResults();
 
     const messages = getPersistedMessages(sm);
-    expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+    // Hook transforms (not blocks) the synthetic result, so the full pair is committed.
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    // Confirm the hook was actually applied to the synthetic tool result.
+    const toolResult = messages[1] as { content?: Array<{ text?: string }> };
+    expect(toolResult.content?.[0]?.text).toBe("hook-modified synthetic");
   });
 
   it("applies message persistence transform to user messages", () => {
@@ -335,7 +390,10 @@ describe("installSessionToolResultGuard", () => {
         (message as { role?: string }).role === "user"
           ? ({
               ...(message as unknown as Record<string, unknown>),
-              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              provenance: {
+                kind: "inter_session",
+                sourceTool: "sessions_send",
+              },
             } as unknown as AgentMessage)
           : message,
     });
