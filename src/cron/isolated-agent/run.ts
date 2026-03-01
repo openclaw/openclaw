@@ -314,12 +314,23 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
   const deliveryRequested = deliveryPlan.requested;
 
-  const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+  // When delivery mode is "none", skip delivery target resolution entirely.
+  // Passing channel="last" when mode="none" causes resolveDeliveryTarget to
+  // attempt channel resolution and fail with "Message failed" when there's
+  // no valid last channel. See: https://github.com/openclaw/openclaw/issues/30393
+  const resolvedDelivery =
+    deliveryPlan.mode === "none"
+      ? ({
+          ok: false,
+          mode: "implicit" as const,
+          error: new Error("Delivery mode is 'none'"),
+        } as const)
+      : await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
+          channel: deliveryPlan.channel ?? "last",
+          to: deliveryPlan.to,
+          accountId: deliveryPlan.accountId,
+          sessionKey: params.job.sessionKey,
+        });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
