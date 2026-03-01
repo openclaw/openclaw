@@ -80,6 +80,11 @@ Check your Node version with `node --version` if you are unsure.
 If the Control UI loads, your Gateway is ready for use.
 </Check>
 
+<Tip>
+If you are running from source on macOS and hit Node/pnpm/auth errors, use the focused runbook:
+[Gateway troubleshooting: macOS source run common errors and fixes](/gateway/troubleshooting#macos-source-run-common-errors-and-fixes).
+</Tip>
+
 ## Optional checks and extras
 
 <AccordionGroup>
