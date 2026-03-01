@@ -1,4 +1,5 @@
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -11,13 +12,14 @@ type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSele
 export type ReplyPrefixContextBundle = {
   prefixContext: ResponsePrefixContext;
   responsePrefix?: string;
+  heartbeatPrompt: string;
   responsePrefixContextProvider: () => ResponsePrefixContext;
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
 export type ReplyPrefixOptions = Pick<
   ReplyPrefixContextBundle,
-  "responsePrefix" | "responsePrefixContextProvider" | "onModelSelected"
+  "responsePrefix" | "heartbeatPrompt" | "responsePrefixContextProvider" | "onModelSelected"
 >;
 
 export function createReplyPrefixContext(params: {
@@ -45,6 +47,7 @@ export function createReplyPrefixContext(params: {
       channel: params.channel,
       accountId: params.accountId,
     }).responsePrefix,
+    heartbeatPrompt: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
     responsePrefixContextProvider: () => prefixContext,
     onModelSelected,
   };
@@ -56,7 +59,7 @@ export function createReplyPrefixOptions(params: {
   channel?: string;
   accountId?: string;
 }): ReplyPrefixOptions {
-  const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
+  const { responsePrefix, heartbeatPrompt, responsePrefixContextProvider, onModelSelected } =
     createReplyPrefixContext(params);
-  return { responsePrefix, responsePrefixContextProvider, onModelSelected };
+  return { responsePrefix, heartbeatPrompt, responsePrefixContextProvider, onModelSelected };
 }
