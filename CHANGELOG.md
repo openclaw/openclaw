@@ -79,6 +79,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gemini/Empty replies: retry once when model output contains only empty/whitespace text payloads, and surface a fallback user-visible error when retry also returns empty text to avoid silent/stuck reply flows. (#30616) Thanks @liuxiaopai-ai.
 - Cron/Isolated sessions list: persist the intended pre-run model/provider on isolated cron session entries so `sessions_list` reflects payload/session model overrides even when runs fail before post-run telemetry persistence. (#21279) Thanks @altaywtf.
 - Cron/One-shot reliability: retry transient one-shot failures with bounded backoff and configurable retry policy before disabling. (#24435) Thanks .
 - Gateway/Cron auditability: add gateway info logs for successful cron create, update, and remove operations. (#25090) Thanks .

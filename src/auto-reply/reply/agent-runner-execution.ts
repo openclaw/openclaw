@@ -69,6 +69,30 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+function isRenderableReplyPayload(payload: ReplyPayload): boolean {
+  if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+    return true;
+  }
+  if (payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0) {
+    return true;
+  }
+  if (payload.audioAsVoice || payload.channelData) {
+    return true;
+  }
+  return false;
+}
+
+function isLikelyEmptyTextOnlyResponse(payloads: ReplyPayload[]): boolean {
+  if (payloads.length === 0) {
+    return false;
+  }
+  const hasTextPayload = payloads.some((payload) => typeof payload.text === "string");
+  if (!hasTextPayload) {
+    return false;
+  }
+  return !payloads.some(isRenderableReplyPayload);
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -125,6 +149,7 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let didRetryEmptyTextResponse = false;
 
   while (true) {
     try {
@@ -443,9 +468,11 @@ export async function runAgentTurnWithFallback(params: {
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
       const embeddedError = runResult.meta?.error;
+      const isEmbeddedContextOverflow =
+        Boolean(embeddedError) && isContextOverflowError(embeddedError.message);
       if (
         embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
+        isEmbeddedContextOverflow &&
         !didResetAfterCompactionFailure &&
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
@@ -467,6 +494,22 @@ export async function runAgentTurnWithFallback(params: {
             },
           };
         }
+      }
+
+      if (!isEmbeddedContextOverflow && isLikelyEmptyTextOnlyResponse(runResult.payloads ?? [])) {
+        if (!didRetryEmptyTextResponse) {
+          didRetryEmptyTextResponse = true;
+          defaultRuntime.error(
+            "Embedded agent returned empty text-only payload; retrying once before surfacing fallback.",
+          );
+          continue;
+        }
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Model returned an empty reply. Please try again.",
+          },
+        };
       }
 
       break;

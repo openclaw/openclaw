@@ -591,6 +591,39 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
+  it("retries once when model returns empty/whitespace-only text payloads", async () => {
+    let calls = 0;
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { payloads: [{ text: "  \n  " }], meta: {} };
+      }
+      return { payloads: [{ text: "final after retry" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({ typingMode: "message" });
+    const res = await run();
+
+    expect(calls).toBe(2);
+    expect(res).toMatchObject({ text: "final after retry" });
+  });
+
+  it("surfaces a fallback error when retry still returns empty text payloads", async () => {
+    let calls = 0;
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      calls += 1;
+      return { payloads: [{ text: "\n\t" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({ typingMode: "message" });
+    const res = await run();
+
+    expect(calls).toBe(2);
+    expect(res).toMatchObject({
+      text: "⚠️ Model returned an empty reply. Please try again.",
+    });
+  });
+
   it("delivers tool results in order even when dispatched concurrently", async () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {
