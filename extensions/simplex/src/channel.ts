@@ -144,7 +144,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       // If media is a URL, download to temp file
       if (mediaUrl && (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://"))) {
         try {
-          const response = await fetch(media);
+          const response = await fetch(mediaUrl);
           if (!response.ok) {
             throw new Error(`Failed to download media: ${response.status} ${response.statusText}`);
           }

@@ -60,9 +60,10 @@ export function resolveRouting(config: SimplexConfig, ctx: RoutingContext): Rout
 
   // 1. Check user routing (direct messages)
   if (!ctx.isGroup) {
-    const userRoute = userRouting.find(
-      (r) => r.contactName.toLowerCase() === ctx.senderName.toLowerCase(),
-    );
+    // Filter matching routes and sort by priority (highest first)
+    const userRoute = userRouting
+      .filter((r) => r.contactName.toLowerCase() === ctx.senderName.toLowerCase())
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
 
     if (userRoute) {
       return {
