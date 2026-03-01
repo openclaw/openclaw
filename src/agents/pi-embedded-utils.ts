@@ -207,13 +207,38 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
-export function extractAssistantText(msg: AssistantMessage): string {
+/**
+ * Strip reasoning_content from text.
+ * Some models (e.g., Xiaomi Mimo v2 flash) return reasoning content in the
+ * response that should be filtered out when filterReasoningContent is enabled.
+ * This removes JSON fields named "reasoning_content" and their values.
+ */
+export function stripReasoningContent(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Match reasoning_content JSON field and remove it
+  // Handles: "reasoning_content": "..." or 'reasoning_content': '...'
+  // with various whitespace and quote styles
+  const reasoningContentRe = /["']?reasoning_content["']?\s*:\s*["'][^"']*["']/gi;
+  return text.replace(reasoningContentRe, "");
+}
+
+export function extractAssistantText(
+  msg: AssistantMessage,
+  opts?: { filterReasoningContent?: boolean },
+): string {
+  const filterReasoning = opts?.filterReasoningContent ?? false;
   const extracted =
     extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
-        ).trim(),
+      sanitizeText: (text) => {
+        let cleaned = stripDowngradedToolCallText(stripMinimaxToolCallXml(text));
+        if (filterReasoning) {
+          cleaned = stripReasoningContent(cleaned);
+        }
+        cleaned = stripThinkingTagsFromText(cleaned).trim();
+        return cleaned;
+      },
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";

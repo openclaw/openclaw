@@ -31,6 +31,7 @@ import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
+  stripReasoningContent,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
 
@@ -144,7 +145,10 @@ export function sanitizeTextContent(text: string): string {
   return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
 }
 
-export function extractAssistantText(message: unknown): string | undefined {
+export function extractAssistantText(
+  message: unknown,
+  opts?: { filterReasoningContent?: boolean },
+): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
@@ -155,9 +159,16 @@ export function extractAssistantText(message: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
+  const filterReasoning = opts?.filterReasoningContent ?? false;
   const joined =
     extractTextFromChatContent(content, {
-      sanitizeText: sanitizeTextContent,
+      sanitizeText: (text) => {
+        let cleaned = sanitizeTextContent(text);
+        if (filterReasoning) {
+          cleaned = stripReasoningContent(cleaned);
+        }
+        return cleaned;
+      },
       joinWith: "",
       normalizeText: (text) => text.trim(),
     }) ?? "";
