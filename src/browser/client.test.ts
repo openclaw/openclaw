@@ -8,7 +8,13 @@ import {
   browserPdfSave,
   browserScreenshotAction,
 } from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+import {
+  browserOpenTab,
+  browserSnapshot,
+  browserStart,
+  browserStatus,
+  browserTabs,
+} from "./client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {
@@ -50,6 +56,36 @@ describe("browser client", () => {
   it("adds useful timeout messaging for abort-like failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("aborted")));
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/timed out/i);
+  });
+
+  it("uses an extended timeout budget for browser start", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: string, init?: RequestInit) => {
+          return new Promise((_, reject) => {
+            const signal = init?.signal;
+            if (!signal) {
+              return;
+            }
+            if (signal.aborted) {
+              reject(new Error("aborted"));
+              return;
+            }
+            signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        }),
+      );
+
+      const startPromise = browserStart("http://127.0.0.1:18791");
+      const startRejected = expect(startPromise).rejects.toThrow(/timed out after 40000ms/i);
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      await startRejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces non-2xx responses with body text", async () => {
