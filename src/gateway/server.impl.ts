@@ -377,6 +377,40 @@ export async function startGatewayServer(
   setPreRestartDeferralCheck(
     () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
+
+  // Verify config integrity before proceeding with startup
+  if (cfgAtStart.security?.configIntegrity?.verifyOnStartup !== false) {
+    try {
+      const { verifyConfigIntegrityOnStartup } = await import("../security/config-integrity.js");
+      const { resolveStateDir: resolveStateDirFn } = await import("../config/paths.js");
+      const integrityStateDir = resolveStateDirFn();
+      verifyConfigIntegrityOnStartup({
+        config: cfgAtStart,
+        stateDir: integrityStateDir,
+        onTampered: (file, result) => {
+          if (result.status === "tampered") {
+            log.error(
+              `Config integrity check FAILED for ${file}: expected ${result.expectedHash}, got ${result.actualHash}`,
+            );
+          }
+          if (cfgAtStart.security?.configIntegrity?.blockOnTampering) {
+            throw new Error(
+              `Config integrity violation detected in ${file}. Gateway startup blocked.`,
+            );
+          }
+        },
+        onMissingBaseline: (file) => {
+          log.info(`No integrity baseline for ${file}. Creating initial hash.`);
+        },
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("Config integrity violation detected")) {
+        throw err;
+      }
+      log.warn(`Config integrity check skipped: ${String(err)}`);
+    }
+  }
+
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);

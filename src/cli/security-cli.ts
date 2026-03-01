@@ -1,7 +1,13 @@
 import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
+import {
+  loadConfigIntegrityStore,
+  saveConfigIntegrityStore,
+} from "../security/config-integrity-store.js";
+import { updateFileIntegrityHash, verifyAllIntegrity } from "../security/config-integrity.js";
 import { fixSecurityFootguns } from "../security/fix.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -160,5 +166,200 @@ export function registerSecurityCli(program: Command) {
       render("info");
 
       defaultRuntime.log(lines.join("\n"));
+    });
+
+  registerIntegrityCli(security);
+}
+
+function formatRelativeTime(epochMs: number): string {
+  const diff = Date.now() - epochMs;
+  if (diff < 60_000) {
+    return "just now";
+  }
+  if (diff < 3_600_000) {
+    return `${Math.floor(diff / 60_000)}m ago`;
+  }
+  if (diff < 86_400_000) {
+    return `${Math.floor(diff / 3_600_000)}h ago`;
+  }
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function registerIntegrityCli(parent: Command) {
+  const integrity = parent.command("integrity").description("Config integrity hash management");
+
+  integrity
+    .command("status")
+    .description("Show hash status for all tracked files")
+    .option("--json", "Print JSON", false)
+    .action((opts: { json?: boolean }) => {
+      const stateDir = resolveStateDir();
+      const store = loadConfigIntegrityStore(stateDir);
+      const results = verifyAllIntegrity(store, stateDir);
+
+      if (opts.json) {
+        const out: Record<string, unknown> = {};
+        for (const [file, result] of results) {
+          const entry = store.entries[file];
+          out[file] = { ...result, updatedAt: entry?.updatedAt, updatedBy: entry?.updatedBy };
+        }
+        defaultRuntime.log(JSON.stringify(out, null, 2));
+        return;
+      }
+
+      const rich = isRich();
+      const heading = (t: string) => (rich ? theme.heading(t) : t);
+      const muted = (t: string) => (rich ? theme.muted(t) : t);
+
+      const lines: string[] = [];
+      lines.push(heading("Config Integrity Status"));
+      lines.push("");
+
+      if (results.size === 0) {
+        lines.push(muted("No tracked files found. Run the gateway to create initial baselines."));
+        defaultRuntime.log(lines.join("\n"));
+        return;
+      }
+
+      const maxFileLen = Math.max(...[...results.keys()].map((f) => f.length), 4);
+      const fileCol = "File".padEnd(maxFileLen);
+      lines.push(` ${fileCol}  Status          Last Updated`);
+      lines.push(muted(" " + "─".repeat(maxFileLen + 40)));
+
+      for (const [file, result] of results) {
+        const entry = store.entries[file];
+        const paddedFile = file.padEnd(maxFileLen);
+        let statusStr: string;
+        let timeStr: string;
+
+        if (result.status === "ok") {
+          statusStr = rich ? theme.success("✓ OK") : "OK";
+          timeStr = entry ? `${formatRelativeTime(entry.updatedAt)} (${entry.updatedBy})` : "";
+        } else if (result.status === "tampered") {
+          statusStr = rich ? theme.error("✗ TAMPERED") : "TAMPERED";
+          timeStr = entry ? `${formatRelativeTime(entry.updatedAt)} (${entry.updatedBy})` : "";
+        } else if (result.status === "missing-baseline") {
+          statusStr = rich ? theme.warn("⚠ No baseline") : "No baseline";
+          timeStr = "";
+        } else if (result.status === "file-not-found") {
+          statusStr = muted("- Not found");
+          timeStr = "";
+        } else {
+          statusStr = muted("? Error");
+          timeStr = "";
+        }
+
+        lines.push(` ${paddedFile}  ${statusStr.padEnd(16)}${timeStr}`);
+      }
+
+      defaultRuntime.log(lines.join("\n"));
+    });
+
+  integrity
+    .command("verify")
+    .description("Verify all tracked files now")
+    .option("--json", "Print JSON", false)
+    .action((opts: { json?: boolean }) => {
+      const stateDir = resolveStateDir();
+      const store = loadConfigIntegrityStore(stateDir);
+      const results = verifyAllIntegrity(store, stateDir);
+
+      if (opts.json) {
+        const out: Record<string, unknown> = {};
+        for (const [file, result] of results) {
+          out[file] = result;
+        }
+        defaultRuntime.log(JSON.stringify(out, null, 2));
+        return;
+      }
+
+      const rich = isRich();
+      let allOk = true;
+      for (const [file, result] of results) {
+        if (result.status === "ok") {
+          defaultRuntime.log(`${rich ? theme.success("✓") : "OK"} ${file}`);
+        } else if (result.status === "tampered") {
+          allOk = false;
+          defaultRuntime.log(
+            `${rich ? theme.error("✗") : "FAIL"} ${file}: expected ${result.expectedHash}, got ${result.actualHash}`,
+          );
+        } else if (result.status === "missing-baseline") {
+          defaultRuntime.log(`${rich ? theme.warn("⚠") : "WARN"} ${file}: no baseline`);
+        } else if (result.status === "file-not-found") {
+          defaultRuntime.log(`${rich ? theme.muted("-") : "-"} ${file}: file not found`);
+        }
+      }
+
+      if (allOk && results.size > 0) {
+        defaultRuntime.log(
+          rich
+            ? theme.success("\nAll files passed integrity check.")
+            : "\nAll files passed integrity check.",
+        );
+      } else if (!allOk) {
+        defaultRuntime.log(
+          rich
+            ? theme.error(
+                '\nIntegrity violations detected. Run "openclaw security integrity update" after verifying changes.',
+              )
+            : '\nIntegrity violations detected. Run "openclaw security integrity update" after verifying changes.',
+        );
+      }
+    });
+
+  integrity
+    .command("update")
+    .description("Update hashes for all tracked files (after manual edit)")
+    .action(() => {
+      const stateDir = resolveStateDir();
+      let store = loadConfigIntegrityStore(stateDir);
+      const results = verifyAllIntegrity(store, stateDir);
+      let count = 0;
+
+      for (const [file] of results) {
+        store = updateFileIntegrityHash(store, file, "manual", stateDir);
+        count++;
+      }
+
+      saveConfigIntegrityStore(store, stateDir);
+      defaultRuntime.log(`Updated integrity hashes for ${count} file(s).`);
+    });
+
+  integrity
+    .command("audit-log")
+    .description("Show recent integrity audit log entries")
+    .option("--limit <n>", "Number of entries to show", "20")
+    .option("--json", "Print JSON", false)
+    .action((opts: { limit?: string; json?: boolean }) => {
+      const stateDir = resolveStateDir();
+      const store = loadConfigIntegrityStore(stateDir);
+      const limit = Math.max(1, Number.parseInt(opts.limit ?? "20", 10) || 20);
+      const entries = store.auditLog.slice(-limit);
+
+      if (opts.json) {
+        defaultRuntime.log(JSON.stringify(entries, null, 2));
+        return;
+      }
+
+      if (entries.length === 0) {
+        defaultRuntime.log("No audit log entries.");
+        return;
+      }
+
+      const rich = isRich();
+      const muted = (t: string) => (rich ? theme.muted(t) : t);
+
+      for (const entry of entries) {
+        const ts = new Date(entry.ts).toISOString();
+        const actionLabel =
+          entry.action === "tampered"
+            ? rich
+              ? theme.error(entry.action)
+              : entry.action
+            : entry.action;
+        defaultRuntime.log(
+          `${muted(ts)} ${actionLabel.padEnd(14)} ${entry.file} ${muted(`(${entry.actor})`)}`,
+        );
+      }
     });
 }

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
@@ -47,6 +48,8 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { loadConfigIntegrityStore, resolveIntegrityStorePath } from "./config-integrity-store.js";
+import { verifyAllIntegrity } from "./config-integrity.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -884,6 +887,94 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   return findings;
 }
 
+function collectConfigIntegrityFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+}): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const integrityCfg = params.cfg.security?.configIntegrity;
+
+  if (integrityCfg?.enabled === false) {
+    findings.push({
+      checkId: "config.integrity_disabled",
+      severity: "warn",
+      title: "Config integrity verification disabled",
+      detail:
+        "security.configIntegrity.enabled is false. Unauthorized or accidental config modifications will not be detected.",
+      remediation:
+        "Set security.configIntegrity.enabled to true (or remove the setting to use the default).",
+    });
+    return findings;
+  }
+
+  // Check store file permissions
+  try {
+    const storePath = resolveIntegrityStorePath(params.stateDir);
+    if (fs.existsSync(storePath)) {
+      const stat = fs.statSync(storePath);
+      const mode = stat.mode & 0o777;
+      const groupWritable = (mode & 0o020) !== 0;
+      const worldWritable = (mode & 0o002) !== 0;
+      if (groupWritable || worldWritable) {
+        findings.push({
+          checkId: "config.integrity_store_permissions",
+          severity: "critical",
+          title: "Integrity store file has unsafe permissions",
+          detail: `${storePath} is writable by group or others (mode ${mode.toString(8)}). An attacker could replace stored hashes to hide config tampering.`,
+          remediation: `chmod 600 ${storePath}`,
+        });
+      }
+    }
+  } catch {
+    // Skip permissions check if file doesn't exist or can't be read
+  }
+
+  // Verify all tracked files
+  try {
+    const store = loadConfigIntegrityStore(params.stateDir);
+    const results = verifyAllIntegrity(store, params.stateDir);
+
+    for (const [file, result] of results) {
+      if (result.status === "tampered") {
+        findings.push({
+          checkId: "config.integrity_tampered",
+          severity: "critical",
+          title: `Config integrity check failed: ${file}`,
+          detail: `File hash mismatch for ${file}: expected ${result.expectedHash}, got ${result.actualHash}. The file may have been modified outside of OpenClaw.`,
+          remediation:
+            'If the change was intentional, run "openclaw security integrity update" to accept the new hash.',
+        });
+      } else if (result.status === "missing-baseline") {
+        findings.push({
+          checkId: "config.integrity_missing_baseline",
+          severity: "warn",
+          title: `No integrity baseline for ${file}`,
+          detail: `Config file ${file} exists but has no stored integrity hash. Initial baseline will be created on next gateway startup.`,
+          remediation: 'Run "openclaw security integrity update" to create the initial baseline.',
+        });
+      }
+    }
+
+    // Check for stale hashes (>30 days since last update)
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const [file, entry] of Object.entries(store.entries)) {
+      if (now - entry.updatedAt > thirtyDaysMs) {
+        findings.push({
+          checkId: "config.integrity_stale",
+          severity: "info",
+          title: `Integrity hash is stale: ${file}`,
+          detail: `Hash for ${file} hasn't been updated in over 30 days (last updated by ${entry.updatedBy}). This may indicate a missed integrity update.`,
+        });
+      }
+    }
+  } catch {
+    // Skip integrity checks if store can't be loaded
+  }
+
+  return findings;
+}
+
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -954,6 +1045,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
   findings.push(...collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...collectConfigIntegrityFindings({ cfg, stateDir }));
 
   const configSnapshot =
     opts.includeFilesystem !== false

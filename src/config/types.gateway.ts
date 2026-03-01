@@ -315,6 +315,22 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type ConfigIntegrityConfig = {
+  /** Enable integrity verification. @default true */
+  enabled?: boolean;
+  /** Verify config integrity on gateway startup. @default true */
+  verifyOnStartup?: boolean;
+  /** Block gateway startup when tampering is detected. @default false */
+  blockOnTampering?: boolean;
+  /** Additional files (relative to stateDir) to track beyond defaults. */
+  trackedFiles?: string[];
+};
+
+export type SecurityConfig = {
+  /** Cryptographic integrity verification for config files. */
+  configIntegrity?: ConfigIntegrityConfig;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
