@@ -150,6 +150,19 @@
   }
 }
 
+/* Fenced code blocks - same style as .code-block but without max-height */
+.fenced-code-block {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--secondary);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 /* Light mode adjustments */
 :root[data-theme="light"] .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.08);
@@ -161,15 +174,15 @@
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-/* Legacy pre styling (for code blocks without wrapper) */
-.chat-text :where(pre:not(.code-block)) {
+/* Legacy pre styling (for code blocks without wrapper or fenced-code-block) */
+.chat-text :where(pre:not(.code-block):not(.fenced-code-block)) {
   background: rgba(0, 0, 0, 0.15);
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
 }
 
-:root[data-theme="light"] .chat-text :where(pre:not(.code-block)) {
+:root[data-theme="light"] .chat-text :where(pre:not(.code-block):not(.fenced-code-block)) {
   background: rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 0, 0, 0.1);
 }

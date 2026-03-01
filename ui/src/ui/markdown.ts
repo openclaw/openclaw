@@ -6,6 +6,15 @@ import { truncateText } from "./format.ts";
 const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
 const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
 
+// Replace only unpaired surrogates (preserve valid surrogate pairs like emoji)
+function sanitizeForUriEncoding(text: string): string {
+  // Unpaired high surrogate (not followed by low surrogate)
+  // or unpaired low surrogate (not preceded by high surrogate)
+  return text
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "\uFFFD") // unpaired high
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"); // unpaired low
+}
+
 // Custom renderer for code blocks with copy button
 const codeBlockRenderer = new marked.Renderer();
 codeBlockRenderer.code = ({ text, lang }: { text: string; lang?: string }): string => {
@@ -13,16 +22,17 @@ codeBlockRenderer.code = ({ text, lang }: { text: string; lang?: string }): stri
   const safeLang = lang ? lang.replace(/[^a-zA-Z0-9_+-]/g, "") : "";
   const langClass = safeLang ? ` language-${safeLang}` : "";
   const escapedCode = escapeHtml(text);
-  // Handle malformed UTF-16 before URI encoding (prevent URIError on unpaired surrogates)
+  // Handle malformed UTF-16 before URI encoding (preserve valid surrogate pairs)
   let encodedCode: string;
   try {
     encodedCode = encodeURIComponent(text);
   } catch {
-    // Fallback: replace unpaired surrogates and retry
-    encodedCode = encodeURIComponent(text.replace(/[\uD800-\uDFFF]/g, "\uFFFD"));
+    // Fallback: replace only unpaired surrogates, preserve valid pairs (emoji)
+    encodedCode = encodeURIComponent(sanitizeForUriEncoding(text));
   }
   // Use a wrapper div with relative positioning for the copy button
-  return `<div class="code-block-wrapper"><pre class="code-block${langClass}"><code>${escapedCode}</code></pre><button class="code-block-copy-btn" type="button" data-code="${encodedCode}" title="Copy code">${COPY_ICON_SVG}<span class="code-block-copy-btn__check">${CHECK_ICON_SVG}</span></button></div>`;
+  // Note: using "fenced-code-block" instead of "code-block" to avoid max-height from global .code-block
+  return `<div class="code-block-wrapper"><pre class="fenced-code-block${langClass}"><code>${escapedCode}</code></pre><button class="code-block-copy-btn" type="button" data-code="${encodedCode}" title="Copy code">${COPY_ICON_SVG}<span class="code-block-copy-btn__check">${CHECK_ICON_SVG}</span></button></div>`;
 };
 
 marked.setOptions({
