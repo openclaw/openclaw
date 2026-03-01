@@ -55,4 +55,13 @@ describe("slack sent-thread-cache", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
     expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000001")).toBe(false);
   });
+
+  it("enforces maximum entries by evicting oldest fresh entries", () => {
+    for (let i = 0; i < 5001; i += 1) {
+      recordSlackThreadParticipation("A1", "C123", `1700000000.${String(i).padStart(6, "0")}`);
+    }
+
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.000000")).toBe(false);
+    expect(hasSlackThreadParticipation("A1", "C123", "1700000000.005000")).toBe(true);
+  });
 });
