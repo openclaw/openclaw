@@ -112,6 +112,11 @@ describe("pi tool definition adapter", () => {
           },
           { description: "Payload description" },
         ),
+        title: Type.String({ title: "Field title", description: "Field description meta" }),
+        description: Type.String({
+          title: "Description field title",
+          description: "Description field meta",
+        }),
       },
       { title: "Top title", description: "Top level description" },
     );
@@ -144,6 +149,12 @@ describe("pi tool definition adapter", () => {
             },
           },
         },
+        title: {
+          type: "string",
+        },
+        description: {
+          type: "string",
+        },
       },
     });
     const compactedSchemaJson = JSON.stringify(def?.parameters);
@@ -151,7 +162,14 @@ describe("pi tool definition adapter", () => {
     expect(compactedSchemaJson).not.toContain("Action description");
     expect(compactedSchemaJson).not.toContain("Message title");
     expect(compactedSchemaJson).not.toContain("Message description");
-    expect(compactedSchemaJson).not.toContain('"title"');
+    expect(compactedSchemaJson).not.toContain("Field title");
+    expect(compactedSchemaJson).not.toContain("Field description meta");
+    const compactedParameters = def?.parameters as Record<string, unknown>;
+    expect(compactedParameters).not.toHaveProperty("title");
+    expect(compactedParameters).toHaveProperty("properties.title.type", "string");
+    expect(compactedParameters).toHaveProperty("properties.description.type", "string");
+    expect(compactedParameters).not.toHaveProperty("properties.title.title");
+    expect(compactedParameters).not.toHaveProperty("properties.description.title");
     expect(JSON.parse(JSON.stringify(parameters))).toEqual(originalParameters);
   });
 
@@ -172,6 +190,16 @@ describe("pi tool definition adapter", () => {
                 title: "Query title",
                 description: "Query description",
               },
+              title: {
+                type: "string",
+                title: "Client field title",
+                description: "Client field title description",
+              },
+              description: {
+                type: "string",
+                title: "Client description field title",
+                description: "Client description field description",
+              },
             },
             required: ["query"],
           },
@@ -186,6 +214,12 @@ describe("pi tool definition adapter", () => {
       description: "Client top description",
       properties: {
         query: {
+          type: "string",
+        },
+        title: {
+          type: "string",
+        },
+        description: {
           type: "string",
         },
       },

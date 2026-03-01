@@ -41,10 +41,17 @@ type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteA
 function compactToolParametersSchema(
   schema: ToolDefinition["parameters"],
 ): ToolDefinition["parameters"] {
+  const schemaKeyMapKeywords = new Set([
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+  ]);
   const seen = new WeakMap<object, unknown>();
-  const compact = (value: unknown, depth: number): unknown => {
+  const compact = (value: unknown, depth: number, inSchemaKeyMap = false): unknown => {
     if (Array.isArray(value)) {
-      return value.map((entry) => compact(entry, depth + 1));
+      return value.map((entry) => compact(entry, depth + 1, false));
     }
     if (!value || typeof value !== "object") {
       return value;
@@ -56,17 +63,17 @@ function compactToolParametersSchema(
     const output: Record<string, unknown> = {};
     seen.set(value, output);
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      if (key === "title") {
+      if (!inSchemaKeyMap && key === "title") {
         continue;
       }
-      if (key === "description" && depth > 0) {
+      if (!inSchemaKeyMap && key === "description" && depth > 0) {
         continue;
       }
-      output[key] = compact(entry, depth + 1);
+      output[key] = compact(entry, depth + 1, schemaKeyMapKeywords.has(key));
     }
     return output;
   };
-  return compact(schema, 0) as ToolDefinition["parameters"];
+  return compact(schema, 0, false) as ToolDefinition["parameters"];
 }
 
 function isAbortSignal(value: unknown): value is AbortSignal {
