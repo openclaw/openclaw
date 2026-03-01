@@ -608,6 +608,15 @@
 .cron-workspace-form {
   position: sticky;
   top: 74px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@supports (height: 100dvh) {
+  .cron-workspace-form {
+    max-height: calc(100dvh - 90px);
+  }
 }
 
 .cron-form {
@@ -924,6 +933,8 @@
   .cron-workspace-form {
     position: static;
     order: -1;
+    max-height: none;
+    overflow: visible;
   }
 
   .cron-form-grid {
