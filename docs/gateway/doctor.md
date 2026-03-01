@@ -164,6 +164,10 @@ Doctor checks:
   the directory, and reminds you that it cannot recover missing data.
 - **State dir permissions**: verifies writability; offers to repair permissions
   (and emits a `chown` hint when owner/group mismatch is detected).
+- **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive
+  (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or
+  `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O
+  and lock/sync races.
 - **Session dirs missing**: `sessions/` and the session store directory are
   required to persist history and avoid `ENOENT` crashes.
 - **Transcript mismatch**: warns when recent session entries have missing
