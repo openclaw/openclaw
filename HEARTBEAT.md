@@ -87,6 +87,14 @@
 
 ## Daily (크론으로 실행)
 
+### 기여 & 수익화 대시보드 갱신 (매일 06:05 KST)
+
+- `powershell -File C:\MAIBOT\scripts\update-contribution-dashboard.ps1`
+- GitHub PR 상태 자동 수집 (openclaw, obsidian-releases)
+- 수익화 데이터 revenue-tracker.md에서 파싱
+- Obsidian `_CONTRIBUTION_DASHBOARD.md` 갱신
+- **이슈 있을 때만 알림** (정상이면 조용히)
+
 ### AI 수익화 브리핑 (매일 03:00 KST)
 
 - 최신 AI 수익화 트렌드, 디스커버리/프로프리에터리 수익 분석, AI SaaS 시장 동향 조사
