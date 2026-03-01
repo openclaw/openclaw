@@ -2037,7 +2037,7 @@ describe("createTelegramBot", () => {
       vi.useRealTimers();
     }
   });
-  it("drops oversized channel_post media instead of dispatching a placeholder message", async () => {
+  it("passes metadata stub for oversized channel_post media instead of dropping", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -2074,10 +2074,13 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ file_path: "photos/oversized.jpg" }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Message should now reach agent with metadata stub instead of being dropped
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("⚠️");
     fetchSpy.mockRestore();
   });
-  it("notifies users when media download fails for direct messages", async () => {
+  it("passes file metadata to agent when media download fails for direct messages", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
@@ -2100,19 +2103,141 @@ describe("createTelegramBot", () => {
           chat: { id: 1234, type: "private" },
           message_id: 411,
           date: 1736380800,
-          photo: [{ file_id: "p1" }],
+          photo: [{ file_id: "p1", width: 800, height: 600, file_size: 12345 }],
           from: { id: 55, is_bot: false, first_name: "u" },
         },
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "photos/p1.jpg" }),
       });
 
-      expect(sendMessageSpy).toHaveBeenCalledWith(
-        1234,
-        "⚠️ Failed to download media. Please try again.",
-        { reply_to_message_id: 411 },
+      // No user-facing warning; instead the message continues to the agent
+      // with a metadata stub so the agent knows a file was sent.
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("⚠️");
+      expect(payload.Body).toContain("Photo:");
+      expect(payload.Body).toContain("download failed");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("includes size limit reason when media exceeds download limit", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => Promise.reject(new Error("Media exceeds 5MB limit")));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 412,
+          date: 1736380800,
+          document: { file_id: "d1", file_name: "report.pdf", file_size: 15_000_000 },
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "documents/report.pdf" }),
+      });
+
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("⚠️");
+      expect(payload.Body).toContain("report.pdf");
+      expect(payload.Body).toContain("download limit");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("preserves caption text alongside metadata stub on download failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Promise.reject(new Error("MediaFetchError: network timeout")),
       );
-      expect(replySpy).not.toHaveBeenCalled();
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 413,
+          date: 1736380800,
+          caption: "Check this document",
+          photo: [{ file_id: "p2", width: 1920, height: 1080, file_size: 500_000 }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p2.jpg" }),
+      });
+
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      // Caption should be preserved alongside the metadata stub
+      expect(payload.Body).toContain("Check this document");
+      expect(payload.Body).toContain("⚠️");
+      expect(payload.Body).toContain("Photo:");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("handles video metadata stub on download failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Promise.reject(new Error("MediaFetchError: Failed to fetch")),
+      );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 414,
+          date: 1736380800,
+          video: { file_id: "v1", file_name: "clip.mp4", file_size: 8_000_000 },
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "videos/clip.mp4" }),
+      });
+
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("⚠️");
+      expect(payload.Body).toContain("Video:");
+      expect(payload.Body).toContain("clip.mp4");
     } finally {
       fetchSpy.mockRestore();
     }

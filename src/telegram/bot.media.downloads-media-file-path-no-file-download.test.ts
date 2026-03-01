@@ -48,7 +48,7 @@ describe("telegram inbound media", () => {
           },
         },
         {
-          name: "skips when file_path is missing",
+          name: "passes metadata stub to agent when file_path is missing",
           messageId: 2,
           getFile: async () => ({}),
           setupFetch: () => vi.spyOn(globalThis, "fetch"),
@@ -58,8 +58,12 @@ describe("telegram inbound media", () => {
             runtimeError: ReturnType<typeof vi.fn>;
           }) => {
             expect(params.fetchSpy).not.toHaveBeenCalled();
-            expect(params.replySpy).not.toHaveBeenCalled();
-            expect(params.runtimeError).not.toHaveBeenCalled();
+            // Message now continues to agent with file metadata stub
+            // instead of being silently dropped.
+            expect(params.replySpy).toHaveBeenCalledTimes(1);
+            const payload = params.replySpy.mock.calls[0][0];
+            expect(payload.Body).toContain("⚠️");
+            expect(payload.Body).toContain("download failed");
           },
         },
       ]) {
