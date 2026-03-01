@@ -1,5 +1,5 @@
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -67,6 +67,26 @@ export async function ensureConfigReady(params: {
   const invalid = snapshot.exists && !snapshot.valid;
   if (!invalid) {
     return;
+  }
+
+  // Before printing errors or exiting, attempt auto-repair via loadConfig()
+  // which calls tryRepairFromBackup() to surgically restore broken keys.
+  if (!allowInvalid) {
+    try {
+      loadConfig();
+      // loadConfig() succeeded → repair worked. Invalidate cached snapshot
+      // so subsequent reads see the repaired config.
+      configSnapshotPromise = null;
+      const repairedSnapshot = await getConfigSnapshot();
+      if (!repairedSnapshot.exists || repairedSnapshot.valid) {
+        const rich = isRich();
+        const muted = (value: string) => colorize(rich, theme.muted, value);
+        params.runtime.error(muted("Config auto-repaired from backup — continuing normally."));
+        return;
+      }
+    } catch {
+      // Repair failed or config still invalid — fall through to error output.
+    }
   }
 
   const rich = isRich();

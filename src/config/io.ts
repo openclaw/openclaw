@@ -13,9 +13,14 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import {
+  CONFIG_BACKUP_COUNT,
+  rotateConfigBackups,
+  rotateConfigBackupsSync,
+} from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -48,6 +53,7 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
+  validateConfigObject,
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
@@ -679,6 +685,253 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
+  /**
+   * Extract the top-level config key from a validation issue dot-path.
+   * e.g. "gateway.port" → "gateway", "agents.list.0.model" → "agents", "" → null
+   */
+  function issuePathToTopKey(issuePath: string): string | null {
+    if (!issuePath) {
+      return null;
+    }
+    const dot = issuePath.indexOf(".");
+    return dot === -1 ? issuePath : issuePath.slice(0, dot);
+  }
+
+  /**
+   * Extract top-level key names from a validation issue.
+   * For nested paths like "gateway.port", returns ["gateway"].
+   * For root-level unrecognized key issues (empty path, message contains key
+   * names), extracts the key names from the message.
+   */
+  function issueToTopKeys(issue: { path: string; message: string }): string[] {
+    if (issue.path) {
+      const key = issuePathToTopKey(issue.path);
+      return key ? [key] : [];
+    }
+    // Zod .strict() produces empty path for unrecognized root-level keys.
+    // Message formats vary by Zod version:
+    //   v3: 'Unrecognized key(s) in object: \'key1\', \'key2\''
+    //   v4: 'Unrecognized key: "key1"'
+    const match = issue.message.match(/Unrecognized key(?:\(s\) in object)?:\s*(.+)/i);
+    if (match) {
+      const keys: string[] = [];
+      for (const m of match[1].matchAll(/['"]([^'"]+)['"]/g)) {
+        keys.push(m[1]);
+      }
+      return keys;
+    }
+    return [];
+  }
+
+  /**
+   * Load a valid backup config (resolved object, not file-on-disk).
+   * Returns the first valid backup's resolved config, or null if none found.
+   */
+  function loadFirstValidBackupConfig(): Record<string, unknown> | null {
+    const backupBase = `${configPath}.bak`;
+    const candidates = [backupBase];
+    for (let i = 1; i < CONFIG_BACKUP_COUNT; i++) {
+      candidates.push(`${backupBase}.${i}`);
+    }
+    for (const candidate of candidates) {
+      try {
+        if (!deps.fs.existsSync(candidate)) {
+          continue;
+        }
+        const raw = deps.fs.readFileSync(candidate, "utf-8");
+        const parsed = deps.json5.parse(raw);
+        const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+          resolveConfigIncludesForRead(parsed, candidate, deps),
+          deps.env,
+        );
+        if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
+          continue;
+        }
+        // Use base validation (without plugin manifests) for backups.
+        // Plugin-level diagnostics depend on runtime state (installed plugins,
+        // workspace paths) and would incorrectly reject perfectly valid backups.
+        const validated = validateConfigObject(resolvedConfig);
+        if (!validated.ok) {
+          continue;
+        }
+        return resolvedConfig as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Attempt to repair invalid config by surgically restoring only the broken
+   * top-level keys from the nearest valid backup, leaving all other config
+   * untouched. Writes the patched config back to disk if the repair succeeds.
+   *
+   * For "plugin not found" issues on specific plugin entries
+   * (e.g. `plugins.entries.foo`), the repair only removes that individual
+   * entry instead of replacing the entire `plugins` key — which could
+   * inadvertently wipe unrelated plugin configurations.
+   *
+   * Returns the repaired & validated OpenClawConfig, or null if repair failed.
+   */
+  function tryRepairFromBackup(
+    brokenConfig: Record<string, unknown>,
+    issues: Array<{ path: string; message: string }>,
+  ): OpenClawConfig | null {
+    const backupConfig = loadFirstValidBackupConfig();
+    if (!backupConfig) {
+      return null;
+    }
+
+    const patched = { ...brokenConfig };
+    const repairActions: string[] = [];
+
+    // ----- Phase 1: Surgical sub-key repairs ---------------------
+    // Handle plugin-level issues precisely so that removing one
+    // broken entry (e.g. retry-backoff) doesn't destroy others
+    // (e.g. memory-context).
+    //
+    // IMPORTANT: Never auto-remove a plugin that ships inside the
+    // bundled extensions/ directory.  A "plugin not found" for a
+    // bundled plugin is almost always a transient discovery issue
+    // (e.g. process respawn during a rebuild).  Deleting its config
+    // entry would wipe user settings that are hard to reconstruct.
+    const bundledDir = resolveBundledPluginsDir();
+    const handledIssues = new Set<number>();
+    for (let i = 0; i < issues.length; i++) {
+      const issue = issues[i];
+      const pluginEntryMatch = issue.path.match(/^plugins\.entries\.([^.]+)$/);
+      if (pluginEntryMatch && issue.message.includes("plugin not found")) {
+        const pluginId = pluginEntryMatch[1];
+
+        // Skip removal if the plugin exists in the bundled extensions dir.
+        if (bundledDir) {
+          const pluginDir = path.join(bundledDir, pluginId);
+          if (deps.fs.existsSync(pluginDir)) {
+            handledIssues.add(i); // mark as handled so Phase 2 doesn't touch it
+            continue;
+          }
+        }
+
+        const plugins = patched.plugins as Record<string, unknown> | undefined;
+        const entries = (plugins?.entries ?? {}) as Record<string, unknown>;
+        if (pluginId in entries) {
+          delete entries[pluginId];
+          repairActions.push(`-plugins.entries.${pluginId}`);
+        }
+        handledIssues.add(i);
+        continue;
+      }
+
+      // plugins.slots.memory / plugins.allow / plugins.deny — remove value
+      const slotsMatch = issue.path.match(/^plugins\.(slots\.[^.]+|allow|deny)$/);
+      if (slotsMatch && issue.message.includes("plugin not found")) {
+        // Extract the referenced plugin id from the issue message.
+        const slotPluginMatch = issue.message.match(/plugin not found:\s*(\S+)/);
+        const slotPluginId = slotPluginMatch?.[1];
+
+        // Skip removal if the referenced plugin exists in bundled extensions.
+        if (bundledDir && slotPluginId) {
+          const pluginDir = path.join(bundledDir, slotPluginId);
+          if (deps.fs.existsSync(pluginDir)) {
+            handledIssues.add(i);
+            continue;
+          }
+        }
+
+        const subPath = slotsMatch[1];
+        const plugins = patched.plugins as Record<string, unknown> | undefined;
+        if (plugins) {
+          const parts = subPath.split(".");
+          if (parts.length === 2 && plugins[parts[0]] && typeof plugins[parts[0]] === "object") {
+            delete (plugins[parts[0]] as Record<string, unknown>)[parts[1]];
+          } else if (parts.length === 1) {
+            delete plugins[parts[0]];
+          }
+          repairActions.push(`-plugins.${subPath}`);
+        }
+        handledIssues.add(i);
+        continue;
+      }
+    }
+
+    // ----- Phase 2: Top-level key replacement --------------------
+    // For remaining issues that were NOT handled surgically above,
+    // fall back to replacing the entire top-level key from backup.
+    const remainingIssues = issues.filter((_, i) => !handledIssues.has(i));
+    const brokenKeys = new Set<string>();
+    for (const issue of remainingIssues) {
+      for (const key of issueToTopKeys(issue)) {
+        brokenKeys.add(key);
+      }
+    }
+
+    for (const key of brokenKeys) {
+      if (key in backupConfig) {
+        patched[key] = backupConfig[key];
+        repairActions.push(key);
+      } else {
+        // Key doesn't exist in backup — delete the offending key entirely.
+        delete patched[key];
+        repairActions.push(`-${key}`);
+      }
+    }
+
+    if (repairActions.length === 0) {
+      if (handledIssues.size > 0) {
+        // All issues were for bundled plugins whose directories exist —
+        // this is a transient discovery failure, not a real config error.
+        // Validate with the base schema only (skip plugin checks) and
+        // return the config as-is so the gateway can start normally.
+        const baseValidated = validateConfigObject(patched);
+        return baseValidated.ok ? baseValidated.config : null;
+      }
+      return null;
+    }
+
+    // Re-validate the patched config (base schema only, not plugins —
+    // plugin manifests depend on runtime state and should not block repair).
+    const validated = validateConfigObject(patched);
+    if (!validated.ok) {
+      // Surgical repair insufficient — fall back to full backup restore.
+      try {
+        deps.fs.writeFileSync(
+          configPath,
+          JSON.stringify(backupConfig, null, 2).trimEnd().concat("\n"),
+          { encoding: "utf-8", mode: 0o600 },
+        );
+        deps.logger.warn(
+          `Config auto-rollback: surgical repair failed, restored full backup → ${configPath}`,
+        );
+        return null; // Signal caller to re-run loadConfig.
+      } catch {
+        return null;
+      }
+    }
+
+    // Write the surgically patched config back to disk and rotate backups
+    // so the pre-repair config is preserved as the latest .bak.
+    try {
+      rotateConfigBackupsSync(configPath);
+      deps.fs.copyFileSync(configPath, `${configPath}.bak`);
+    } catch {
+      // best-effort backup rotation
+    }
+    try {
+      deps.fs.writeFileSync(configPath, JSON.stringify(patched, null, 2).trimEnd().concat("\n"), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    } catch {
+      // Disk write failed — return the in-memory repaired config anyway.
+    }
+
+    deps.logger.warn(
+      `Config auto-repair: [${repairActions.join(", ")}] — other settings preserved`,
+    );
+    return validated.config;
+  }
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -720,6 +973,28 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loggedInvalidConfigs.add(configPath);
           deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
+
+        // Attempt surgical repair: only restore broken keys from backup.
+        const repaired = tryRepairFromBackup(
+          resolvedConfig as Record<string, unknown>,
+          validated.issues,
+        );
+        if (repaired) {
+          // Apply the same post-validation pipeline as the normal path.
+          const cfg = applyModelDefaults(
+            applyCompactionDefaults(
+              applyContextPruningDefaults(
+                applyAgentDefaults(
+                  applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(repaired))),
+                ),
+              ),
+            ),
+          );
+          normalizeConfigPaths(cfg);
+          applyConfigEnvVars(cfg, deps.env);
+          return applyConfigOverrides(cfg);
+        }
+
         const error = new Error("Invalid config");
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
@@ -810,8 +1085,30 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
+        // Validation-level repair already attempted above; no valid backup available.
+        deps.logger.error(`Invalid config and no valid backup found — starting with empty config`);
         return {};
       }
+
+      // Parse-level failure (bad JSON, missing env vars, etc.) — try full backup restore.
+      const backupConfig = loadFirstValidBackupConfig();
+      if (backupConfig) {
+        try {
+          deps.fs.writeFileSync(
+            configPath,
+            JSON.stringify(backupConfig, null, 2).trimEnd().concat("\n"),
+            { encoding: "utf-8", mode: 0o600 },
+          );
+          deps.logger.warn(
+            `Config auto-rollback: config unreadable, restored full backup → ${configPath}`,
+          );
+          loggedInvalidConfigs.delete(configPath);
+          return loadConfig();
+        } catch {
+          // Fall through
+        }
+      }
+
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       return {};
     }

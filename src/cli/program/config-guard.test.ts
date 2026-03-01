@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const loadConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/doctor-config-flow.js", () => ({
   loadAndMaybeMigrateDoctorConfig: loadAndMaybeMigrateDoctorConfigMock,
@@ -9,6 +10,7 @@ vi.mock("../../commands/doctor-config-flow.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  loadConfig: loadConfigMock,
 }));
 
 function makeSnapshot() {
@@ -99,5 +101,50 @@ describe("ensureConfigReady", () => {
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-repairs invalid config via loadConfig before exiting", async () => {
+    // First call: snapshot returns invalid. loadConfig() succeeds (repair worked).
+    // Second call (re-read): snapshot returns valid.
+    let callCount = 0;
+    readConfigFileSnapshotMock.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ...makeSnapshot(),
+          exists: true,
+          valid: false,
+          issues: [{ path: "_reload_trigger", message: "unexpected key" }],
+        };
+      }
+      return { ...makeSnapshot(), exists: true, valid: true };
+    });
+    loadConfigMock.mockReturnValue({});
+
+    const runtime = await runEnsureConfigReady(["gateway", "run"]);
+
+    expect(loadConfigMock).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("auto-repaired"));
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("exits when auto-repair via loadConfig fails", async () => {
+    setInvalidSnapshot();
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Invalid config");
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+
+    expect(loadConfigMock).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not attempt auto-repair for allowlisted commands", async () => {
+    setInvalidSnapshot();
+
+    await runEnsureConfigReady(["doctor"]);
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
   });
 });
