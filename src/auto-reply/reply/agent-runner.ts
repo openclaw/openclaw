@@ -381,6 +381,7 @@ export async function runReplyAgent(params: {
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
+      pinPrimaryCandidate: Boolean(activeSessionEntry?.modelOverride?.trim()),
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,

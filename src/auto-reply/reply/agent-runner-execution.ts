@@ -91,6 +91,7 @@ export async function runAgentTurnWithFallback(params: {
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
+  pinPrimaryCandidate?: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
@@ -182,6 +183,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
+        pinPrimaryCandidate: params.pinPrimaryCandidate === true,
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.

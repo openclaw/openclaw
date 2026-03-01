@@ -990,6 +990,39 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5");
     });
 
+    it("tries the pinned primary model before fallback during cooldown", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("still cooling down"))
+        .mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+        pinPrimaryCandidate: true,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6");
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5");
+    });
+
     it("skips same-provider models on auth cooldown but still tries no-profile fallback providers", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "auth");
       const cfg = makeCfg({

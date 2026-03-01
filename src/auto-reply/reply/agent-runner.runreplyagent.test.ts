@@ -738,6 +738,43 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("pins the selected primary model when session has a model override", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "google",
+      modelOverride: "gemini-3-flash-preview",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const fallbackSpy = vi.spyOn(modelFallbackModule, "runWithModelFallback");
+    try {
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        runOverrides: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+        },
+      });
+      await run();
+      expect(fallbackSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          pinPrimaryCandidate: true,
+        }),
+      );
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("announces model fallback only once per active fallback state", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

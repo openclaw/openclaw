@@ -322,6 +322,7 @@ function resolveCooldownDecision(params: {
   candidate: ModelCandidate;
   isPrimary: boolean;
   requestedModel: boolean;
+  pinPrimaryCandidate: boolean;
   hasFallbackCandidates: boolean;
   now: number;
   probeThrottleKey: string;
@@ -359,7 +360,7 @@ function resolveCooldownDecision(params: {
   // For same-provider fallbacks: only relax cooldown on rate_limit, which
   // is commonly model-scoped and can recover on a sibling model.
   const shouldAttemptDespiteCooldown =
-    (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
+    (params.isPrimary && (params.pinPrimaryCandidate || !params.requestedModel || shouldProbe)) ||
     (!params.isPrimary && inferredReason === "rate_limit");
   if (!shouldAttemptDespiteCooldown) {
     return {
@@ -381,6 +382,11 @@ export async function runWithModelFallback<T>(params: {
   provider: string;
   model: string;
   agentDir?: string;
+  /**
+   * When true, always attempt the requested primary candidate for this run
+   * even if the provider is currently in cooldown, then continue fallback.
+   */
+  pinPrimaryCandidate?: boolean;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
@@ -421,6 +427,7 @@ export async function runWithModelFallback<T>(params: {
           candidate,
           isPrimary,
           requestedModel,
+          pinPrimaryCandidate: params.pinPrimaryCandidate === true,
           hasFallbackCandidates,
           now,
           probeThrottleKey,
