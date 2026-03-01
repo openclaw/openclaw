@@ -677,10 +677,10 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        const ext = channelId === "telegram" ? ".ogg" : ".mp3";
+        const ext = output.extension === ".opus" ? ".ogg" : ".mp3";
         const audioPath = path.join(tempDir, `voice-${Date.now()}${ext}`);
         const ttsChannel = channelId ?? "unknown";
-        const ttsFormat = channelId === "telegram" ? "opus" : "mp3";
+        const ttsFormat = output.extension === ".opus" ? "opus" : "mp3";
         // {{PascalCase}} placeholders in args align with media/link CLI runner convention.
         const templCtx = {
           Text: params.text,
@@ -728,7 +728,9 @@ export async function textToSpeech(params: {
         }
         scheduleCleanup(tempDir);
         const voiceCompatible =
-          channelId === "telegram" ? isVoiceCompatibleAudio({ fileName: audioPath }) : false;
+          channelId && VOICE_BUBBLE_CHANNELS.has(channelId)
+            ? isVoiceCompatibleAudio({ fileName: audioPath })
+            : false;
         return {
           success: true,
           audioPath,

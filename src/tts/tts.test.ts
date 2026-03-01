@@ -776,7 +776,7 @@ describe("tts", () => {
 
         expect(result.success).toBe(true);
         expect(result.provider).toBe("local");
-        expect(result.audioPath).toMatch(/\.mp3$/);
+        expect(result.audioPath).toMatch(/\.ogg$/); // whatsapp is a voice-bubble channel
         expect(result.latencyMs).toBeGreaterThanOrEqual(0);
         expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
       });
@@ -848,9 +848,9 @@ describe("tts", () => {
 
         expect(capturedArgv[0]).toBe("/bin/tts");
         expect(capturedArgv[1]).toBe("synthesize this"); // {{Text}}
-        expect(capturedArgv[2]).toMatch(/\.mp3$/); // {{Output}}
+        expect(capturedArgv[2]).toMatch(/\.ogg$/); // {{Output}} — whatsapp is a voice-bubble channel
         expect(capturedArgv[3]).toBe("whatsapp"); // {{Channel}}
-        expect(capturedArgv[4]).toBe("mp3"); // {{Format}}
+        expect(capturedArgv[4]).toBe("opus"); // {{Format}} — whatsapp is a voice-bubble channel
       });
 
       it("passes no extra args when args array is empty", async () => {
@@ -1005,8 +1005,8 @@ describe("tts", () => {
         });
 
         expect(result.success).toBe(true);
-        expect(result.voiceCompatible).toBe(false);
-        expect(result.audioPath).toMatch(/\.mp3$/);
+        expect(result.voiceCompatible).toBe(true); // whatsapp is a voice-bubble channel
+        expect(result.audioPath).toMatch(/\.ogg$/); // whatsapp is a voice-bubble channel
       });
 
       it("falls back to local when the primary provider (openai) has no API key", async () => {
