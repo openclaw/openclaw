@@ -4,8 +4,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
-const DEFAULT_ACP_META_MODE = "minimal";
-const DEFAULT_ACP_SHOW_USAGE = false;
+const DEFAULT_ACP_REPEAT_SUPPRESSION = true;
 const DEFAULT_ACP_DELIVERY_MODE = "live";
 const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
 const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
@@ -26,12 +25,10 @@ export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> =
 };
 
 export type AcpDeliveryMode = "live" | "final_only";
-export type AcpMetaMode = "off" | "minimal" | "verbose";
 
 export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
-  metaMode: AcpMetaMode;
-  showUsage: boolean;
+  repeatSuppression: boolean;
   maxTurnChars: number;
   maxToolSummaryChars: number;
   maxStatusChars: number;
@@ -65,13 +62,6 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return value === "final_only" ? "final_only" : DEFAULT_ACP_DELIVERY_MODE;
 }
 
-function resolveAcpMetaMode(value: unknown): AcpMetaMode {
-  if (value === "off" || value === "minimal" || value === "verbose") {
-    return value;
-  }
-  return DEFAULT_ACP_META_MODE;
-}
-
 function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
   return clampPositiveInteger(
     cfg.acp?.stream?.coalesceIdleMs,
@@ -94,8 +84,7 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
   const stream = cfg.acp?.stream;
   return {
     deliveryMode: resolveAcpDeliveryMode(stream?.deliveryMode),
-    metaMode: resolveAcpMetaMode(stream?.metaMode),
-    showUsage: clampBoolean(stream?.showUsage, DEFAULT_ACP_SHOW_USAGE),
+    repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
     maxTurnChars: clampPositiveInteger(stream?.maxTurnChars, DEFAULT_ACP_MAX_TURN_CHARS, {
       min: 1,
       max: 500_000,
