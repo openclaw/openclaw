@@ -494,7 +494,7 @@ describe("security audit", () => {
         | "gateway.trusted_proxies_missing"
         | "gateway.loopback_no_auth"
         | "logging.redact_off";
-      severity: "warn" | "critical";
+      severity: "critical";
       opts?: Omit<SecurityAuditOptions, "config">;
     }> = [
       {
@@ -506,7 +506,7 @@ describe("security audit", () => {
           },
         },
         checkId: "gateway.trusted_proxies_missing",
-        severity: "warn",
+        severity: "critical",
       },
       {
         name: "loopback control UI without auth",
@@ -527,7 +527,7 @@ describe("security audit", () => {
           logging: { redactSensitive: "off" },
         },
         checkId: "logging.redact_off",
-        severity: "warn",
+        severity: "critical",
       },
     ];
     await Promise.all(
@@ -1151,11 +1151,11 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
+          severity: "critical",
         }),
         expect.objectContaining({
           checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
+          severity: "critical",
           detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
         }),
       ]),
@@ -1179,7 +1179,7 @@ describe("security audit", () => {
         }),
         expect.objectContaining({
           checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
+          severity: "critical",
           detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
         }),
       ]),
@@ -1508,7 +1508,7 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "channels.whatsapp.dm.scope_main_multiuser",
-          severity: "warn",
+          severity: "critical",
           remediation: expect.stringContaining('config set session.dmScope "per-channel-peer"'),
         }),
       ]),
@@ -1545,7 +1545,7 @@ describe("security audit", () => {
         expect.arrayContaining([
           expect.objectContaining({
             checkId: "channels.discord.commands.native.no_allowlists",
-            severity: "warn",
+            severity: "critical",
           }),
         ]),
       );
@@ -1855,7 +1855,7 @@ describe("security audit", () => {
         expect.arrayContaining([
           expect.objectContaining({
             checkId: "channels.slack.commands.slash.no_allowlists",
-            severity: "warn",
+            severity: "critical",
           }),
         ]),
       );
@@ -1951,7 +1951,7 @@ describe("security audit", () => {
         expect.arrayContaining([
           expect.objectContaining({
             checkId: "channels.telegram.allowFrom.invalid_entries",
-            severity: "warn",
+            severity: "critical",
           }),
         ]),
       );
@@ -2007,18 +2007,18 @@ describe("security audit", () => {
     const cases: Array<{
       name: string;
       model: string;
-      expectedFindings?: Array<{ checkId: string; severity: "warn" }>;
+      expectedFindings?: Array<{ checkId: string; severity: "critical" }>;
       expectedAbsentCheckId?: string;
     }> = [
       {
         name: "legacy model",
         model: "openai/gpt-3.5-turbo",
-        expectedFindings: [{ checkId: "models.legacy", severity: "warn" }],
+        expectedFindings: [{ checkId: "models.legacy", severity: "critical" }],
       },
       {
         name: "weak-tier model",
         model: "anthropic/claude-haiku-4-5",
-        expectedFindings: [{ checkId: "models.weak_tier", severity: "warn" }],
+        expectedFindings: [{ checkId: "models.weak_tier", severity: "critical" }],
       },
       {
         // Venice uses "claude-opus-45" format (no dash between 4 and 5).
@@ -2305,7 +2305,10 @@ describe("security audit", () => {
 
       expect(res.findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "plugins.extensions_no_allowlist", severity: "warn" }),
+          expect.objectContaining({
+            checkId: "plugins.extensions_no_allowlist",
+            severity: "critical",
+          }),
         ]),
       );
     } finally {
@@ -2492,7 +2495,7 @@ describe("security audit", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "plugins.tools_reachable_permissive_policy",
-          severity: "warn",
+          severity: "critical",
         }),
       ]),
     );
