@@ -103,6 +103,8 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
 // Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
+// This includes guillemets, double angle brackets, and other variants that
+// could visually resemble angle brackets and potentially bypass marker detection.
 const ANGLE_BRACKET_MAP: Record<number, string> = {
   0xff1c: "<", // fullwidth <
   0xff1e: ">", // fullwidth >
@@ -116,6 +118,14 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x27e9: ">", // mathematical right angle bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
+  0x00ab: "<", // left guillemet (left-pointing double angle quotation mark)
+  0x00bb: ">", // right guillemet (right-pointing double angle quotation mark)
+  0x27ea: "<", // mathematical left double angle bracket
+  0x27eb: ">", // mathematical right double angle bracket
+  0x27ec: "<", // mathematical left white tortoise shell bracket
+  0x27ed: ">", // mathematical right white tortoise shell bracket
+  0x27ee: "<", // mathematical left flattened parenthesis
+  0x27ef: ">", // mathematical right flattened parenthesis
 };
 
 function foldMarkerChar(char: string): string {
@@ -135,7 +145,7 @@ function foldMarkerChar(char: string): string {
 
 function foldMarkerText(input: string): string {
   return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u00AB\u00BB\u27EA\u27EB\u27EC\u27ED\u27EE\u27EF]/g,
     (char) => foldMarkerChar(char),
   );
 }
