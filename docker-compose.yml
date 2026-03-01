@@ -28,9 +28,9 @@ services:
       ]
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.node_exporter.rule=Host(`openclaw.home.arpa`)"
-      - "traefik.http.routers.node_exporter.entrypoints=web"
-      - "traefik.http.services.node_exporter.loadbalancer.server.port=18789"
+      - "traefik.http.routers.openclaw.rule=Host(`openclaw.home.arpa`)"
+      - "traefik.http.routers.openclaw.entrypoints=web"
+      - "traefik.http.services.openclaw.loadbalancer.server.port=18789"
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
