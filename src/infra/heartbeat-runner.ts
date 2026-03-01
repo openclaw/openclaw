@@ -87,6 +87,14 @@ type HeartbeatAgent = {
   heartbeat?: HeartbeatConfig;
 };
 
+function resolveLegacyHeartbeatConfig(cfg: OpenClawConfig): HeartbeatConfig | undefined {
+  const legacy = (cfg as Record<string, unknown>).heartbeat;
+  if (!legacy || typeof legacy !== "object") {
+    return undefined;
+  }
+  return legacy as HeartbeatConfig;
+}
+
 export type HeartbeatSummary = {
   enabled: boolean;
   every: string;
@@ -135,21 +143,24 @@ function resolveHeartbeatConfig(
   agentId?: string,
 ): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
+  const legacyDefaults = resolveLegacyHeartbeatConfig(cfg);
+  const mergedDefaults =
+    defaults || legacyDefaults ? { ...legacyDefaults, ...defaults } : undefined;
   if (!agentId) {
-    return defaults;
+    return mergedDefaults;
   }
   const overrides = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  if (!defaults && !overrides) {
+  if (!mergedDefaults && !overrides) {
     return overrides;
   }
-  return { ...defaults, ...overrides };
+  return { ...mergedDefaults, ...overrides };
 }
 
 export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
   agentId?: string,
 ): HeartbeatSummary {
-  const defaults = cfg.agents?.defaults?.heartbeat;
+  const defaults = resolveHeartbeatConfig(cfg);
   const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
 
@@ -213,10 +224,12 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
   heartbeat?: HeartbeatConfig,
 ) {
+  const legacyDefaults = resolveLegacyHeartbeatConfig(cfg);
   const raw =
     overrideEvery ??
     heartbeat?.every ??
     cfg.agents?.defaults?.heartbeat?.every ??
+    legacyDefaults?.every ??
     DEFAULT_HEARTBEAT_EVERY;
   if (!raw) {
     return null;
@@ -238,7 +251,11 @@ export function resolveHeartbeatIntervalMs(
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
-  return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
+  return resolveHeartbeatPromptText(
+    heartbeat?.prompt ??
+      cfg.agents?.defaults?.heartbeat?.prompt ??
+      resolveLegacyHeartbeatConfig(cfg)?.prompt,
+  );
 }
 
 function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -246,6 +263,7 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
     0,
     heartbeat?.ackMaxChars ??
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      resolveLegacyHeartbeatConfig(cfg)?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 }
