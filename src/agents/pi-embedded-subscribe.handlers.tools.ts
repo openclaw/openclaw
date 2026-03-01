@@ -2,6 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
@@ -143,8 +144,15 @@ function emitToolResultOutput(params: {
   }
 
   if (ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
-    if (outputText) {
+    const rawOutputText = extractToolResultText(sanitizedResult);
+    if (rawOutputText) {
+      const privacyConfig = ctx.params.config?.privacy;
+      const outputText =
+        privacyConfig?.enabled &&
+        privacyConfig.pii?.enabled &&
+        privacyConfig.pii.toolOutputs !== false
+          ? redactPiiText(rawOutputText, privacyConfig)
+          : rawOutputText;
       ctx.emitToolOutput(toolName, meta, outputText);
     }
     return;

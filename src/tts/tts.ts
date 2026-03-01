@@ -25,6 +25,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   edgeTTS,
@@ -890,6 +891,14 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim(); // strip markdown for TTS (### → "hashtag" etc.)
+
+  // Privacy: redact PII from TTS text before it leaves the machine to
+  // the TTS provider (ElevenLabs, OpenAI, Edge).
+  const ttsPrivacyCfg = params.cfg.privacy;
+  if (ttsPrivacyCfg?.enabled && ttsPrivacyCfg.pii?.enabled) {
+    textForAudio = redactPiiText(textForAudio, ttsPrivacyCfg);
+  }
+
   if (textForAudio.length < 10) {
     return nextPayload;
   }

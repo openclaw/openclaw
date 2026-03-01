@@ -20,6 +20,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { redactPiiText } from "../../privacy/payload-redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -98,6 +99,15 @@ export async function runAgentTurnWithFallback(params: {
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+
+  // Privacy: optionally redact PII from inbound user messages before they
+  // reach the LLM.  Off by default (pii.userMessages is false unless set).
+  const privacyCfg = params.followupRun.run.config?.privacy;
+  const commandBody =
+    privacyCfg?.enabled && privacyCfg.pii?.enabled && privacyCfg.pii.userMessages === true
+      ? redactPiiText(params.commandBody, privacyCfg)
+      : params.commandBody;
+
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -213,7 +223,7 @@ export async function runAgentTurnWithFallback(params: {
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: params.followupRun.run.config,
-                  prompt: params.commandBody,
+                  prompt: commandBody,
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
@@ -301,7 +311,7 @@ export async function runAgentTurnWithFallback(params: {
             groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
             ...senderContext,
             ...runBaseParams,
-            prompt: params.commandBody,
+            prompt: commandBody,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
             toolResultFormat: (() => {
               const channel = resolveMessageChannel(
