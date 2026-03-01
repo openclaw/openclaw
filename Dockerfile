@@ -46,6 +46,14 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
 
 USER node
 COPY --chown=node:node . .
+# Normalize plugin/agent state permissions inside image layers.
+# Prevent world-writable paths (e.g. mode 777) from being blocked by plugin path safety checks.
+RUN for dir in /app/extensions /app/.agent /app/.agents; do \
+      if [ -d "$dir" ]; then \
+        find "$dir" -type d -exec chmod 755 {} +; \
+        find "$dir" -type f -exec chmod 644 {} +; \
+      fi; \
+    done
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
