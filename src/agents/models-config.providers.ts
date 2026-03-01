@@ -252,18 +252,42 @@ async function queryOllamaContextWindow(
     if (!response.ok) {
       return undefined;
     }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
+    const data = (await response.json()) as {
+      model_info?: Record<string, unknown>;
+      parameters?: string;
+    };
+
+    // Priority 1: Read num_ctx from parameters (user-configured via Modelfile)
+    // This is the value users explicitly set and should always take precedence.
+    if (typeof data.parameters === "string") {
+      const match = /\bnum_ctx\s+(\d+)/.exec(data.parameters);
+      if (match && match[1]) {
+        const numCtx = parseInt(match[1], 10);
+        if (numCtx > 0) {
+          return numCtx;
         }
       }
     }
+
+    // Priority 2: Fall back to model_info.context_length (model's maximum supported context)
+    // This preserves the model's actual capabilities when num_ctx is not explicitly configured.
+    // Users with small VRAM GPUs should set num_ctx in their Modelfile to override this value.
+    if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (
+          key.endsWith(".context_length") &&
+          typeof value === "number" &&
+          Number.isFinite(value)
+        ) {
+          const contextWindow = Math.floor(value);
+          if (contextWindow > 0) {
+            return contextWindow;
+          }
+        }
+      }
+    }
+
+    // Priority 3: Return undefined if neither num_ctx nor context_length is available
     return undefined;
   } catch {
     return undefined;
