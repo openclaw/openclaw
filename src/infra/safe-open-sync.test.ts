@@ -28,14 +28,14 @@ describe("openVerifiedFileSync", () => {
     });
   });
 
-  it("accepts directories when allowedTypes includes directory", async () => {
+  it("accepts directories when allowedType is directory", async () => {
     await withTempDir("openclaw-safe-open-", async (root) => {
       const targetDir = path.join(root, "nested");
       await fsp.mkdir(targetDir, { recursive: true });
 
       const opened = openVerifiedFileSync({
         filePath: targetDir,
-        allowedTypes: ["directory"],
+        allowedType: "directory",
         rejectHardlinks: true,
       });
       expect(opened.ok).toBe(true);
