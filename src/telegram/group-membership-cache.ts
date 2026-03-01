@@ -38,15 +38,22 @@ function startEvictionTimer(): ReturnType<typeof setInterval> {
 let evictionTimer = startEvictionTimer();
 
 /**
- * Build a cache key that includes both the chat ID and a hash of the
- * allowFrom entries. This avoids collisions when two Telegram accounts
- * share a gateway and monitor the same group with different allowlists.
+ * Build a cache key that includes the chat ID, bot ID, and a hash of the
+ * allowFrom entries. This avoids collisions when two Telegram bots share a
+ * gateway and monitor the same group with identical allowlists — without botId
+ * in the key, a trusted result cached for bot A could be replayed for bot B
+ * up to TTL.
  */
-function getChatKey(chatId: number | string, allowFrom: NormalizedAllowFrom): string {
+function getChatKey(
+  chatId: number | string,
+  botId: number,
+  allowFrom: NormalizedAllowFrom,
+): string {
   const sorted = allowFrom.entries.toSorted();
-  // Include hasWildcard in the payload so that two allowFrom values sharing
-  // the same entries but differing on wildcard state produce distinct keys.
-  const payload = `${allowFrom.hasWildcard ? "1" : "0"}:${sorted.join(",")}`;
+  // Include botId in the payload so two bots in the same chat with identical
+  // allowlists produce separate cache entries. Without this, a trusted result
+  // cached for bot A can be replayed for bot B up to TTL.
+  const payload = `${botId}:${allowFrom.hasWildcard ? "1" : "0"}:${sorted.join(",")}`;
   const hash = createHash("sha256").update(payload).digest("hex").slice(0, 12);
   return `${chatId}:${hash}`;
 }
@@ -67,7 +74,7 @@ export async function verifyGroupMembership(params: {
   allowFrom: NormalizedAllowFrom;
 }): Promise<MembershipResult> {
   const { chatId, api, botId, allowFrom } = params;
-  const key = getChatKey(chatId, allowFrom);
+  const key = getChatKey(chatId, botId, allowFrom);
 
   // Check cache
   const cached = cache.get(key);
