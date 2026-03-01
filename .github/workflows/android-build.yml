@@ -1,0 +1,127 @@
+name: Android Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/android/**'
+  pull_request:
+    paths:
+      - 'apps/android/**'
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          apps/android
+        sparse-checkout-cone-mode: true
+
+    - name: Set up JDK 17 (Temurin)
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Cache Gradle packages
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+          apps/android/.gradle/caches
+          apps/android/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x apps/android/gradlew
+
+    - name: Lint check
+      run: |
+        cd apps/android
+        ./gradlew lint --stacktrace
+      continue-on-error: true
+
+    - name: Build debug APK
+      run: |
+        cd apps/android
+        ./gradlew :app:assembleDebug --stacktrace
+
+    - name: Find APK file
+      id: find-apk
+      run: |
+        APK_PATH=$(find apps/android/app/build/outputs/apk/debug -name "*.apk" | head -n1)
+        if [ -z "$APK_PATH" ]; then
+          echo "::error::APK not found after build"
+          ls -laR apps/android/app/build/outputs/apk/ 2>/dev/null || echo "No APK output directory"
+          exit 1
+        fi
+        # Rename with git SHA for traceability
+        APK_DIR=$(dirname "$APK_PATH")
+        APK_EXT="${APK_PATH##*.}"
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        if [ "${{ github.event_name }}" = "release" ]; then
+          NEW_NAME="openclaw-android-${{ github.event.release.tag_name }}.${APK_EXT}"
+        else
+          NEW_NAME="openclaw-android-${SHORT_SHA}.${APK_EXT}"
+        fi
+        cp "$APK_PATH" "${APK_DIR}/${NEW_NAME}"
+        echo "apk-path=${APK_DIR}/${NEW_NAME}" >> $GITHUB_OUTPUT
+        echo "apk-name=${NEW_NAME}" >> $GITHUB_OUTPUT
+        echo "Found APK: $APK_PATH → renamed to $NEW_NAME"
+
+    - name: Upload APK as artifact (on push/PR)
+      if: github.event_name != 'release'
+      uses: actions/upload-artifact@v4
+      with:
+        name: openclaw-android-debug
+        path: ${{ steps.find-apk.outputs.apk-path }}
+        retention-days: 30
+
+    - name: Attach APK to release
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ steps.find-apk.outputs.apk-path }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build summary
+      run: |
+        APK_SIZE=$(du -h "${{ steps.find-apk.outputs.apk-path }}" | cut -f1)
+        echo "## 🤖 Android Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **APK:** \`${{ steps.find-apk.outputs.apk-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Size:** $APK_SIZE" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ github.event_name }}" = "release" ]; then
+          echo "- **Release:** ${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action:** Attached to release" >> $GITHUB_STEP_SUMMARY
+        elif [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "- **PR:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action:** Uploaded as workflow artifact (30-day retention)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **Action:** Uploaded as workflow artifact (30-day retention)" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "> ⚠️ This is a **debug** build. Release-signed APKs for production distribution are a planned follow-up." >> $GITHUB_STEP_SUMMARY
