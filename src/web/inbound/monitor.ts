@@ -58,13 +58,20 @@ export async function monitorWebInbox(options: {
     resolver(reason);
   };
 
-  try {
-    await sock.sendPresenceUpdate("available");
-    if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+  const connectSuppressed = isOutboundSuppressed({
+    cfg: loadConfig(),
+    channel: "whatsapp",
+    accountId: options.accountId,
+  });
+  if (!connectSuppressed) {
+    try {
+      await sock.sendPresenceUpdate("available");
+      if (shouldLogVerbose()) {
+        logVerbose("Sent global 'available' presence on connect");
+      }
+    } catch (err) {
+      logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
     }
-  } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
   }
 
   const selfJid = sock.user?.id;
