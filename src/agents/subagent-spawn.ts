@@ -199,18 +199,21 @@ export async function spawnSubagentDirect(
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
+  // Config sets the minimum floor for subagent timeouts.
+  // LLMs frequently ignore prompt instructions and pass low values;
+  // the config floor ensures a minimum regardless of LLM behavior.
+  // Falls back to 0 (no timeout) if config key is unset,
   // preserving current behavior for existing deployments.
   const cfgSubagentTimeout =
     typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
     Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
       ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
       : 0;
-  const runTimeoutSeconds =
+  const paramTimeout =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-      : cfgSubagentTimeout;
+      : 0;
+  const runTimeoutSeconds = Math.max(paramTimeout, cfgSubagentTimeout);
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);

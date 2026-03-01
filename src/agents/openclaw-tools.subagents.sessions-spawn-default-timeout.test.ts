@@ -67,13 +67,22 @@ describe("sessions_spawn default runTimeoutSeconds", () => {
     expect(agentCall?.params?.timeout).toBe(900);
   });
 
-  it("explicit runTimeoutSeconds wins over config default", async () => {
+  it("explicit runTimeoutSeconds above floor wins over config default", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
-    const result = await tool.execute("call-2", { task: "hello", runTimeoutSeconds: 300 });
+    const result = await tool.execute("call-2", { task: "hello", runTimeoutSeconds: 1200 });
     expect(result.details).toMatchObject({ status: "accepted" });
 
     const calls = await getGatewayCalls();
     const agentCall = findLastCall(calls, (call) => call.method === "agent");
-    expect(agentCall?.params?.timeout).toBe(300);
+    expect(agentCall?.params?.timeout).toBe(1200);
   });
+
+  it("explicit runTimeoutSeconds below floor is raised to config default", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+    const result = await tool.execute("call-3", { task: "hello", runTimeoutSeconds: 300 });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    const calls = await getGatewayCalls();
+    const agentCall = findLastCall(calls, (call) => call.method === "agent");
+    expect(agentCall?.params?.timeout).toBe(900);
 });
