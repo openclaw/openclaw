@@ -42,7 +42,13 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send"];
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = ["system.notify", "shutdown"];
 
-const SYSTEM_COMMANDS = ["system.run", "system.which", "system.notify", "browser.proxy", "shutdown"];
+const SYSTEM_COMMANDS = [
+  "system.run",
+  "system.which",
+  "system.notify",
+  "browser.proxy",
+  "shutdown",
+];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.allowCommands` (and ensuring they're not blocked by denyCommands).
