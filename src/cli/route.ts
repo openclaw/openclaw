@@ -10,11 +10,13 @@ import { findRoutedCommand } from "./program/routes.js";
 async function prepareRoutedCommand(params: {
   argv: string[];
   commandPath: string[];
-  loadPlugins?: boolean;
+  loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   emitCliBanner(VERSION, { argv: params.argv });
   await ensureConfigReady({ runtime: defaultRuntime, commandPath: params.commandPath });
-  if (params.loadPlugins) {
+  const shouldLoadPlugins =
+    typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
+  if (shouldLoadPlugins) {
     ensurePluginRegistryLoaded();
   }
 }
