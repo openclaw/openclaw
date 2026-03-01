@@ -1077,13 +1077,25 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
   "cron.failureDestination":
-    "Default destination for failure notifications when cron jobs fail. Jobs can override this with their own `delivery.failureDestination`. When not configured, failures are logged but not sent to any channel.",
+    "Default destination for failure notifications when cron jobs fail. Jobs can override this with their own `delivery.failureDestination`. When not configured, failures are logged but not sent to any channel. Example: `{ channel: 'telegram', to: 'admin-chat-id' }` sends failures to a different chat than the job's primary announcement.",
   "cron.failureDestination.channel":
     "Channel to send failure notifications to (e.g., `telegram`, `slack`, `whatsapp`, or `last` for the most recently used channel).",
   "cron.failureDestination.to":
-    "Recipient identifier for the failure notification (e.g., chat ID, phone number, or channel-specific target).",
+    "Recipient identifier for the failure notification (e.g., chat ID, phone number, channel-specific target, or webhook URL when mode=webhook).",
   "cron.failureDestination.mode":
-    "Delivery mode for failure notifications: `announce` sends via the agent system to messaging channels, `webhook` sends an HTTP POST with JSON payload.",
+    "Delivery mode for failure notifications: `announce` (default) sends via the agent system to messaging channels, `webhook` sends an HTTP POST with JSON payload to the URL in `to`.",
+  "cron.failureDestination.accountId":
+    "Account ID to use for multi-account channel configurations (e.g., for Telegram bots with multiple bot tokens).",
+  "cron.add.delivery.failureDestination":
+    "Separate destination for failure notifications. When a cron job fails, the failure will be sent here instead of the primary `delivery` channel. Useful to route failures to a different chat/channel than regular announcements. Example: `{ channel: 'slack', to: '#incidents' }`.",
+  "cron.add.delivery.failureDestination.channel":
+    "Channel for failure notifications (e.g., `telegram`, `slack`, `whatsapp`, or `last`).",
+  "cron.add.delivery.failureDestination.to":
+    "Recipient for failure notifications (chat ID, channel name, or webhook URL when mode=webhook).",
+  "cron.add.delivery.failureDestination.accountId":
+    "Account ID for multi-account channel configurations.",
+  "cron.add.delivery.failureDestination.mode":
+    "How to deliver failure notifications: `announce` (default) uses messaging channels, `webhook` sends HTTP POST.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
