@@ -37,7 +37,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["channel"]).toBe("telegram");
   });
 
-  it("does not include per-turn message identifiers (cache stability)", () => {
+  it("includes trusted message_id for reaction targeting", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "123",
       MessageSidFull: "123",
@@ -51,7 +51,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     } as TemplateContext);
 
     const payload = parseInboundMetaPayload(prompt);
-    expect(payload["message_id"]).toBeUndefined();
+    expect(payload["message_id"]).toBe("123");
     expect(payload["message_id_full"]).toBeUndefined();
     expect(payload["reply_to_id"]).toBeUndefined();
     expect(payload["sender_id"]).toBeUndefined();
@@ -73,6 +73,48 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
+  });
+
+  it("includes message_id in system metadata for group chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "msg-456",
+      MessageSidFull: "msg-456-full",
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBe("msg-456");
+  });
+
+  it("omits message_id from system metadata when MessageSid is empty", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "   ",
+      OriginatingTo: "bluebubbles:+15551234567",
+      OriginatingChannel: "bluebubbles",
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBeUndefined();
+  });
+
+  it("omits message_id from system metadata when MessageSid is undefined", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "bluebubbles:+15551234567",
+      OriginatingChannel: "bluebubbles",
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBeUndefined();
   });
 
   it("omits sender_id when blank", () => {
@@ -101,11 +143,43 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct chats", () => {
+  it("hides message_id for direct chats (empty-input guard preserved)", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
+    } as TemplateContext);
+
+    // message_id must NOT appear in user-role context for DMs —
+    // it lives in the trusted inbound_meta system block instead,
+    // so blank-body messages don't bypass the empty-input guard.
+    expect(text).toBe("");
+  });
+
+  it("returns empty string for direct chats with no MessageSid", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
+  it("returns empty string for direct chats with blank MessageSid", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "   ",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
+  it("suppresses all identity fields for direct chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "dm-msg-1",
+      ReplyToId: "dm-msg-0",
+      SenderId: "user-123",
+      ConversationLabel: "John Doe",
     } as TemplateContext);
 
     expect(text).toBe("");

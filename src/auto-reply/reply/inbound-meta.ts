@@ -37,9 +37,8 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
   // Those belong in the user-role "untrusted context" blocks.
-  // Per-message identifiers and dynamic flags are also excluded here: they change on turns/replies
-  // and would bust prefix-based prompt caches on providers that use stable system prefixes.
-  // They are included in the user-role conversation info block instead.
+  // Dynamic per-turn flags remain excluded here to keep the trusted system payload compact.
+  // message_id is included so tools can target the triggering inbound message reliably.
 
   // Resolve channel identity: prefer explicit channel, then surface, then provider.
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
@@ -60,6 +59,7 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const payload = {
     schema: "openclaw.inbound_meta.v1",
     chat_id: safeTrim(ctx.OriginatingTo),
+    message_id: safeTrim(ctx.MessageSid),
     channel: channelValue,
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
