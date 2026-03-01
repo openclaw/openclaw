@@ -67,6 +67,7 @@ export type DiffViewerPayload = {
 
 export type RenderedDiffDocument = {
   html: string;
+  imageHtml: string;
   title: string;
   fileCount: number;
   inputKind: DiffInput["kind"];
