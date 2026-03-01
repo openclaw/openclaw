@@ -89,6 +89,7 @@ export async function buildStatusReply(params: {
         timeoutMs: 3500,
         providers: [currentUsageProvider],
         agentDir: statusAgentDir,
+        profileId: sessionEntry?.authProfileOverride,
       });
       const usageEntry = usageSummary.providers[0];
       if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
@@ -98,7 +99,10 @@ export async function buildStatusReply(params: {
           includeResets: true,
         });
         if (summaryLine) {
-          usageLine = `📊 Usage: ${summaryLine}`;
+          const sourceProfile = sessionEntry?.authProfileOverride?.trim();
+          usageLine = sourceProfile
+            ? `📊 Usage (profile ${sourceProfile}): ${summaryLine}`
+            : `📊 Usage: ${summaryLine}`;
         }
       }
     } catch {
