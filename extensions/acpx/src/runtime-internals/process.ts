@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import path from "node:path";
+import { existsSync } from "node:fs";
+import type { WindowsSpawnProgram } from "openclaw/plugin-sdk";
+import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "openclaw/plugin-sdk";
 
 export type SpawnExit = {
   code: number | null;
@@ -21,147 +22,72 @@ type SpawnRuntime = {
   execPath: string;
 };
 
+export type SpawnCommandCache = {
+  key?: string;
+  program?: WindowsSpawnProgram;
+};
+
+export type SpawnCommandOptions = {
+  strictWindowsCmdWrapper?: boolean;
+  cache?: SpawnCommandCache;
+};
+
 const DEFAULT_RUNTIME: SpawnRuntime = {
   platform: process.platform,
   env: process.env,
   execPath: process.execPath,
 };
 
-function isFilePath(candidate: string): boolean {
-  try {
-    return statSync(candidate).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
-  if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
-    return command;
-  }
-
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const pathEntries = pathValue
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  const hasExtension = path.extname(command).length > 0;
-  const pathExtRaw =
-    env.PATHEXT ??
-    env.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
-    ".EXE;.CMD;.BAT;.COM";
-  const pathExt = hasExtension
-    ? [""]
-    : pathExtRaw
-        .split(";")
-        .map((ext) => ext.trim())
-        .filter(Boolean)
-        .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
-
-  for (const dir of pathEntries) {
-    for (const ext of pathExt) {
-      for (const candidateExt of [ext, ext.toLowerCase(), ext.toUpperCase()]) {
-        const candidate = path.join(dir, `${command}${candidateExt}`);
-        if (isFilePath(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  }
-
-  return command;
-}
-
-function resolveNodeEntrypointFromCmdShim(wrapperPath: string): string | null {
-  if (!isFilePath(wrapperPath)) {
-    return null;
-  }
-  try {
-    const content = readFileSync(wrapperPath, "utf8");
-    const candidates: string[] = [];
-    for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
-      const token = match[1] ?? "";
-      const relMatch = token.match(/%~?dp0%?\s*[\\/]*(.*)$/i);
-      const relative = relMatch?.[1]?.trim();
-      if (!relative) {
-        continue;
-      }
-      const normalizedRelative = relative.replace(/[\\/]+/g, path.sep).replace(/^[\\/]+/, "");
-      const candidate = path.resolve(path.dirname(wrapperPath), normalizedRelative);
-      if (isFilePath(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-    const nonNode = candidates.find((candidate) => {
-      const base = path.basename(candidate).toLowerCase();
-      return base !== "node.exe" && base !== "node";
-    });
-    return nonNode ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export function resolveSpawnCommand(
   params: { command: string; args: string[] },
+  options?: SpawnCommandOptions,
   runtime: SpawnRuntime = DEFAULT_RUNTIME,
 ): ResolvedSpawnCommand {
-  if (runtime.platform !== "win32") {
-    return { command: params.command, args: params.args };
-  }
+  const strictWindowsCmdWrapper = options?.strictWindowsCmdWrapper === true;
+  const cacheKey = `${params.command}::${strictWindowsCmdWrapper ? "strict" : "compat"}`;
+  const cachedProgram = options?.cache;
 
-  const resolvedCommand = resolveWindowsExecutablePath(params.command, runtime.env);
-  const extension = path.extname(resolvedCommand).toLowerCase();
-  if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
-    return {
-      command: runtime.execPath,
-      args: [resolvedCommand, ...params.args],
-      windowsHide: true,
-    };
-  }
-
-  if (extension === ".cmd" || extension === ".bat") {
-    const entrypoint = resolveNodeEntrypointFromCmdShim(resolvedCommand);
-    if (entrypoint) {
-      const entryExt = path.extname(entrypoint).toLowerCase();
-      if (entryExt === ".exe") {
-        return {
-          command: entrypoint,
-          args: params.args,
-          windowsHide: true,
-        };
-      }
-      return {
-        command: runtime.execPath,
-        args: [entrypoint, ...params.args],
-        windowsHide: true,
-      };
+  let program =
+    cachedProgram?.key === cacheKey && cachedProgram.program ? cachedProgram.program : undefined;
+  if (!program) {
+    program = resolveWindowsSpawnProgram({
+      command: params.command,
+      platform: runtime.platform,
+      env: runtime.env,
+      execPath: runtime.execPath,
+      packageName: "acpx",
+      allowShellFallback: !strictWindowsCmdWrapper,
+    });
+    if (cachedProgram) {
+      cachedProgram.key = cacheKey;
+      cachedProgram.program = program;
     }
-    // Preserve compatibility for non-npm wrappers we cannot safely unwrap.
-    return {
-      command: resolvedCommand,
-      args: params.args,
-      shell: true,
-    };
   }
 
+  const resolved = materializeWindowsSpawnProgram(program, params.args);
   return {
-    command: resolvedCommand,
-    args: params.args,
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
   };
 }
 
-export function spawnWithResolvedCommand(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-}): ChildProcessWithoutNullStreams {
-  const resolved = resolveSpawnCommand({
-    command: params.command,
-    args: params.args,
-  });
+export function spawnWithResolvedCommand(
+  params: {
+    command: string;
+    args: string[];
+    cwd: string;
+  },
+  options?: SpawnCommandOptions,
+): ChildProcessWithoutNullStreams {
+  const resolved = resolveSpawnCommand(
+    {
+      command: params.command,
+      args: params.args,
+    },
+    options,
+  );
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
@@ -193,17 +119,20 @@ export async function waitForExit(child: ChildProcessWithoutNullStreams): Promis
   });
 }
 
-export async function spawnAndCollect(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-}): Promise<{
+export async function spawnAndCollect(
+  params: {
+    command: string;
+    args: string[];
+    cwd: string;
+  },
+  options?: SpawnCommandOptions,
+): Promise<{
   stdout: string;
   stderr: string;
   code: number | null;
   error: Error | null;
 }> {
-  const child = spawnWithResolvedCommand(params);
+  const child = spawnWithResolvedCommand(params, options);
   child.stdin.end();
 
   let stdout = "";
