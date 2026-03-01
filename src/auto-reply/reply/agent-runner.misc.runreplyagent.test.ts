@@ -1163,9 +1163,12 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expect(result).toMatchObject([
+      { text: "I'll remind you tomorrow morning." },
+      {
+        text: "System note: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+      },
+    ]);
   });
 
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {

@@ -54,7 +54,7 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const UNSCHEDULED_REMINDER_NOTE =
-  "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
+  "System note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
@@ -72,21 +72,20 @@ function hasUnbackedReminderCommitment(text: string): boolean {
 }
 
 function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
+  const next: ReplyPayload[] = [];
   let appended = false;
-  return payloads.map((payload) => {
+  for (const payload of payloads) {
+    next.push(payload);
     if (appended || payload.isError || typeof payload.text !== "string") {
-      return payload;
+      continue;
     }
     if (!hasUnbackedReminderCommitment(payload.text)) {
-      return payload;
+      continue;
     }
     appended = true;
-    const trimmed = payload.text.trimEnd();
-    return {
-      ...payload,
-      text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
-    };
-  });
+    next.push({ text: UNSCHEDULED_REMINDER_NOTE });
+  }
+  return next;
 }
 
 export async function runReplyAgent(params: {
