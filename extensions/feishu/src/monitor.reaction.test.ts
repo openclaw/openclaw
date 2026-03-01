@@ -1,8 +1,54 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveReactionSyntheticEvent, type FeishuReactionCreatedEvent } from "./monitor.js";
+import { setFeishuRuntime } from "./runtime.js";
 
 const cfg = {} as ClawdbotConfig;
+
+function createMockRuntime() {
+  return {
+    version: "test",
+    config: {},
+    system: {},
+    media: {},
+    tts: {},
+    tools: {},
+    channel: {
+      feishu: {
+        listFeishuAccountIds: () => ["default"],
+        resolveDefaultFeishuAccountId: () => "default",
+        resolveFeishuAccount: ({ cfg, accountId }: { cfg: ClawdbotConfig; accountId?: string }) => {
+          const feishuCfg = cfg?.channels?.feishu as Record<string, unknown> | undefined;
+          return {
+            accountId: accountId ?? "default",
+            enabled: true,
+            configured: true,
+            domain: "feishu" as const,
+            config: feishuCfg ?? {},
+          };
+        },
+        probeFeishu: vi.fn(),
+        sendMessageFeishu: vi.fn(),
+        getMessageFeishu: vi.fn(),
+        sendCardFeishu: vi.fn(),
+        sendMarkdownCardFeishu: vi.fn(),
+        updateCardFeishu: vi.fn(),
+        editMessageFeishu: vi.fn(),
+        buildMarkdownCard: (t: string) => ({
+          body: { elements: [{ tag: "markdown", content: t }] },
+        }),
+        clearProbeCache: vi.fn(),
+      },
+      text: { resolveMarkdownTableMode: () => "native", convertMarkdownTables: (t: string) => t },
+    },
+    logging: {},
+    state: {},
+  };
+}
+
+beforeEach(() => {
+  setFeishuRuntime(createMockRuntime() as never);
+});
 
 function makeReactionEvent(
   overrides: Partial<FeishuReactionCreatedEvent> = {},

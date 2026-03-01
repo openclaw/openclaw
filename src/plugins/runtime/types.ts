@@ -178,6 +178,21 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// Feishu channel types
+type ListFeishuAccountIds = typeof import("../../feishu/accounts.js").listFeishuAccountIds;
+type ResolveDefaultFeishuAccountId =
+  typeof import("../../feishu/accounts.js").resolveDefaultFeishuAccountId;
+type ResolveFeishuAccount = typeof import("../../feishu/accounts.js").resolveFeishuAccount;
+type ProbeFeishu = typeof import("../../feishu/probe.js").probeFeishu;
+type ClearProbeCache = typeof import("../../feishu/probe.js").clearProbeCache;
+type SendMessageFeishu = typeof import("../../feishu/send.js").sendMessageFeishu;
+type GetMessageFeishu = typeof import("../../feishu/send.js").getMessageFeishu;
+type SendCardFeishu = typeof import("../../feishu/send.js").sendCardFeishu;
+type SendMarkdownCardFeishu = typeof import("../../feishu/send.js").sendMarkdownCardFeishu;
+type UpdateCardFeishu = typeof import("../../feishu/send.js").updateCardFeishu;
+type EditMessageFeishu = typeof import("../../feishu/send.js").editMessageFeishu;
+type BuildMarkdownCard = typeof import("../../feishu/send.js").buildMarkdownCard;
+
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -359,6 +374,20 @@ export type PluginRuntime = {
       createQuickReplyItems: CreateQuickReplyItems;
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
+    };
+    feishu: {
+      listFeishuAccountIds: ListFeishuAccountIds;
+      resolveDefaultFeishuAccountId: ResolveDefaultFeishuAccountId;
+      resolveFeishuAccount: ResolveFeishuAccount;
+      probeFeishu: ProbeFeishu;
+      clearProbeCache: ClearProbeCache;
+      sendMessageFeishu: SendMessageFeishu;
+      getMessageFeishu: GetMessageFeishu;
+      sendCardFeishu: SendCardFeishu;
+      sendMarkdownCardFeishu: SendMarkdownCardFeishu;
+      updateCardFeishu: UpdateCardFeishu;
+      editMessageFeishu: EditMessageFeishu;
+      buildMarkdownCard: BuildMarkdownCard;
     };
   };
   logging: {

@@ -263,6 +263,7 @@ function createMockRuntime(): PluginRuntime {
           vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"],
       },
       discord: {} as PluginRuntime["channel"]["discord"],
+      feishu: {} as PluginRuntime["channel"]["feishu"],
       activity: {} as PluginRuntime["channel"]["activity"],
       line: {} as PluginRuntime["channel"]["line"],
       slack: {} as PluginRuntime["channel"]["slack"],

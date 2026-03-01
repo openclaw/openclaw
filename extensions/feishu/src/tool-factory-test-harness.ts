@@ -1,4 +1,5 @@
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { setFeishuRuntime } from "./runtime.js";
 
 type ToolContextLike = {
   agentAccountId?: string;
@@ -34,11 +35,74 @@ function asToolLike(tool: AnyAgentTool, fallbackName?: string): ToolLike {
   };
 }
 
+function createMockFeishuChannel(cfg: OpenClawPluginApi["config"]) {
+  const feishuCfg = cfg?.channels?.feishu as
+    | {
+        accounts?: Record<
+          string,
+          { appId?: string; appSecret?: string; tools?: Record<string, boolean> }
+        >;
+      }
+    | undefined;
+  const accounts = feishuCfg?.accounts ?? {};
+  const ids = Object.keys(accounts).filter(Boolean);
+  const accountIds = ids.length > 0 ? ids : ["default"];
+
+  return {
+    listFeishuAccountIds: () => accountIds,
+    resolveDefaultFeishuAccountId: () => accountIds[0] ?? "default",
+    resolveFeishuAccount: ({ accountId }: { accountId?: string }) => {
+      const id = accountId ?? "default";
+      const acct = accounts[id] ?? {};
+      const merged = { ...feishuCfg, ...acct };
+      return {
+        accountId: id,
+        enabled: true,
+        configured: Boolean(acct.appId),
+        appId: acct.appId,
+        appSecret: acct.appSecret,
+        domain: "feishu" as const,
+        config: merged ?? {},
+      };
+    },
+    probeFeishu: () => Promise.resolve({ ok: true }),
+    sendMessageFeishu: () => Promise.resolve({ messageId: "", chatId: "" }),
+    getMessageFeishu: () => Promise.resolve(null),
+    sendCardFeishu: () => Promise.resolve({ messageId: "", chatId: "" }),
+    sendMarkdownCardFeishu: () => Promise.resolve({ messageId: "", chatId: "" }),
+    updateCardFeishu: () => Promise.resolve(),
+    editMessageFeishu: () => Promise.resolve(),
+    buildMarkdownCard: (text: string) => ({
+      schema: "2.0",
+      body: { elements: [{ tag: "markdown", content: text }] },
+    }),
+  };
+}
+
 export function createToolFactoryHarness(cfg: OpenClawPluginApi["config"]) {
   const registered: RegisteredTool[] = [];
+  const runtime = {
+    version: "test",
+    config: {} as OpenClawPluginApi["config"],
+    system: {} as OpenClawPluginApi["runtime"]["system"],
+    media: {} as OpenClawPluginApi["runtime"]["media"],
+    tts: {} as OpenClawPluginApi["runtime"]["tts"],
+    tools: {} as OpenClawPluginApi["runtime"]["tools"],
+    channel: {
+      feishu: createMockFeishuChannel(cfg),
+      text: {
+        resolveMarkdownTableMode: () => "native" as const,
+        convertMarkdownTables: (t: string) => t,
+      },
+    } as unknown as OpenClawPluginApi["runtime"]["channel"],
+    logging: {} as OpenClawPluginApi["runtime"]["logging"],
+    state: {} as OpenClawPluginApi["runtime"]["state"],
+  };
+  setFeishuRuntime(runtime as unknown as OpenClawPluginApi["runtime"]);
 
-  const api: Pick<OpenClawPluginApi, "config" | "logger" | "registerTool"> = {
+  const api: Pick<OpenClawPluginApi, "config" | "logger" | "registerTool" | "runtime"> = {
     config: cfg,
+    runtime: runtime as OpenClawPluginApi["runtime"],
     logger: {
       info: () => {},
       warn: () => {},

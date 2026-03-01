@@ -1,9 +1,68 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const probeCache = new Map<
+  string,
+  {
+    result: { ok: boolean; appId?: string; botName?: string; botOpenId?: string; error?: string };
+    expiresAt: number;
+  }
+>();
+const PROBE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
+}));
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    channel: {
+      feishu: {
+        probeFeishu: async (creds?: { accountId?: string; appId?: string; appSecret?: string }) => {
+          if (!creds?.appId || !creds?.appSecret) {
+            return { ok: false, error: "missing credentials (appId, appSecret)" };
+          }
+          const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
+          const cached = probeCache.get(cacheKey);
+          if (cached && cached.expiresAt > Date.now()) {
+            return cached.result;
+          }
+          try {
+            const client = createFeishuClientMock(creds);
+            const res = await client?.request?.({
+              method: "GET",
+              url: "/open-apis/bot/v3/info",
+              data: {},
+            });
+            if (res?.code !== 0) {
+              return {
+                ok: false,
+                appId: creds.appId,
+                error: `API error: ${res?.msg || `code ${res?.code}`}`,
+              };
+            }
+            const bot = res.bot || res.data?.bot;
+            const result = {
+              ok: true,
+              appId: creds.appId,
+              botName: bot?.bot_name,
+              botOpenId: bot?.open_id,
+            };
+            probeCache.set(cacheKey, { result, expiresAt: Date.now() + PROBE_CACHE_TTL_MS });
+            return result;
+          } catch (err) {
+            return {
+              ok: false,
+              appId: creds.appId,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+        clearProbeCache: () => probeCache.clear(),
+      },
+    },
+  }),
+  setFeishuRuntime: vi.fn(),
 }));
 
 import { probeFeishu, clearProbeCache } from "./probe.js";
