@@ -86,6 +86,12 @@ final class TalkModeManager: NSObject {
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
+    private var sttProvider: String = "apple"
+    private var sttApiKey: String?
+    private var sttModel: String = "whisper-1"
+    private var sttLanguage: String?
+    private var whisperAudioBuffer: Data?
+    private var whisperSampleRate: Double?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
@@ -179,16 +185,21 @@ final class TalkModeManager: NSObject {
             self.statusText = "Microphone permission denied"
             return
         }
-        let speechOk = await Self.requestSpeechPermission()
-        guard speechOk else {
-            self.logger.warning("start blocked: speech permission denied")
-            self.statusText = Self.permissionMessage(
-                kind: "Speech recognition",
-                status: SFSpeechRecognizer.authorizationStatus())
-            return
-        }
 
         await self.reloadConfig()
+
+        // Apple Speech requires speech recognition permission; Whisper (openai) does not.
+        if self.sttProvider != "openai" {
+            let speechOk = await Self.requestSpeechPermission()
+            guard speechOk else {
+                self.logger.warning("start blocked: speech permission denied")
+                self.statusText = Self.permissionMessage(
+                    kind: "Speech recognition",
+                    status: SFSpeechRecognizer.authorizationStatus())
+                return
+            }
+        }
+
         do {
             try Self.configureAudioSession()
             // Set this before starting recognition so any early speech errors are classified correctly.
@@ -323,14 +334,16 @@ final class TalkModeManager: NSObject {
                     NSLocalizedDescriptionKey: "Microphone permission denied",
                 ])
             }
-            let speechOk = await Self.requestSpeechPermission()
-            guard speechOk else {
-                self.statusText = Self.permissionMessage(
-                    kind: "Speech recognition",
-                    status: SFSpeechRecognizer.authorizationStatus())
-                throw NSError(domain: "TalkMode", code: 5, userInfo: [
-                    NSLocalizedDescriptionKey: "Speech recognition permission denied",
-                ])
+            if self.sttProvider != "openai" {
+                let speechOk = await Self.requestSpeechPermission()
+                guard speechOk else {
+                    self.statusText = Self.permissionMessage(
+                        kind: "Speech recognition",
+                        status: SFSpeechRecognizer.authorizationStatus())
+                    throw NSError(domain: "TalkMode", code: 5, userInfo: [
+                        NSLocalizedDescriptionKey: "Speech recognition permission denied",
+                    ])
+                }
             }
         }
 
@@ -499,6 +512,12 @@ final class TalkModeManager: NSObject {
         #endif
 
         self.stopRecognition()
+
+        if self.sttProvider == "openai" {
+            try self.startWhisperCapture()
+            return
+        }
+
         self.speechRecognizer = SFSpeechRecognizer()
         guard let recognizer = self.speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
@@ -521,43 +540,7 @@ final class TalkModeManager: NSObject {
             ])
         }
         input.removeTap(onBus: 0)
-        let tapDiagnostics = AudioTapDiagnostics(label: "talk") { [weak self] level in
-            guard let self else { return }
-            Task { @MainActor in
-                // Smooth + clamp for UI, and keep it cheap.
-                let raw = max(0, min(Double(level) * 10.0, 1.0))
-                let next = (self.micLevel * 0.80) + (raw * 0.20)
-                self.micLevel = next
-
-                // Dynamic thresholding so background noise doesn’t prevent endpointing.
-                if self.isListening, !self.isSpeaking, !self.noiseFloorReady {
-                    self.noiseFloorSamples.append(raw)
-                    if self.noiseFloorSamples.count >= 22 {
-                        let sorted = self.noiseFloorSamples.sorted()
-                        let take = max(6, sorted.count / 2)
-                        let slice = sorted.prefix(take)
-                        let avg = slice.reduce(0.0, +) / Double(slice.count)
-                        self.noiseFloor = avg
-                        self.noiseFloorReady = true
-                        self.noiseFloorSamples.removeAll(keepingCapacity: true)
-                        let threshold = min(0.35, max(0.12, avg + 0.10))
-                        GatewayDiagnostics.log(
-                            "talk audio: noiseFloor=\(String(format: "%.3f", avg)) "
-                                + "threshold=\(String(format: "%.3f", threshold))"
-                        )
-                    }
-                }
-
-                let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
-                    min(0.35, max(0.12, floor + 0.10))
-                } else {
-                    0.18
-                }
-                if raw >= threshold {
-                    self.lastAudioActivity = Date()
-                }
-            }
-        }
+        let tapDiagnostics = self.makeSharedTapDiagnostics()
         self.audioTapDiagnostics = tapDiagnostics
         let tapBlock = Self.makeAudioTapAppendCallback(request: request, diagnostics: tapDiagnostics)
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
@@ -588,7 +571,7 @@ final class TalkModeManager: NSObject {
                 GatewayDiagnostics.log("talk speech: error=\(msg)")
                 if !self.isSpeaking {
                     if msg.localizedCaseInsensitiveContains("no speech detected") {
-                        // Treat as transient silence. Don't scare users with an error banner.
+                        // Treat as transient silence. Don’t scare users with an error banner.
                         self.statusText = self.isEnabled ? "Listening" : "Speech error: \(msg)"
                     } else {
                         self.statusText = "Speech error: \(msg)"
@@ -596,9 +579,9 @@ final class TalkModeManager: NSObject {
                 }
                 self.logger.debug("speech recognition error: \(msg, privacy: .public)")
                 // Speech recognition can terminate on transient errors (e.g. no speech detected).
-                // If talk mode is enabled and we're in continuous capture, try to restart.
+                // If talk mode is enabled and we’re in continuous capture, try to restart.
                 if self.captureMode == .continuous, self.isEnabled, !self.isSpeaking {
-                    // Treat the task as terminal on error so we don't get stuck with a dead recognizer.
+                    // Treat the task as terminal on error so we don’t get stuck with a dead recognizer.
                     self.stopRecognition()
                     Task { @MainActor [weak self] in
                         await self?.restartRecognitionAfterError()
@@ -657,6 +640,143 @@ final class TalkModeManager: NSObject {
         }
         self.audioEngine.stop()
         self.speechRecognizer = nil
+        self.whisperAudioBuffer = nil
+        self.whisperSampleRate = nil
+    }
+
+    // MARK: - Whisper (OpenAI) STT capture
+
+    /// Start audio capture for Whisper STT — mic tap only, no SFSpeechRecognizer.
+    private func startWhisperCapture() throws {
+        GatewayDiagnostics.log("talk audio: whisper capture session \(Self.describeAudioSession())")
+        let input = self.audioEngine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "TalkMode", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid audio input format",
+            ])
+        }
+        input.removeTap(onBus: 0)
+
+        self.whisperAudioBuffer = Data()
+        self.whisperSampleRate = format.sampleRate
+
+        let tapDiagnostics = self.makeSharedTapDiagnostics()
+        self.audioTapDiagnostics = tapDiagnostics
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
+            tapDiagnostics.onBuffer(buffer)
+            // Accumulate Float32 PCM for Whisper.
+            guard let data = buffer.floatChannelData else { return }
+            let frames = Int(buffer.frameLength)
+            let bytes = Data(bytes: data.pointee, count: frames * MemoryLayout<Float>.size)
+            Task { @MainActor [weak self] in
+                self?.whisperAudioBuffer?.append(bytes)
+                // Track speech activity for silence detection via lastHeard.
+                let rms = Self.computeRMS(data.pointee, count: frames)
+                let raw = max(0, min(Double(rms) * 10.0, 1.0))
+                let threshold: Double = if let floor = self?.noiseFloor, self?.noiseFloorReady == true {
+                    min(0.35, max(0.12, floor + 0.10))
+                } else {
+                    0.18
+                }
+                if raw >= threshold {
+                    self?.lastHeard = Date()
+                    self?.lastAudioActivity = Date()
+                }
+            }
+        }
+        self.inputTapInstalled = true
+
+        self.audioEngine.prepare()
+        try self.audioEngine.start()
+
+        GatewayDiagnostics.log(
+            "talk whisper: capture started mode=\(String(describing: self.captureMode)) "
+                + "sampleRate=\(format.sampleRate) engineRunning=\(self.audioEngine.isRunning)"
+        )
+    }
+
+    /// Shared tap diagnostics factory (mic level + noise floor).
+    private func makeSharedTapDiagnostics() -> AudioTapDiagnostics {
+        AudioTapDiagnostics(label: "talk") { [weak self] level in
+            guard let self else { return }
+            Task { @MainActor in
+                let raw = max(0, min(Double(level) * 10.0, 1.0))
+                let next = (self.micLevel * 0.80) + (raw * 0.20)
+                self.micLevel = next
+
+                if self.isListening, !self.isSpeaking, !self.noiseFloorReady {
+                    self.noiseFloorSamples.append(raw)
+                    if self.noiseFloorSamples.count >= 22 {
+                        let sorted = self.noiseFloorSamples.sorted()
+                        let take = max(6, sorted.count / 2)
+                        let slice = sorted.prefix(take)
+                        let avg = slice.reduce(0.0, +) / Double(slice.count)
+                        self.noiseFloor = avg
+                        self.noiseFloorReady = true
+                        self.noiseFloorSamples.removeAll(keepingCapacity: true)
+                        let threshold = min(0.35, max(0.12, avg + 0.10))
+                        GatewayDiagnostics.log(
+                            "talk audio: noiseFloor=\(String(format: "%.3f", avg)) "
+                                + "threshold=\(String(format: "%.3f", threshold))"
+                        )
+                    }
+                }
+
+                let threshold: Double = if let floor = self.noiseFloor, self.noiseFloorReady {
+                    min(0.35, max(0.12, floor + 0.10))
+                } else {
+                    0.18
+                }
+                if raw >= threshold {
+                    self.lastAudioActivity = Date()
+                }
+            }
+        }
+    }
+
+    private nonisolated static func computeRMS(_ floats: UnsafeMutablePointer<Float>, count: Int) -> Float {
+        guard count > 0 else { return 0 }
+        var sum: Float = 0
+        for i in 0..<count {
+            let v = floats[i]
+            sum += v * v
+        }
+        return sqrt(sum / Float(count))
+    }
+
+    /// Called when Whisper silence is detected — transcribe accumulated audio.
+    private func whisperTranscribeAndProcess(restartAfter: Bool) async {
+        guard let pcmData = self.whisperAudioBuffer, !pcmData.isEmpty,
+              let sampleRate = self.whisperSampleRate,
+              let apiKey = self.sttApiKey, !apiKey.isEmpty else {
+            self.logger.warning("whisper: no audio or missing API key")
+            if restartAfter { await self.start() }
+            return
+        }
+
+        self.isListening = false
+        self.captureMode = .idle
+        self.statusText = "Transcribing\u{2026}"
+        self.stopRecognition()
+
+        let client = WhisperSTTClient(apiKey: apiKey, model: self.sttModel, language: self.sttLanguage)
+        do {
+            let transcript = try await client.transcribe(pcmData: pcmData, sampleRate: sampleRate)
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                GatewayDiagnostics.log("talk whisper: empty transcript")
+                if restartAfter { await self.start() }
+                return
+            }
+            GatewayDiagnostics.log("talk whisper: transcript chars=\(trimmed.count)")
+            await self.processTranscript(trimmed, restartAfter: restartAfter)
+        } catch {
+            self.logger.error("whisper transcribe failed: \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("talk whisper: error=\(error.localizedDescription)")
+            self.statusText = "Transcription error"
+            if restartAfter { await self.start() }
+        }
     }
 
     private nonisolated static func makeAudioTapAppendCallback(
@@ -713,6 +833,18 @@ final class TalkModeManager: NSObject {
     private func checkSilence() async {
         if self.captureMode == .continuous {
             guard self.isListening, !self.isSpeechOutputActive else { return }
+
+            // Whisper: silence detection triggers batch transcription (no streaming partial transcript).
+            if self.sttProvider == "openai" {
+                guard self.whisperAudioBuffer != nil, !(self.whisperAudioBuffer?.isEmpty ?? true) else { return }
+                guard self.lastHeard != nil || self.lastAudioActivity != nil else { return }
+                let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
+                guard let lastActivity else { return }
+                if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
+                await self.whisperTranscribeAndProcess(restartAfter: true)
+                return
+            }
+
             let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcript.isEmpty else { return }
             let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap { $0 }.max()
@@ -2067,6 +2199,39 @@ extension TalkModeManager {
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
             }
+
+            // STT config (speech-to-text provider).
+            if let sttBlock = talk?["stt"] as? [String: Any] {
+                let provider = (sttBlock["provider"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                self.sttProvider = (provider == "openai") ? "openai" : "apple"
+                self.sttModel = (sttBlock["model"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "whisper-1"
+                self.sttLanguage = (sttBlock["language"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // API key: local Keychain override > gateway config value.
+                let rawSttApiKey = (sttBlock["apiKey"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let configSttKey = Self.normalizedTalkApiKey(rawSttApiKey)
+                let localSttKey = Self.normalizedTalkApiKey(
+                    GatewaySettingsStore.loadTalkProviderApiKey(provider: "openai-stt"))
+                if rawSttApiKey == Self.redactedConfigSentinel {
+                    self.sttApiKey = (localSttKey?.isEmpty == false) ? localSttKey : nil
+                } else {
+                    self.sttApiKey = (localSttKey?.isEmpty == false) ? localSttKey : configSttKey
+                }
+                if self.sttProvider == "openai" {
+                    GatewayDiagnostics.log(
+                        "talk stt: provider=openai model=\(self.sttModel) keyPresent=\(self.sttApiKey != nil)")
+                }
+            } else {
+                self.sttProvider = "apple"
+                self.sttApiKey = nil
+                self.sttModel = "whisper-1"
+                self.sttLanguage = nil
+            }
+
             if selection != nil {
                 GatewayDiagnostics.log("talk config provider=\(activeProvider)")
             }
@@ -2079,6 +2244,10 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.sttProvider = "apple"
+            self.sttApiKey = nil
+            self.sttModel = "whisper-1"
+            self.sttLanguage = nil
         }
     }
 
