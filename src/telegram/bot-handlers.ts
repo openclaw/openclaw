@@ -234,15 +234,19 @@ export const registerTelegramHandlers = ({
       }
       const first = entries[0];
       const anchor = last;
+      const replyContextEntry = resolveReplyTargetMessage(anchor.msg) ? anchor : first;
       const syntheticMessage = buildSyntheticTextMessage({
-        base: anchor.msg,
+        base: replyContextEntry.msg,
         text: combinedText,
         date: anchor.msg.date ?? first.msg.date,
         from: anchor.msg.from ?? first.msg.from,
       });
       const messageIdOverride = anchor.msg.message_id ? String(anchor.msg.message_id) : undefined;
       const syntheticCtx = buildSyntheticContext(anchor.ctx, syntheticMessage);
-      const replyMedia = await resolveReplyMediaForMessage(anchor.ctx, anchor.msg);
+      const replyMedia = await resolveReplyMediaForMessage(
+        replyContextEntry.ctx,
+        replyContextEntry.msg,
+      );
       await processMessage(
         syntheticCtx,
         combinedMedia,
