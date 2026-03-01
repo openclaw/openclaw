@@ -1533,18 +1533,14 @@ export async function runSubagentAnnounceFlow(params: {
     // method:"agent" fallback injected into the requester session, which
     // already wakes the requester and would cause a duplicate turn).
     // A valid completionDirectOrigin with channel+to signals a real send path.
-    const hadDirectSendRoute =
+    const _hadDirectSendRoute =
       Boolean(completionResolution.origin?.channel) && Boolean(completionResolution.origin?.to);
-    const isSilentTriggerCandidate =
-      delivery.delivered &&
-      delivery.path === "direct" &&
-      hadDirectSendRoute &&
-      !requesterIsSubagent &&
-      expectsCompletionMessage &&
-      announceType !== "cron job" &&
-      params.spawnMode !== "session" &&
-      findings.trim().length > 0 &&
-      findings !== "(no output)";
+    // Silent trigger disabled — it blocks the session lane for 90s-5min with
+    // no typing indicator, causing dead silence after every sub-agent completion.
+    // The normal announce path already injects the result into session history;
+    // the parent processes it on the next user message. See:
+    // research/silent-trigger-session-blocking-bug.md
+    const isSilentTriggerCandidate = false;
 
     let activeRunsForTrigger = 1; // default conservative: assume siblings exist
     if (isSilentTriggerCandidate) {
