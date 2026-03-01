@@ -163,6 +163,7 @@ function payloadToInboundMessage(
     mediaType: payload.object.mediaType || "text/plain",
     timestamp: Date.now(),
     isGroupChat,
+    ...(payload.object.threadId ? { threadId: payload.object.threadId } : {}),
   };
 }
 
