@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
@@ -76,6 +78,36 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
   }
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+}
+
+function resolveSubagentOutputDir(cfg: ReturnType<typeof loadConfig>): string {
+  const configured = (cfg.agents?.defaults?.subagents as Record<string, unknown> | undefined)
+    ?.outputDir;
+  if (typeof configured === "string" && configured.trim()) {
+    return configured.trim().replace(/^~/, process.env.HOME ?? "");
+  }
+  const home = process.env.HOME ?? "/root";
+  return `${home}/.openclaw/workspace/tmp/agent-output`;
+}
+
+function saveOutputToTempFile(params: {
+  findings: string;
+  label: string;
+  runId: string;
+  outputDir: string;
+}): string | undefined {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const safeName = (params.label || "agent").replace(/[^a-z0-9-]/gi, "-").slice(0, 40);
+    const safeRunId = params.runId.slice(0, 8);
+    const filename = `${timestamp}-${safeName}-${safeRunId}.md`;
+    const filePath = join(params.outputDir, filename);
+    mkdirSync(params.outputDir, { recursive: true });
+    writeFileSync(filePath, params.findings, "utf8");
+    return filePath;
+  } catch {
+    return undefined;
+  }
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -1378,6 +1410,24 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
+    const cfg2 = loadConfig();
+    const outputDir = resolveSubagentOutputDir(cfg2);
+    const OUTPUT_THRESHOLD = 3_000;
+    const savedFilePath =
+      findings.length > OUTPUT_THRESHOLD
+        ? saveOutputToTempFile({
+            findings,
+            label: params.label ?? params.task?.slice(0, 40) ?? "agent",
+            runId: params.childRunId,
+            outputDir,
+          })
+        : undefined;
+    const findingsForContext = savedFilePath
+      ? `${findings.slice(0, 1_500)}
+…
+
+_Full output saved: \`${savedFilePath.replace(/.*\.openclaw\/workspace\//, "")}\`_`
+      : findings;
     const internalEvents: AgentInternalEvent[] = [
       {
         type: "task_completion",
@@ -1388,7 +1438,7 @@ export async function runSubagentAnnounceFlow(params: {
         taskLabel,
         status: outcome.status,
         statusLabel,
-        result: findings,
+        result: findingsForContext,
         statsLine,
         replyInstruction,
       },
