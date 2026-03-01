@@ -509,7 +509,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("passes agentId + sessionKey to runHeartbeatOnce for main-session wakeMode now jobs", async () => {
+  it("passes agentId and preserves scoped session for wakeMode now main jobs", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =

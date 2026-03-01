@@ -18,7 +18,7 @@ import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 import {
@@ -421,6 +421,21 @@ type ConnectResponse = {
   error?: { message?: string; code?: string; details?: unknown };
 };
 
+function resolveDefaultTestDeviceIdentityPath(params: {
+  clientId: string;
+  clientMode: string;
+  platform: string;
+  deviceFamily?: string;
+  role: string;
+}) {
+  const safe =
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .toLowerCase();
+  const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+}
+
 export async function readConnectChallengeNonce(
   ws: WebSocket,
   timeoutMs = 2_000,
@@ -478,6 +493,7 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    deviceIdentityPath?: string;
     skipConnectChallengeNonce?: boolean;
     timeoutMs?: number;
   },
@@ -527,9 +543,18 @@ export async function connectReq(
     if (!connectChallengeNonce) {
       throw new Error("missing connect.challenge nonce");
     }
-    const identity = loadOrCreateDeviceIdentity();
+    const identityPath =
+      opts?.deviceIdentityPath ??
+      resolveDefaultTestDeviceIdentityPath({
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        role,
+      });
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
+    const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: client.id,
       clientMode: client.mode,
@@ -538,6 +563,8 @@ export async function connectReq(
       signedAtMs,
       token: authTokenForSignature ?? null,
       nonce: connectChallengeNonce,
+      platform: client.platform,
+      deviceFamily: client.deviceFamily,
     });
     return {
       id: identity.deviceId,

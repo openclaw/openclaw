@@ -71,7 +71,7 @@ export async function assertSandboxPath(params: {
   };
   await assertNoPathAliasEscape({
     absolutePath: resolved.resolved,
-    rootPath: path.resolve(params.root),
+    rootPath: params.root,
     boundaryLabel: "sandbox root",
     policy,
   });

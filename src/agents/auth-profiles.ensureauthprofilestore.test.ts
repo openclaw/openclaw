@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
@@ -120,6 +120,158 @@ describe("ensureAuthProfileStore", () => {
         process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
       }
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes auth-profiles credential aliases with canonical-field precedence", () => {
+    const cases = [
+      {
+        name: "mode/apiKey aliases map to type/key",
+        profile: {
+          provider: "anthropic",
+          mode: "api_key",
+          apiKey: "sk-ant-alias",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-alias",
+        },
+      },
+      {
+        name: "canonical type overrides conflicting mode alias",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          mode: "token",
+          key: "sk-ant-canonical",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-canonical",
+        },
+      },
+      {
+        name: "canonical key overrides conflicting apiKey alias",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          key: "sk-ant-canonical",
+          apiKey: "sk-ant-alias",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-canonical",
+        },
+      },
+      {
+        name: "canonical profile shape remains unchanged",
+        profile: {
+          provider: "anthropic",
+          type: "api_key",
+          key: "sk-ant-direct",
+        },
+        expected: {
+          type: "api_key",
+          key: "sk-ant-direct",
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-alias-"));
+      try {
+        const storeData = {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "anthropic:work": testCase.profile,
+          },
+        };
+        fs.writeFileSync(
+          path.join(agentDir, "auth-profiles.json"),
+          `${JSON.stringify(storeData, null, 2)}\n`,
+          "utf8",
+        );
+
+        const store = ensureAuthProfileStore(agentDir);
+        expect(store.profiles["anthropic:work"], testCase.name).toMatchObject(testCase.expected);
+      } finally {
+        fs.rmSync(agentDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("normalizes mode/apiKey aliases while migrating legacy auth.json", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-legacy-alias-"));
+    try {
+      fs.writeFileSync(
+        path.join(agentDir, "auth.json"),
+        `${JSON.stringify(
+          {
+            anthropic: {
+              provider: "anthropic",
+              mode: "api_key",
+              apiKey: "sk-ant-legacy",
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["anthropic:default"]).toMatchObject({
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-ant-legacy",
+      });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-invalid-"));
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const invalidStore = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:missing-type": {
+            provider: "anthropic",
+          },
+          "openai:missing-provider": {
+            type: "api_key",
+            key: "sk-openai",
+          },
+          "qwen:not-object": "broken",
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(invalidStore, null, 2)}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles).toEqual({});
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "ignored invalid auth profile entries during store load",
+        {
+          source: "auth-profiles.json",
+          dropped: 3,
+          reasons: {
+            invalid_type: 1,
+            missing_provider: 1,
+            non_object: 1,
+          },
+          keys: ["anthropic:missing-type", "openai:missing-provider", "qwen:not-object"],
+        },
+      );
+    } finally {
+      warnSpy.mockRestore();
+      fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
 });

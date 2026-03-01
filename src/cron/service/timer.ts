@@ -18,6 +18,9 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
+import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+
+export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -30,13 +33,6 @@ const MAX_TIMER_DELAY_MS = 60_000;
  */
 const MIN_REFIRE_GAP_MS = 2_000;
 
-/**
- * Maximum wall-clock time for a single job execution. Acts as a safety net
- * on top of the per-provider / per-agent timeouts to prevent one stuck job
- * from wedging the entire cron lane.
- */
-export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
-
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
@@ -45,17 +41,6 @@ type TimedCronRunOutcome = CronRunOutcome &
     startedAt: number;
     endedAt: number;
   };
-
-function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
-  const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-      ? Math.floor(job.payload.timeoutSeconds * 1_000)
-      : undefined;
-  if (configuredTimeoutMs === undefined) {
-    return DEFAULT_JOB_TIMEOUT_MS;
-  }
-  return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
-}
 
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
@@ -265,8 +250,12 @@ export function armTimer(state: CronServiceState) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
     const withNextRun =
-      state.store?.jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number")
-        .length ?? 0;
+      state.store?.jobs.filter(
+        (j) =>
+          j.enabled &&
+          typeof j.state.nextRunAtMs === "number" &&
+          Number.isFinite(j.state.nextRunAtMs),
+      ).length ?? 0;
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
@@ -491,7 +480,7 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  return typeof next === "number" && nowMs >= next;
+  return typeof next === "number" && Number.isFinite(next) && nowMs >= next;
 }
 
 function collectRunnableJobs(
@@ -651,9 +640,13 @@ export async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
+    // Preserve the job session namespace for main-target reminders so heartbeat
+    // routing can deliver follow-through in the originating channel/thread.
+    // Downstream gateway wiring canonicalizes/guards this key per agent.
+    const targetMainSessionKey = job.sessionKey;
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
-      sessionKey: job.sessionKey,
+      sessionKey: targetMainSessionKey,
       contextKey: `cron:${job.id}`,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
@@ -670,7 +663,12 @@ export async function executeJobCore(
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
           agentId: job.agentId,
-          sessionKey: job.sessionKey,
+          sessionKey: targetMainSessionKey,
+          // Cron-triggered heartbeats should deliver to the last active channel.
+          // Without this override, heartbeat target defaults to "none" (since
+          // e2362d35) and cron main-session responses are silently swallowed.
+          // See: https://github.com/openclaw/openclaw/issues/28508
+          heartbeat: { target: "last" },
         });
         if (
           heartbeatResult.status !== "skipped" ||
@@ -688,7 +686,7 @@ export async function executeJobCore(
           state.deps.requestHeartbeatNow({
             reason,
             agentId: job.agentId,
-            sessionKey: job.sessionKey,
+            sessionKey: targetMainSessionKey,
           });
           return { status: "ok", summary: text };
         }
@@ -709,7 +707,7 @@ export async function executeJobCore(
       state.deps.requestHeartbeatNow({
         reason: `cron:${job.id}`,
         agentId: job.agentId,
-        sessionKey: job.sessionKey,
+        sessionKey: targetMainSessionKey,
       });
       return { status: "ok", summary: text };
     }

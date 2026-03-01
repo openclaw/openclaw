@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect or unexpected behavior in OpenClaw.
+description: Report a non-regression defect or unexpected behavior in OpenClaw.
 title: "[Bug]: "
 labels:
   - bug
@@ -8,6 +8,7 @@ body:
     attributes:
       value: |
         Thanks for filing this report. Keep it concise, reproducible, and evidence-based.
+        If this behavior worked previously and now fails, use the "Regression bug report" template instead.
   - type: textarea
     id: summary
     attributes:

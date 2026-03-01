@@ -1,6 +1,14 @@
+import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import { approvalMatchesSystemRunRequest } from "./node-invoke-system-run-approval-match.js";
+import {
+  systemRunApprovalGuardError,
+  systemRunApprovalRequired,
+} from "./node-invoke-system-run-approval-errors.js";
+import {
+  evaluateSystemRunApprovalMatch,
+  toSystemRunApprovalMismatchError,
+} from "./node-invoke-system-run-approval-match.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -96,19 +104,6 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   const p = obj as SystemRunParamsLike;
-  const cmdTextResolution = resolveSystemRunCommand({
-    command: p.command,
-    rawCommand: p.rawCommand,
-  });
-  if (!cmdTextResolution.ok) {
-    return {
-      ok: false,
-      message: cmdTextResolution.message,
-      details: cmdTextResolution.details,
-    };
-  }
-  const cmdText = cmdTextResolution.cmdText;
-
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const wantsApprovalOverride = approved || requestedDecision !== null;
@@ -118,67 +113,76 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
+    const cmdTextResolution = resolveSystemRunCommand({
+      command: p.command,
+      rawCommand: p.rawCommand,
+    });
+    if (!cmdTextResolution.ok) {
+      return {
+        ok: false,
+        message: cmdTextResolution.message,
+        details: cmdTextResolution.details,
+      };
+    }
     return { ok: true, params: next };
   }
 
   const runId = normalizeString(p.runId);
   if (!runId) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "MISSING_RUN_ID",
       message: "approval override requires params.runId",
-      details: { code: "MISSING_RUN_ID" },
-    };
+    });
   }
 
   const manager = opts.execApprovalManager;
   if (!manager) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "APPROVALS_UNAVAILABLE",
       message: "exec approvals unavailable",
-      details: { code: "APPROVALS_UNAVAILABLE" },
-    };
+    });
   }
 
   const snapshot = manager.getSnapshot(runId);
   if (!snapshot) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "UNKNOWN_APPROVAL_ID",
       message: "unknown or expired approval id",
-      details: { code: "UNKNOWN_APPROVAL_ID", runId },
-    };
+      details: { runId },
+    });
   }
 
   const nowMs = typeof opts.nowMs === "number" ? opts.nowMs : Date.now();
   if (nowMs > snapshot.expiresAtMs) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "APPROVAL_EXPIRED",
       message: "approval expired",
-      details: { code: "APPROVAL_EXPIRED", runId },
-    };
+      details: { runId },
+    });
   }
 
   const targetNodeId = normalizeString(opts.nodeId);
   if (!targetNodeId) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "MISSING_NODE_ID",
       message: "node.invoke requires nodeId",
-      details: { code: "MISSING_NODE_ID", runId },
-    };
+      details: { runId },
+    });
   }
   const approvalNodeId = normalizeString(snapshot.request.nodeId);
   if (!approvalNodeId) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "APPROVAL_NODE_BINDING_MISSING",
       message: "approval id missing node binding",
-      details: { code: "APPROVAL_NODE_BINDING_MISSING", runId },
-    };
+      details: { runId },
+    });
   }
   if (approvalNodeId !== targetNodeId) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "APPROVAL_NODE_MISMATCH",
       message: "approval id not valid for this node",
-      details: { code: "APPROVAL_NODE_MISMATCH", runId },
-    };
+      details: { runId },
+    });
   }
 
   // Prefer binding by device identity (stable across reconnects / per-call clients like callGateway()).
@@ -187,50 +191,80 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const clientDeviceId = opts.client?.connect?.device?.id ?? null;
   if (snapshotDeviceId) {
     if (snapshotDeviceId !== clientDeviceId) {
-      return {
-        ok: false,
+      return systemRunApprovalGuardError({
+        code: "APPROVAL_DEVICE_MISMATCH",
         message: "approval id not valid for this device",
-        details: { code: "APPROVAL_DEVICE_MISMATCH", runId },
-      };
+        details: { runId },
+      });
     }
   } else if (
     snapshot.requestedByConnId &&
     snapshot.requestedByConnId !== (opts.client?.connId ?? null)
   ) {
-    return {
-      ok: false,
+    return systemRunApprovalGuardError({
+      code: "APPROVAL_CLIENT_MISMATCH",
       message: "approval id not valid for this client",
-      details: { code: "APPROVAL_CLIENT_MISMATCH", runId },
-    };
+      details: { runId },
+    });
   }
 
-  if (
-    !approvalMatchesSystemRunRequest({
-      cmdText,
-      argv: cmdTextResolution.argv,
-      request: snapshot.request,
-      binding: {
-        cwd: normalizeString(p.cwd) ?? null,
-        agentId: normalizeString(p.agentId) ?? null,
-        sessionKey: normalizeString(p.sessionKey) ?? null,
-      },
-    })
-  ) {
+  const runtimeContext = resolveSystemRunApprovalRuntimeContext({
+    planV2: snapshot.request.systemRunPlanV2 ?? null,
+    command: p.command,
+    rawCommand: p.rawCommand,
+    cwd: p.cwd,
+    agentId: p.agentId,
+    sessionKey: p.sessionKey,
+  });
+  if (!runtimeContext.ok) {
     return {
       ok: false,
-      message: "approval id does not match request",
-      details: { code: "APPROVAL_REQUEST_MISMATCH", runId },
+      message: runtimeContext.message,
+      details: runtimeContext.details,
     };
+  }
+  if (runtimeContext.planV2) {
+    next.command = [...runtimeContext.planV2.argv];
+    if (runtimeContext.rawCommand) {
+      next.rawCommand = runtimeContext.rawCommand;
+    } else {
+      delete next.rawCommand;
+    }
+    if (runtimeContext.cwd) {
+      next.cwd = runtimeContext.cwd;
+    } else {
+      delete next.cwd;
+    }
+    if (runtimeContext.agentId) {
+      next.agentId = runtimeContext.agentId;
+    } else {
+      delete next.agentId;
+    }
+    if (runtimeContext.sessionKey) {
+      next.sessionKey = runtimeContext.sessionKey;
+    } else {
+      delete next.sessionKey;
+    }
+  }
+
+  const approvalMatch = evaluateSystemRunApprovalMatch({
+    argv: runtimeContext.argv,
+    request: snapshot.request,
+    binding: {
+      cwd: runtimeContext.cwd,
+      agentId: runtimeContext.agentId,
+      sessionKey: runtimeContext.sessionKey,
+      env: p.env,
+    },
+  });
+  if (!approvalMatch.ok) {
+    return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
 
   // Normal path: enforce the decision recorded by the gateway.
   if (snapshot.decision === "allow-once") {
     if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
-      return {
-        ok: false,
-        message: "approval required",
-        details: { code: "APPROVAL_REQUIRED", runId },
-      };
+      return systemRunApprovalRequired(runId);
     }
     next.approved = true;
     next.approvalDecision = "allow-once";
@@ -260,9 +294,5 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     return { ok: true, params: next };
   }
 
-  return {
-    ok: false,
-    message: "approval required",
-    details: { code: "APPROVAL_REQUIRED", runId },
-  };
+  return systemRunApprovalRequired(runId);
 }

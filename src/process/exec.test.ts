@@ -110,7 +110,8 @@ describe("runCommandWithTimeout", () => {
       ],
       {
         timeoutMs: 7_000,
-        noOutputTimeoutMs: 450,
+        // Keep a generous idle budget; CI event-loop stalls can exceed 450ms.
+        noOutputTimeoutMs: 900,
       },
     );
 

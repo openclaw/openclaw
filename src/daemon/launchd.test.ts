@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS } from "./launchd-plist.js";
 import {
   installLaunchAgent,
   isLaunchAgentListed,
@@ -198,7 +199,8 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
-    expect(plist).not.toContain("<key>ThrottleInterval</key>");
+    expect(plist).toContain("<key>ThrottleInterval</key>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
