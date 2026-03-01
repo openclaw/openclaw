@@ -801,6 +801,7 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               loopDetection: clientToolLoopDetection,
             },
+            { abortSignal: runAbortController.signal },
           )
         : [];
 

@@ -458,7 +458,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
-    scheduleGatewaySigusr1Restart({ reason: "/restart" });
+    scheduleGatewaySigusr1Restart({ reason: "/restart", delayMs: 0, force: true });
     return {
       shouldContinue: false,
       reply: {

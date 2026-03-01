@@ -42,6 +42,54 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
 
+function isNativeAbortSignal(value: unknown): value is AbortSignal {
+  return value instanceof AbortSignal;
+}
+
+function getAbortReason(signal: AbortSignal): unknown {
+  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
+}
+
+function makeAbortError(signal: AbortSignal): Error {
+  const reason = getAbortReason(signal);
+  const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw makeAbortError(signal);
+}
+
+function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
+  if (!a && !b) {
+    return undefined;
+  }
+  if (a && !b) {
+    return a;
+  }
+  if (b && !a) {
+    return b;
+  }
+  if (a?.aborted) {
+    return a;
+  }
+  if (b?.aborted) {
+    return b;
+  }
+  if (typeof AbortSignal.any === "function" && isNativeAbortSignal(a) && isNativeAbortSignal(b)) {
+    return AbortSignal.any([a, b]);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  a?.addEventListener("abort", onAbort, { once: true });
+  b?.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
+}
+
 function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
   const third = args[2];
   const fifth = args[4];
@@ -150,6 +198,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
         try {
+          throwIfAborted(signal);
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
@@ -161,6 +210,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
+          throwIfAborted(signal);
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
@@ -248,6 +298,7 @@ export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
   hookContext?: HookContext,
+  options?: { abortSignal?: AbortSignal },
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
@@ -257,7 +308,9 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
+        const combinedSignal = combineAbortSignals(signal, options?.abortSignal);
+        throwIfAborted(combinedSignal);
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,
@@ -267,6 +320,7 @@ export function toClientToolDefinitions(
         if (outcome.blocked) {
           throw new Error(outcome.reason);
         }
+        throwIfAborted(combinedSignal);
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called

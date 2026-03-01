@@ -123,8 +123,9 @@ export function createGatewayTool(opts?: {
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
         const scheduled = scheduleGatewaySigusr1Restart({
-          delayMs,
+          delayMs: delayMs ?? 0,
           reason,
+          force: true,
         });
         return jsonResult(scheduled);
       }

@@ -9,13 +9,13 @@ const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
-const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
+const markGatewayDraining = vi.fn();
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
-const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
+const FORCE_RESTART_LOG = "forcing restart with 2 active task(s); cancelling in-flight runs";
 const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -38,8 +38,8 @@ vi.mock("../../infra/process-respawn.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
-  markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),
+  markGatewayDraining: () => markGatewayDraining(),
   resetAllLanes: () => resetAllLanes(),
 }));
 
@@ -158,12 +158,11 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
+  it("restarts after SIGUSR1 and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async () => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
-      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
 
       type StartServer = () => Promise<{
         close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
@@ -214,9 +213,8 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(FORCE_RESTART_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
@@ -235,6 +233,26 @@ describe("runGatewayLoop", () => {
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("exits when non-abortable lane tasks fail to drain for in-process restart", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      getActiveTaskCount.mockReturnValueOnce(1).mockReturnValueOnce(1);
+      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+
+      const { start, runtime, exited } = await createSignaledLoopHarness();
+      process.emit("SIGUSR1");
+
+      await expect(exited).resolves.toBe(1);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(waitForActiveTasks).toHaveBeenCalledWith(10_000);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "in-process restart cancelled; non-abortable lane tasks are still active after 10000ms",
+      );
     });
   });
 

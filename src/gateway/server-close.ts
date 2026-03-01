@@ -5,6 +5,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -17,6 +18,8 @@ export function createGatewayCloseHandler(params: {
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  abortAllEmbeddedRuns: () => number;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -80,6 +83,23 @@ export function createGatewayCloseHandler(params: {
       clearInterval(timer);
     }
     params.nodePresenceTimers.clear();
+    for (const active of params.chatAbortControllers.values()) {
+      try {
+        active.controller.abort(new Error(reason));
+      } catch {
+        try {
+          active.controller.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    params.chatAbortControllers.clear();
+    try {
+      params.abortAllEmbeddedRuns();
+    } catch {
+      /* ignore */
+    }
     params.broadcast("shutdown", {
       reason,
       restartExpectedMs,
