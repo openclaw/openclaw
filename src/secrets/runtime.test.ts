@@ -95,7 +95,7 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_TOKEN: "resolved-token-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () =>
+      loadAuthStore: ((_agentDir?: string) =>
         ({
           version: 1,
           profiles: {
@@ -105,7 +105,7 @@ describe("secrets runtime snapshot", () => {
               token: { source: "env", provider: "default", id: "MY_TOKEN" },
             },
           },
-        }) as unknown as AuthProfileStore,
+        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
@@ -125,7 +125,7 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_KEY: "resolved-key-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () =>
+      loadAuthStore: ((_agentDir?: string) =>
         ({
           version: 1,
           profiles: {
@@ -135,7 +135,7 @@ describe("secrets runtime snapshot", () => {
               key: { source: "env", provider: "default", id: "MY_KEY" },
             },
           },
-        }) as unknown as AuthProfileStore,
+        }) as unknown as AuthProfileStore) as (agentDir?: string) => AuthProfileStore,
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
