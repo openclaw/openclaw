@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -95,16 +95,17 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_TOKEN: "resolved-token-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({
-        version: 1,
-        profiles: {
-          "custom:inline-token": {
-            type: "token",
-            provider: "custom",
-            token: { source: "env", provider: "default", id: "MY_TOKEN" },
+      loadAuthStore: () =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:inline-token": {
+              type: "token",
+              provider: "custom",
+              token: { source: "env", provider: "default", id: "MY_TOKEN" },
+            },
           },
-        },
-      }),
+        }) as unknown as AuthProfileStore,
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
@@ -124,16 +125,17 @@ describe("secrets runtime snapshot", () => {
       config,
       env: { MY_KEY: "resolved-key-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({
-        version: 1,
-        profiles: {
-          "custom:inline-key": {
-            type: "api_key",
-            provider: "custom",
-            key: { source: "env", provider: "default", id: "MY_KEY" },
+      loadAuthStore: () =>
+        ({
+          version: 1,
+          profiles: {
+            "custom:inline-key": {
+              type: "api_key",
+              provider: "custom",
+              key: { source: "env", provider: "default", id: "MY_KEY" },
+            },
           },
-        },
-      }),
+        }) as unknown as AuthProfileStore,
     });
 
     const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
