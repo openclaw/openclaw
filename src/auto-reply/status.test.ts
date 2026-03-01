@@ -496,6 +496,27 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("-79714");
   });
 
+  it("treats negative totalTokens as missing and falls back to directional usage", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-sonnet-4-6-thinking", contextTokens: 32_000 },
+      sessionEntry: {
+        sessionId: "neg-total",
+        updatedAt: 0,
+        inputTokens: 1_200,
+        outputTokens: 800,
+        totalTokens: -500,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 2.0k/32k");
+  });
+
   function writeTranscriptUsageLog(params: {
     dir: string;
     agentId: string;

@@ -10,6 +10,7 @@ import {
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import {
+  asFiniteNonNegativeNumber,
   derivePromptTokens,
   normalizeUsage,
   sanitizeStoredTokenCount,
@@ -466,7 +467,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheRead = sanitizeStoredTokenCount(entry?.cacheRead);
   let cacheWrite = sanitizeStoredTokenCount(entry?.cacheWrite);
   let totalTokens =
-    sanitizeStoredTokenCount(entry?.totalTokens) ?? (inputTokens ?? 0) + (outputTokens ?? 0);
+    asFiniteNonNegativeNumber(entry?.totalTokens) ?? (inputTokens ?? 0) + (outputTokens ?? 0);
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
