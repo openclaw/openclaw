@@ -12,7 +12,19 @@ type SessionQueue = {
   lastContextKey: string | null;
 };
 
-const queues = new Map<string, SessionQueue>();
+// Use globalThis singleton so the queues Map is shared across bundler chunks.
+// Without this, enqueueSystemEvent (called from dispatch-from-config chunk)
+// and drainSystemEvents (called from get-reply-run chunk) reference different
+// Maps and events are silently lost. Same pattern as internal-hooks.ts.
+const queues: Map<string, SessionQueue> =
+  ((globalThis as Record<string, unknown>).__openclaw_system_event_queues as Map<
+    string,
+    SessionQueue
+  >) ??
+  ((globalThis as Record<string, unknown>).__openclaw_system_event_queues = new Map<
+    string,
+    SessionQueue
+  >());
 
 type SystemEventOptions = {
   sessionKey: string;
