@@ -68,6 +68,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     messageId?: string;
     mediaPath?: string;
     mediaType?: string;
+    mediaPaths?: string[];
+    mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
   };
@@ -166,6 +168,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
+      MediaPaths: entry.mediaPaths,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
@@ -287,7 +290,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!entry.bodyText.trim()) {
         return false;
       }
-      if (entry.mediaPath || entry.mediaType) {
+      if (entry.mediaPath || entry.mediaType || entry.mediaPaths?.length) {
         return false;
       }
       return !hasControlCommand(entry.bodyText, deps.cfg);
@@ -621,24 +624,36 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
+    const mediaPaths: string[] = [];
+    const mediaTypes: string[] = [];
     let placeholder = "";
-    const firstAttachment = dataMessage.attachments?.[0];
-    if (firstAttachment?.id && !deps.ignoreAttachments) {
-      try {
-        const fetched = await deps.fetchAttachment({
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          attachment: firstAttachment,
-          sender: senderRecipient,
-          groupId,
-          maxBytes: deps.mediaMaxBytes,
-        });
-        if (fetched) {
-          mediaPath = fetched.path;
-          mediaType = fetched.contentType ?? firstAttachment.contentType ?? undefined;
+    const attachments = dataMessage.attachments ?? [];
+    if (attachments.length > 0 && !deps.ignoreAttachments) {
+      for (const attachment of attachments) {
+        if (!attachment?.id) continue;
+        try {
+          const fetched = await deps.fetchAttachment({
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            attachment,
+            sender: senderRecipient,
+            groupId,
+            maxBytes: deps.mediaMaxBytes,
+          });
+          if (fetched) {
+            const path = fetched.path;
+            const type = fetched.contentType ?? attachment.contentType ?? undefined;
+            mediaPaths.push(path);
+            if (type) mediaTypes.push(type);
+            // First attachment sets the legacy single-media fields
+            if (!mediaPath) {
+              mediaPath = path;
+              mediaType = type;
+            }
+          }
+        } catch (err) {
+          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
         }
-      } catch (err) {
-        deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
       }
     }
 
@@ -695,6 +710,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageId,
       mediaPath,
       mediaType,
+      mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+      mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
     });
