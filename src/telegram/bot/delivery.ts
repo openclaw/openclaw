@@ -308,6 +308,11 @@ export async function deliverReplies(params: {
   return { delivered: hasDelivered };
 }
 
+/** Normalize Telegram file_path: strip leading slash so URL never has double slash. */
+function normalizeTelegramFilePath(filePath: string): string {
+  return filePath.startsWith("/") ? filePath.slice(1) : filePath;
+}
+
 export async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
@@ -319,17 +324,23 @@ export async function resolveMedia(
   placeholder: string;
   stickerMetadata?: StickerMetadata;
 } | null> {
+  if (!token?.trim()) {
+    throw new Error(
+      "Telegram bot token is missing or empty; cannot build file download URL. Check channels.telegram.token.",
+    );
+  }
   const msg = ctx.message;
   const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
-    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const path = normalizeTelegramFilePath(filePath);
+    const url = `https://api.telegram.org/file/bot${token}/${path}`;
     const fetched = await fetchRemoteMedia({
       url,
       fetchImpl,
-      filePathHint: filePath,
+      filePathHint: path,
       maxBytes,
       ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
-    const originalName = fetched.fileName ?? filePath;
+    const originalName = fetched.fileName ?? path;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
   };
 

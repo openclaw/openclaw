@@ -198,6 +198,34 @@ describe("resolveMedia getFile retry", () => {
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
+  it("throws when token is empty so URL is never built with file//", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "photos/file_5.jpg" });
+    await expect(resolveMedia(makeCtx("photo", getFile), MAX_MEDIA_BYTES, "")).rejects.toThrow(
+      "Telegram bot token is missing or empty",
+    );
+    expect(getFile).not.toHaveBeenCalled();
+  });
+
+  it("normalizes file_path with leading slash to avoid double slash in download URL", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/photos/file_5.jpg" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from([0xff, 0xd8, 0xff]),
+      contentType: "image/jpeg",
+      fileName: "file_5.jpg",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_5.jpg",
+      contentType: "image/jpeg",
+    });
+    const result = await resolveMedia(makeCtx("photo", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    expect(result).not.toBeNull();
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `https://api.telegram.org/file/bot${BOT_TOKEN}/photos/file_5.jpg`,
+      }),
+    );
+  });
+
   it("still retries transient errors even after encountering file too big in different call", async () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
