@@ -89,7 +89,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
  * Normalize a TLS certificate fingerprint to uppercase colon-separated hex
  * so that comparisons are consistent regardless of input format.
  */
-function normalizeTlsFingerprint(fp: string): string {
+export function normalizeTlsFingerprint(fp: string): string {
   const hex = fp.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
   return hex.replace(/(.{2})(?=.)/g, "$1:");
 }

@@ -223,7 +223,7 @@ Disable `register` after the nick is registered to avoid repeated REGISTER attem
 
 When connecting to IRC servers with self-signed or untrusted TLS certificates, Node.js will reject the connection by default. Two options are available:
 
-### `tlsInsecure` — skip all certificate verification
+### `tlsInsecure`: skip all certificate verification
 
 ```json
 {
@@ -238,7 +238,7 @@ When connecting to IRC servers with self-signed or untrusted TLS certificates, N
 
 This disables all certificate verification. The connection is encrypted but vulnerable to man-in-the-middle attacks. A security warning will appear in the status output.
 
-### `tlsFingerprints` — pin to specific certificate fingerprints
+### `tlsFingerprints`: pin to specific certificate fingerprints
 
 ```json
 {
