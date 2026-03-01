@@ -195,6 +195,10 @@ describe("sweepCronRunSessions", () => {
         sessionId: "hook-old",
         updatedAt: now - 2 * 3_600_000,
       },
+      "agent:main:hook:gmail:123": {
+        sessionId: "hook-gmail-old",
+        updatedAt: now - 2 * 3_600_000,
+      },
       "agent:main:hook:recent": {
         sessionId: "hook-recent",
         updatedAt: now - 5 * 60_000,
@@ -215,9 +219,10 @@ describe("sweepCronRunSessions", () => {
       force: true,
     });
 
-    expect(result.pruned).toBe(1);
+    expect(result.pruned).toBe(2);
     const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
     expect(updated["agent:main:hook:old"]).toBeUndefined();
+    expect(updated["agent:main:hook:gmail:123"]).toBeUndefined();
     expect(updated["agent:main:hook:recent"]).toBeDefined();
     expect(updated["agent:main:cron:job1:run:run1"]).toBeDefined();
   });

@@ -79,7 +79,7 @@ export function isHookSessionKey(sessionKey: string | undefined | null): boolean
   if (!parsed) {
     return false;
   }
-  return /^hook:[^:]+$/.test(parsed.rest);
+  return parsed.rest.toLowerCase().startsWith("hook:");
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
