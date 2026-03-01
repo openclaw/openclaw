@@ -89,26 +89,125 @@ function formatCommandPreview(command: string, maxChars = 200): string {
   return command;
 }
 
+function describeCommand(command: string): string {
+  const trimmed = command.trim();
+  const binary = trimmed.split(/\s+/)[0] ?? trimmed;
+  const base = binary.split("/").pop() ?? binary;
+
+  // Provide human-readable descriptions for common commands
+  if (base === "rm" || base === "rmdir") {
+    return "Delete files or directories";
+  }
+  if (base === "mv") {
+    return "Move or rename files";
+  }
+  if (base === "cp") {
+    return "Copy files";
+  }
+  if (base === "chmod") {
+    return "Change file permissions";
+  }
+  if (base === "chown") {
+    return "Change file ownership";
+  }
+  if (base === "curl" || base === "wget") {
+    return "Download from the internet";
+  }
+  if (base === "pip" || base === "pip3") {
+    return "Install Python packages";
+  }
+  if (
+    base === "npm" ||
+    base === "npx" ||
+    base === "pnpm" ||
+    base === "yarn" ||
+    base === "bun" ||
+    base === "bunx"
+  ) {
+    return "Run a Node.js package manager command";
+  }
+  if (base === "git") {
+    return "Run a git version control command";
+  }
+  if (base === "docker" || base === "podman") {
+    return "Run a container command";
+  }
+  if (base === "ssh" || base === "scp") {
+    return "Connect to or transfer files with a remote host";
+  }
+  if (base === "sudo") {
+    return "Run a command with elevated privileges";
+  }
+  if (
+    base === "apt" ||
+    base === "apt-get" ||
+    base === "brew" ||
+    base === "dnf" ||
+    base === "yum" ||
+    base === "pacman"
+  ) {
+    return "Install or manage system packages";
+  }
+  if (base === "kill" || base === "pkill" || base === "killall") {
+    return "Terminate a running process";
+  }
+  if (base === "cat" || base === "less" || base === "head" || base === "tail") {
+    return "Read file contents";
+  }
+  if (base === "sed" || base === "awk") {
+    return "Transform text or file contents";
+  }
+  if (
+    base === "python" ||
+    base === "python3" ||
+    base === "node" ||
+    base === "ruby" ||
+    base === "perl"
+  ) {
+    return `Execute a ${base} script`;
+  }
+  if (base === "bash" || base === "sh" || base === "zsh") {
+    return "Run a shell script";
+  }
+  return `Run "${base}"`;
+}
+
 function buildRequestMessageText(request: ExecApprovalRequest, nowMs: number): string {
-  const lines: string[] = ["\u{1F512} Exec approval required"];
-  const command = formatCommandPreview(request.request.command);
-  lines.push(`Command: ${command}`);
+  const command = request.request.command;
+  const description = describeCommand(command);
+  const preview = formatCommandPreview(command, 300);
+  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
+
+  const lines: string[] = [
+    `\u{1F512} <b>Exec Approval Required</b>`,
+    "",
+    `<b>What:</b> ${description}`,
+    `<b>Command:</b> <code>${escapeHtml(preview)}</code>`,
+  ];
   if (request.request.cwd) {
-    lines.push(`CWD: ${request.request.cwd}`);
+    lines.push(`<b>Directory:</b> <code>${escapeHtml(request.request.cwd)}</code>`);
   }
   if (request.request.host) {
-    lines.push(`Host: ${request.request.host}`);
+    lines.push(`<b>Host:</b> ${escapeHtml(request.request.host)}`);
   }
   if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
+    lines.push(`<b>Agent:</b> ${escapeHtml(request.request.agentId)}`);
   }
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
-    lines.push(`Env: ${request.request.envKeys.join(", ")}`);
+    lines.push(`<b>Env overrides:</b> ${escapeHtml(request.request.envKeys.join(", "))}`);
   }
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
-  lines.push(`Expires in: ${expiresIn}s`);
-  lines.push(`ID: ${request.id}`);
+  lines.push("");
+  lines.push(
+    `\u26A0\uFE0F <i>Allow once</i> = run this command once. ` +
+      `<i>Always allow</i> = add to allowlist. ` +
+      `<i>Deny</i> = block execution.`,
+  );
+  lines.push(`\u23F3 Expires in ${expiresIn}s \u2022 ID: ${request.id}`);
   return lines.join("\n");
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function decisionLabel(decision: ExecApprovalDecision): string {
@@ -121,14 +220,29 @@ function decisionLabel(decision: ExecApprovalDecision): string {
   return "denied";
 }
 
-function buildResolvedMessageText(resolved: ExecApprovalResolved): string {
-  const base = `\u2705 Exec approval ${decisionLabel(resolved.decision)}.`;
-  const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
-  return `${base}${by} ID: ${resolved.id}`;
+function resolvedEmoji(decision: ExecApprovalDecision): string {
+  if (decision === "deny") {
+    return "\u274C";
+  }
+  return "\u2705";
+}
+
+function buildResolvedMessageText(
+  resolved: ExecApprovalResolved,
+  request?: ExecApprovalRequest,
+): string {
+  const emoji = resolvedEmoji(resolved.decision);
+  const label = decisionLabel(resolved.decision);
+  const by = resolved.resolvedBy ? ` by ${resolved.resolvedBy}` : "";
+  const commandInfo = request?.request.command
+    ? `\n<b>Command:</b> <code>${escapeHtml(formatCommandPreview(request.request.command, 200))}</code>`
+    : "";
+  return `${emoji} <b>Exec approval ${label}</b>${by}.${commandInfo}\nID: ${resolved.id}`;
 }
 
 function buildExpiredMessageText(request: ExecApprovalRequest): string {
-  return `\u23F1\uFE0F Exec approval expired. ID: ${request.id}`;
+  const preview = formatCommandPreview(request.request.command, 200);
+  return `\u23F1\uFE0F <b>Exec approval expired</b>\n<b>Command:</b> <code>${escapeHtml(preview)}</code>\nID: ${request.id}`;
 }
 
 // --- Chat ID extraction ---
@@ -395,7 +509,7 @@ export class TelegramExecApprovalHandler {
 
     logDebug(`telegram exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
 
-    const text = buildResolvedMessageText(resolved);
+    const text = buildResolvedMessageText(resolved, entry.request);
     await this.updateOrDeleteMessages(entry, text);
   }
 
