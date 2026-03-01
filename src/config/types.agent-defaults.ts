@@ -150,6 +150,23 @@ export type AgentDefaultsConfig = {
    * Include elapsed time in message envelopes ("on" | "off", default: "on").
    */
   envelopeElapsed?: "on" | "off";
+  /**
+   * Include readable timestamps in inbound_meta.v1 payload ("on" | "off", default: "on").
+   */
+  envelopeInboundTime?: "on" | "off";
+  /**
+   * Minimum gap (ms) before including a time-only `t` field (default: 90000 = 90s).
+   * Messages arriving faster than this skip the `t` field to save tokens.
+   */
+  envelopeInboundTimeSkipMs?: number;
+  /**
+   * Maximum gap (ms) without any `t` field before ensuring a time-only inclusion (default: 900000 = 15min).
+   */
+  envelopeInboundTimeMaxGapMs?: number;
+  /**
+   * Gap (ms) before including the full date+time format instead of time-only (default: 7200000 = 2hrs).
+   */
+  envelopeInboundTimeDateMs?: number;
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
