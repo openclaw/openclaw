@@ -69,15 +69,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
     // Scheme A compatibility shim:
-    // when upstream accidentally returns a local image path as plain text,
-    // auto-upload and send as Feishu image message instead of leaking path text.
-    const localImagePath = normalizePossibleLocalFilePath(text);
-    if (localImagePath) {
+    // when upstream accidentally returns a local file path as plain text,
+    // auto-upload and send as Feishu file/image message instead of leaking path text.
+    const localFilePath = normalizePossibleLocalFilePath(text);
+    if (localFilePath) {
       try {
         const result = await sendMediaFeishu({
           cfg,
           to,
-          mediaUrl: localImagePath,
+          mediaUrl: localFilePath,
           accountId: accountId ?? undefined,
         });
         return { channel: "feishu", ...result };
