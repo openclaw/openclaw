@@ -326,8 +326,8 @@ export async function sendFileFeishu(params: {
   cfg: BotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
-  msgType?: "file" | "media";
+  /** Use "media" for video, "audio" for audio, "file" for documents */
+  msgType?: "file" | "media" | "audio";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
@@ -460,13 +460,13 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu API: opus -> "audio", mp4 -> "media", everything else -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
       accountId,
     });
