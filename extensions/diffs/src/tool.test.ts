@@ -41,7 +41,8 @@ describe("diffs tool", () => {
 
   it("returns an image artifact in image mode", async () => {
     const screenshotter = {
-      screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {
+      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
         await fs.mkdir(path.dirname(outputPath), { recursive: true });
         await fs.writeFile(outputPath, Buffer.from("png"));
         return outputPath;
@@ -66,6 +67,7 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain("Use the `message` tool");
     expect(result?.content).toHaveLength(1);
     expect((result?.details as Record<string, unknown>).imagePath).toBeDefined();
+    expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -142,6 +144,14 @@ describe("diffs tool", () => {
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
+    const screenshotter = {
+      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, Buffer.from("png"));
+        return outputPath;
+      }),
+    };
     const tool = createDiffsTool({
       api: createApi(),
       store,
@@ -151,6 +161,7 @@ describe("diffs tool", () => {
         theme: "light",
         layout: "split",
       },
+      screenshotter,
     });
 
     const result = await tool.execute?.("tool-6", {
@@ -162,6 +173,7 @@ describe("diffs tool", () => {
     });
 
     expect((result?.details as Record<string, unknown>).mode).toBe("both");
+    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
     const html = await store.readHtml(id);

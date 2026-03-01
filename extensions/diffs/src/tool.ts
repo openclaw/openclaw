@@ -91,6 +91,39 @@ export function createDiffsTool(params: {
         expandUnchanged,
       });
 
+      const screenshotter =
+        params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
+
+      if (mode === "image") {
+        const imagePath = params.store.allocateStandaloneImagePath();
+        await screenshotter.screenshotHtml({
+          html: rendered.imageHtml,
+          outputPath: imagePath,
+          theme,
+        });
+        const imageStats = await fs.stat(imagePath);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Diff image generated at: ${imagePath}\n` +
+                "Use the `message` tool with `path` or `filePath` to send the PNG.",
+            },
+          ],
+          details: {
+            title: rendered.title,
+            inputKind: rendered.inputKind,
+            fileCount: rendered.fileCount,
+            mode,
+            imagePath,
+            path: imagePath,
+            imageBytes: imageStats.size,
+          },
+        };
+      }
+
       const artifact = await params.store.createArtifact({
         html: rendered.html,
         title: rendered.title,
@@ -128,13 +161,10 @@ export function createDiffsTool(params: {
         };
       }
 
-      const screenshotter =
-        params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
-
       try {
         const imagePath = params.store.allocateImagePath(artifact.id);
         await screenshotter.screenshotHtml({
-          html: rendered.html,
+          html: rendered.imageHtml,
           outputPath: imagePath,
           theme,
         });
