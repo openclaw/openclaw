@@ -97,7 +97,7 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
-  const TRANSIENT_HTTP_RETRY_DELAY_MS = 30_000;
+  const TRANSIENT_HTTP_RETRY_DELAY_MS = 5_000;
 
   const sleepWithAbort = async (ms: number, abortSignal?: AbortSignal): Promise<boolean> => {
     if (!abortSignal) {
