@@ -579,15 +579,17 @@ function buildFailureAlert(form: CronFormState) {
     return undefined;
   }
   const after = toNumber(form.failureAlertAfter.trim(), 0);
-  const cooldownSeconds = toNumber(form.failureAlertCooldownSeconds.trim(), 0);
+  const cooldownRaw = form.failureAlertCooldownSeconds.trim();
+  const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
+  const cooldownMs =
+    cooldownSeconds !== undefined && Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
+      ? Math.floor(cooldownSeconds * 1000)
+      : undefined;
   return {
     after: after > 0 ? Math.floor(after) : undefined,
     channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
     to: form.failureAlertTo.trim() || undefined,
-    cooldownMs:
-      Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
-        ? Math.floor(cooldownSeconds * 1000)
-        : undefined,
+    ...(cooldownMs !== undefined ? { cooldownMs } : {}),
   };
 }
 
