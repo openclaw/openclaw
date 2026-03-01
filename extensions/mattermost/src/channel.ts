@@ -14,7 +14,6 @@ import {
   deleteAccountFromConfigSection,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
-  normalizeChatType,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
@@ -347,7 +346,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveMattermostAccount({ cfg, accountId });
-      const kind = normalizeChatType(chatType) ?? "channel";
+      const kind =
+        chatType === "direct" || chatType === "group" || chatType === "channel"
+          ? chatType
+          : "channel";
       return resolveMattermostReplyToMode(account, kind);
     },
   },
