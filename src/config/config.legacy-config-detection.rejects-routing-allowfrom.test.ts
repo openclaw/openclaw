@@ -571,6 +571,53 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("migrates legacy discord guild channel config-write keys", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                "200": {
+                  allowFrom: ["user:123", 456],
+                  groupPolicy: "disabled",
+                  model: "openai/gpt-5.1",
+                  requireMention: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.100.channels.200.allowFrom → channels.discord.guilds.100.channels.200.users.",
+    );
+    expect(res.changes).toContain(
+      'Mapped channels.discord.guilds.100.channels.200.groupPolicy="disabled" → channels.discord.guilds.100.channels.200.allow=false.',
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.100.channels.200.model → channels.modelByChannel.discord.200.",
+    );
+
+    const channel = res.config?.channels?.discord?.guilds?.["100"]?.channels?.["200"] as
+      | {
+          allow?: boolean;
+          users?: string[];
+          allowFrom?: unknown;
+          groupPolicy?: unknown;
+          model?: unknown;
+        }
+      | undefined;
+    expect(channel?.users).toEqual(["user:123", "456"]);
+    expect(channel?.allow).toBe(false);
+    expect(channel?.allowFrom).toBeUndefined();
+    expect(channel?.groupPolicy).toBeUndefined();
+    expect(channel?.model).toBeUndefined();
+    expect(res.config?.channels?.modelByChannel?.discord?.["200"]).toBe("openai/gpt-5.1");
+  });
+
   it("normalizes discord streaming fields during validation", async () => {
     const cases = [
       {
