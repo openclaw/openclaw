@@ -1,10 +1,30 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { PluginRuntime, RuntimeEnv, RuntimeLogger } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
+  beforeEach(() => {
+    // Initialize Matrix runtime with minimal mocks needed for handler
+    setMatrixRuntime({
+      config: { loadConfig: vi.fn().mockReturnValue({}) },
+      state: {
+        resolveStateDir: vi.fn().mockReturnValue("/tmp/openclaw-test"),
+      },
+      channel: {
+        mentions: {
+          matchesMentionPatterns: vi.fn().mockReturnValue(false),
+        },
+      },
+    } as unknown as PluginRuntime);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("stores sender-labeled BodyForAgent for group thread messages", async () => {
     const recordInboundSession = vi.fn().mockResolvedValue(undefined);
     const formatInboundEnvelope = vi
@@ -15,6 +35,9 @@ describe("createMatrixRoomMessageHandler BodyForAgent sender label", () => {
       .mockImplementation((ctx: Record<string, unknown>) => ctx);
 
     const core = {
+      config: {
+        loadConfig: vi.fn().mockReturnValue({}),
+      },
       channel: {
         pairing: {
           readAllowFromStore: vi.fn().mockResolvedValue([]),
