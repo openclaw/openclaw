@@ -112,6 +112,22 @@ describe("normalizeModelCompat — OpenAI-compatible baseUrl", () => {
     expect(normalized.baseUrl).toBe("https://api.n1n.ai/v1");
   });
 
+  it("preserves z.ai compat tweak when baseUrl is normalized", () => {
+    const model = {
+      ...baseModel(),
+      provider: "zai",
+      api: "openai-completions" as Api,
+      baseUrl: "https://api.z.ai/api/coding/paas/v4/chat/completions",
+    };
+    delete (model as { compat?: unknown }).compat;
+
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
   it("strips trailing /chat/completions/ with slash", () => {
     const model = {
       ...baseModel(),

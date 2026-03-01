@@ -43,38 +43,43 @@ function normalizeOpenAiCompletionsBaseUrl(baseUrl: string): string {
 }
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+  let nextModel = model;
+
   const baseUrl = model.baseUrl ?? "";
 
   // Normalise anthropic-messages baseUrl: strip trailing /v1 that users may
   // have included in their config. pi-ai appends /v1/messages itself.
-  if (isAnthropicMessagesModel(model) && baseUrl) {
+  if (isAnthropicMessagesModel(nextModel) && baseUrl) {
     const normalised = normalizeAnthropicBaseUrl(baseUrl);
     if (normalised !== baseUrl) {
-      return { ...model, baseUrl: normalised } as Model<"anthropic-messages">;
+      nextModel = { ...nextModel, baseUrl: normalised } as Model<"anthropic-messages">;
     }
   }
 
-  if (isOpenAiCompletionsModel(model) && baseUrl) {
-    const normalized = normalizeOpenAiCompletionsBaseUrl(baseUrl);
-    if (normalized !== baseUrl) {
-      return { ...model, baseUrl: normalized } as Model<"openai-completions">;
+  const normalizedBaseUrl = nextModel.baseUrl ?? "";
+  if (isOpenAiCompletionsModel(nextModel) && normalizedBaseUrl) {
+    const normalized = normalizeOpenAiCompletionsBaseUrl(normalizedBaseUrl);
+    if (normalized !== normalizedBaseUrl) {
+      nextModel = { ...nextModel, baseUrl: normalized } as Model<"openai-completions">;
     }
   }
 
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
+  const compatBaseUrl = nextModel.baseUrl ?? "";
+  const isZai = nextModel.provider === "zai" || compatBaseUrl.includes("api.z.ai");
   const isMoonshot =
-    model.provider === "moonshot" ||
-    baseUrl.includes("moonshot.ai") ||
-    baseUrl.includes("moonshot.cn");
-  const isDashScope = model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
-  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(model)) {
-    return model;
+    nextModel.provider === "moonshot" ||
+    compatBaseUrl.includes("moonshot.ai") ||
+    compatBaseUrl.includes("moonshot.cn");
+  const isDashScope =
+    nextModel.provider === "dashscope" || isDashScopeCompatibleEndpoint(compatBaseUrl);
+  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(nextModel)) {
+    return nextModel;
   }
 
-  const openaiModel = model;
+  const openaiModel = nextModel;
   const compat = openaiModel.compat ?? undefined;
   if (compat?.supportsDeveloperRole === false) {
-    return model;
+    return nextModel;
   }
 
   openaiModel.compat = compat
