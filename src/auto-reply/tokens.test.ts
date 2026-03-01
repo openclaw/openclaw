@@ -56,3 +56,40 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
   });
 });
+
+import { stripTrailingSilentToken } from "./tokens.js";
+
+describe("stripTrailingSilentToken", () => {
+  it("strips trailing NO_REPLY after substantive content", () => {
+    const text = "Here is a summary of the weather.\n\nNO_REPLY";
+    expect(stripTrailingSilentToken(text)).toBe("Here is a summary of the weather.");
+  });
+
+  it("strips trailing NO_REPLY with extra whitespace", () => {
+    const text = "Content here\n  NO_REPLY  ";
+    expect(stripTrailingSilentToken(text)).toBe("Content here");
+  });
+
+  it("does not strip when NO_REPLY is the entire text", () => {
+    expect(stripTrailingSilentToken("NO_REPLY")).toBe("NO_REPLY");
+    expect(stripTrailingSilentToken("  NO_REPLY  ")).toBe("  NO_REPLY  ");
+  });
+
+  it("does not strip NO_REPLY embedded in content", () => {
+    const text = "This is NO_REPLY related content";
+    expect(stripTrailingSilentToken(text)).toBe(text);
+  });
+
+  it("returns undefined for undefined input", () => {
+    expect(stripTrailingSilentToken(undefined)).toBeUndefined();
+  });
+
+  it("returns empty string as-is", () => {
+    expect(stripTrailingSilentToken("")).toBe("");
+  });
+
+  it("works with custom token", () => {
+    const text = "Done checking.\nHEARTBEAT_OK";
+    expect(stripTrailingSilentToken(text, "HEARTBEAT_OK")).toBe("Done checking.");
+  });
+});

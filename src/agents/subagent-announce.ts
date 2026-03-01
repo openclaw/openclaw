@@ -1,5 +1,9 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripTrailingSilentToken,
+} from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -1169,6 +1173,9 @@ export async function runSubagentAnnounceFlow(params: {
     if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
       return true;
     }
+
+    // Strip trailing NO_REPLY that weaker models append after substantive content (#30692).
+    reply = stripTrailingSilentToken(reply, SILENT_REPLY_TOKEN) ?? reply;
 
     if (!outcome) {
       outcome = { status: "unknown" };

@@ -36,3 +36,25 @@ export function isSilentReplyPrefixText(
   }
   return token.toUpperCase().startsWith(normalized);
 }
+
+/**
+ * Strip a trailing NO_REPLY token from text that contains substantive content.
+ * Weaker models sometimes append NO_REPLY after real output (e.g. announce
+ * delivery). When the text is chunked for sending, the trailing token would
+ * otherwise leak as a visible message (#30692).
+ */
+export function stripTrailingSilentToken(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): string | undefined {
+  if (!text) {
+    return text;
+  }
+  const escaped = escapeRegExp(token);
+  // Remove the token only when it appears as the last non-whitespace segment,
+  // separated from preceding content by at least one newline.
+  const re = new RegExp(`\\n\\s*${escaped}\\s*$`);
+  const stripped = text.replace(re, "");
+  // Only return the stripped version if there is substantive content left.
+  return stripped.trim() ? stripped : text;
+}
