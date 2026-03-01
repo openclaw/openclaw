@@ -24,6 +24,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
 } from "../routing/session-key.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
@@ -135,6 +136,7 @@ function canonicalizeSessionKeyForAgent(params: {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
+  skipCrossAgentRemap?: boolean;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
@@ -159,7 +161,11 @@ function canonicalizeSessionKeyForAgent(params: {
   // hardcoded DEFAULT_AGENT_ID ("main") instead of the configured agent (#29683).
   const defaultPrefix = `agent:${DEFAULT_AGENT_ID}:`;
   const rawLower = raw.toLowerCase();
-  if (rawLower.startsWith(defaultPrefix) && agentId !== DEFAULT_AGENT_ID) {
+  if (
+    rawLower.startsWith(defaultPrefix) &&
+    agentId !== DEFAULT_AGENT_ID &&
+    !params.skipCrossAgentRemap
+  ) {
     const rest = rawLower.slice(defaultPrefix.length);
     const remapped = `agent:${agentId}:${rest}`;
     const canonicalized = canonicalizeMainSessionAlias({
@@ -283,6 +289,7 @@ function canonicalizeSessionStore(params: {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
+  skipCrossAgentRemap?: boolean;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical: Record<string, SessionEntryLike> = {};
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
@@ -297,6 +304,7 @@ function canonicalizeSessionStore(params: {
       agentId: params.agentId,
       mainKey: params.mainKey,
       scope: params.scope,
+      skipCrossAgentRemap: params.skipCrossAgentRemap,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -1024,23 +1032,31 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
 
-  // Collect all known agent store paths with their owning agentId (deduplicated by path).
-  const storeMap = new Map<string, string>();
+  // Collect all known agent store paths with their owning agentIds.
+  // A single path may be shared by multiple agents when session.store
+  // does not contain {agentId}.
+  const storeMap = new Map<string, Set<string>>();
+  const addToStoreMap = (p: string, id: string) => {
+    const existing = storeMap.get(p);
+    if (existing) {
+      existing.add(id);
+    } else {
+      storeMap.set(p, new Set([id]));
+    }
+  };
   // Default agent store.
   const defaultStorePath = storeConfig
-    ? resolveStorePathFromTemplate(storeConfig, agentId, stateDir)
+    ? resolveStorePathFromTemplate(storeConfig, agentId, env)
     : path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-  storeMap.set(defaultStorePath, agentId);
+  addToStoreMap(defaultStorePath, agentId);
   // Configured agents.
   for (const entry of params.cfg.agents?.list ?? []) {
     if (entry?.id) {
       const id = normalizeAgentId(entry.id);
       const p = storeConfig
-        ? resolveStorePathFromTemplate(storeConfig, id, stateDir)
+        ? resolveStorePathFromTemplate(storeConfig, id, env)
         : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-      if (!storeMap.has(p)) {
-        storeMap.set(p, id);
-      }
+      addToStoreMap(p, id);
     }
   }
   // Agent directories present on disk.
@@ -1051,15 +1067,13 @@ export async function migrateOrphanedSessionKeys(params: {
         const diskAgentId = normalizeAgentId(dirEntry.name);
         if (diskAgentId) {
           const diskPath = path.join(agentsDir, diskAgentId, "sessions", "sessions.json");
-          if (!storeMap.has(diskPath)) {
-            storeMap.set(diskPath, diskAgentId);
-          }
+          addToStoreMap(diskPath, diskAgentId);
         }
       }
     }
   }
 
-  for (const [storePath, storeAgentId] of storeMap) {
+  for (const [storePath, storeAgentIds] of storeMap) {
     if (!fileExists(storePath)) {
       continue;
     }
@@ -1074,18 +1088,32 @@ export async function migrateOrphanedSessionKeys(params: {
       continue;
     }
 
-    const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
-      store: parsed.store,
-      agentId: storeAgentId,
-      mainKey,
-      scope,
-    });
-    if (legacyKeys.length === 0) {
+    // When multiple agents share a single store file (session.store without
+    // {agentId}), run canonicalization once per agent so each agent's keys are
+    // handled correctly. Skip cross-agent "agent:main:*" remapping when "main"
+    // is a legitimate configured agent to avoid merging its data into another
+    // agent's namespace.
+    let working = parsed.store;
+    let totalLegacy = 0;
+    for (const storeAgentId of storeAgentIds) {
+      const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
+        store: working,
+        agentId: storeAgentId,
+        mainKey,
+        scope,
+        // When multiple agents share the store and "main" is one of them,
+        // agent:main:* keys are legitimate — don't cross-agent remap them.
+        skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
+      });
+      working = canonicalized;
+      totalLegacy += legacyKeys.length;
+    }
+    if (totalLegacy === 0) {
       continue;
     }
 
     const normalized: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(canonicalized)) {
+    for (const [key, entry] of Object.entries(working)) {
       const ne = normalizeSessionEntry(entry);
       if (ne) {
         normalized[key] = ne;
@@ -1093,7 +1121,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     try {
       await saveSessionStore(storePath, normalized, { skipMaintenance: true });
-      changes.push(`Canonicalized ${legacyKeys.length} orphaned session key(s) in ${storePath}`);
+      changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
       warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
     }
@@ -1105,19 +1133,14 @@ export async function migrateOrphanedSessionKeys(params: {
 function resolveStorePathFromTemplate(
   template: string,
   agentId: string,
-  _stateDir: string,
+  env?: NodeJS.ProcessEnv,
 ): string {
+  const expand = (s: string) =>
+    s.startsWith("~") ? expandHomePrefix(s, { env: env ?? process.env, homedir: os.homedir }) : s;
   if (template.includes("{agentId}")) {
-    let expanded = template.replaceAll("{agentId}", agentId);
-    if (expanded.startsWith("~")) {
-      expanded = path.join(os.homedir(), expanded.slice(1));
-    }
-    return path.resolve(expanded);
+    return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
   }
-  if (template.startsWith("~")) {
-    return path.resolve(path.join(os.homedir(), template.slice(1)));
-  }
-  return path.resolve(template);
+  return path.resolve(expand(template));
 }
 
 export async function autoMigrateLegacyState(params: {
