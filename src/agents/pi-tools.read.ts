@@ -869,7 +869,11 @@ function toRelativePathInRoot(
   options?: { allowRoot?: boolean },
 ): string {
   const rootResolved = path.resolve(root);
-  const resolved = path.resolve(candidate);
+  // If candidate is a relative path, resolve it against the root
+  // This handles cases where callers pass relative paths like "memory/file.txt"
+  const resolved = path.isAbsolute(candidate)
+    ? path.resolve(candidate)
+    : path.resolve(root, candidate);
   const relative = path.relative(rootResolved, resolved);
   if (relative === "" || relative === ".") {
     if (options?.allowRoot) {
