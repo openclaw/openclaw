@@ -82,6 +82,20 @@ export async function getGHLConversation(params: {
   return result.conversation ?? {};
 }
 
+/** Add a tag to a GHL contact. */
+export async function addGHLContactTag(params: {
+  account: ResolvedGoHighLevelAccount;
+  contactId: string;
+  tag: string;
+}): Promise<void> {
+  const { account, contactId, tag } = params;
+  const url = `${GHL_API_BASE}/contacts/${contactId}/tags`;
+  await fetchJson<{ tags?: string[] }>(account, url, {
+    method: "POST",
+    body: JSON.stringify({ tags: [tag] }),
+  });
+}
+
 /** Probe the GHL API to verify credentials are valid. */
 export async function probeGoHighLevel(account: ResolvedGoHighLevelAccount): Promise<{
   ok: boolean;
