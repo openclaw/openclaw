@@ -129,3 +129,10 @@ repos:
         language: system
         pass_filenames: false
         types: [swift]
+
+  # Animal-friendly language — detect speciesist idioms and suggest inclusive alternatives
+  - repo: https://github.com/open-paws/no-animal-violence-pre-commit
+    rev: v0.1.0
+    hooks:
+      - id: speciesist-language
+        exclude: '^(dist/|vendor/|CHANGELOG\.md$|pnpm-lock\.yaml$)'
