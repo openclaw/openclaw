@@ -21,6 +21,28 @@ vi.mock("../globals.js", () => ({
 
 import { downloadLineMedia } from "./download.js";
 
+// Helper to create MP4/M4A ftyp box
+function createMP4Buffer(brand: string): Buffer {
+  // MP4 header: 4 bytes size + "ftyp" + 4 bytes brand + rest
+  const size = 32;
+  const buffer = Buffer.alloc(size);
+  // Size (big-endian)
+  buffer[0] = (size >> 24) & 0xff;
+  buffer[1] = (size >> 16) & 0xff;
+  buffer[2] = (size >> 8) & 0xff;
+  buffer[3] = size & 0xff;
+  // "ftyp"
+  buffer[4] = 0x66;
+  buffer[5] = 0x74;
+  buffer[6] = 0x79;
+  buffer[7] = 0x70;
+  // Brand (4 bytes)
+  for (let i = 0; i < brand.length; i++) {
+    buffer[8 + i] = brand.charCodeAt(i);
+  }
+  return buffer;
+}
+
 async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   for (const part of parts) {
     yield part;
@@ -65,5 +87,55 @@ describe("downloadLineMedia", () => {
 
     await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(/Media exceeds/i);
     expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("detects M4A audio with M4A brand", async () => {
+    const m4a = createMP4Buffer("M4A ");
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4a]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
+  });
+
+  it("detects M4A audio with isom brand", async () => {
+    const isom = createMP4Buffer("isom");
+    getMessageContentMock.mockResolvedValueOnce(chunks([isom]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
+  });
+
+  it("detects video/mp4 with avc1 brand", async () => {
+    const avc1 = createMP4Buffer("avc1");
+    getMessageContentMock.mockResolvedValueOnce(chunks([avc1]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.path).toMatch(/\.mp4$/);
+  });
+
+  it("detects video/mp4 with mp41 brand", async () => {
+    const mp41 = createMP4Buffer("mp41");
+    getMessageContentMock.mockResolvedValueOnce(chunks([mp41]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.path).toMatch(/\.mp4$/);
+  });
+
+  it("detects M4A audio with M4AE brand (enhanced)", async () => {
+    const m4ae = createMP4Buffer("M4AE");
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4ae]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
   });
 });
