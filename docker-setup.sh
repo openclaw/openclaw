@@ -347,8 +347,14 @@ fi
 # it works regardless of the host uid and doesn't require host-side root.
 echo ""
 echo "==> Fixing data-directory permissions"
+# Use -xdev to restrict chown to the config-dir mount only — without it,
+# the recursive chown would cross into the workspace bind mount and rewrite
+# ownership of all user project files on Linux hosts.
+# After fixing the config dir, only the OpenClaw metadata subdirectory
+# (.openclaw/) inside the workspace gets chowned, not the user's project files.
 docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
-  'chown -R node:node /home/node/.openclaw'
+  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
 echo "==> Onboarding (interactive)"
