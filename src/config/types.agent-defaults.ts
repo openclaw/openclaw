@@ -263,6 +263,13 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
     announceTimeoutMs?: number;
+    /**
+     * Custom header for subagent announce messages. Use `{name}` as placeholder for the agent name.
+     * Set to `false` to suppress the header entirely and deliver only the response body.
+     * Set to `""` (empty string) for the same effect.
+     * Default: `"✅ Subagent {name} finished"`.
+     */
+    announceHeader?: string | false;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

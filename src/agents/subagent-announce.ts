@@ -65,6 +65,10 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+function resolveAnnounceHeader(cfg: ReturnType<typeof loadConfig>): string | false | undefined {
+  return cfg.agents?.defaults?.subagents?.announceHeader;
+}
+
 function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
@@ -81,7 +85,27 @@ function buildCompletionDeliveryMessage(params: {
   if (params.announceType === "cron job") {
     return hasFindings ? findingsText : "";
   }
+
+  const cfg = loadConfig();
+  const customHeader = resolveAnnounceHeader(cfg);
+
+  // If announceHeader is false, suppress header for non-error/timeout outcomes.
+  const isErrorOrTimeout =
+    params.outcome?.status === "error" || params.outcome?.status === "timeout";
+  if (customHeader === false && !isErrorOrTimeout) {
+    return hasFindings ? findingsText : "";
+  }
+
   const header = (() => {
+    // Custom header template — only applies to success status.
+    if (
+      typeof customHeader === "string" &&
+      params.outcome?.status !== "error" &&
+      params.outcome?.status !== "timeout"
+    ) {
+      return customHeader.replace(/\{name\}/g, params.subagentName);
+    }
+
     if (params.outcome?.status === "error") {
       return params.spawnMode === "session"
         ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
@@ -96,6 +120,12 @@ function buildCompletionDeliveryMessage(params: {
       ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
       : `✅ Subagent ${params.subagentName} finished`;
   })();
+
+  // Empty custom header (e.g., announceHeader: "") — deliver body only.
+  if (header === "") {
+    return hasFindings ? findingsText : "";
+  }
+
   if (!hasFindings) {
     return header;
   }
