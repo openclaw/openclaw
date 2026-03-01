@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import * as mediaFetch from "../../media/fetch.js";
 import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
 import { mockPinnedHostnameResolution } from "../../test-helpers/ssrf.js";
@@ -469,6 +470,80 @@ describe("resolveSlackMedia", () => {
     expect(result).toHaveLength(8);
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
+  });
+});
+
+describe("Slack media SSRF policy", () => {
+  const originalFetchLocal = globalThis.fetch;
+
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    globalThis.fetch = withFetchPreconnect(mockFetch);
+    mockPinnedHostnameResolution();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetchLocal;
+    vi.restoreAllMocks();
+  });
+
+  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowRfc2544BenchmarkRange to file downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("img"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+
+    const policy = spy.mock.calls[0][0].ssrfPolicy;
+    expect(policy?.allowedHostnames).toEqual(
+      expect.arrayContaining(["*.slack.com", "*.slack-edge.com", "*.slack-files.com"]),
+    );
+  });
+
+  it("passes ssrfPolicy to forwarded attachment image downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/fwd.jpg", "image/jpeg"),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      return {
+        hostname: normalized,
+        addresses: ["93.184.216.34"],
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses: ["93.184.216.34"] }),
+      };
+    });
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("fwd"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
   });
 });
 
