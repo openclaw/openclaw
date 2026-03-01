@@ -189,11 +189,6 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  // Skip typing indicator emoji
-  if (emoji === "Typing") {
-    return null;
-  }
-
   if (reactionNotifications === "own" && !botOpenId) {
     logger?.(
       `feishu[${accountId}]: bot open_id unavailable, skipping reaction ${emoji} on ${messageId}`,

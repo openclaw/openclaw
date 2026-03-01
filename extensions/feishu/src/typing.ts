@@ -6,7 +6,7 @@ import { getFeishuRuntime } from "./runtime.js";
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
-const TYPING_EMOJI = "Typing"; // Typing indicator emoji
+export const DEFAULT_TYPING_EMOJI = "Typing"; // Default typing indicator emoji
 
 /**
  * Feishu API error codes that indicate the caller should back off.
@@ -105,20 +105,22 @@ export async function addTypingIndicator(params: {
   messageId: string;
   accountId?: string;
   runtime?: RuntimeEnv;
+  emoji?: string;
 }): Promise<TypingIndicatorState> {
-  const { cfg, messageId, accountId, runtime } = params;
+  const { cfg, messageId, accountId, runtime, emoji } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
   }
 
+  const typingEmoji = emoji ?? DEFAULT_TYPING_EMOJI;
   const client = createFeishuClient(account);
 
   try {
     const response = await client.im.messageReaction.create({
       path: { message_id: messageId },
       data: {
-        reaction_type: { emoji_type: TYPING_EMOJI },
+        reaction_type: { emoji_type: typingEmoji },
       },
     });
 

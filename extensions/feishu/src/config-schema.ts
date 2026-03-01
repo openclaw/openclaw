@@ -164,6 +164,7 @@ const FeishuSharedConfigShape = {
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
+  typingEmoji: z.string().optional(),
   resolveSenderNames: z.boolean().optional(),
 };
 
@@ -210,6 +211,7 @@ export const FeishuConfigSchema = z
     dynamicAgentCreation: DynamicAgentCreationSchema,
     // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
+    typingEmoji: z.string().optional(),
     resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),

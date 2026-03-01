@@ -68,6 +68,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         messageId: replyToMessageId,
         accountId,
         runtime: params.runtime,
+        emoji: account.config?.typingEmoji,
       });
     },
     stop: async () => {
