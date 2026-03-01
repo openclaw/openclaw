@@ -879,6 +879,45 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isContentPolicyErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+
+  // Anthropic and proxy variants.
+  // Examples seen in the wild:
+  // - "Output blocked by content filtering policy"
+  // - "content_policy_violation"
+  // - "Request rejected by content policy"
+  // - stop reasons like "sensitive" / "refusal" are handled elsewhere, but those
+  //   may also bubble up as generic error text.
+  if (
+    lower.includes("content filtering") ||
+    lower.includes("content filter") ||
+    lower.includes("content_policy") ||
+    lower.includes("content policy") ||
+    lower.includes("policy violation") ||
+    lower.includes("output blocked") ||
+    (lower.includes("blocked by") && lower.includes("policy")) ||
+    (lower.includes("violates") && lower.includes("policy")) ||
+    (lower.includes("safety") && lower.includes("policy"))
+  ) {
+    return true;
+  }
+
+  // JSON-ish Anthropic error payload fragments.
+  // e.g. {"error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}
+  if (
+    lower.includes("invalid_request_error") &&
+    (lower.includes("blocked") || lower.includes("policy"))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -888,6 +927,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
+  }
+  if (isContentPolicyErrorMessage(raw)) {
+    return "content_policy";
   }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.

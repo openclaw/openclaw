@@ -479,6 +479,11 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}',
+      ),
+    ).toBe("content_policy");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
