@@ -447,6 +447,42 @@ describe("browser server-context tab selection state", () => {
     );
   });
 
+  it("does not fail tab open when managed-tab cleanup list fails", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        listCount += 1;
+        if (listCount === 1) {
+          return {
+            ok: true,
+            json: async () => [
+              {
+                id: "NEW",
+                title: "New Tab",
+                url: "http://127.0.0.1:3009",
+                webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+                type: "page",
+              },
+            ],
+          } as unknown as Response;
+        }
+        throw new Error("/json/list timeout");
+      }
+      throw new Error(`unexpected fetch: ${value}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await openclaw.openTab("http://127.0.0.1:3009");
+    expect(opened.targetId).toBe("NEW");
+  });
+
   it("blocks unsupported non-network URLs before any HTTP tab-open fallback", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
