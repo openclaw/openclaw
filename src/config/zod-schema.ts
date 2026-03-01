@@ -221,6 +221,33 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    privacy: z
+      .object({
+        enabled: z.boolean().optional(),
+        rules: z.string().optional(),
+        encryption: z
+          .object({
+            algorithm: z.string().optional(),
+            salt: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        mappings: z
+          .object({
+            ttl: z.number().int().positive().optional(),
+            storePath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        log: z
+          .object({
+            useReplacedContent: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),

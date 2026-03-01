@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { PrivacyDetector } from "../privacy/detector.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 
@@ -142,9 +143,45 @@ export function redactToolDetail(detail: string): string {
   if (normalizeMode(resolved.mode) !== "tools") {
     return detail;
   }
-  return redactSensitiveText(detail, resolved);
+  return redactWithPrivacyFilter(detail, resolved);
 }
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+// Lazy-initialized shared detector for log redaction.
+let sharedDetector: PrivacyDetector | undefined;
+
+/**
+ * Enhanced redaction that combines the existing pattern-based redaction
+ * with the privacy detection engine for broader coverage.
+ */
+export function redactWithPrivacyFilter(text: string, options?: RedactOptions): string {
+  if (!text) {
+    return text;
+  }
+
+  // First pass: existing pattern-based redaction.
+  let result = redactSensitiveText(text, options);
+
+  // Second pass: privacy detector for additional coverage.
+  try {
+    if (!sharedDetector) {
+      sharedDetector = new PrivacyDetector("extended");
+    }
+    const detected = sharedDetector.detect(result);
+    if (detected.hasPrivacyRisk) {
+      // Apply mask-style redaction (not replacement) for log output.
+      const sorted = [...detected.matches].toSorted((a, b) => b.start - a.start);
+      for (const match of sorted) {
+        const masked = maskToken(match.content);
+        result = result.slice(0, match.start) + masked + result.slice(match.end);
+      }
+    }
+  } catch {
+    // Non-fatal: fall back to pattern-only redaction.
+  }
+
+  return result;
 }

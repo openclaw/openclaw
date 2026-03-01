@@ -18,6 +18,12 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import {
+  createPrivacyFilterContext,
+  wrapStreamFnPrivacyFilter,
+  filterPrompt,
+  type PrivacyFilterContext,
+} from "../../../privacy/stream-wrapper.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -965,6 +971,18 @@ export async function runEmbeddedAttempt(
       // names on the live response stream before tool execution.
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(activeSession.agent.streamFn);
 
+      // Privacy filter: replace sensitive content before sending to LLM API.
+      // Inserted before payload logger so logged payloads also have privacy content filtered.
+      const privacyEnabled = params.config?.privacy?.enabled !== false;
+      let privacyCtx: PrivacyFilterContext | undefined;
+      if (privacyEnabled) {
+        privacyCtx = createPrivacyFilterContext(params.sessionId, params.config?.privacy);
+        activeSession.agent.streamFn = wrapStreamFnPrivacyFilter(
+          activeSession.agent.streamFn,
+          privacyCtx,
+        );
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -1311,6 +1329,11 @@ export async function runEmbeddedAttempt(
               .catch((err) => {
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
+          }
+
+          // Apply privacy filter to the prompt text before sending to LLM.
+          if (privacyCtx) {
+            effectivePrompt = filterPrompt(effectivePrompt, privacyCtx);
           }
 
           // Only pass images option if there are actually images to pass
