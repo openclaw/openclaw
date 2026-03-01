@@ -99,8 +99,9 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${hiddenCount > 0
-        ? html`<span
+      ${
+        hiddenCount > 0
+          ? html`<span
             style="
               position: absolute;
               top: -5px;
@@ -115,7 +116,8 @@ function renderCronFilterIcon(hiddenCount: number) {
             "
           >${hiddenCount}</span
           >`
-        : ""}
+          : ""
+      }
     </span>
   `;
 }
@@ -275,9 +277,13 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${hideCron
-          ? `Show cron sessions${hiddenCronCount > 0 ? ` (${hiddenCronCount} hidden)` : ""}`
-          : "Hide cron sessions"}
+        title=${
+          hideCron
+            ? hiddenCronCount > 0
+              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+              : t("chat.showCronSessions")
+            : t("chat.hideCronSessions")
+        }
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -336,6 +342,8 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
+  const normalized = key.toLowerCase();
+
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
     return { prefix: "", fallbackName: "Main Session" };
@@ -347,7 +355,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   }
 
   // ── Cron job ─────────────────────────────────────
-  if (key.includes(":cron:")) {
+  if (normalized.startsWith("cron:") || key.includes(":cron:")) {
     return { prefix: "Cron:", fallbackName: "Cron Job:" };
   }
 
@@ -405,7 +413,22 @@ export function resolveSessionDisplayName(
 }
 
 export function isCronSessionKey(key: string): boolean {
-  return key.startsWith("cron:");
+  const normalized = key.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("cron:")) {
+    return true;
+  }
+  if (!normalized.startsWith("agent:")) {
+    return false;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return false;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest.startsWith("cron:");
 }
 
 function resolveSessionOptions(
@@ -456,15 +479,12 @@ function resolveSessionOptions(
 }
 
 /** Count sessions with a cron: key that would be hidden when hideCron=true. */
-function countHiddenCronSessions(
-  sessionKey: string,
-  sessions: SessionsListResult | null,
-): number {
-  if (!sessions?.sessions) return 0;
+function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResult | null): number {
+  if (!sessions?.sessions) {
+    return 0;
+  }
   // Don't count the currently active session even if it's a cron.
-  return sessions.sessions.filter(
-    (s) => isCronSessionKey(s.key) && s.key !== sessionKey,
-  ).length;
+  return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
 const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];

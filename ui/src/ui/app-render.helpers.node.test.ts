@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
+import {
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+} from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -33,6 +37,10 @@ describe("parseSessionKey", () => {
 
   it("identifies cron sessions", () => {
     expect(parseSessionKey("agent:main:cron:daily-briefing-uuid")).toEqual({
+      prefix: "Cron:",
+      fallbackName: "Cron Job:",
+    });
+    expect(parseSessionKey("cron:daily-briefing-uuid")).toEqual({
       prefix: "Cron:",
       fallbackName: "Cron Job:",
     });
@@ -266,11 +274,13 @@ describe("isCronSessionKey", () => {
   it("returns true for cron: prefixed keys", () => {
     expect(isCronSessionKey("cron:abc-123")).toBe(true);
     expect(isCronSessionKey("cron:weekly-agent-roundtable")).toBe(true);
+    expect(isCronSessionKey("agent:main:cron:abc-123")).toBe(true);
+    expect(isCronSessionKey("agent:main:cron:abc-123:run:run-1")).toBe(true);
   });
 
   it("returns false for non-cron keys", () => {
     expect(isCronSessionKey("main")).toBe(false);
-    expect(isCronSessionKey("agent:main:cron:abc-123")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
+    expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
   });
 });

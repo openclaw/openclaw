@@ -113,6 +113,9 @@ export const pt_BR: TranslationMap = {
     refreshTitle: "Atualizar dados do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
+    hideCronSessions: "Ocultar sessões de cron",
+    showCronSessions: "Mostrar sessões de cron",
+    showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",
     onboardingDisabled: "Desativado durante a integração",
   },
   languages: {
