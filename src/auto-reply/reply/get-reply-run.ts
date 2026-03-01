@@ -18,6 +18,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { buildSecretDetectionWarning } from "../../security/detect-inbound-secrets.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -267,7 +268,16 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  const secretWarning = buildSecretDetectionWarning(
+    ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
+  );
+  const extraSystemPrompt = [
+    inboundMetaPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+    secretWarning,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
