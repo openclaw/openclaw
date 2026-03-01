@@ -56,12 +56,14 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
-### Codex transport default
+### Transport default
 
-OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can set
-`agents.defaults.models.<provider/model>.params.transport` to select transport:
+OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
+`openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
+fallback).
 
-- Default is `"auto"` (WebSocket-first, then SSE fallback).
+You can set `agents.defaults.models.<provider/model>.params.transport`:
+
 - `"sse"`: force SSE
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE

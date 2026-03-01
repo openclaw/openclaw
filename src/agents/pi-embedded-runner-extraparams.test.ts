@@ -544,7 +544,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("does not set transport defaults for non-Codex providers", () => {
+  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -558,7 +558,24 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBeUndefined();
+    expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("lets runtime options override OpenAI default transport", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { transport: "sse" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
   });
 
   it("allows forcing Codex transport to SSE", () => {
@@ -878,6 +895,7 @@ describe("applyExtraParamsToAgent", () => {
         contextWindow: 128_000,
         maxTokens: 16_384,
         compat: { supportsStore: false },
+<<<<<<< HEAD
       } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
     });
     expect(payload.store).toBe(false);
