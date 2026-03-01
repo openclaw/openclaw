@@ -90,6 +90,7 @@ export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;
 // Legacy alias (pre-rename).
 export type ProviderChoice = ChannelChoice;
+export type SecretInputMode = "plaintext" | "ref";
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -100,6 +101,7 @@ export type OnboardOptions = {
   /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
   reset?: boolean;
+  resetScope?: ResetScope;
   authChoice?: AuthChoice;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenProvider?: string;
@@ -109,6 +111,8 @@ export type OnboardOptions = {
   tokenProfileId?: string;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenExpiresIn?: string;
+  /** API key persistence mode for onboarding flows (default: plaintext). */
+  secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;

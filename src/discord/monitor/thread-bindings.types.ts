@@ -12,11 +12,17 @@ export type ThreadBindingRecord = {
   webhookToken?: string;
   boundBy: string;
   boundAt: number;
-  expiresAt?: number;
+  lastActivityAt: number;
+  /** Inactivity timeout window in milliseconds (0 disables inactivity auto-unfocus). */
+  idleTimeoutMs?: number;
+  /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
+  maxAgeMs?: number;
 };
 
 export type PersistedThreadBindingRecord = ThreadBindingRecord & {
   sessionKey?: string;
+  /** @deprecated Legacy absolute expiry timestamp; migrated on load. */
+  expiresAt?: number;
 };
 
 export type PersistedThreadBindingsPayload = {
@@ -26,11 +32,17 @@ export type PersistedThreadBindingsPayload = {
 
 export type ThreadBindingManager = {
   accountId: string;
-  getSessionTtlMs: () => number;
+  getIdleTimeoutMs: () => number;
+  getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
   getBySessionKey: (targetSessionKey: string) => ThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
   listBindings: () => ThreadBindingRecord[];
+  touchThread: (params: {
+    threadId: string;
+    at?: number;
+    persist?: boolean;
+  }) => ThreadBindingRecord | null;
   bindTarget: (params: {
     threadId?: string | number;
     channelId?: string;
@@ -63,7 +75,8 @@ export type ThreadBindingManager = {
 
 export const THREAD_BINDINGS_VERSION = 1 as const;
 export const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;
-export const DEFAULT_THREAD_BINDING_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-export const DEFAULT_FAREWELL_TEXT = "Session ended. Messages here will no longer be routed.";
+export const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
+export const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0; // disabled
+export const DEFAULT_FAREWELL_TEXT = "Thread unfocused. Messages here will no longer be routed.";
 export const DISCORD_UNKNOWN_CHANNEL_ERROR_CODE = 10_003;
-export const RECENT_UNBOUND_WEBHOOK_ECHO_TTL_MS = 30_000;
+export const RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS = 30_000;

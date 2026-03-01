@@ -435,6 +435,23 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-no-reply",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: " NO_REPLY ",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
   it("retries completion direct send on transient channel-unavailable errors", async () => {
     sendSpy
       .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))
@@ -1045,6 +1062,32 @@ describe("subagent announce formatting", () => {
     expect(params.channel).toBe("whatsapp");
     expect(params.to).toBe("+1555");
     expect(params.accountId).toBe("kev");
+  });
+
+  it("does not report cron announce as delivered when it was only queued", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-cron-queued",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-queued",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "cron job",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {

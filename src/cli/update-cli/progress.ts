@@ -28,11 +28,46 @@ const STEP_LABELS: Record<string, string> = {
   "openclaw doctor": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
+  "global update (omit optional)": "Retrying update without optional deps",
   "global install": "Installing global package",
 };
 
 function getStepLabel(step: UpdateStepInfo): string {
   return STEP_LABELS[step.name] ?? step.name;
+}
+
+export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
+  if (result.status !== "error" || result.mode !== "npm") {
+    return [];
+  }
+  const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
+  if (!failedStep) {
+    return [];
+  }
+
+  const stderr = (failedStep.stderrTail ?? "").toLowerCase();
+  const hints: string[] = [];
+
+  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+    hints.push(
+      "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
+    );
+    hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+  }
+
+  if (
+    failedStep.name.startsWith("global update") &&
+    (stderr.includes("node-gyp") ||
+      stderr.includes("@discordjs/opus") ||
+      stderr.includes("prebuild"))
+  ) {
+    hints.push(
+      "Detected native optional dependency build failure (e.g. opus). The updater retries with --omit=optional automatically.",
+    );
+    hints.push("If it still fails: npm i -g openclaw@latest --omit=optional");
+  }
+
+  return hints;
 }
 
 export type ProgressController = {
@@ -148,6 +183,15 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
           }
         }
       }
+    }
+  }
+
+  const hints = inferUpdateFailureHints(result);
+  if (hints.length > 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Recovery hints:"));
+    for (const hint of hints) {
+      defaultRuntime.log(`  - ${theme.warn(hint)}`);
     }
   }
 
