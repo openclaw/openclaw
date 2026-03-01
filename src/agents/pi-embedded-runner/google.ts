@@ -19,6 +19,7 @@ import {
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import {
   sanitizeToolCallInputs,
+  sanitizeToolNameLengths,
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
@@ -447,7 +448,8 @@ export async function sanitizeSessionHistory(params: {
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
-  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedNames = sanitizeToolNameLengths(repairedTools);
+  const sanitizedToolResults = stripToolResultDetails(sanitizedNames);
   const sanitizedCompactionUsage =
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults);
 

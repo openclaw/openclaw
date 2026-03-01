@@ -328,6 +328,36 @@ describe("installSessionToolResultGuard", () => {
     expect(messages.map((m) => m.role)).toEqual(["assistant"]);
   });
 
+  it("truncates oversized toolName on tool results before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    const longName = "x".repeat(930);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_long", name: "read", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_long",
+        toolName: longName,
+        content: [{ type: "text", text: "Tool not found" }],
+        isError: true,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    const result = messages.find((m) => m.role === "toolResult") as
+      | { toolName?: string }
+      | undefined;
+    expect(result).toBeDefined();
+    expect(result!.toolName!.length).toBeLessThanOrEqual(200);
+  });
+
   it("applies message persistence transform to user messages", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {

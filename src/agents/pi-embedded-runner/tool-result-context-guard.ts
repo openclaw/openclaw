@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { sanitizeToolNameLengths } from "../session-transcript-repair.js";
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
@@ -321,13 +322,14 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
+    const sanitized = sanitizeToolNameLengths(contextMessages);
     enforceToolResultContextBudgetInPlace({
-      messages: contextMessages,
+      messages: sanitized,
       contextBudgetChars,
       maxSingleToolResultChars,
     });
 
-    return contextMessages;
+    return sanitized;
   }) as GuardableTransformContext;
 
   return () => {

@@ -9,7 +9,11 @@ import {
   HARD_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
-import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import {
+  TOOL_RESULT_NAME_MAX_CHARS,
+  makeMissingToolResult,
+  sanitizeToolCallInputs,
+} from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const GUARD_TRUNCATION_SUFFIX =
@@ -149,6 +153,14 @@ export function installSessionToolResultGuard(
       const toolName = id ? pending.get(id) : undefined;
       if (id) {
         pending.delete(id);
+      }
+      // Truncate toolName to prevent Anthropic API 400 (max 200 chars).
+      const raw = nextMessage as { toolName?: string };
+      if (typeof raw.toolName === "string" && raw.toolName.length > TOOL_RESULT_NAME_MAX_CHARS) {
+        nextMessage = {
+          ...nextMessage,
+          toolName: raw.toolName.slice(0, TOOL_RESULT_NAME_MAX_CHARS),
+        } as AgentMessage;
       }
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.

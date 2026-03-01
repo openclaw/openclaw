@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeToolCallInputs,
+  sanitizeToolNameLengths,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
 } from "./session-transcript-repair.js";
@@ -399,5 +400,127 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+  });
+});
+
+describe("sanitizeToolNameLengths", () => {
+  it("returns original array when all names are within limit", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "toolCall", id: "1", name: "read", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 1,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("truncates toolResult.toolName exceeding 200 chars", () => {
+    const longName = "x".repeat(930);
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "1",
+        toolName: longName,
+        content: [{ type: "text", text: "Tool not found" }],
+        isError: true,
+        timestamp: 1,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    expect(result).not.toBe(messages);
+    const toolResult = result[0] as { toolName: string };
+    expect(toolResult.toolName).toHaveLength(200);
+    expect(toolResult.toolName).toBe("x".repeat(200));
+  });
+
+  it("truncates assistant toolCall block name exceeding 200 chars", () => {
+    const longName = "a".repeat(300);
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me run this" },
+          { type: "toolCall", id: "1", name: longName, arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    expect(result).not.toBe(messages);
+    const assistant = result[0] as { content: Array<{ name?: string }> };
+    expect(assistant.content[1].name).toHaveLength(200);
+  });
+
+  it("truncates both sides consistently for paired messages", () => {
+    const longName = "tool_" + "z".repeat(250);
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: longName, arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: longName,
+        content: [{ type: "text", text: "error" }],
+        isError: true,
+        timestamp: 1,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    const assistantName = (result[0] as { content: Array<{ name?: string }> }).content[0].name;
+    const toolResultName = (result[1] as { toolName: string }).toolName;
+    expect(assistantName).toBe(toolResultName);
+    expect(assistantName).toHaveLength(200);
+  });
+
+  it("does not modify names at exactly 200 chars", () => {
+    const exactName = "b".repeat(200);
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "1",
+        toolName: exactName,
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+        timestamp: 1,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    expect(result).toBe(messages);
+  });
+
+  it("handles toolUse and functionCall block types", () => {
+    const longName = "c".repeat(201);
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "1", name: longName, input: {} },
+          { type: "functionCall", id: "2", name: longName, arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolNameLengths(messages);
+    const blocks = (result[0] as { content: Array<{ name?: string }> }).content;
+    expect(blocks[0].name).toHaveLength(200);
+    expect(blocks[1].name).toHaveLength(200);
+  });
+
+  it("passes through non-object messages unchanged", () => {
+    const messages = [null, undefined, "text"] as unknown as AgentMessage[];
+    const result = sanitizeToolNameLengths(messages);
+    expect(result).toBe(messages);
   });
 });
