@@ -72,7 +72,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       .filter((entry) => entry.msgs > 0 && entry.errors > 0)
       .slice()
       // eslint-disable-next-line unicorn/no-array-sort
-      .toSorted((a, b) => b.rate - a.rate)
+      .sort((a, b) => b.rate - a.rate)
       .slice(0, 5)
       .map((entry) => ({
         label: formatHourLabel(entry.hour),
@@ -516,21 +516,21 @@ const buildAggregatesFromSessions = (
         .map(([name, count]) => ({ name, count }))
         .slice()
         // eslint-disable-next-line unicorn/no-array-sort
-        .toSorted((a, b) => b.count - a.count),
+        .sort((a, b) => b.count - a.count),
     },
     byModel: Array.from(modelMap.values())
       .slice()
       // eslint-disable-next-line unicorn/no-array-sort
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     byProvider: Array.from(providerMap.values())
       .slice()
       // eslint-disable-next-line unicorn/no-array-sort
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
       .slice()
       // eslint-disable-next-line unicorn/no-array-sort
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+      .sort((a, b) => b.totals.totalCost - a.totals.totalCost),
     ...tail,
   };
 };
@@ -579,7 +579,7 @@ const buildUsageInsightStats = (
     }))
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+    .sort((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
 
   return {
     durationSumMs,

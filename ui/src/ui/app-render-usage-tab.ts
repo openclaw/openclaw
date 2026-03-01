@@ -178,7 +178,7 @@ export function renderUsageTab(state: AppViewState) {
         // Sort sessions same way as displayed (by tokens or cost descending)
         const isTokenMode = state.usageChartMode === "tokens";
         // eslint-disable-next-line unicorn/no-array-sort
-        const sortedSessions = [...(state.usageResult?.sessions ?? [])].toSorted((a, b) => {
+        const sortedSessions = [...(state.usageResult?.sessions ?? [])].sort((a, b) => {
           const valA = isTokenMode ? (a.usage?.totalTokens ?? 0) : (a.usage?.totalCost ?? 0);
           const valB = isTokenMode ? (b.usage?.totalTokens ?? 0) : (b.usage?.totalCost ?? 0);
           return valB - valA;

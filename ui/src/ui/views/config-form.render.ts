@@ -339,7 +339,7 @@ export function renderConfigForm(props: ConfigFormProps) {
   const entries = Object.entries(properties)
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
       const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
       if (orderA !== orderB) {

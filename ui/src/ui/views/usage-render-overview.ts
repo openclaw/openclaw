@@ -418,7 +418,7 @@ function renderUsageInsights(
     })
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b.rate - a.rate)
+    .sort((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
@@ -629,7 +629,7 @@ function renderSessionsCard(
 
   const sortedSessions = [...sessions]
     .slice() // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       switch (sessionSort) {
         case "recent":
           return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);

@@ -45,7 +45,7 @@ export function renderChannels(props: ChannelsProps) {
     }))
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => {
+    .sort((a, b) => {
       if (a.enabled !== b.enabled) {
         return a.enabled ? -1 : 1;
       }

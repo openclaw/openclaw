@@ -308,7 +308,7 @@ export function parseToolSummary(content: string) {
   const sortedTools = Array.from(toolCounts.entries())
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b[1] - a[1]);
+    .sort((a, b) => b[1] - a[1]);
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

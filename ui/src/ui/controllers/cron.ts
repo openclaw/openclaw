@@ -210,7 +210,7 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
     state.cronModelSuggestions = Array.from(new Set(ids))
       .slice()
       // eslint-disable-next-line unicorn/no-array-sort
-      .toSorted((a, b) => a.localeCompare(b));
+      .sort((a, b) => a.localeCompare(b));
   } catch {
     state.cronModelSuggestions = [];
   }

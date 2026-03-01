@@ -319,7 +319,11 @@ export function resolveConfiguredCronModelSuggestions(
       addModelConfigIds(out, (entry as Record<string, unknown>).model);
     }
   }
-  return [...out].toSorted((a, b) => a.localeCompare(b));
+  return (
+    [...out]
+      // eslint-disable-next-line unicorn/no-array-sort
+      .sort((a, b) => a.localeCompare(b))
+  );
 }
 
 export function parseFallbackList(value: string): string[] {

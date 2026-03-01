@@ -732,7 +732,7 @@ function renderObject(params: {
 
   // Sort by hint order
   // eslint-disable-next-line unicorn/no-array-sort
-  const sorted = entries.toSorted((a, b) => {
+  const sorted = entries.slice().sort((a, b) => {
     const orderA = hintForPath([...path, a[0]], hints)?.order ?? 0;
     const orderB = hintForPath([...path, b[0]], hints)?.order ?? 0;
     if (orderA !== orderB) {

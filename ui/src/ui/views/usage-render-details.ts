@@ -749,15 +749,15 @@ function renderContextPanel(
   const skillsList = contextWeight.skills.entries
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b.blockChars - a.blockChars);
+    .sort((a, b) => b.blockChars - a.blockChars);
   const toolsList = contextWeight.tools.entries
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars));
+    .sort((a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars));
   const filesList = contextWeight.injectedWorkspaceFiles
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => b.injectedChars - a.injectedChars);
+    .sort((a, b) => b.injectedChars - a.injectedChars);
   const defaultLimit = 4;
   const showAll = expanded;
   const skillsTop = showAll ? skillsList : skillsList.slice(0, defaultLimit);
@@ -930,7 +930,7 @@ function renderSessionLogsCompact(
   )
     .slice()
     // eslint-disable-next-line unicorn/no-array-sort
-    .toSorted((a, b) => a.localeCompare(b));
+    .sort((a, b) => a.localeCompare(b));
   const filteredEntries = entries.filter((entry) => {
     // Filter by cursor timeline range (only if logs cover the range)
     if (cursorStart != null && cursorEnd != null) {
