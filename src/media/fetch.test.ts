@@ -65,4 +65,32 @@ describe("fetchRemoteMedia", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it("rejects when download exceeds timeoutMs", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    // Simulate a fetch that respects abort signal (stalled download)
+    const fetchImpl = (_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(signal.reason ?? new Error("aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new Error("aborted"));
+        });
+      });
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://example.com/large-video.mp4",
+        fetchImpl,
+        maxBytes: 10_000_000,
+        lookupFn,
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow();
+  });
 });

@@ -328,6 +328,7 @@ export async function resolveMedia(
       filePathHint: filePath,
       maxBytes,
       ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+      timeoutMs: 60_000,
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
