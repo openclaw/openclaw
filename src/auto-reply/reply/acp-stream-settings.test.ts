@@ -55,7 +55,8 @@ describe("acp stream settings", () => {
 
   it("uses default tag visibility when no override is provided", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
-    expect(isAcpTagVisible(settings, "tool_call")).toBe(true);
+    expect(isAcpTagVisible(settings, "tool_call")).toBe(false);
+    expect(isAcpTagVisible(settings, "tool_call_update")).toBe(false);
     expect(isAcpTagVisible(settings, "usage_update")).toBe(false);
   });
 
