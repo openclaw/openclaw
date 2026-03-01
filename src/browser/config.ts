@@ -172,7 +172,7 @@ function ensureDefaultChromeExtensionProfile(
   }
   result.chrome = {
     driver: "extension",
-    cdpUrl: `http://127.0.0.1:${relayPort}`,
+    cdpUrl: `http://${isWSL2Sync() ? "0.0.0.0" : "127.0.0.1"}:${relayPort}`,
     color: "#00AA00",
   };
   return result;

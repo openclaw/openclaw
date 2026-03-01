@@ -52,10 +52,11 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const port = resolved.controlPort;
   const server = await new Promise<Server>((resolve, reject) => {
-    const s = app.listen(port, "127.0.0.1", () => resolve(s));
+    const bindHost = (await isWSL()) ? "0.0.0.0" : "127.0.0.1";
+    const s = app.listen(port, bindHost, () => resolve(s));
     s.once("error", reject);
   }).catch((err) => {
-    logServer.error(`openclaw browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
+    logServer.error(`openclaw browser server failed to bind ${(await isWSL()) ? "0.0.0.0" : "127.0.0.1"}:${port}: ${String(err)}`);
     return null;
   });
 
@@ -76,7 +77,8 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   });
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
-  logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
+  const listenHost = (await isWSL()) ? "0.0.0.0 (WSL)" : "127.0.0.1";
+  logServer.info(`Browser control listening on http://${listenHost}:${port}/ (auth=${authMode})`);
   return state;
 }
 
