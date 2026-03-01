@@ -317,8 +317,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
-    sessionKey: params.job.sessionKey,
     accountId: deliveryPlan.accountId,
+    sessionKey: params.job.sessionKey,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
@@ -466,8 +466,11 @@ export async function runCronIsolatedAgentTurn(params: {
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: true,
-          disableMessageTool: deliveryRequested,
+          // Only enforce an explicit message target when the cron delivery target
+          // was successfully resolved. When resolution fails the agent should not
+          // be blocked by a target it cannot satisfy (#27898).
+          requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
+          disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
           abortSignal,
         });
       },
@@ -511,27 +514,32 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const totalTokens =
-        deriveSessionTotalTokens({
-          usage,
-          contextTokens,
-          promptTokens,
-        }) ?? input;
+      const totalTokens = deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+        promptTokens,
+      });
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens = totalTokens;
-      cronSession.sessionEntry.totalTokensFresh = true;
+      const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+        input_tokens: input,
+        output_tokens: output,
+      };
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        cronSession.sessionEntry.totalTokens = totalTokens;
+        cronSession.sessionEntry.totalTokensFresh = true;
+        telemetryUsage.total_tokens = totalTokens;
+      } else {
+        cronSession.sessionEntry.totalTokens = undefined;
+        cronSession.sessionEntry.totalTokensFresh = false;
+      }
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
 
       telemetry = {
         model: modelUsed,
         provider: providerUsed,
-        usage: {
-          input_tokens: input,
-          output_tokens: output,
-          total_tokens: totalTokens,
-        },
+        usage: telemetryUsage,
       };
     } else {
       telemetry = {
