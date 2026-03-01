@@ -1,20 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-
-function createCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
-  return {
-    acp: {
-      enabled: true,
-      stream: {
-        coalesceIdleMs: 0,
-        maxChunkChars: 64,
-      },
-    },
-    ...overrides,
-  } as OpenClawConfig;
-}
+import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
 describe("createAcpReplyProjector", () => {
   it("coalesces text deltas into bounded block chunks", async () => {
