@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -30,6 +31,16 @@ function firstDefined(values: Array<string | undefined>): string | undefined {
     }
   }
   return undefined;
+}
+
+function throwUnresolvedGatewaySecretInput(path: string): never {
+  throw new Error(
+    [
+      `${path} is configured as a secret reference but is unavailable in this command path.`,
+      "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+      "or run a gateway command path that resolves secret references before credential selection.",
+    ].join("\n"),
+  );
 }
 
 function readGatewayTokenEnv(
@@ -128,6 +139,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const mode: GatewayCredentialMode =
     params.modeOverride ?? (params.cfg.gateway?.mode === "remote" ? "remote" : "local");
   const remote = params.cfg.gateway?.remote;
+  const defaults = params.cfg.secrets?.defaults;
+  const authMode = params.cfg.gateway?.auth?.mode;
   const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
   const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
 
@@ -153,6 +166,18 @@ export function resolveGatewayCredentialsFromConfig(params: {
       tokenPrecedence: localTokenPrecedence,
       passwordPrecedence: localPasswordPrecedence,
     });
+    const localPasswordRef = resolveSecretInputRef({
+      value: params.cfg.gateway?.auth?.password,
+      defaults,
+    }).ref;
+    if (
+      localPasswordRef &&
+      !localResolved.password &&
+      !envPassword &&
+      (authMode === "password" || !localResolved.token)
+    ) {
+      throwUnresolvedGatewaySecretInput("gateway.auth.password");
+    }
     return localResolved;
   }
 

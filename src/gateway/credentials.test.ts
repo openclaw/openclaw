@@ -117,6 +117,29 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
+  it("throws when local password auth relies on an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "password",
+              password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+      }),
+    ).toThrow("gateway.auth.password");
+  });
+
   it("keeps local credentials ahead of remote fallback in local mode", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
