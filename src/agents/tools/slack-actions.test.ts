@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
+<<<<<<< HEAD
 const deleteSlackMessage = vi.fn(async () => ({}));
 const editSlackMessage = vi.fn(async () => ({}));
 const getSlackMemberInfo = vi.fn(async () => ({}));
@@ -30,6 +31,43 @@ vi.mock("../../slack/actions.js", () => ({
   removeSlackReaction: (...args: unknown[]) => removeSlackReaction(...args),
   sendSlackMessage: (...args: unknown[]) => sendSlackMessage(...args),
   unpinSlackMessage: (...args: unknown[]) => unpinSlackMessage(...args),
+=======
+const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
+const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
+const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
+const listSlackPins = vi.fn(async (..._args: unknown[]) => ({}));
+const listSlackReactions = vi.fn(async (..._args: unknown[]) => ({}));
+const pinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const reactSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
+const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
+const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
+const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+
+vi.mock("../../slack/actions.js", () => ({
+  deleteSlackMessage: (...args: Parameters<typeof deleteSlackMessage>) =>
+    deleteSlackMessage(...args),
+  downloadSlackFile: (...args: Parameters<typeof downloadSlackFile>) => downloadSlackFile(...args),
+  editSlackMessage: (...args: Parameters<typeof editSlackMessage>) => editSlackMessage(...args),
+  getSlackMemberInfo: (...args: Parameters<typeof getSlackMemberInfo>) =>
+    getSlackMemberInfo(...args),
+  listSlackEmojis: (...args: Parameters<typeof listSlackEmojis>) => listSlackEmojis(...args),
+  listSlackPins: (...args: Parameters<typeof listSlackPins>) => listSlackPins(...args),
+  listSlackReactions: (...args: Parameters<typeof listSlackReactions>) =>
+    listSlackReactions(...args),
+  pinSlackMessage: (...args: Parameters<typeof pinSlackMessage>) => pinSlackMessage(...args),
+  reactSlackMessage: (...args: Parameters<typeof reactSlackMessage>) => reactSlackMessage(...args),
+  readSlackMessages: (...args: Parameters<typeof readSlackMessages>) => readSlackMessages(...args),
+  removeOwnSlackReactions: (...args: Parameters<typeof removeOwnSlackReactions>) =>
+    removeOwnSlackReactions(...args),
+  removeSlackReaction: (...args: Parameters<typeof removeSlackReaction>) =>
+    removeSlackReaction(...args),
+  sendSlackMessage: (...args: Parameters<typeof sendSlackMessage>) => sendSlackMessage(...args),
+  unpinSlackMessage: (...args: Parameters<typeof unpinSlackMessage>) => unpinSlackMessage(...args),
+>>>>>>> 2c5b898ee (feat(slack): add download-file action for on-demand file attachment access (#24723))
 }));
 
 describe("handleSlackAction", () => {
@@ -141,9 +179,46 @@ describe("handleSlackAction", () => {
     });
   });
 
+<<<<<<< HEAD
   it("accepts blocks JSON and allows empty content", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as BotConfig;
     sendSlackMessage.mockClear();
+=======
+  it("returns a friendly error when downloadFile cannot fetch the attachment", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+      },
+      slackConfig(),
+    );
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({ maxBytes: 20 * 1024 * 1024 }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({ ok: false }),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "JSON blocks",
+      blocks: JSON.stringify([
+        { type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } },
+      ]),
+      expectedBlocks: [{ type: "section", text: { type: "mrkdwn", text: "*Deploy* status" } }],
+    },
+    {
+      name: "array blocks",
+      blocks: [{ type: "divider" }],
+      expectedBlocks: [{ type: "divider" }],
+    },
+  ])("accepts $name and allows empty content", async ({ blocks, expectedBlocks }) => {
+>>>>>>> 2c5b898ee (feat(slack): add download-file action for on-demand file attachment access (#24723))
     await handleSlackAction(
       {
         action: "sendMessage",
