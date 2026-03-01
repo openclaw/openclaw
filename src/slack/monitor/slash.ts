@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
@@ -289,7 +290,17 @@ export async function registerSlackMonitorSlashCommands(params: {
     commandArgs?: CommandArgs;
     commandDefinition?: ChatCommandDefinition;
   }) => {
-    const { command, ack, respond, body, prompt, commandArgs, commandDefinition } = p;
+    const { command, ack, body, prompt, commandArgs, commandDefinition } = p;
+    const slashSuppressed = isOutboundSuppressed({
+      cfg,
+      channel: "slack",
+      accountId: account.accountId,
+    });
+    const respond: typeof p.respond = slashSuppressed
+      ? async () => {
+          logVerbose("[suppressOutbound] Blocked Slack slash respond");
+        }
+      : p.respond;
     try {
       if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
         await ack();

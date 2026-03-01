@@ -116,6 +116,11 @@ async function resolveSlackConversationContext(params: {
 }): Promise<SlackConversationContext> {
   const { ctx, account, message } = params;
   const cfg = ctx.cfg;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
 
   let channelInfo: {
     name?: string;
@@ -225,13 +230,17 @@ async function authorizeSlackInboundMessage(params: {
       senderId: directUserId,
       allowFromLower,
       resolveSenderName: ctx.resolveUserName,
-      sendPairingReply: async (text) => {
-        await sendMessageSlack(message.channel, text, {
-          token: ctx.botToken,
-          client: ctx.app.client,
-          accountId: account.accountId,
-        });
-      },
+      sendPairingReply: slackSuppressed
+        ? async () => {
+            logVerbose("[suppressOutbound] Blocked Slack DM pairing reply");
+          }
+        : async (text) => {
+            await sendMessageSlack(message.channel, text, {
+              token: ctx.botToken,
+              client: ctx.app.client,
+              accountId: account.accountId,
+            });
+          },
       onDisabled: () => {
         logVerbose("slack: drop dm (dms disabled)");
       },
@@ -555,11 +564,6 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
-  const slackSuppressed = isOutboundSuppressed({
-    cfg,
-    channel: "slack",
-    accountId: account.accountId,
-  });
   const ackReactionPromise =
     shouldAckReaction() && ackReactionMessageTs && ackReactionValue && !slackSuppressed
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
