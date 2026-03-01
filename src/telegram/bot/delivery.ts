@@ -132,9 +132,14 @@ export async function deliverReplies(params: {
         }
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
+        // In "first" mode, only the first chunk should carry replyToMessageId.
+        const chunkReplyTo =
+          replyToId && (replyToMode === "all" || !hasReplied)
+            ? replyToId
+            : undefined;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId: replyToMessageIdForPayload,
-          replyQuoteText,
+          replyToMessageId: chunkReplyTo,
+          replyQuoteText: !hasReplied ? replyQuoteText : undefined,
           thread,
           textMode: "html",
           plainText: chunk.text,
@@ -142,10 +147,10 @@ export async function deliverReplies(params: {
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
         sentTextChunk = true;
+        if (chunkReplyTo && !hasReplied) {
+          hasReplied = true;
+        }
         markDelivered();
-      }
-      if (replyToMessageIdForPayload && !hasReplied && sentTextChunk) {
-        hasReplied = true;
       }
       continue;
     }
@@ -287,14 +292,22 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
+          // In "first" mode, only reply-quote the first unseen chunk.
+          const followUpReplyTo =
+            replyToId && (replyToMode === "all" || !hasReplied)
+              ? replyToId
+              : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdForPayload,
+            replyToMessageId: followUpReplyTo,
             thread,
             textMode: "html",
             plainText: chunk.text,
             linkPreview,
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
+          if (followUpReplyTo && !hasReplied) {
+            hasReplied = true;
+          }
           markDelivered();
         }
         pendingFollowUpText = undefined;
