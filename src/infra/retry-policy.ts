@@ -20,6 +20,10 @@ export const TELEGRAM_RETRY_DEFAULTS = {
 };
 
 const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+// For outbound sends (non-idempotent), exclude "timeout" from retryable errors.
+// A timeout means the request may have succeeded server-side, so retrying can
+// cause duplicate message delivery (#30246).
+const TELEGRAM_SEND_RETRY_RE = /429|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
@@ -90,6 +94,38 @@ export function createTelegramRetryRunner(params: {
       ...retryConfig,
       label,
       shouldRetry,
+      retryAfterMs: getTelegramRetryAfterMs,
+      onRetry: params.verbose
+        ? (info) => {
+            const maxRetries = Math.max(1, info.maxAttempts - 1);
+            log.warn(
+              `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+            );
+          }
+        : undefined,
+    });
+}
+
+/**
+ * Retry runner for Telegram outbound sends (sendMessage, sendPhoto, etc.).
+ * Unlike the general retry runner, this excludes "timeout" from retryable
+ * errors because a timed-out send may have succeeded server-side. Retrying
+ * a successful-but-timed-out send causes duplicate messages (#30246).
+ */
+export function createTelegramSendRetryRunner(params: {
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
+}): RetryRunner {
+  const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
+    ...params.configRetry,
+    ...params.retry,
+  });
+  return <T>(fn: () => Promise<T>, label?: string) =>
+    retryAsync(fn, {
+      ...retryConfig,
+      label,
+      shouldRetry: (err: unknown) => TELEGRAM_SEND_RETRY_RE.test(formatErrorMessage(err)),
       retryAfterMs: getTelegramRetryAfterMs,
       onRetry: params.verbose
         ? (info) => {
