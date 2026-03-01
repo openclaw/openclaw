@@ -1,6 +1,12 @@
 node_modules
 **/node_modules/
 .env
+.env.local
+.env.*.local
+.env.override
+.env.*.override
+.openclaw/
+**/.openclaw/
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml

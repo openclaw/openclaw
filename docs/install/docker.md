@@ -100,6 +100,17 @@ Note: run `docker compose ...` from the repo root. If you enabled
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
 ```
 
+Canonical local env workflow:
+
+```bash
+cp .env.example .env.local
+$EDITOR .env.local
+docker compose --env-file .env.local up -d
+docker compose --env-file .env.local logs --tail=80 openclaw-gateway
+```
+
+Prefer `--env-file .env.local` over shell exports. Shell environment variables can drift between terminals and produce inconsistent Compose behavior.
+
 ### Control UI token + pairing (Docker)
 
 If you see “unauthorized” or “disconnected (1008): pairing required”, fetch a
