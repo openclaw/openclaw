@@ -49,8 +49,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "agents_list",
   // Interactive setup - not a task
   "whatsapp_login",
-  // Status/scheduling - main agent coordinates
-  "session_status",
+  // Scheduling - subagents should not create cron jobs; main agent coordinates
   "cron",
   // Memory - pass relevant info in spawn prompt instead
   "memory_search",

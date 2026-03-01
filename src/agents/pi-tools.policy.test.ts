@@ -139,6 +139,17 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
   });
 
+  it("allows session_status in subagents for date/time awareness and model info (regression: #30685)", () => {
+    // session_status was previously denied for all subagents.  Sub-agents need it to
+    // answer time-related questions and inspect their own model/usage — neither of which
+    // poses a coordination risk since the tool operates on the subagent's own session.
+    const policy = resolveSubagentToolPolicy(baseCfg, 1);
+    expect(isToolAllowedByPolicyName("session_status", policy)).toBe(true);
+    // Depth-2 leaf should also be allowed
+    const leafPolicy = resolveSubagentToolPolicy(baseCfg, 2);
+    expect(isToolAllowedByPolicyName("session_status", leafPolicy)).toBe(true);
+  });
+
   it("depth-2 leaf denies sessions_spawn", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
