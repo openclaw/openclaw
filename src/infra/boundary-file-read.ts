@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
-import { openVerifiedFileSync, type SafeOpenSyncFailureReason } from "./safe-open-sync.js";
+import {
+  openVerifiedFileSync,
+  type SafeOpenSyncAllowedType,
+  type SafeOpenSyncFailureReason,
+} from "./safe-open-sync.js";
 
 type BoundaryReadFs = Pick<
   typeof fs,
@@ -28,6 +32,7 @@ export type OpenBoundaryFileSyncParams = {
   rootRealPath?: string;
   maxBytes?: number;
   rejectHardlinks?: boolean;
+  allowedTypes?: readonly SafeOpenSyncAllowedType[];
   skipLexicalRootCheck?: boolean;
   ioFs?: BoundaryReadFs;
 };
@@ -74,6 +79,7 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     resolvedPath,
     rejectHardlinks: params.rejectHardlinks ?? true,
     maxBytes: params.maxBytes,
+    allowedTypes: params.allowedTypes,
     ioFs,
   });
   if (!opened.ok) {
