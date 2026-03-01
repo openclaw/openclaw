@@ -56,6 +56,8 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
+    heartbeat?: { target?: string };
   }) => Promise<HeartbeatRunResult>;
   /**
    * WakeMode=now: max time to wait for runHeartbeatOnce to stop returning
@@ -80,6 +82,11 @@ export type CronServiceDeps = {
        * https://github.com/openclaw/openclaw/issues/15692
        */
       delivered?: boolean;
+      /**
+       * `true` when announce/direct delivery was attempted for this run, even
+       * if the final per-message ack status is uncertain.
+       */
+      deliveryAttempted?: boolean;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

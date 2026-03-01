@@ -32,11 +32,15 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
+import {
+  resolveSessionTranscriptPath,
+  setSessionRuntimeModel,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
@@ -59,6 +63,7 @@ import {
   pickSummaryFromPayloads,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 
@@ -73,6 +78,12 @@ export type RunCronAgentTurnResult = {
    * messages.  See: https://github.com/openclaw/openclaw/issues/15692
    */
   delivered?: boolean;
+  /**
+   * `true` when cron attempted announce/direct delivery for this run.
+   * This is tracked separately from `delivered` because some announce paths
+   * cannot guarantee a final delivery ack synchronously.
+   */
+  deliveryAttempted?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
 
@@ -132,10 +143,7 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey: baseSessionKey,
-  });
+  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);
@@ -194,10 +202,17 @@ export async function runCronIsolatedAgentTurn(params: {
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
-      return { status: "error", error: resolvedOverride.error };
+      if (resolvedOverride.error.startsWith("model not allowed:")) {
+        logWarn(
+          `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
+        );
+      } else {
+        return { status: "error", error: resolvedOverride.error };
+      }
+    } else {
+      provider = resolvedOverride.ref.provider;
+      model = resolvedOverride.ref.model;
     }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
   }
   const now = Date.now();
   const cronSession = resolveCronSession({
@@ -302,6 +317,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
+    accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
   });
 
@@ -366,9 +382,18 @@ export async function runCronIsolatedAgentTurn(params: {
     await persistSessionEntry();
   }
 
-  // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
+  // Persist the intended model and systemSent before the run so that
+  // sessions_list reflects the cron override even if the run fails or is
+  // still in progress (#21057).  Best-effort: a filesystem error here
+  // must not prevent the actual agent run from executing.
+  cronSession.sessionEntry.modelProvider = provider;
+  cronSession.sessionEntry.model = model;
   cronSession.sessionEntry.systemSent = true;
-  await persistSessionEntry();
+  try {
+    await persistSessionEntry();
+  } catch (err) {
+    logWarn(`[cron:${params.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+  }
 
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
   // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
@@ -450,8 +475,11 @@ export async function runCronIsolatedAgentTurn(params: {
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: true,
-          disableMessageTool: deliveryRequested,
+          // Only enforce an explicit message target when the cron delivery target
+          // was successfully resolved. When resolution fails the agent should not
+          // be blocked by a target it cannot satisfy (#27898).
+          requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
+          disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
           abortSignal,
         });
       },
@@ -481,8 +509,10 @@ export async function runCronIsolatedAgentTurn(params: {
     const contextTokens =
       agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
-    cronSession.sessionEntry.modelProvider = providerUsed;
-    cronSession.sessionEntry.model = modelUsed;
+    setSessionRuntimeModel(cronSession.sessionEntry, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = runResult.meta?.agentMeta?.sessionId?.trim();
@@ -493,27 +523,32 @@ export async function runCronIsolatedAgentTurn(params: {
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
-      const totalTokens =
-        deriveSessionTotalTokens({
-          usage,
-          contextTokens,
-          promptTokens,
-        }) ?? input;
+      const totalTokens = deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+        promptTokens,
+      });
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
-      cronSession.sessionEntry.totalTokens = totalTokens;
-      cronSession.sessionEntry.totalTokensFresh = true;
+      const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+        input_tokens: input,
+        output_tokens: output,
+      };
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        cronSession.sessionEntry.totalTokens = totalTokens;
+        cronSession.sessionEntry.totalTokensFresh = true;
+        telemetryUsage.total_tokens = totalTokens;
+      } else {
+        cronSession.sessionEntry.totalTokens = undefined;
+        cronSession.sessionEntry.totalTokensFresh = false;
+      }
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
 
       telemetry = {
         model: modelUsed,
         provider: providerUsed,
-        usage: {
-          input_tokens: input,
-          output_tokens: output,
-          total_tokens: totalTokens,
-        },
+        usage: telemetryUsage,
       };
     } else {
       telemetry = {
@@ -544,22 +579,35 @@ export async function runCronIsolatedAgentTurn(params: {
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
+  const runLevelError = runResult.meta?.error;
+  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
+  const hasSuccessfulPayloadAfterLastError =
+    !runLevelError &&
+    lastErrorPayloadIndex >= 0 &&
+    payloads
+      .slice(lastErrorPayloadIndex + 1)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+  // Tool wrappers can emit transient/false-positive error payloads before a valid final
+  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
+  // did not report a model/context-level error and (b) a non-error payload follows.
+  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
-  const embeddedRunError = hasErrorPayload
+  const embeddedRunError = hasFatalErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
-  const resolveRunOutcome = (params?: { delivered?: boolean }) =>
+  const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     withRunSession({
-      status: hasErrorPayload ? "error" : "ok",
-      ...(hasErrorPayload
+      status: hasFatalErrorPayload ? "error" : "ok",
+      ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
       summary,
       outputText,
       delivered: params?.delivered,
+      deliveryAttempted: params?.deliveryAttempted,
       ...telemetry,
     });
 
@@ -605,14 +653,23 @@ export async function runCronIsolatedAgentTurn(params: {
     withRunSession,
   });
   if (deliveryResult.result) {
-    if (!hasErrorPayload || deliveryResult.result.status !== "ok") {
-      return deliveryResult.result;
+    const resultWithDeliveryMeta: RunCronAgentTurnResult = {
+      ...deliveryResult.result,
+      deliveryAttempted:
+        deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+    };
+    if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
+      return resultWithDeliveryMeta;
     }
-    return resolveRunOutcome({ delivered: deliveryResult.result.delivered });
+    return resolveRunOutcome({
+      delivered: deliveryResult.result.delivered,
+      deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+    });
   }
   const delivered = deliveryResult.delivered;
+  const deliveryAttempted = deliveryResult.deliveryAttempted;
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
 
-  return resolveRunOutcome({ delivered });
+  return resolveRunOutcome({ delivered, deliveryAttempted });
 }

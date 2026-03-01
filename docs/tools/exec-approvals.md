@@ -165,6 +165,10 @@ and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOM
 used to smuggle file reads.
 Safe bins must also resolve from trusted binary directories (system defaults plus optional
 `tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
+Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
+If your safe-bin executable lives in package-manager/user paths (for example
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
+to `tools.exec.safeBinTrustedDirs`.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist

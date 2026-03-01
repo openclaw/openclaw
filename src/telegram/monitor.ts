@@ -2,6 +2,7 @@ import { type RunOptions, run } from "@grammyjs/runner";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
@@ -45,8 +46,9 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
-      // Retry transient failures for a limited window before surfacing errors.
-      maxRetryTime: 5 * 60 * 1000,
+      // Keep grammY retrying for a long outage window. If polling still
+      // stops, the outer monitor loop restarts it with backoff.
+      maxRetryTime: 60 * 60 * 1000,
       retryInterval: "exponential",
     },
   };
@@ -58,6 +60,8 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   factor: 1.8,
   jitter: 0.25,
 };
+
+type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
@@ -169,16 +173,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
-      const abortSignal = opts.abortSignal;
-      if (abortSignal && !abortSignal.aborted) {
-        await new Promise<void>((resolve) => {
-          const onAbort = () => {
-            abortSignal.removeEventListener("abort", onAbort);
-            resolve();
-          };
-          abortSignal.addEventListener("abort", onAbort, { once: true });
-        });
-      }
+      await waitForAbortSignal(opts.abortSignal);
       return;
     }
 
@@ -186,21 +181,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     let restartAttempts = 0;
     let webhookCleared = false;
     const runnerOptions = createTelegramRunnerOptions(cfg);
-    const waitBeforeRetryOnRecoverableSetupError = async (
-      err: unknown,
-      logPrefix: string,
-    ): Promise<boolean> => {
-      if (opts.abortSignal?.aborted) {
-        return false;
-      }
-      if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
-        throw err;
-      }
+    const waitBeforeRestart = async (buildLine: (delay: string) => string): Promise<boolean> => {
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-      (opts.runtime?.error ?? console.error)(
-        `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
-      );
+      const delay = formatDurationPrecise(delayMs);
+      log(buildLine(delay));
       try {
         await sleepWithAbort(delayMs, opts.abortSignal);
       } catch (sleepErr) {
@@ -212,10 +197,24 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return true;
     };
 
-    while (!opts.abortSignal?.aborted) {
-      let bot;
+    const waitBeforeRetryOnRecoverableSetupError = async (
+      err: unknown,
+      logPrefix: string,
+    ): Promise<boolean> => {
+      if (opts.abortSignal?.aborted) {
+        return false;
+      }
+      if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        throw err;
+      }
+      return waitBeforeRestart(
+        (delay) => `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${delay}.`,
+      );
+    };
+
+    const createPollingBot = async (): Promise<TelegramBot | undefined> => {
       try {
-        bot = createTelegramBot({
+        return createTelegramBot({
           token,
           runtime: opts.runtime,
           proxyFetch,
@@ -232,31 +231,34 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           "Telegram setup network error",
         );
         if (!shouldRetry) {
-          return;
+          return undefined;
         }
-        continue;
+        return undefined;
       }
+    };
 
-      if (!webhookCleared) {
-        try {
-          await withTelegramApiErrorLogging({
-            operation: "deleteWebhook",
-            runtime: opts.runtime,
-            fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
-          });
-          webhookCleared = true;
-        } catch (err) {
-          const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
-            err,
-            "Telegram webhook cleanup failed",
-          );
-          if (!shouldRetry) {
-            return;
-          }
-          continue;
-        }
+    const ensureWebhookCleanup = async (bot: TelegramBot): Promise<"ready" | "retry" | "exit"> => {
+      if (webhookCleared) {
+        return "ready";
       }
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "deleteWebhook",
+          runtime: opts.runtime,
+          fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+        });
+        webhookCleared = true;
+        return "ready";
+      } catch (err) {
+        const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
+          err,
+          "Telegram webhook cleanup failed",
+        );
+        return shouldRetry ? "retry" : "exit";
+      }
+    };
 
+    const runPollingCycle = async (bot: TelegramBot): Promise<"continue" | "exit"> => {
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
@@ -277,17 +279,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        if (!forceRestarted) {
-          return;
+        if (opts.abortSignal?.aborted) {
+          return "exit";
         }
+        const reason = forceRestarted
+          ? "unhandled network error"
+          : "runner stopped (maxRetryTime exceeded or graceful stop)";
         forceRestarted = false;
-        restartAttempts += 1;
-        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-        log(
-          `Telegram polling runner restarted after unhandled network error; retrying in ${formatDurationPrecise(delayMs)}.`,
+        const shouldRestart = await waitBeforeRestart(
+          (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
         );
-        await sleepWithAbort(delayMs, opts.abortSignal);
-        continue;
+        return shouldRestart ? "continue" : "exit";
       } catch (err) {
         forceRestarted = false;
         if (opts.abortSignal?.aborted) {
@@ -298,24 +300,35 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         if (!isConflict && !isRecoverable) {
           throw err;
         }
-        restartAttempts += 1;
-        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
         const reason = isConflict ? "getUpdates conflict" : "network error";
         const errMsg = formatErrorMessage(err);
-        (opts.runtime?.error ?? console.error)(
-          `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationPrecise(delayMs)}.`,
+        const shouldRestart = await waitBeforeRestart(
+          (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
         );
-        try {
-          await sleepWithAbort(delayMs, opts.abortSignal);
-        } catch (sleepErr) {
-          if (opts.abortSignal?.aborted) {
-            return;
-          }
-          throw sleepErr;
-        }
+        return shouldRestart ? "continue" : "exit";
       } finally {
         opts.abortSignal?.removeEventListener("abort", stopOnAbort);
         await stopRunner();
+      }
+    };
+
+    while (!opts.abortSignal?.aborted) {
+      const bot = await createPollingBot();
+      if (!bot) {
+        continue;
+      }
+
+      const cleanupState = await ensureWebhookCleanup(bot);
+      if (cleanupState === "retry") {
+        continue;
+      }
+      if (cleanupState === "exit") {
+        return;
+      }
+
+      const state = await runPollingCycle(bot);
+      if (state === "exit") {
+        return;
       }
     }
   } finally {

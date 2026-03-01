@@ -141,6 +141,11 @@ export function createSynologyChatPlugin() {
             '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
           );
         }
+        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
+          warnings.push(
+            '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+          );
+        }
         return warnings;
       },
     },
@@ -218,6 +223,12 @@ export function createSynologyChatPlugin() {
         if (!account.token || !account.incomingUrl) {
           log?.warn?.(
             `Synology Chat account ${accountId} not fully configured (missing token or incomingUrl)`,
+          );
+          return { stop: () => {} };
+        }
+        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
+          log?.warn?.(
+            `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
           );
           return { stop: () => {} };
         }
