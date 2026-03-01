@@ -109,4 +109,17 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /**
+   * Internal hook for adaptive model routing.
+   * Called with the raw attempt result on the success path so the wrapper can
+   * validate outcome quality without re-inspecting the final EmbeddedPiRunResult.
+   * Not for general use.
+   */
+  _onAttemptResult?: (attempt: import("./types.js").EmbeddedRunAttemptResult) => void;
+  /**
+   * Internal flag for adaptive routing: indicates an explicit per-run model
+   * override was provided (CLI/env/API). Used to enforce bypassOnExplicitOverride.
+   * Not for general use.
+   */
+  _hasExplicitModelOverride?: boolean;
 };

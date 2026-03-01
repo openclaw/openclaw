@@ -1271,6 +1271,10 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // Fire the adaptive-routing callback so the wrapper can inspect
+          // the rich attempt data for outcome validation.
+          params._onAttemptResult?.(attempt);
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
