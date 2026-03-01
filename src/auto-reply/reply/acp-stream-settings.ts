@@ -131,14 +131,34 @@ export function resolveAcpStreamingConfig(params: {
   cfg: OpenClawConfig;
   provider?: string;
   accountId?: string;
+  deliveryMode?: AcpDeliveryMode;
 }) {
-  return resolveEffectiveBlockStreamingConfig({
+  const resolved = resolveEffectiveBlockStreamingConfig({
     cfg: params.cfg,
     provider: params.provider,
     accountId: params.accountId,
     maxChunkChars: resolveAcpStreamMaxChunkChars(params.cfg),
     coalesceIdleMs: resolveAcpStreamCoalesceIdleMs(params.cfg),
   });
+
+  // In live mode, ACP text deltas should flush promptly and never be held
+  // behind large generic min-char thresholds.
+  if (params.deliveryMode === "live") {
+    return {
+      chunking: {
+        ...resolved.chunking,
+        minChars: 1,
+      },
+      coalescing: {
+        ...resolved.coalescing,
+        minChars: 1,
+        // ACP delta streams already carry spacing/newlines; preserve exact text.
+        joiner: "",
+      },
+    };
+  }
+
+  return resolved;
 }
 
 export function isAcpTagVisible(
