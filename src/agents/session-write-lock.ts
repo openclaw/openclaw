@@ -7,6 +7,7 @@ import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 type LockFilePayload = {
   pid?: number;
   createdAt?: string;
+  bootId?: string;
 };
 
 type HeldLock = {
@@ -40,6 +41,9 @@ const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
+const LINUX_BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
+
+let cachedBootId: string | null | undefined;
 
 type CleanupState = {
   registered: boolean;
@@ -100,6 +104,23 @@ function resolvePositiveMs(
     return fallback;
   }
   return value;
+}
+
+function resolveCurrentBootId(): string | null {
+  if (cachedBootId !== undefined) {
+    return cachedBootId;
+  }
+  if (process.platform !== "linux") {
+    cachedBootId = null;
+    return cachedBootId;
+  }
+  try {
+    const value = fsSync.readFileSync(LINUX_BOOT_ID_PATH, "utf8").trim();
+    cachedBootId = value.length > 0 ? value : null;
+  } catch {
+    cachedBootId = null;
+  }
+  return cachedBootId;
 }
 
 export function resolveSessionLockMaxHoldFromTimeout(params: {
@@ -276,6 +297,9 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.createdAt === "string") {
       payload.createdAt = parsed.createdAt;
     }
+    if (typeof parsed.bootId === "string") {
+      payload.bootId = parsed.bootId;
+    }
     return payload;
   } catch {
     return null;
@@ -286,10 +310,13 @@ function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
   nowMs: number,
+  currentBootId: string | null,
 ): LockInspectionDetails {
   const pid = typeof payload?.pid === "number" ? payload.pid : null;
   const pidAlive = pid !== null ? isPidAlive(pid) : false;
   const createdAt = typeof payload?.createdAt === "string" ? payload.createdAt : null;
+  const bootIdRaw = typeof payload?.bootId === "string" ? payload.bootId.trim() : "";
+  const bootId = bootIdRaw.length > 0 ? bootIdRaw : null;
   const createdAtMs = createdAt ? Date.parse(createdAt) : Number.NaN;
   const ageMs = Number.isFinite(createdAtMs) ? Math.max(0, nowMs - createdAtMs) : null;
 
@@ -303,6 +330,9 @@ function inspectLockPayload(
     staleReasons.push("invalid-createdAt");
   } else if (ageMs > staleMs) {
     staleReasons.push("too-old");
+  }
+  if (currentBootId && bootId && bootId !== currentBootId) {
+    staleReasons.push("boot-id-mismatch");
   }
 
   return {
@@ -351,6 +381,7 @@ export async function cleanStaleLockFiles(params: {
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
+  bootId?: string | null;
   log?: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
@@ -360,6 +391,7 @@ export async function cleanStaleLockFiles(params: {
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
+  const currentBootId = params.bootId === undefined ? resolveCurrentBootId() : params.bootId;
 
   let entries: fsSync.Dirent[] = [];
   try {
@@ -381,7 +413,7 @@ export async function cleanStaleLockFiles(params: {
   for (const entry of lockEntries) {
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
-    const inspected = inspectLockPayload(payload, staleMs, nowMs);
+    const inspected = inspectLockPayload(payload, staleMs, nowMs, currentBootId);
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
@@ -409,6 +441,7 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
+  bootId?: string | null;
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -416,6 +449,7 @@ export async function acquireSessionWriteLock(params: {
   const timeoutMs = resolvePositiveMs(params.timeoutMs, 10_000, { allowInfinity: true });
   const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
+  const currentBootId = params.bootId === undefined ? resolveCurrentBootId() : params.bootId;
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   await fs.mkdir(sessionDir, { recursive: true });
@@ -447,7 +481,11 @@ export async function acquireSessionWriteLock(params: {
     try {
       handle = await fs.open(lockPath, "wx");
       const createdAt = new Date().toISOString();
-      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt }, null, 2), "utf8");
+      const payload: LockFilePayload = { pid: process.pid, createdAt };
+      if (currentBootId) {
+        payload.bootId = currentBootId;
+      }
+      await handle.writeFile(JSON.stringify(payload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
         handle,
@@ -480,7 +518,7 @@ export async function acquireSessionWriteLock(params: {
       }
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
-      const inspected = inspectLockPayload(payload, staleMs, nowMs);
+      const inspected = inspectLockPayload(payload, staleMs, nowMs, currentBootId);
       if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
         continue;

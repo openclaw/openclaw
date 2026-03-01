@@ -89,6 +89,67 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("reclaims fresh lock files when boot marker mismatches", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          bootId: "old-boot",
+        }),
+        "utf8",
+      );
+
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        staleMs: 60_000,
+        bootId: "new-boot",
+      });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { pid: number; bootId?: string };
+
+      expect(payload.pid).toBe(process.pid);
+      expect(payload.bootId).toBe("new-boot");
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reclaim fresh lock files when boot marker matches", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          bootId: "same-boot",
+        }),
+        "utf8",
+      );
+
+      await expect(
+        acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 50,
+          staleMs: 60_000,
+          bootId: "same-boot",
+        }),
+      ).rejects.toThrow(/session file locked/);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not reclaim fresh malformed lock files during contention", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {
@@ -219,6 +280,39 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(staleDeadLock)).rejects.toThrow();
       await expect(fs.access(staleAliveLock)).rejects.toThrow();
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans fresh lock files from previous boots", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "prev-boot.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          bootId: "boot-old",
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 60_000,
+        removeStale: true,
+        bootId: "boot-new",
+      });
+
+      expect(result.cleaned).toHaveLength(1);
+      expect(path.basename(result.cleaned[0]?.lockPath ?? "")).toBe("prev-boot.jsonl.lock");
+      expect(result.cleaned[0]?.staleReasons).toContain("boot-id-mismatch");
+      await expect(fs.access(lockPath)).rejects.toThrow();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
