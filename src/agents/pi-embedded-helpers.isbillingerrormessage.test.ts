@@ -98,6 +98,7 @@ describe("isBillingErrorMessage", () => {
       "Use a 402 stainless bolt",
       "Book a 402 room",
       "There is a 402 near me",
+      "HTTP 402: request limit reached in your 5-hour window, please try again later",
     ];
     for (const sample of falsePositives) {
       expect(isBillingErrorMessage(sample)).toBe(false);
@@ -467,6 +468,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        "HTTP 402: request limit reached in your 5-hour window, please try again later",
+      ),
+    ).toBe("rate_limit");
     expect(
       classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
     ).toBe("rate_limit");

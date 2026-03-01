@@ -84,6 +84,13 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("treats 402 request-window throttling as rate limit instead of billing", () => {
+    const msg = makeAssistantError(
+      "HTTP 402: request limit reached in your 5-hour window, please try again later",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe("⚠️ API rate limit reached. Please try again later.");
+  });
   it("returns a friendly billing message for insufficient credits", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);

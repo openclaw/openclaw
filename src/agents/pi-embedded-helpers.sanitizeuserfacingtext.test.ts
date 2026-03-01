@@ -66,6 +66,13 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
   });
 
+  it("rewrites 402 request-window throttling as rate limit with errorContext", () => {
+    const text = "HTTP 402: request limit reached in your 5-hour window, please try again later";
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
     expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(

@@ -25,7 +25,7 @@ const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
+  if (isRateLimitErrorMessage(raw) || isRateLimit402Error(raw)) {
     return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
@@ -163,6 +163,8 @@ const BILLING_ERROR_HEAD_RE =
   /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
 const BILLING_ERROR_HARD_402_RE =
   /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
+const RATE_LIMIT_402_HINT_RE =
+  /rate[_\s-]?limit|too many requests|request(?:s)?(?:\s+\w+){0,4}\s+limit|quota|throttl|usage limit|message limit|retry(?:ing)? after|try again later|resource(?:\s+has\s+been)? exhausted|tpm|tokens per minute|rpm|rpd|\b(?:5|five)[-\s]?hour\b.*window|window.*(?:limit|exceed)/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -577,6 +579,11 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
       );
     }
 
+    const transientCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+    if (transientCopy) {
+      return transientCopy;
+    }
+
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
     }
@@ -715,6 +722,22 @@ export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
 }
 
+function isRateLimit402Error(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  if (!BILLING_ERROR_HARD_402_RE.test(lower)) {
+    return false;
+  }
+  if (isRateLimitErrorMessage(lower) || isOverloadedErrorMessage(lower)) {
+    return true;
+  }
+  const parsed = parseApiErrorInfo(raw);
+  const searchable = [lower, parsed?.type, parsed?.message].filter(Boolean).join(" ");
+  return RATE_LIMIT_402_HINT_RE.test(searchable);
+}
+
 /**
  * Maximum character length for a string to be considered a billing error message.
  * Real API billing errors are short, structured messages (typically under 300 chars).
@@ -725,6 +748,10 @@ const BILLING_ERROR_MAX_LENGTH = 512;
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) {
+    return false;
+  }
+  // Anthropic Max can return HTTP 402 for temporary usage throttling.
+  if (isRateLimit402Error(raw)) {
     return false;
   }
   // Real billing error messages from APIs are short structured payloads.
@@ -896,7 +923,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
-  if (isRateLimitErrorMessage(raw)) {
+  if (isRateLimitErrorMessage(raw) || isRateLimit402Error(raw)) {
     return "rate_limit";
   }
   if (isOverloadedErrorMessage(raw)) {
