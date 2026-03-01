@@ -1430,7 +1430,11 @@ describe("dispatchReplyFromConfig", () => {
         }),
       }),
     );
-    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    // message:received + message:sent
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "message", action: "sent" }),
+    );
   });
 
   it("skips internal message:received hook when session key is unavailable", async () => {
