@@ -12,7 +12,7 @@ import {
   isRequestBodyLimitError,
 } from "openclaw/plugin-sdk";
 import type { ResolvedGoHighLevelAccount } from "./accounts.js";
-import { sendGHLMessage } from "./api.js";
+import { addGHLContactTag, sendGHLMessage } from "./api.js";
 import { verifyGHLSignature } from "./auth.js";
 import { getGoHighLevelRuntime } from "./runtime.js";
 import type { GHLWebhookPayload } from "./types.js";
@@ -360,6 +360,20 @@ async function processMessageWithPipeline(params: {
   });
 }
 
+const ESCALATION_PATTERNS = [
+  "let me look into that for you",
+  "i'll get back to you shortly",
+  "let me check on that",
+  // Legacy patterns in case prompt changes
+  "connect you with robert",
+  "reach him at (619) 602-9713",
+];
+
+function isEscalationReply(text: string): boolean {
+  const lower = text.toLowerCase();
+  return ESCALATION_PATTERNS.some((p) => lower.includes(p));
+}
+
 async function deliverGHLReply(params: {
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string };
   account: ResolvedGoHighLevelAccount;
@@ -389,6 +403,13 @@ async function deliverGHLReply(params: {
       } catch (err) {
         runtime.error?.(`GHL message send failed: ${String(err)}`);
       }
+    }
+
+    // Tag contact for escalation when the bot defers to Robert
+    if (isEscalationReply(payload.text)) {
+      addGHLContactTag({ account, contactId, tag: "escalation" }).catch((err) => {
+        runtime.error?.(`GHL escalation tag failed: ${String(err)}`);
+      });
     }
   }
 }
