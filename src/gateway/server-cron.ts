@@ -192,9 +192,11 @@ export function buildGatewayCronService(params: {
           (entry) =>
             entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
         );
+      const agentHeartbeat =
+        agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
-        ...agentEntry?.heartbeat,
+        ...agentHeartbeat,
       };
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
