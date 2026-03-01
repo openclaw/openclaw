@@ -28,7 +28,7 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
-  it("supports deliveryMode=final_only by buffering deltas until done", async () => {
+  it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -38,6 +38,9 @@ describe("createAcpReplyProjector", () => {
             coalesceIdleMs: 0,
             maxChunkChars: 512,
             deliveryMode: "final_only",
+            tagVisibility: {
+              available_commands_update: true,
+            },
           },
         },
       }),
@@ -54,6 +57,19 @@ describe("createAcpReplyProjector", () => {
       tag: "agent_message_chunk",
     });
     await projector.onEvent({
+      type: "status",
+      text: "available commands updated (7)",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_1",
+      status: "in_progress",
+      title: "List files",
+      text: "List files (in_progress)",
+    });
+    await projector.onEvent({
       type: "text_delta",
       text: " now?",
       tag: "agent_message_chunk",
@@ -61,7 +77,62 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([]);
 
     await projector.onEvent({ type: "done" });
-    expect(deliveries).toEqual([{ kind: "block", text: "What now?" }]);
+    expect(deliveries).toHaveLength(3);
+    expect(deliveries[0]).toEqual({
+      kind: "tool",
+      text: prefixSystemMessage("available commands updated (7)"),
+    });
+    expect(deliveries[1]?.kind).toBe("tool");
+    expect(deliveries[1]?.text).toContain("Tool Call");
+    expect(deliveries[2]).toEqual({ kind: "block", text: "What now?" });
+  });
+
+  it("flushes buffered status/tool output on error in deliveryMode=final_only", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 512,
+            deliveryMode: "final_only",
+            tagVisibility: {
+              available_commands_update: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated (7)",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_2",
+      status: "in_progress",
+      title: "Run tests",
+      text: "Run tests (in_progress)",
+    });
+    expect(deliveries).toEqual([]);
+
+    await projector.onEvent({ type: "error", message: "turn failed" });
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[0]).toEqual({
+      kind: "tool",
+      text: prefixSystemMessage("available commands updated (7)"),
+    });
+    expect(deliveries[1]?.kind).toBe("tool");
+    expect(deliveries[1]?.text).toContain("Tool Call");
   });
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
@@ -91,6 +162,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 64,
+            deliveryMode: "live",
             tagVisibility: {
               usage_update: true,
             },
@@ -142,7 +214,6 @@ describe("createAcpReplyProjector", () => {
         return true;
       },
     });
-
     await projector.onEvent({
       type: "status",
       text: "available commands updated (7)",
@@ -155,7 +226,14 @@ describe("createAcpReplyProjector", () => {
   it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
-      cfg: createCfg(),
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+          },
+        },
+      }),
       shouldSendToolSummaries: true,
       deliver: async (kind, payload) => {
         deliveries.push({ kind, text: payload.text });
@@ -206,7 +284,14 @@ describe("createAcpReplyProjector", () => {
   it("renders fallback tool labels without leaking call ids as primary label", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
-      cfg: createCfg(),
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+          },
+        },
+      }),
       shouldSendToolSummaries: true,
       deliver: async (kind, payload) => {
         deliveries.push({ kind, text: payload.text });
@@ -235,6 +320,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            deliveryMode: "live",
             repeatSuppression: false,
             tagVisibility: {
               available_commands_update: true,
@@ -303,6 +389,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            deliveryMode: "live",
             tagVisibility: {
               available_commands_update: true,
             },
@@ -388,6 +475,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            deliveryMode: "live",
             maxMetaEventsPerTurn: 1,
             tagVisibility: {
               usage_update: true,
@@ -438,6 +526,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            deliveryMode: "live",
             tagVisibility: {
               tool_call_update: false,
             },

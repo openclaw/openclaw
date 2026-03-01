@@ -59,7 +59,10 @@ function clampBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
-  return value === "final_only" ? "final_only" : DEFAULT_ACP_DELIVERY_MODE;
+  if (value === "live" || value === "final_only") {
+    return value;
+  }
+  return DEFAULT_ACP_DELIVERY_MODE;
 }
 
 function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
