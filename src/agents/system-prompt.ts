@@ -2,6 +2,8 @@ import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { applyRuntimeLineMasking, redactContextFileContent } from "../privacy/payload-redact.js";
+import type { PrivacyConfig } from "../privacy/types.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -232,6 +234,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Privacy/redaction config applied before content leaves the machine. */
+  privacyConfig?: PrivacyConfig;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const coreToolSummaries: Record<string, string> = {
@@ -620,7 +624,12 @@ export function buildAgentSystemPrompt(params: {
     }
     lines.push("");
     for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
+      const fileContent = redactContextFileContent(file.path, file.content, params.privacyConfig);
+      if (fileContent === "" && params.privacyConfig?.systemPrompt?.suppressContextFiles) {
+        // File suppressed by privacy config — skip entirely
+        continue;
+      }
+      lines.push(`## ${file.path}`, "", fileContent, "");
     }
   }
 
@@ -655,9 +664,16 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  const rawRuntimeLine = buildRuntimeLine(
+    runtimeInfo,
+    runtimeChannel,
+    runtimeCapabilities,
+    params.defaultThinkLevel,
+  );
+  const maskedRuntimeLine = applyRuntimeLineMasking(rawRuntimeLine, params.privacyConfig);
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    maskedRuntimeLine,
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 

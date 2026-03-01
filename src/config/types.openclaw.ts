@@ -1,3 +1,4 @@
+import type { PrivacyConfig } from "../privacy/types.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -112,6 +113,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /** Controls what data is included in LLM inference payloads. */
+  privacy?: PrivacyConfig;
 };
 
 export type ConfigValidationIssue = {
