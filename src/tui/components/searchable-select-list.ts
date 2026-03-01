@@ -273,7 +273,12 @@ export class SearchableSelectList implements Component {
       const descriptionLayout = this.getDescriptionLayout(width, prefixWidth);
       if (descriptionLayout) {
         const truncatedValue = truncateToWidth(displayValue, descriptionLayout.maxValueWidth, "");
-        const valueText = this.highlightMatch(truncatedValue, query);
+        const highlightedValue = this.highlightMatch(truncatedValue, query);
+        // Re-clamp after highlight in case theme wrappers alter visible width.
+        const valueText =
+          visibleWidth(highlightedValue) <= descriptionLayout.maxValueWidth
+            ? highlightedValue
+            : truncateToWidth(stripAnsi(highlightedValue), descriptionLayout.maxValueWidth, "");
 
         const usedByValue = visibleWidth(valueText);
         const remainingWidth = descriptionLayout.availableWidth - usedByValue;
@@ -293,7 +298,14 @@ export class SearchableSelectList implements Component {
 
     const maxWidth = width - prefixWidth - 2;
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
-    const valueText = this.highlightMatch(truncatedValue, query);
+    const highlighted = this.highlightMatch(truncatedValue, query);
+    // Re-clamp after highlight: ANSI styling added by matchHighlight does not
+    // affect visible width, but theme wrappers (selectedText, etc.) may add
+    // sequences that shift the rendered width. Guard against overflow.
+    const valueText =
+      visibleWidth(highlighted) <= maxWidth
+        ? highlighted
+        : truncateToWidth(stripAnsi(highlighted), maxWidth, "");
     const line = `${prefix}${valueText}`;
     return isSelected ? this.theme.selectedText(line) : line;
   }
