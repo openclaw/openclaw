@@ -17,47 +17,83 @@ function isTarget(url: string): boolean {
 }
 
 function parseIntSafe(v: string | null): number | undefined {
-  if (!v) return undefined;
+  if (!v) {
+    return undefined;
+  }
   const n = parseInt(v.trim(), 10);
   return Number.isFinite(n) ? n : undefined;
 }
 function parseFloatSafe(v: string | null): number | undefined {
-  if (!v) return undefined;
+  if (!v) {
+    return undefined;
+  }
   const n = parseFloat(v.trim());
   return Number.isFinite(n) ? n : undefined;
 }
 
 export function installOpenAiRateLimitShaper(): void {
-  if (!ENABLED) return;
+  if (!ENABLED) {
+    return;
+  }
+
   // Only install once
-  // @ts-ignore
-  if ((globalThis as any).__ocOpenAIShaperApplied) return;
-  // @ts-ignore
-  (globalThis as any).__ocOpenAIShaperApplied = true;
+  const SHAPER_FLAG = "__ocOpenAIShaperApplied" as const;
+  const g = globalThis as Record<string, unknown>;
+  if (g[SHAPER_FLAG]) {
+    return;
+  }
+  g[SHAPER_FLAG] = true;
 
   const buckets = new Map<string, { nextOkAt?: number; coolingUntil?: number }>();
   const jitter = (ms: number) => Math.max(0, Math.floor(ms * (0.9 + Math.random() * 0.2)));
   const now = () => Date.now();
 
-  const origFetch = globalThis.fetch as any;
-  if (!origFetch) return;
+  const origFetch: typeof fetch | undefined = (globalThis as any).fetch;
+  if (!origFetch) {
+    return;
+  }
 
-  globalThis.fetch = async function shapedFetch(
+  function requestInfoToUrl(input: RequestInfo | URL): string {
+    if (typeof input === "string") {
+      return input;
+    }
+    if (input instanceof URL) {
+      return input.toString();
+    }
+    // Request is available in Node 18+/undici and browsers
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      return input.url;
+    }
+    // Last resort (should be rare)
+    try {
+      return String(input);
+    } catch {
+      return "[object RequestInfo]";
+    }
+  }
+
+  const shapedFetch = async function (
     input: RequestInfo | URL,
     init?: RequestInit,
   ): Promise<Response> {
-    const url = typeof input === "string" ? input : ((input as any).toString?.() ?? String(input));
+    const url = requestInfoToUrl(input);
     const key = `openai:${url}`;
 
     if (isTarget(url)) {
       const b = buckets.get(key) || {};
       const t = now();
       let waitMs = 0;
-      if (b.coolingUntil && t < b.coolingUntil) waitMs = Math.max(waitMs, b.coolingUntil - t);
-      if (b.nextOkAt && t < b.nextOkAt) waitMs = Math.max(waitMs, b.nextOkAt - t);
-      if (waitMs > 0) await new Promise((r) => setTimeout(r, jitter(waitMs)));
+      if (b.coolingUntil && t < b.coolingUntil) {
+        waitMs = Math.max(waitMs, b.coolingUntil - t);
+      }
+      if (b.nextOkAt && t < b.nextOkAt) {
+        waitMs = Math.max(waitMs, b.nextOkAt - t);
+      }
+      if (waitMs > 0) {
+        await new Promise((r) => setTimeout(r, jitter(waitMs)));
+      }
 
-      const resp = await origFetch(input as any, init);
+      const resp = await origFetch(input, init);
       try {
         const h = resp.headers;
         const remReq = parseIntSafe(h.get("x-ratelimit-remaining-requests"));
@@ -75,17 +111,21 @@ export function installOpenAiRateLimitShaper(): void {
         }
         if (limReq && remReq != null && resetReqS != null && limReq > 0) {
           const frac = remReq / limReq;
-          if (frac <= 0.1)
+          if (frac <= 0.1) {
             nextOkAt = Math.max(nextOkAt, nowMs + Math.ceil(resetReqS * 1000 * (1 - frac)));
+          }
         }
         if (limTok && remTok != null && resetTokS != null && limTok > 0) {
           const frac = remTok / limTok;
-          if (frac <= 0.1)
+          if (frac <= 0.1) {
             nextOkAt = Math.max(nextOkAt, nowMs + Math.ceil(resetTokS * 1000 * (1 - frac)));
+          }
         }
         b.nextOkAt = nextOkAt > nowMs ? nextOkAt : undefined;
         buckets.set(key, b);
-      } catch {}
+      } catch {
+        // Ignore header parsing issues
+      }
 
       if (resp.status === 429) {
         const ra = parseFloatSafe(resp.headers.get("retry-after")) || 2;
@@ -97,6 +137,9 @@ export function installOpenAiRateLimitShaper(): void {
       return resp;
     }
 
-    return await origFetch(input as any, init);
-  } as any;
+    return await origFetch(input, init);
+  } as typeof fetch;
+
+  globalThis.fetch = shapedFetch;
 }
+
