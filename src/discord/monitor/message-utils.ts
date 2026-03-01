@@ -228,6 +228,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -320,6 +321,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
+          ssrfPolicy: { allowRfc2544BenchmarkRange: true },
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,

@@ -94,6 +94,7 @@ describe("resolveForwardedMediaList", () => {
       filePathHint: attachment.filename,
       maxBytes: 512,
       fetchImpl: undefined,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -168,6 +169,7 @@ describe("resolveForwardedMediaList", () => {
       filePathHint: "wave.png",
       maxBytes: 512,
       fetchImpl: undefined,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -236,6 +238,7 @@ describe("resolveMediaList", () => {
       filePathHint: "hello.png",
       maxBytes: 512,
       fetchImpl: undefined,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
