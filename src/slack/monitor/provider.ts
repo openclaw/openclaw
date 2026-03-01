@@ -10,6 +10,12 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import type { SessionScope } from "../../config/sessions.js";
 import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
@@ -98,26 +104,25 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
-  if (
-    slackCfg.groupPolicy === undefined &&
-    slackCfg.channels === undefined &&
-    defaultGroupPolicy === undefined &&
-    groupPolicy === "open"
-  ) {
-    runtime.log?.(
-      warn(
-        'slack: groupPolicy defaults to "open" when channels.slack is missing; set channels.slack.groupPolicy (or channels.defaults.groupPolicy) or add channels.slack.channels to restrict access.',
-      ),
-    );
-  }
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const providerConfigPresent = cfg.channels?.slack !== undefined;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent,
+    groupPolicy: slackCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "slack",
+    accountId: account.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
 
   const resolveToken = slackCfg.userToken?.trim() || botToken;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
-  const replyToMode = slackCfg.replyToMode ?? "all";
+  const replyToMode = slackCfg.replyToMode ?? "off";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
@@ -206,6 +211,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     dmEnabled,
     dmPolicy,
     allowFrom,
+    allowNameMatching: isDangerousNameMatchingEnabled(slackCfg),
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,
@@ -363,3 +369,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     await app.stop().catch(() => undefined);
   }
 }
+
+export const __testing = {
+  resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+};

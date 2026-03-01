@@ -1,29 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
+import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), { status: 200 });
+function createGuildListProbeFetcher() {
+  let guildsCalled = false;
+  const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+    const url = urlToString(input);
+    if (url.endsWith("/users/@me/guilds")) {
+      guildsCalled = true;
+      return jsonResponse([]);
+    }
+    return new Response("not found", { status: 404 });
+  });
+  return {
+    fetcher,
+    wasGuildsCalled: () => guildsCalled,
+  };
 }
 
-const urlToString = (url: Request | URL | string): string => {
-  if (typeof url === "string") {
-    return url;
-  }
-  return "url" in url ? url.url : String(url);
-};
+function createGuildsForbiddenFetcher() {
+  return withFetchPreconnect(async (input: RequestInfo | URL) => {
+    const url = urlToString(input);
+    if (url.endsWith("/users/@me/guilds")) {
+      throw new Error("Forbidden: Missing Access");
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
 
 describe("resolveDiscordUserAllowlist", () => {
   it("resolves plain user ids without calling listGuilds", async () => {
-    let guildsCalled = false;
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        guildsCalled = true;
-        return jsonResponse([]);
-      }
-      return new Response("not found", { status: 404 });
-    });
+    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
 
     const results = await resolveDiscordUserAllowlist({
       token: "test",
@@ -38,19 +46,11 @@ describe("resolveDiscordUserAllowlist", () => {
         id: "123456789012345678",
       },
     ]);
-    expect(guildsCalled).toBe(false);
+    expect(wasGuildsCalled()).toBe(false);
   });
 
   it("resolves mention-format ids without calling listGuilds", async () => {
-    let guildsCalled = false;
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        guildsCalled = true;
-        return jsonResponse([]);
-      }
-      return new Response("not found", { status: 404 });
-    });
+    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
 
     const results = await resolveDiscordUserAllowlist({
       token: "test",
@@ -65,19 +65,11 @@ describe("resolveDiscordUserAllowlist", () => {
         id: "123456789012345678",
       },
     ]);
-    expect(guildsCalled).toBe(false);
+    expect(wasGuildsCalled()).toBe(false);
   });
 
   it("resolves prefixed ids (user:, discord:) without calling listGuilds", async () => {
-    let guildsCalled = false;
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        guildsCalled = true;
-        return jsonResponse([]);
-      }
-      return new Response("not found", { status: 404 });
-    });
+    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
 
     const results = await resolveDiscordUserAllowlist({
       token: "test",
@@ -88,17 +80,11 @@ describe("resolveDiscordUserAllowlist", () => {
     expect(results).toHaveLength(2);
     expect(results[0]).toMatchObject({ resolved: true, id: "111" });
     expect(results[1]).toMatchObject({ resolved: true, id: "222" });
-    expect(guildsCalled).toBe(false);
+    expect(wasGuildsCalled()).toBe(false);
   });
 
   it("resolves user ids even when listGuilds would fail", async () => {
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        throw new Error("Forbidden: Missing Access");
-      }
-      return new Response("not found", { status: 404 });
-    });
+    const fetcher = createGuildsForbiddenFetcher();
 
     // Before the fix, this would throw because listGuilds() was called eagerly
     const results = await resolveDiscordUserAllowlist({
@@ -185,13 +171,7 @@ describe("resolveDiscordUserAllowlist", () => {
   });
 
   it("handles mixed ids and usernames — ids resolve even if guilds fail", async () => {
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        throw new Error("Forbidden: Missing Access");
-      }
-      return new Response("not found", { status: 404 });
-    });
+    const fetcher = createGuildsForbiddenFetcher();
 
     // IDs should succeed, username should fail (listGuilds throws)
     await expect(

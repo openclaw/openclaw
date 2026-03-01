@@ -13,34 +13,22 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
 describe("normalizeInboundTextNewlines", () => {
-  it("converts CRLF to LF", () => {
-    expect(normalizeInboundTextNewlines("hello\r\nworld")).toBe("hello\nworld");
-  });
+  it("normalizes real newlines and preserves literal backslash-n sequences", () => {
+    const cases = [
+      { input: "hello\r\nworld", expected: "hello\nworld" },
+      { input: "hello\rworld", expected: "hello\nworld" },
+      { input: "C:\\Work\\nxxx\\README.md", expected: "C:\\Work\\nxxx\\README.md" },
+      {
+        input: "Please read the file at C:\\Work\\nxxx\\README.md",
+        expected: "Please read the file at C:\\Work\\nxxx\\README.md",
+      },
+      { input: "C:\\new\\notes\\nested", expected: "C:\\new\\notes\\nested" },
+      { input: "Line 1\r\nC:\\Work\\nxxx", expected: "Line 1\nC:\\Work\\nxxx" },
+    ] as const;
 
-  it("converts CR to LF", () => {
-    expect(normalizeInboundTextNewlines("hello\rworld")).toBe("hello\nworld");
-  });
-
-  it("preserves literal backslash-n sequences in Windows paths", () => {
-    const windowsPath = "C:\\Work\\nxxx\\README.md";
-    expect(normalizeInboundTextNewlines(windowsPath)).toBe("C:\\Work\\nxxx\\README.md");
-  });
-
-  it("preserves backslash-n in messages containing Windows paths", () => {
-    const message = "Please read the file at C:\\Work\\nxxx\\README.md";
-    expect(normalizeInboundTextNewlines(message)).toBe(
-      "Please read the file at C:\\Work\\nxxx\\README.md",
-    );
-  });
-
-  it("preserves multiple backslash-n sequences", () => {
-    const message = "C:\\new\\notes\\nested";
-    expect(normalizeInboundTextNewlines(message)).toBe("C:\\new\\notes\\nested");
-  });
-
-  it("still normalizes actual CRLF while preserving backslash-n", () => {
-    const message = "Line 1\r\nC:\\Work\\nxxx";
-    expect(normalizeInboundTextNewlines(message)).toBe("Line 1\nC:\\Work\\nxxx");
+    for (const testCase of cases) {
+      expect(normalizeInboundTextNewlines(testCase.input)).toBe(testCase.expected);
+    }
   });
 });
 
@@ -205,348 +193,358 @@ const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
 
 describe("hasLineDirectives", () => {
-  it("detects quick_replies directive", () => {
-    expect(hasLineDirectives("Here are options [[quick_replies: A, B, C]]")).toBe(true);
-  });
+  it("matches expected detection across directive patterns", () => {
+    const cases: Array<{ text: string; expected: boolean }> = [
+      { text: "Here are options [[quick_replies: A, B, C]]", expected: true },
+      { text: "[[location: Place | Address | 35.6 | 139.7]]", expected: true },
+      { text: "[[confirm: Continue? | Yes | No]]", expected: true },
+      { text: "[[buttons: Menu | Choose | Opt1:data1, Opt2:data2]]", expected: true },
+      { text: "Just regular text", expected: false },
+      { text: "[[not_a_directive: something]]", expected: false },
+      { text: "[[media_player: Song | Artist | Speaker]]", expected: true },
+      { text: "[[event: Meeting | Jan 24 | 2pm]]", expected: true },
+      { text: "[[agenda: Today | Meeting:9am, Lunch:12pm]]", expected: true },
+      { text: "[[device: TV | Room]]", expected: true },
+      { text: "[[appletv_remote: Apple TV | Playing]]", expected: true },
+    ];
 
-  it("detects location directive", () => {
-    expect(hasLineDirectives("[[location: Place | Address | 35.6 | 139.7]]")).toBe(true);
-  });
-
-  it("detects confirm directive", () => {
-    expect(hasLineDirectives("[[confirm: Continue? | Yes | No]]")).toBe(true);
-  });
-
-  it("detects buttons directive", () => {
-    expect(hasLineDirectives("[[buttons: Menu | Choose | Opt1:data1, Opt2:data2]]")).toBe(true);
-  });
-
-  it("returns false for regular text", () => {
-    expect(hasLineDirectives("Just regular text")).toBe(false);
-  });
-
-  it("returns false for similar but invalid patterns", () => {
-    expect(hasLineDirectives("[[not_a_directive: something]]")).toBe(false);
-  });
-
-  it("detects media_player directive", () => {
-    expect(hasLineDirectives("[[media_player: Song | Artist | Speaker]]")).toBe(true);
-  });
-
-  it("detects event directive", () => {
-    expect(hasLineDirectives("[[event: Meeting | Jan 24 | 2pm]]")).toBe(true);
-  });
-
-  it("detects agenda directive", () => {
-    expect(hasLineDirectives("[[agenda: Today | Meeting:9am, Lunch:12pm]]")).toBe(true);
-  });
-
-  it("detects device directive", () => {
-    expect(hasLineDirectives("[[device: TV | Room]]")).toBe(true);
-  });
-
-  it("detects appletv_remote directive", () => {
-    expect(hasLineDirectives("[[appletv_remote: Apple TV | Playing]]")).toBe(true);
+    for (const testCase of cases) {
+      expect(hasLineDirectives(testCase.text)).toBe(testCase.expected);
+    }
   });
 });
 
 describe("parseLineDirectives", () => {
   describe("quick_replies", () => {
-    it("parses quick_replies and removes from text", () => {
-      const result = parseLineDirectives({
-        text: "Choose one:\n[[quick_replies: Option A, Option B, Option C]]",
-      });
+    it("parses quick replies variants", () => {
+      const cases: Array<{
+        text: string;
+        channelData?: { line: { quickReplies: string[] } };
+        quickReplies: string[];
+        outputText?: string;
+      }> = [
+        {
+          text: "Choose one:\n[[quick_replies: Option A, Option B, Option C]]",
+          quickReplies: ["Option A", "Option B", "Option C"],
+          outputText: "Choose one:",
+        },
+        {
+          text: "Before [[quick_replies: A, B]] After",
+          quickReplies: ["A", "B"],
+          outputText: "Before  After",
+        },
+        {
+          text: "Text [[quick_replies: C, D]]",
+          channelData: { line: { quickReplies: ["A", "B"] } },
+          quickReplies: ["A", "B", "C", "D"],
+          outputText: "Text",
+        },
+      ];
 
-      expect(getLineData(result).quickReplies).toEqual(["Option A", "Option B", "Option C"]);
-      expect(result.text).toBe("Choose one:");
-    });
-
-    it("handles quick_replies in middle of text", () => {
-      const result = parseLineDirectives({
-        text: "Before [[quick_replies: A, B]] After",
-      });
-
-      expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
-      expect(result.text).toBe("Before  After");
-    });
-
-    it("merges with existing quickReplies", () => {
-      const result = parseLineDirectives({
-        text: "Text [[quick_replies: C, D]]",
-        channelData: { line: { quickReplies: ["A", "B"] } },
-      });
-
-      expect(getLineData(result).quickReplies).toEqual(["A", "B", "C", "D"]);
+      for (const testCase of cases) {
+        const result = parseLineDirectives({
+          text: testCase.text,
+          channelData: testCase.channelData,
+        });
+        expect(getLineData(result).quickReplies).toEqual(testCase.quickReplies);
+        if (testCase.outputText !== undefined) {
+          expect(result.text).toBe(testCase.outputText);
+        }
+      }
     });
   });
 
   describe("location", () => {
-    it("parses location with all fields", () => {
-      const result = parseLineDirectives({
-        text: "Here's the location:\n[[location: Tokyo Station | Tokyo, Japan | 35.6812 | 139.7671]]",
-      });
-
-      expect(getLineData(result).location).toEqual({
-        title: "Tokyo Station",
-        address: "Tokyo, Japan",
-        latitude: 35.6812,
-        longitude: 139.7671,
-      });
-      expect(result.text).toBe("Here's the location:");
-    });
-
-    it("ignores invalid coordinates", () => {
-      const result = parseLineDirectives({
-        text: "[[location: Place | Address | invalid | 139.7]]",
-      });
-
-      expect(getLineData(result).location).toBeUndefined();
-    });
-
-    it("does not override existing location", () => {
+    it("parses location variants", () => {
       const existing = { title: "Existing", address: "Addr", latitude: 1, longitude: 2 };
-      const result = parseLineDirectives({
-        text: "[[location: New | New Addr | 35.6 | 139.7]]",
-        channelData: { line: { location: existing } },
-      });
+      const cases: Array<{
+        text: string;
+        channelData?: { line: { location: typeof existing } };
+        location?: typeof existing;
+        outputText?: string;
+      }> = [
+        {
+          text: "Here's the location:\n[[location: Tokyo Station | Tokyo, Japan | 35.6812 | 139.7671]]",
+          location: {
+            title: "Tokyo Station",
+            address: "Tokyo, Japan",
+            latitude: 35.6812,
+            longitude: 139.7671,
+          },
+          outputText: "Here's the location:",
+        },
+        {
+          text: "[[location: Place | Address | invalid | 139.7]]",
+          location: undefined,
+        },
+        {
+          text: "[[location: New | New Addr | 35.6 | 139.7]]",
+          channelData: { line: { location: existing } },
+          location: existing,
+        },
+      ];
 
-      expect(getLineData(result).location).toEqual(existing);
+      for (const testCase of cases) {
+        const result = parseLineDirectives({
+          text: testCase.text,
+          channelData: testCase.channelData,
+        });
+        expect(getLineData(result).location).toEqual(testCase.location);
+        if (testCase.outputText !== undefined) {
+          expect(result.text).toBe(testCase.outputText);
+        }
+      }
     });
   });
 
   describe("confirm", () => {
-    it("parses simple confirm", () => {
-      const result = parseLineDirectives({
-        text: "[[confirm: Delete this item? | Yes | No]]",
-      });
+    it("parses confirm directives with default and custom action payloads", () => {
+      const cases = [
+        {
+          name: "default yes/no data",
+          text: "[[confirm: Delete this item? | Yes | No]]",
+          expectedTemplate: {
+            type: "confirm",
+            text: "Delete this item?",
+            confirmLabel: "Yes",
+            confirmData: "yes",
+            cancelLabel: "No",
+            cancelData: "no",
+            altText: "Delete this item?",
+          },
+          expectedText: undefined,
+        },
+        {
+          name: "custom action data",
+          text: "[[confirm: Proceed? | OK:action=confirm | Cancel:action=cancel]]",
+          expectedTemplate: {
+            type: "confirm",
+            text: "Proceed?",
+            confirmLabel: "OK",
+            confirmData: "action=confirm",
+            cancelLabel: "Cancel",
+            cancelData: "action=cancel",
+            altText: "Proceed?",
+          },
+          expectedText: undefined,
+        },
+      ] as const;
 
-      expect(getLineData(result).templateMessage).toEqual({
-        type: "confirm",
-        text: "Delete this item?",
-        confirmLabel: "Yes",
-        confirmData: "yes",
-        cancelLabel: "No",
-        cancelData: "no",
-        altText: "Delete this item?",
-      });
-      // Text is undefined when directive consumes entire text
-      expect(result.text).toBeUndefined();
-    });
-
-    it("parses confirm with custom data", () => {
-      const result = parseLineDirectives({
-        text: "[[confirm: Proceed? | OK:action=confirm | Cancel:action=cancel]]",
-      });
-
-      expect(getLineData(result).templateMessage).toEqual({
-        type: "confirm",
-        text: "Proceed?",
-        confirmLabel: "OK",
-        confirmData: "action=confirm",
-        cancelLabel: "Cancel",
-        cancelData: "action=cancel",
-        altText: "Proceed?",
-      });
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        expect(getLineData(result).templateMessage, testCase.name).toEqual(
+          testCase.expectedTemplate,
+        );
+        expect(result.text, testCase.name).toBe(testCase.expectedText);
+      }
     });
   });
 
   describe("buttons", () => {
-    it("parses buttons with message actions", () => {
-      const result = parseLineDirectives({
-        text: "[[buttons: Menu | Select an option | Help:/help, Status:/status]]",
-      });
+    it("parses message/uri/postback button actions and enforces action caps", () => {
+      const cases = [
+        {
+          name: "message actions",
+          text: "[[buttons: Menu | Select an option | Help:/help, Status:/status]]",
+          expectedTemplate: {
+            type: "buttons",
+            title: "Menu",
+            text: "Select an option",
+            actions: [
+              { type: "message", label: "Help", data: "/help" },
+              { type: "message", label: "Status", data: "/status" },
+            ],
+            altText: "Menu: Select an option",
+          },
+        },
+        {
+          name: "uri action",
+          text: "[[buttons: Links | Visit us | Site:https://example.com]]",
+          expectedFirstAction: {
+            type: "uri",
+            label: "Site",
+            uri: "https://example.com",
+          },
+        },
+        {
+          name: "postback action",
+          text: "[[buttons: Actions | Choose | Select:action=select&id=1]]",
+          expectedFirstAction: {
+            type: "postback",
+            label: "Select",
+            data: "action=select&id=1",
+          },
+        },
+        {
+          name: "action cap",
+          text: "[[buttons: Menu | Text | A:a, B:b, C:c, D:d, E:e, F:f]]",
+          expectedActionCount: 4,
+        },
+      ] as const;
 
-      expect(getLineData(result).templateMessage).toEqual({
-        type: "buttons",
-        title: "Menu",
-        text: "Select an option",
-        actions: [
-          { type: "message", label: "Help", data: "/help" },
-          { type: "message", label: "Status", data: "/status" },
-        ],
-        altText: "Menu: Select an option",
-      });
-    });
-
-    it("parses buttons with uri actions", () => {
-      const result = parseLineDirectives({
-        text: "[[buttons: Links | Visit us | Site:https://example.com]]",
-      });
-
-      const templateMessage = getLineData(result).templateMessage as {
-        type?: string;
-        actions?: Array<Record<string, unknown>>;
-      };
-      expect(templateMessage?.type).toBe("buttons");
-      if (templateMessage?.type === "buttons") {
-        expect(templateMessage.actions?.[0]).toEqual({
-          type: "uri",
-          label: "Site",
-          uri: "https://example.com",
-        });
-      }
-    });
-
-    it("parses buttons with postback actions", () => {
-      const result = parseLineDirectives({
-        text: "[[buttons: Actions | Choose | Select:action=select&id=1]]",
-      });
-
-      const templateMessage = getLineData(result).templateMessage as {
-        type?: string;
-        actions?: Array<Record<string, unknown>>;
-      };
-      expect(templateMessage?.type).toBe("buttons");
-      if (templateMessage?.type === "buttons") {
-        expect(templateMessage.actions?.[0]).toEqual({
-          type: "postback",
-          label: "Select",
-          data: "action=select&id=1",
-        });
-      }
-    });
-
-    it("limits to 4 actions", () => {
-      const result = parseLineDirectives({
-        text: "[[buttons: Menu | Text | A:a, B:b, C:c, D:d, E:e, F:f]]",
-      });
-
-      const templateMessage = getLineData(result).templateMessage as {
-        type?: string;
-        actions?: Array<Record<string, unknown>>;
-      };
-      expect(templateMessage?.type).toBe("buttons");
-      if (templateMessage?.type === "buttons") {
-        expect(templateMessage.actions?.length).toBe(4);
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const templateMessage = getLineData(result).templateMessage as {
+          type?: string;
+          actions?: Array<Record<string, unknown>>;
+        };
+        expect(templateMessage?.type, testCase.name).toBe("buttons");
+        if ("expectedTemplate" in testCase) {
+          expect(templateMessage, testCase.name).toEqual(testCase.expectedTemplate);
+        }
+        if ("expectedFirstAction" in testCase) {
+          expect(templateMessage?.actions?.[0], testCase.name).toEqual(
+            testCase.expectedFirstAction,
+          );
+        }
+        if ("expectedActionCount" in testCase) {
+          expect(templateMessage?.actions?.length, testCase.name).toBe(
+            testCase.expectedActionCount,
+          );
+        }
       }
     });
   });
 
   describe("media_player", () => {
-    it("parses media_player with all fields", () => {
-      const result = parseLineDirectives({
-        text: "Now playing:\n[[media_player: Bohemian Rhapsody | Queen | Speaker | https://example.com/album.jpg | playing]]",
-      });
+    it("parses media_player directives across full/minimal/paused variants", () => {
+      const cases = [
+        {
+          name: "all fields",
+          text: "Now playing:\n[[media_player: Bohemian Rhapsody | Queen | Speaker | https://example.com/album.jpg | playing]]",
+          expectedAltText: "🎵 Bohemian Rhapsody - Queen",
+          expectedText: "Now playing:",
+          expectFooter: true,
+          expectBodyContents: false,
+        },
+        {
+          name: "minimal",
+          text: "[[media_player: Unknown Track]]",
+          expectedAltText: "🎵 Unknown Track",
+          expectedText: undefined,
+          expectFooter: false,
+          expectBodyContents: false,
+        },
+        {
+          name: "paused status",
+          text: "[[media_player: Song | Artist | Player | | paused]]",
+          expectedAltText: undefined,
+          expectedText: undefined,
+          expectFooter: false,
+          expectBodyContents: true,
+        },
+      ] as const;
 
-      const flexMessage = getLineData(result).flexMessage as {
-        altText?: string;
-        contents?: { footer?: { contents?: unknown[] } };
-      };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("🎵 Bohemian Rhapsody - Queen");
-      const contents = flexMessage?.contents as { footer?: { contents?: unknown[] } };
-      expect(contents.footer?.contents?.length).toBeGreaterThan(0);
-      expect(result.text).toBe("Now playing:");
-    });
-
-    it("parses media_player with minimal fields", () => {
-      const result = parseLineDirectives({
-        text: "[[media_player: Unknown Track]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("🎵 Unknown Track");
-    });
-
-    it("handles paused status", () => {
-      const result = parseLineDirectives({
-        text: "[[media_player: Song | Artist | Player | | paused]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as {
-        contents?: { body: { contents: unknown[] } };
-      };
-      expect(flexMessage).toBeDefined();
-      const contents = flexMessage?.contents as { body: { contents: unknown[] } };
-      expect(contents).toBeDefined();
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const flexMessage = getLineData(result).flexMessage as {
+          altText?: string;
+          contents?: { footer?: { contents?: unknown[] }; body?: { contents?: unknown[] } };
+        };
+        expect(flexMessage, testCase.name).toBeDefined();
+        if (testCase.expectedAltText !== undefined) {
+          expect(flexMessage?.altText, testCase.name).toBe(testCase.expectedAltText);
+        }
+        if (testCase.expectedText !== undefined) {
+          expect(result.text, testCase.name).toBe(testCase.expectedText);
+        }
+        if (testCase.expectFooter) {
+          expect(flexMessage?.contents?.footer?.contents?.length, testCase.name).toBeGreaterThan(0);
+        }
+        if ("expectBodyContents" in testCase && testCase.expectBodyContents) {
+          expect(flexMessage?.contents?.body?.contents, testCase.name).toBeDefined();
+        }
+      }
     });
   });
 
   describe("event", () => {
-    it("parses event with all fields", () => {
-      const result = parseLineDirectives({
-        text: "[[event: Team Meeting | January 24, 2026 | 2:00 PM - 3:00 PM | Conference Room A | Discuss Q1 roadmap]]",
-      });
+    it("parses event variants", () => {
+      const cases = [
+        {
+          text: "[[event: Team Meeting | January 24, 2026 | 2:00 PM - 3:00 PM | Conference Room A | Discuss Q1 roadmap]]",
+          altText: "📅 Team Meeting - January 24, 2026 2:00 PM - 3:00 PM",
+        },
+        {
+          text: "[[event: Birthday Party | March 15]]",
+          altText: "📅 Birthday Party - March 15",
+        },
+      ];
 
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📅 Team Meeting - January 24, 2026 2:00 PM - 3:00 PM");
-    });
-
-    it("parses event with minimal fields", () => {
-      const result = parseLineDirectives({
-        text: "[[event: Birthday Party | March 15]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📅 Birthday Party - March 15");
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        expect(flexMessage).toBeDefined();
+        expect(flexMessage?.altText).toBe(testCase.altText);
+      }
     });
   });
 
   describe("agenda", () => {
-    it("parses agenda with multiple events", () => {
-      const result = parseLineDirectives({
-        text: "[[agenda: Today's Schedule | Team Meeting:9:00 AM, Lunch:12:00 PM, Review:3:00 PM]]",
-      });
+    it("parses agenda variants", () => {
+      const cases = [
+        {
+          text: "[[agenda: Today's Schedule | Team Meeting:9:00 AM, Lunch:12:00 PM, Review:3:00 PM]]",
+          altText: "📋 Today's Schedule (3 events)",
+        },
+        {
+          text: "[[agenda: Tasks | Buy groceries, Call mom, Workout]]",
+          altText: "📋 Tasks (3 events)",
+        },
+      ];
 
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📋 Today's Schedule (3 events)");
-    });
-
-    it("parses agenda with events without times", () => {
-      const result = parseLineDirectives({
-        text: "[[agenda: Tasks | Buy groceries, Call mom, Workout]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📋 Tasks (3 events)");
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        expect(flexMessage).toBeDefined();
+        expect(flexMessage?.altText).toBe(testCase.altText);
+      }
     });
   });
 
   describe("device", () => {
-    it("parses device with controls", () => {
-      const result = parseLineDirectives({
-        text: "[[device: TV | Streaming Box | Playing | Play/Pause:toggle, Menu:menu]]",
-      });
+    it("parses device variants", () => {
+      const cases = [
+        {
+          text: "[[device: TV | Streaming Box | Playing | Play/Pause:toggle, Menu:menu]]",
+          altText: "📱 TV: Playing",
+        },
+        {
+          text: "[[device: Speaker]]",
+          altText: "📱 Speaker",
+        },
+      ];
 
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📱 TV: Playing");
-    });
-
-    it("parses device with minimal fields", () => {
-      const result = parseLineDirectives({
-        text: "[[device: Speaker]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toBe("📱 Speaker");
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        expect(flexMessage).toBeDefined();
+        expect(flexMessage?.altText).toBe(testCase.altText);
+      }
     });
   });
 
   describe("appletv_remote", () => {
-    it("parses appletv_remote with status", () => {
-      const result = parseLineDirectives({
-        text: "[[appletv_remote: Apple TV | Playing]]",
-      });
+    it("parses appletv remote variants", () => {
+      const cases = [
+        {
+          text: "[[appletv_remote: Apple TV | Playing]]",
+          contains: "Apple TV",
+        },
+        {
+          text: "[[appletv_remote: Apple TV]]",
+          contains: undefined,
+        },
+      ];
 
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
-      expect(flexMessage?.altText).toContain("Apple TV");
-    });
-
-    it("parses appletv_remote with minimal fields", () => {
-      const result = parseLineDirectives({
-        text: "[[appletv_remote: Apple TV]]",
-      });
-
-      const flexMessage = getLineData(result).flexMessage as { altText?: string };
-      expect(flexMessage).toBeDefined();
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        const flexMessage = getLineData(result).flexMessage as { altText?: string };
+        expect(flexMessage).toBeDefined();
+        if (testCase.contains) {
+          expect(flexMessage?.altText).toContain(testCase.contains);
+        }
+      }
     });
   });
 
@@ -1048,23 +1046,73 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
   });
+
+  it("preserves routing metadata on overflow summary followups", async () => {
+    const key = `test-overflow-summary-routing-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.originatingChannel).toBe("discord");
+    expect(calls[0]?.originatingTo).toBe("channel:C1");
+    expect(calls[0]?.originatingAccountId).toBe("work");
+    expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;
 
 describe("createReplyDispatcher", () => {
-  it("drops empty payloads and silent tokens without media", async () => {
+  it("drops empty payloads and exact silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
 
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(false);
-    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` })).toBe(true);
+    expect(dispatcher.sendFinalReply({ text: `interject.${SILENT_REPLY_TOKEN}` })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe(`${SILENT_REPLY_TOKEN} -- nope`);
+    expect(deliver.mock.calls[1]?.[0]?.text).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
   it("strips heartbeat tokens and applies responsePrefix", async () => {
@@ -1116,7 +1164,7 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(3);
     expect(deliver.mock.calls[0][0].text).toBe("PFX already");
     expect(deliver.mock.calls[1][0].text).toBe("");
-    expect(deliver.mock.calls[2][0].text).toBe("");
+    expect(deliver.mock.calls[2][0].text).toBe(`PFX ${SILENT_REPLY_TOKEN} -- explanation`);
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {
@@ -1205,34 +1253,15 @@ describe("createReplyDispatcher", () => {
 });
 
 describe("resolveReplyToMode", () => {
-  it("defaults to off for Telegram", () => {
-    expect(resolveReplyToMode(emptyCfg, "telegram")).toBe("off");
-  });
-
-  it("defaults to off for Discord and Slack", () => {
-    expect(resolveReplyToMode(emptyCfg, "discord")).toBe("off");
-    expect(resolveReplyToMode(emptyCfg, "slack")).toBe("off");
-  });
-
-  it("defaults to all when channel is unknown", () => {
-    expect(resolveReplyToMode(emptyCfg, undefined)).toBe("all");
-  });
-
-  it("uses configured value when present", () => {
-    const cfg = {
+  it("resolves defaults, channel overrides, chat-type overrides, and legacy dm overrides", () => {
+    const configuredCfg = {
       channels: {
         telegram: { replyToMode: "all" },
         discord: { replyToMode: "first" },
         slack: { replyToMode: "all" },
       },
     } as OpenClawConfig;
-    expect(resolveReplyToMode(cfg, "telegram")).toBe("all");
-    expect(resolveReplyToMode(cfg, "discord")).toBe("first");
-    expect(resolveReplyToMode(cfg, "slack")).toBe("all");
-  });
-
-  it("uses chat-type replyToMode overrides for Slack when configured", () => {
-    const cfg = {
+    const chatTypeCfg = {
       channels: {
         slack: {
           replyToMode: "off",
@@ -1240,26 +1269,14 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
-    expect(resolveReplyToMode(cfg, "slack", null, "group")).toBe("first");
-    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
-    expect(resolveReplyToMode(cfg, "slack", null, undefined)).toBe("off");
-  });
-
-  it("falls back to top-level replyToMode when no chat-type override is set", () => {
-    const cfg = {
+    const topLevelFallbackCfg = {
       channels: {
         slack: {
           replyToMode: "first",
         },
       },
     } as OpenClawConfig;
-    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("first");
-    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("first");
-  });
-
-  it("uses legacy dm.replyToMode for direct messages when no chat-type override exists", () => {
-    const cfg = {
+    const legacyDmCfg = {
       channels: {
         slack: {
           replyToMode: "off",
@@ -1267,25 +1284,63 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    expect(resolveReplyToMode(cfg, "slack", null, "direct")).toBe("all");
-    expect(resolveReplyToMode(cfg, "slack", null, "channel")).toBe("off");
+
+    const cases: Array<{
+      cfg: OpenClawConfig;
+      channel?: "telegram" | "discord" | "slack";
+      chatType?: "direct" | "group" | "channel";
+      expected: "off" | "all" | "first";
+    }> = [
+      { cfg: emptyCfg, channel: "telegram", expected: "off" },
+      { cfg: emptyCfg, channel: "discord", expected: "off" },
+      { cfg: emptyCfg, channel: "slack", expected: "off" },
+      { cfg: emptyCfg, channel: undefined, expected: "all" },
+      { cfg: configuredCfg, channel: "telegram", expected: "all" },
+      { cfg: configuredCfg, channel: "discord", expected: "first" },
+      { cfg: configuredCfg, channel: "slack", expected: "all" },
+      { cfg: chatTypeCfg, channel: "slack", chatType: "direct", expected: "all" },
+      { cfg: chatTypeCfg, channel: "slack", chatType: "group", expected: "first" },
+      { cfg: chatTypeCfg, channel: "slack", chatType: "channel", expected: "off" },
+      { cfg: chatTypeCfg, channel: "slack", chatType: undefined, expected: "off" },
+      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "direct", expected: "first" },
+      { cfg: topLevelFallbackCfg, channel: "slack", chatType: "channel", expected: "first" },
+      { cfg: legacyDmCfg, channel: "slack", chatType: "direct", expected: "all" },
+      { cfg: legacyDmCfg, channel: "slack", chatType: "channel", expected: "off" },
+    ];
+    for (const testCase of cases) {
+      expect(resolveReplyToMode(testCase.cfg, testCase.channel, null, testCase.chatType)).toBe(
+        testCase.expected,
+      );
+    }
   });
 });
 
 describe("createReplyToModeFilter", () => {
-  it("drops replyToId when mode is off", () => {
-    const filter = createReplyToModeFilter("off");
-    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBeUndefined();
-  });
-
-  it("keeps replyToId when mode is off and reply tags are allowed", () => {
-    const filter = createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true });
-    expect(filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId).toBe("1");
-  });
-
-  it("keeps replyToId when mode is all", () => {
-    const filter = createReplyToModeFilter("all");
-    expect(filter({ text: "hi", replyToId: "1" }).replyToId).toBe("1");
+  it("handles off/all mode behavior for replyToId", () => {
+    const cases: Array<{
+      filter: ReturnType<typeof createReplyToModeFilter>;
+      input: { text: string; replyToId?: string; replyToTag?: boolean };
+      expectedReplyToId?: string;
+    }> = [
+      {
+        filter: createReplyToModeFilter("off"),
+        input: { text: "hi", replyToId: "1" },
+        expectedReplyToId: undefined,
+      },
+      {
+        filter: createReplyToModeFilter("off", { allowExplicitReplyTagsWhenOff: true }),
+        input: { text: "hi", replyToId: "1", replyToTag: true },
+        expectedReplyToId: "1",
+      },
+      {
+        filter: createReplyToModeFilter("all"),
+        input: { text: "hi", replyToId: "1" },
+        expectedReplyToId: "1",
+      },
+    ];
+    for (const testCase of cases) {
+      expect(testCase.filter(testCase.input).replyToId).toBe(testCase.expectedReplyToId);
+    }
   });
 
   it("keeps only the first replyToId when mode is first", () => {

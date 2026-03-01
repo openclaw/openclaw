@@ -31,9 +31,16 @@ export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   groq: "whisper-large-v3-turbo",
   openai: "gpt-4o-mini-transcribe",
   deepgram: "nova-3",
+  mistral: "voxtral-mini-latest",
 };
 
-export const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google"] as const;
+export const AUTO_AUDIO_KEY_PROVIDERS = [
+  "openai",
+  "groq",
+  "deepgram",
+  "google",
+  "mistral",
+] as const;
 export const AUTO_IMAGE_KEY_PROVIDERS = [
   "openai",
   "anthropic",
@@ -41,7 +48,7 @@ export const AUTO_IMAGE_KEY_PROVIDERS = [
   "minimax",
   "zai",
 ] as const;
-export const AUTO_VIDEO_KEY_PROVIDERS = ["google"] as const;
+export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "moonshot"] as const;
 export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-opus-4-6",

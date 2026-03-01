@@ -165,6 +165,43 @@ export function emitAssistantTextEnd(params: {
   });
 }
 
+export function emitAssistantLifecycleErrorAndEnd(params: {
+  emit: (evt: unknown) => void;
+  errorMessage: string;
+  provider?: string;
+  model?: string;
+}): void {
+  const assistantMessage = {
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: params.errorMessage,
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.model ? { model: params.model } : {}),
+  } as AssistantMessage;
+  params.emit({ type: "message_update", message: assistantMessage });
+  params.emit({ type: "agent_end" });
+}
+
+type LifecycleErrorAgentEvent = {
+  stream?: unknown;
+  data?: {
+    phase?: unknown;
+    error?: unknown;
+  };
+};
+
+export function findLifecycleErrorAgentEvent(
+  calls: Array<unknown[]>,
+): LifecycleErrorAgentEvent | undefined {
+  for (const call of calls) {
+    const event = call?.[0] as LifecycleErrorAgentEvent | undefined;
+    if (event?.stream === "lifecycle" && event?.data?.phase === "error") {
+      return event;
+    }
+  }
+  return undefined;
+}
+
 export function expectFencedChunks(calls: Array<unknown[]>, expectedPrefix: string): void {
   expect(calls.length).toBeGreaterThan(1);
   for (const call of calls) {

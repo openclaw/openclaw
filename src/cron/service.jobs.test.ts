@@ -32,6 +32,13 @@ describe("applyJobPatch", () => {
     payload: { kind: "systemEvent", text: "ping" },
   });
 
+  const createMainSystemEventJob = (id: string, delivery: CronJob["delivery"]): CronJob => {
+    return createIsolatedAgentTurnJob(id, delivery, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+  };
+
   it("clears delivery when switching to main session", () => {
     const job = createIsolatedAgentTurnJob("job-1", {
       mode: "announce",
@@ -108,56 +115,145 @@ describe("applyJobPatch", () => {
     });
   });
 
-  it("rejects webhook delivery without a valid http(s) target URL", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-webhook-invalid",
-      name: "job-webhook-invalid",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "ping" },
-      delivery: { mode: "webhook" },
-      state: {},
-    };
+  it("merges delivery.accountId from patch and preserves existing", () => {
+    const job = createIsolatedAgentTurnJob("job-acct", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
-    expect(() => applyJobPatch(job, { delivery: { mode: "webhook", to: "" } })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
-    expect(() =>
-      applyJobPatch(job, { delivery: { mode: "webhook", to: "ftp://example.invalid" } }),
-    ).toThrow("cron webhook delivery requires delivery.to to be a valid http(s) URL");
-    expect(() => applyJobPatch(job, { delivery: { mode: "webhook", to: "not-a-url" } })).toThrow(
-      "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-    );
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: " coordinator " } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.to).toBe("-100123");
+
+    // Updating other fields preserves accountId
+    applyJobPatch(job, { delivery: { mode: "announce", to: "-100999" } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.to).toBe("-100999");
+
+    // Clearing accountId with empty string
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: "" } });
+    expect(job.delivery?.accountId).toBeUndefined();
+  });
+
+  it("rejects webhook delivery without a valid http(s) target URL", () => {
+    const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
+    const cases = [
+      { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
+      {
+        name: "blank webhook target",
+        patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
+      },
+      {
+        name: "non-http protocol",
+        patch: {
+          delivery: { mode: "webhook", to: "ftp://example.invalid" },
+        } satisfies CronJobPatch,
+      },
+      {
+        name: "invalid URL",
+        patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
+      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(expectedError);
+    }
   });
 
   it("trims webhook delivery target URLs", () => {
-    const now = Date.now();
-    const job: CronJob = {
-      id: "job-webhook-trim",
-      name: "job-webhook-trim",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "ping" },
-      delivery: { mode: "webhook", to: "https://example.invalid/original" },
-      state: {},
-    };
+    const job = createMainSystemEventJob("job-webhook-trim", {
+      mode: "webhook",
+      to: "https://example.invalid/original",
+    });
 
     expect(() =>
       applyJobPatch(job, { delivery: { mode: "webhook", to: "  https://example.invalid/trim  " } }),
     ).not.toThrow();
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/trim" });
+  });
+
+  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-10012345/6789",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
+    );
+  });
+
+  it("accepts Telegram delivery with t.me URL", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-tme", {
+      mode: "announce",
+      channel: "telegram",
+      to: "https://t.me/mychannel",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with t.me URL (no https)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-tme-no-https", {
+      mode: "announce",
+      channel: "telegram",
+      to: "t.me/mychannel",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (plain chat id)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (colon delimiter)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid-colon", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:123",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with valid target (topic marker)", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-valid-topic", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:456",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery without target", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-no-target", {
+      mode: "announce",
+      channel: "telegram",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+  });
+
+  it("accepts Telegram delivery with @username", () => {
+    const job = createIsolatedAgentTurnJob("job-telegram-username", {
+      mode: "announce",
+      channel: "telegram",
+      to: "@mybot",
+    });
+
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
   });
 });
 

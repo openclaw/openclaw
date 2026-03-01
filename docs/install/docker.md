@@ -26,6 +26,7 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 ## Requirements
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
+- At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
 - Enough disk for images + logs
 
 ## Containerized Gateway (Docker Compose)
@@ -368,6 +369,8 @@ precedence, and troubleshooting.
   - `"rw"` mounts the agent workspace read/write at `/workspace`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
+  - `host` is blocked.
+  - `container:<id>` is blocked by default (namespace-join risk).
 - Default allow: `exec`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
@@ -376,6 +379,9 @@ precedence, and troubleshooting.
 If you plan to install packages in `setupCommand`, note:
 
 - Default `docker.network` is `"none"` (no egress).
+- `docker.network: "host"` is blocked.
+- `docker.network: "container:<id>"` is blocked by default.
+- Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
 - `readOnlyRoot: true` blocks package installs.
 - `user` must be root for `apt-get` (omit `user` or set `user: "0:0"`).
   OpenClaw auto-recreates containers when `setupCommand` (or docker config) changes
@@ -445,7 +451,8 @@ If you plan to install packages in `setupCommand`, note:
 
 Hardening knobs live under `agents.defaults.sandbox.docker`:
 `network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
-`seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`.
+`seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`,
+`dangerouslyAllowContainerNamespaceJoin` (break-glass only).
 
 Multi-agent: override `agents.defaults.sandbox.{docker,browser,prune}.*` per agent via `agents.list[].sandbox.{docker,browser,prune}.*`
 (ignored when `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` is `"shared"`).
@@ -495,6 +502,9 @@ Notes:
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.
+- Browser containers default to a dedicated Docker network (`openclaw-sandbox-browser`) instead of global `bridge`.
+- Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress by CIDR (for example `172.21.0.1/32`).
+- noVNC observer access is password-protected by default; OpenClaw provides a short-lived observer token URL instead of sharing the raw password in the URL.
 
 Use config:
 

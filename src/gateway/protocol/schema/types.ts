@@ -32,6 +32,11 @@ import type {
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
+  ToolCatalogEntrySchema,
+  ToolCatalogGroupSchema,
+  ToolCatalogProfileSchema,
+  ToolsCatalogParamsSchema,
+  ToolsCatalogResultSchema,
 } from "./agents-models-skills.js";
 import type {
   ChannelsLogoutParamsSchema,
@@ -213,6 +218,11 @@ export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
+export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
+export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
+export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
+export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
+export type ToolsCatalogResult = Static<typeof ToolsCatalogResultSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
 export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
 export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;

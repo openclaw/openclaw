@@ -9,11 +9,11 @@ const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../spawn-utils.js", () => ({
-  spawnWithFallback: (...args: unknown[]) => spawnWithFallbackMock(...args),
+  spawnWithFallback: spawnWithFallbackMock,
 }));
 
 vi.mock("../../kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+  killProcessTree: killProcessTreeMock,
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
@@ -54,8 +54,8 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
-    spawnWithFallbackMock.mockReset();
-    killProcessTreeMock.mockReset();
+    spawnWithFallbackMock.mockClear();
+    killProcessTreeMock.mockClear();
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {

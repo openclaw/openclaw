@@ -28,7 +28,12 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
@@ -141,6 +146,12 @@ export async function runAgentTurnWithFallback(params: {
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
+        if (
+          isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
+          isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
+        ) {
+          return { skip: true };
+        }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
           if ((payload.mediaUrls?.length ?? 0) > 0) {
@@ -157,6 +168,9 @@ export async function runAgentTurnWithFallback(params: {
         return { text: sanitized, skip: false };
       };
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
+          return undefined;
+        }
         const { text, skip } = normalizeStreamingText(payload);
         if (skip || !text) {
           return undefined;
@@ -439,7 +453,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }
@@ -473,7 +487,7 @@ export async function runAgentTurnWithFallback(params: {
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
           },
         };
       }
@@ -567,6 +581,22 @@ export async function runAgentTurnWithFallback(params: {
         },
       };
     }
+  }
+
+  // If the run completed but with an embedded context overflow error that
+  // wasn't recovered from (e.g. compaction reset already attempted), surface
+  // the error to the user instead of silently returning an empty response.
+  // See #26905: Slack DM sessions silently swallowed messages when context
+  // overflow errors were returned as embedded error payloads.
+  const finalEmbeddedError = runResult?.meta?.error;
+  const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
+  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
+    return {
+      kind: "final",
+      payload: {
+        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+      },
+    };
   }
 
   return {
