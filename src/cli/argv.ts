@@ -121,6 +121,7 @@ export function isRootVersionInvocation(argv: string[]): boolean {
 
 export function isRootHelpInvocation(argv: string[]): boolean {
   const args = argv.slice(2);
+  let hasHelp = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (!arg) {
@@ -130,7 +131,8 @@ export function isRootHelpInvocation(argv: string[]): boolean {
       break;
     }
     if (HELP_FLAGS.has(arg)) {
-      return true;
+      hasHelp = true;
+      continue;
     }
     if (ROOT_BOOLEAN_FLAGS.has(arg)) {
       continue;
@@ -148,7 +150,7 @@ export function isRootHelpInvocation(argv: string[]): boolean {
     // Unknown flags and subcommand-scoped help should fall back to Commander.
     return false;
   }
-  return false;
+  return hasHelp;
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
