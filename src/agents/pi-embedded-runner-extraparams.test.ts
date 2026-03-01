@@ -895,7 +895,6 @@ describe("applyExtraParamsToAgent", () => {
         contextWindow: 128_000,
         maxTokens: 16_384,
         compat: { supportsStore: false },
-<<<<<<< HEAD
       } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
     });
     expect(payload.store).toBe(false);
