@@ -162,6 +162,49 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function handleFileInputChange(e: Event, props: ChatProps) {
+  const input = e.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file && file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    input.value = ""; // Reset input
+    return;
+  }
+
+  let loadedCount = 0;
+  const current = props.attachments ? [...props.attachments] : [];
+
+  for (const file of imageFiles) {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = reader.result as string;
+      current.push({
+        id: generateAttachmentId(),
+        dataUrl,
+        mimeType: file.type,
+      });
+
+      loadedCount++;
+      if (loadedCount === imageFiles.length) {
+        props.onAttachmentsChange?.([...current]);
+        input.value = ""; // Reset input after all are loaded
+      }
+    });
+    reader.readAsDataURL(file);
+  }
+}
+
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
@@ -458,6 +501,16 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <label class="btn chat-compose__attach-btn" title="Attach image" aria-label="Attach image">
+              ${icons.paperclip}
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                style="display: none;"
+                @change=${(e: Event) => handleFileInputChange(e, props)}
+              />
+            </label>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}
