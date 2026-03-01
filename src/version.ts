@@ -89,10 +89,11 @@ export function resolveRuntimeServiceVersion(
 }
 
 // Single source of truth for the current OpenClaw version.
-// - Embedded/bundled builds: injected define or env var.
-// - Dev/npm builds: package.json.
+// - Embedded/bundled builds: injected define.
+// - Dev/npm builds: package.json or build-info.json via module URL.
+// - Fallback: OPENCLAW_BUNDLED_VERSION env (may be stale across upgrades).
 export const VERSION =
   (typeof __OPENCLAW_VERSION__ === "string" && __OPENCLAW_VERSION__) ||
-  process.env.OPENCLAW_BUNDLED_VERSION ||
   resolveVersionFromModuleUrl(import.meta.url) ||
+  process.env.OPENCLAW_BUNDLED_VERSION ||
   "0.0.0";

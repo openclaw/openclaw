@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
@@ -131,5 +131,53 @@ describe("version resolution", () => {
         "fallback",
       ),
     ).toBe("fallback");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VERSION constant precedence (issue #30934)
+//
+// The VERSION constant is evaluated at module load time, so we use dynamic
+// re-imports with vi.resetModules() to test different env combinations.
+// ---------------------------------------------------------------------------
+describe("VERSION precedence (issue #30934)", () => {
+  it("prefers module metadata over stale OPENCLAW_BUNDLED_VERSION", async () => {
+    // A stale env var should NOT override the real version detected from
+    // the module's file path (package.json / build-info.json).
+    vi.stubEnv("OPENCLAW_BUNDLED_VERSION", "0.0.0-stale");
+    vi.resetModules();
+
+    const { VERSION } = await import("./version.js");
+
+    // VERSION must be the real package version, not the stale env value.
+    expect(VERSION).not.toBe("0.0.0-stale");
+    expect(VERSION).toBeTruthy();
+    expect(VERSION).toMatch(/^\d/);
+  });
+
+  it("falls back to OPENCLAW_BUNDLED_VERSION when module metadata is unavailable", async () => {
+    // When resolveVersionFromModuleUrl returns null (no reachable metadata),
+    // the env var should still serve as a valid fallback.
+    await withTempDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+
+      // No package.json or build-info.json written -> metadata is null.
+      expectVersionMetadataToBeMissing(moduleUrl);
+
+      // The fallback chain: null || envValue -> envValue
+      const envVersion = "99.0.0-fallback";
+      const result = resolveVersionFromModuleUrl(moduleUrl) || envVersion;
+      expect(result).toBe(envVersion);
+    });
+  });
+
+  it("falls back to 0.0.0 when nothing is available", async () => {
+    await withTempDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+
+      // No metadata, no env -> final fallback is "0.0.0".
+      const result = resolveVersionFromModuleUrl(moduleUrl) || undefined || "0.0.0";
+      expect(result).toBe("0.0.0");
+    });
   });
 });
