@@ -22,8 +22,6 @@ export type AcpStreamConfig = {
   maxToolSummaryChars?: number;
   /** Maximum visible characters for status lines. */
   maxStatusChars?: number;
-  /** Maximum number of meta events projected per turn. */
-  maxMetaEventsPerTurn?: number;
   /**
    * Per-sessionUpdate visibility overrides.
    * Keys not listed here fall back to OpenClaw defaults.
