@@ -182,7 +182,7 @@ describe("tilde expansion in file tools", () => {
     process.env.HOME = fakeHome;
     try {
       const result = expandHomePrefix("~/file.txt");
-      expect(result).toBe(`${fakeHome}/file.txt`);
+      expect(path.normalize(result)).toBe(path.join(path.resolve(fakeHome), "file.txt"));
     } finally {
       process.env.HOME = originalHome;
     }
