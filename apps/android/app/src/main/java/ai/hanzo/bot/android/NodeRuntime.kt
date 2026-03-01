@@ -434,10 +434,14 @@ class NodeRuntime(context: Context) {
           }
         val response = operatorSession.request("chat.send", params.toString())
         parseChatSendRunId(response) ?: idempotencyKey
->>>>>>> 587790e84 (fix(android): talk mode stability — thread safety, TTS fallback, mic cooldown):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 587790e84 (fix(android): talk mode stability — thread safety, TTS fallback, mic cooldown):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
       },
       speakAssistantReply = { text ->
-        voiceReplySpeaker.speakAssistantReply(text)
+        // Skip if TalkModeManager is handling TTS (ttsOnAllResponses) to avoid
+        // double-speaking the same assistant reply from both pipelines.
+        if (!talkMode.ttsOnAllResponses) {
+          voiceReplySpeaker.speakAssistantReply(text)
+        }
       },
     )
   }
@@ -481,7 +485,7 @@ class NodeRuntime(context: Context) {
     )
   }
 
->>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
@@ -491,7 +495,7 @@ class NodeRuntime(context: Context) {
     voiceReplySpeaker.setMainSessionKey(trimmed)
 =======
     talkMode.setMainSessionKey(trimmed)
->>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -618,7 +622,7 @@ class NodeRuntime(context: Context) {
           talkMode.ttsOnAllResponses = true
           scope.launch { talkMode.ensureChatSubscribed() }
         }
->>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -776,7 +780,7 @@ class NodeRuntime(context: Context) {
     }
     micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
->>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -1018,7 +1022,7 @@ class NodeRuntime(context: Context) {
       root["runId"].asStringOrNull()
     } catch (_: Throwable) {
       null
->>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/bot/android/NodeRuntime.kt
     }
 
     voiceReplySpeaker.handleGatewayEvent(event, payloadJson)
