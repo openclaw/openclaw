@@ -58,9 +58,10 @@ Required behavior:
    - `runtime: "acp"`
    - `thread: true`
    - `mode: "session"` (unless user explicitly wants one-shot)
-2. Put requested work in `task` so the ACP session gets it immediately.
-3. Set `agentId` explicitly unless ACP default agent is known.
-4. Do not ask user to run slash commands or CLI when this path works directly.
+2. For ACP harness thread creation, do not use `message` with `action=thread-create`; `sessions_spawn` is the only thread-create path.
+3. Put requested work in `task` so the ACP session gets it immediately.
+4. Set `agentId` explicitly unless ACP default agent is known.
+5. Do not ask user to run slash commands or CLI when this path works directly.
 
 Example:
 
