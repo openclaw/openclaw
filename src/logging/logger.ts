@@ -15,8 +15,14 @@ export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // l
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
-const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h — fallback for non-dated filenames
 const DEFAULT_MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB
+/**
+ * Re-read the actual file size from disk every N writes so that concurrent writers
+ * (e.g. multiple gateway instances pointing at the same log file) don't each think
+ * they have a full 500 MB budget, causing unbounded growth.
+ */
+const BYTES_RESYNC_WRITES = 100;
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -101,10 +107,11 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
+    pruneOldRollingLogs(path.dirname(settings.file), settings.file);
   }
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
+  let writesSinceResync = 0;
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     minLevel: levelToMinLevel(settings.level),
@@ -117,6 +124,13 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
+      // Periodically re-read the actual on-disk size so that concurrent writers
+      // (multiple gateway instances, external tools) don't each believe they have
+      // a full budget, which would allow unbounded growth beyond maxFileBytes.
+      if (++writesSinceResync >= BYTES_RESYNC_WRITES) {
+        writesSinceResync = 0;
+        currentFileBytes = getCurrentLogFileBytes(settings.file);
+      }
       const nextBytes = currentFileBytes + payloadBytes;
       if (nextBytes > settings.maxFileBytes) {
         if (!warnedAboutSizeCap) {
@@ -281,10 +295,11 @@ function isRollingPath(file: string): boolean {
   );
 }
 
-function pruneOldRollingLogs(dir: string): void {
+function pruneOldRollingLogs(dir: string, currentFile?: string): void {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const cutoff = Date.now() - MAX_LOG_AGE_MS;
+    const todayStr = formatLocalDate(new Date());
+    const mtimeCutoff = Date.now() - MAX_LOG_AGE_MS;
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
@@ -293,10 +308,26 @@ function pruneOldRollingLogs(dir: string): void {
         continue;
       }
       const fullPath = path.join(dir, entry.name);
+      // Never delete the active log file.
+      if (currentFile && path.resolve(fullPath) === path.resolve(currentFile)) {
+        continue;
+      }
       try {
-        const stat = fs.statSync(fullPath);
-        if (stat.mtimeMs < cutoff) {
-          fs.rmSync(fullPath, { force: true });
+        // For properly-dated filenames (openclaw-YYYY-MM-DD.log) delete any file
+        // whose date is strictly before today.  This is more reliable than an
+        // mtime cutoff because a file written just after midnight would otherwise
+        // survive until the following night.
+        const datePart = entry.name.slice(LOG_PREFIX.length + 1, -LOG_SUFFIX.length);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+          if (datePart < todayStr) {
+            fs.rmSync(fullPath, { force: true });
+          }
+        } else {
+          // Fallback: mtime-based pruning for legacy or non-dated filenames.
+          const stat = fs.statSync(fullPath);
+          if (stat.mtimeMs < mtimeCutoff) {
+            fs.rmSync(fullPath, { force: true });
+          }
         }
       } catch {
         // ignore errors during pruning
