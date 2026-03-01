@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveMainSessionKeyFromConfig, resolveStorePath } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
-import { sweepCronRunSessions } from "../../cron/session-reaper.js";
 import type { Logger as ReaperLogger } from "../../cron/service/state.js";
+import { sweepCronRunSessions } from "../../cron/session-reaper.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
