@@ -1232,10 +1232,6 @@
                 "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
               },
               {
-                "group": "Operations hubs",
-                "pages": ["network", "logging"]
-              },
-              {
                 "group": "Security",
                 "pages": [
                   "security/formal-verification",
