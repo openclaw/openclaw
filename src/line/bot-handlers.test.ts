@@ -64,6 +64,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
+let resetLineWebhookEventDedupeForTests: typeof import("./bot-handlers.js").resetLineWebhookEventDedupeForTests;
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
@@ -74,10 +75,12 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
-    ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
+    ({ handleLineWebhookEvents, resetLineWebhookEventDedupeForTests } =
+      await import("./bot-handlers.js"));
   });
 
   beforeEach(() => {
+    resetLineWebhookEventDedupeForTests();
     buildLineMessageContextMock.mockClear();
     buildLinePostbackContextMock.mockClear();
     readAllowFromStoreMock.mockClear();
@@ -247,5 +250,65 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("skips duplicate inbound LINE message events by message id", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m-dup-1", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-dup", userId: "user-dup" },
+      mode: "active",
+      webhookEventId: "evt-dup-1",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          ...event,
+          webhookEventId: "evt-dup-redelivery",
+          deliveryContext: { isRedelivery: true },
+        } as MessageEvent,
+      ],
+      {
+        cfg: {
+          channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] } },
+        },
+        account: {
+          accountId: "default",
+          enabled: true,
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          tokenSource: "config",
+          config: { groupPolicy: "allowlist", groupAllowFrom: ["user-dup"] },
+        },
+        runtime: createRuntime(),
+        mediaMaxBytes: 1,
+        processMessage,
+      },
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
   });
 });

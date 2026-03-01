@@ -14,6 +14,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import { danger, logVerbose } from "../globals.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
@@ -48,6 +49,33 @@ export interface LineHandlerContext {
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
   processMessage: (ctx: LineInboundContext) => Promise<void>;
+}
+
+const lineWebhookEventDedupe = createDedupeCache({
+  ttlMs: 20 * 60_000,
+  maxSize: 5000,
+});
+
+function buildLineWebhookEventDedupeKey(event: WebhookEvent): string | null {
+  if (event.type === "message") {
+    const messageId = event.message?.id?.trim();
+    return messageId ? `message:${messageId}` : null;
+  }
+  if (event.type === "postback") {
+    const replyToken = event.replyToken?.trim();
+    if (replyToken) {
+      return `postback:${replyToken}`;
+    }
+  }
+  const webhookEventId = (event as { webhookEventId?: unknown }).webhookEventId;
+  if (typeof webhookEventId === "string" && webhookEventId.trim()) {
+    return `event:${webhookEventId.trim()}`;
+  }
+  return null;
+}
+
+export function resetLineWebhookEventDedupeForTests(): void {
+  lineWebhookEventDedupe.clear();
 }
 
 function resolveLineGroupConfig(params: {
@@ -319,6 +347,11 @@ export async function handleLineWebhookEvents(
   context: LineHandlerContext,
 ): Promise<void> {
   for (const event of events) {
+    const dedupeKey = buildLineWebhookEventDedupeKey(event);
+    if (dedupeKey && lineWebhookEventDedupe.check(dedupeKey)) {
+      logVerbose(`line: skipped duplicate webhook event (${dedupeKey})`);
+      continue;
+    }
     try {
       switch (event.type) {
         case "message":
