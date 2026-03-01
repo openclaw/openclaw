@@ -90,6 +90,10 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+export const RECONNECT_INITIAL_BACKOFF_MS = 800;
+export const RECONNECT_BACKOFF_MULTIPLIER = 1.7;
+export const RECONNECT_MAX_BACKOFF_MS = 15_000;
+export const CONNECT_QUEUE_DELAY_MS = 750;
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -99,7 +103,7 @@ export class GatewayBrowserClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: number | null = null;
-  private backoffMs = 800;
+  private backoffMs = RECONNECT_INITIAL_BACKOFF_MS;
   private pendingConnectError: GatewayErrorInfo | undefined;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
@@ -147,7 +151,10 @@ export class GatewayBrowserClient {
       return;
     }
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    this.backoffMs = Math.min(
+      this.backoffMs * RECONNECT_BACKOFF_MULTIPLIER,
+      RECONNECT_MAX_BACKOFF_MS,
+    );
     window.setTimeout(() => this.connect(), delay);
   }
 
@@ -257,7 +264,7 @@ export class GatewayBrowserClient {
             scopes: hello.auth.scopes ?? [],
           });
         }
-        this.backoffMs = 800;
+        this.backoffMs = RECONNECT_INITIAL_BACKOFF_MS;
         this.opts.onHello?.(hello);
       })
       .catch((err: unknown) => {
@@ -355,6 +362,6 @@ export class GatewayBrowserClient {
     }
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
-    }, 750);
+    }, CONNECT_QUEUE_DELAY_MS);
   }
 }
