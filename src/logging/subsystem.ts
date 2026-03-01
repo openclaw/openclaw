@@ -94,7 +94,16 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
+
+// Lazy initialization to avoid circular dependency issues with CHAT_CHANNEL_ORDER
+let channelSubsystemPrefixesCache: Set<string> | null = null;
+
+function getChannelSubsystemPrefixes(): Set<string> {
+  if (!channelSubsystemPrefixesCache) {
+    channelSubsystemPrefixesCache = new Set<string>(CHAT_CHANNEL_ORDER);
+  }
+  return channelSubsystemPrefixesCache;
+}
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -122,7 +131,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (getChannelSubsystemPrefixes().has(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
