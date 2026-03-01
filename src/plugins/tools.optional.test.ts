@@ -54,7 +54,7 @@ function setRegistry(entries: MockRegistryToolEntry[]) {
 
 describe("resolvePluginTools optional tools", () => {
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockReset();
+    loadOpenClawPluginsMock.mockClear();
   });
 
   it("skips optional tools without explicit allowlist", () => {

@@ -63,6 +63,17 @@ export type OpenClawConfig = {
     channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
+    /** Core auto-update policy for package installs. */
+    auto?: {
+      /** Enable background auto-update checks and apply logic. Default: false. */
+      enabled?: boolean;
+      /** Stable channel minimum delay before auto-apply. Default: 6. */
+      stableDelayHours?: number;
+      /** Additional stable-channel jitter window. Default: 12. */
+      stableJitterHours?: number;
+      /** Beta channel check cadence. Default: 1 hour. */
+      betaCheckIntervalHours?: number;
+    };
   };
   browser?: BrowserConfig;
   ui?: {

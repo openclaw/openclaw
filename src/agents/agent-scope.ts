@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -9,6 +10,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+const log = createSubsystemLogger("agent-scope");
 
 export { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
@@ -66,21 +68,29 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    console.warn("Multiple agents marked default=true; using the first entry as default.");
+    log.warn("Multiple agents marked default=true; using the first entry as default.");
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
 }
 
-export function resolveSessionAgentIds(params: { sessionKey?: string; config?: OpenClawConfig }): {
+export function resolveSessionAgentIds(params: {
+  sessionKey?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+}): {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
   const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+  const explicitAgentIdRaw =
+    typeof params.agentId === "string" ? params.agentId.trim().toLowerCase() : "";
+  const explicitAgentId = explicitAgentIdRaw ? normalizeAgentId(explicitAgentIdRaw) : null;
   const sessionKey = params.sessionKey?.trim();
   const normalizedSessionKey = sessionKey ? sessionKey.toLowerCase() : undefined;
   const parsed = normalizedSessionKey ? parseAgentSessionKey(normalizedSessionKey) : null;
-  const sessionAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId;
+  const sessionAgentId =
+    explicitAgentId ?? (parsed?.agentId ? normalizeAgentId(parsed.agentId) : defaultAgentId);
   return { defaultAgentId, sessionAgentId };
 }
 

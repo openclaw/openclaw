@@ -133,4 +133,56 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
+
+  it("skips structured outbound delivery when timeout abort is already set", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "telegram",
+        lastChannel: "telegram",
+        lastTo: "123",
+      });
+      const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn().mockResolvedValue({
+          messageId: "t1",
+          chatId: "123",
+        }),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out");
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: "do it",
+          }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        signal: controller.signal,
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("timed out");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    });
+  });
 });

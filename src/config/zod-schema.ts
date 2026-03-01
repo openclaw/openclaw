@@ -72,9 +72,28 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
+const MemoryQmdMcporterSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    serverName: z.string().optional(),
+    startDaemon: z.boolean().optional(),
+  })
+  .strict();
+
+const LoggingLevelSchema = z.union([
+  z.literal("silent"),
+  z.literal("fatal"),
+  z.literal("error"),
+  z.literal("warn"),
+  z.literal("info"),
+  z.literal("debug"),
+  z.literal("trace"),
+]);
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
+    mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -169,29 +188,10 @@ export const OpenClawSchema = z
       .optional(),
     logging: z
       .object({
-        level: z
-          .union([
-            z.literal("silent"),
-            z.literal("fatal"),
-            z.literal("error"),
-            z.literal("warn"),
-            z.literal("info"),
-            z.literal("debug"),
-            z.literal("trace"),
-          ])
-          .optional(),
+        level: LoggingLevelSchema.optional(),
         file: z.string().optional(),
-        consoleLevel: z
-          .union([
-            z.literal("silent"),
-            z.literal("fatal"),
-            z.literal("error"),
-            z.literal("warn"),
-            z.literal("info"),
-            z.literal("debug"),
-            z.literal("trace"),
-          ])
-          .optional(),
+        maxFileBytes: z.number().int().positive().optional(),
+        consoleLevel: LoggingLevelSchema.optional(),
         consoleStyle: z
           .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
           .optional(),
@@ -204,6 +204,15 @@ export const OpenClawSchema = z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
         checkOnStart: z.boolean().optional(),
+        auto: z
+          .object({
+            enabled: z.boolean().optional(),
+            stableDelayHours: z.number().nonnegative().max(168).optional(),
+            stableJitterHours: z.number().nonnegative().max(168).optional(),
+            betaCheckIntervalHours: z.number().positive().max(24).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -233,6 +233,11 @@ export type HookAgentPayload = {
   timeoutSeconds?: number;
 };
 
+export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
+  sessionKey: string;
+  allowUnsafeExternalContent?: boolean;
+};
+
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";

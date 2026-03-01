@@ -1,5 +1,8 @@
 ---
 summary: "Frequently asked questions about OpenClaw setup, configuration, and usage"
+read_when:
+  - Answering common setup, install, onboarding, or runtime support questions
+  - Triaging user-reported issues before deeper debugging
 title: "FAQ"
 ---
 
@@ -1038,6 +1041,26 @@ cheaper model for sub-agents via `agents.defaults.subagents.model`.
 
 Docs: [Sub-agents](/tools/subagents).
 
+### How do thread-bound subagent sessions work on Discord
+
+Use thread bindings. You can bind a Discord thread to a subagent or session target so follow-up messages in that thread stay on that bound session.
+
+Basic flow:
+
+- Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"` for persistent follow-up).
+- Or manually bind with `/focus <target>`.
+- Use `/agents` to inspect binding state.
+- Use `/session ttl <duration|off>` to control auto-unfocus.
+- Use `/unfocus` to detach the thread.
+
+Required config:
+
+- Global defaults: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`.
+- Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`.
+- Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
+
+Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
+
 ### Cron or reminders do not fire What should I check
 
 Cron runs inside the Gateway process. If the Gateway is not running continuously,
@@ -1228,14 +1251,15 @@ still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`)
 If you don't set a provider explicitly, OpenClaw auto-selects a provider when it
 can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
 It prefers OpenAI if an OpenAI key resolves, otherwise Gemini if a Gemini key
-resolves. If neither key is available, memory search stays disabled until you
-configure it. If you have a local model path configured and present, OpenClaw
+resolves, then Voyage, then Mistral. If no remote key is available, memory
+search stays disabled until you configure it. If you have a local model path
+configured and present, OpenClaw
 prefers `local`.
 
 If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
 `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
 `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-`memorySearch.remote.apiKey`). We support **OpenAI, Gemini, or local** embedding
+`memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, or local** embedding
 models - see [Memory](/concepts/memory) for the setup details.
 
 ### Does memory persist forever What are the limits

@@ -91,14 +91,24 @@ export function buildReplyPayloads(params: {
     originatingTo: params.originatingTo,
     accountId: params.accountId,
   });
-  const dedupedPayloads = filterMessagingToolDuplicates({
-    payloads: replyTaggedPayloads,
-    sentTexts: messagingToolSentTexts,
-  });
-  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-    payloads: dedupedPayloads,
-    sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
-  });
+  // Only dedupe against messaging tool sends for the same origin target.
+  // Cross-target sends (for example posting to another channel) must not
+  // suppress the current conversation's final reply.
+  // If target metadata is unavailable, keep legacy dedupe behavior.
+  const dedupeMessagingToolPayloads =
+    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+  const dedupedPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolDuplicates({
+        payloads: replyTaggedPayloads,
+        sentTexts: messagingToolSentTexts,
+      })
+    : replyTaggedPayloads;
+  const mediaFilteredPayloads = dedupeMessagingToolPayloads
+    ? filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+      })
+    : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []

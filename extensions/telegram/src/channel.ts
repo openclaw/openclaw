@@ -17,6 +17,8 @@ import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
   resolveDefaultTelegramAccountId,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
@@ -195,8 +197,12 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.telegram !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -326,13 +332,24 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       });
       return { channel: "telegram", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, silent }) => {
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
       const messageThreadId = parseTelegramThreadId(threadId);
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
+        mediaLocalRoots,
         messageThreadId,
         replyToMessageId,
         accountId: accountId ?? undefined,
@@ -486,6 +503,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         webhookSecret: account.config.webhookSecret,
         webhookPath: account.config.webhookPath,
         webhookHost: account.config.webhookHost,
+        webhookPort: account.config.webhookPort,
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {

@@ -85,6 +85,9 @@ export function readTelegramButtons(
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
+  options?: {
+    mediaLocalRoots?: readonly string[];
+  },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
@@ -198,6 +201,7 @@ export async function handleTelegramAction(
       token,
       accountId: accountId ?? undefined,
       mediaUrl: mediaUrl || undefined,
+      mediaLocalRoots: options?.mediaLocalRoots,
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,

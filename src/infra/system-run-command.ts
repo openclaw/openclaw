@@ -1,4 +1,4 @@
-import path from "node:path";
+import { extractShellWrapperCommand } from "./exec-wrapper-resolution.js";
 
 export type SystemRunCommandValidation =
   | {
@@ -26,13 +26,6 @@ export type ResolvedSystemRunCommand =
       details?: Record<string, unknown>;
     };
 
-function basenameLower(token: string): string {
-  const win = path.win32.basename(token);
-  const posix = path.posix.basename(token);
-  const base = win.length < posix.length ? win : posix;
-  return base.trim().toLowerCase();
-}
-
 export function formatExecCommand(argv: string[]): string {
   return argv
     .map((arg) => {
@@ -50,44 +43,7 @@ export function formatExecCommand(argv: string[]): string {
 }
 
 export function extractShellCommandFromArgv(argv: string[]): string | null {
-  const token0 = argv[0]?.trim();
-  if (!token0) {
-    return null;
-  }
-
-  const base0 = basenameLower(token0);
-
-  // POSIX-style shells: sh -lc "<cmd>"
-  if (
-    base0 === "sh" ||
-    base0 === "bash" ||
-    base0 === "zsh" ||
-    base0 === "dash" ||
-    base0 === "ksh"
-  ) {
-    const flag = argv[1]?.trim();
-    if (flag !== "-lc" && flag !== "-c") {
-      return null;
-    }
-    const cmd = argv[2];
-    return typeof cmd === "string" ? cmd : null;
-  }
-
-  // Windows cmd.exe: cmd.exe /d /s /c "<cmd>"
-  if (base0 === "cmd.exe" || base0 === "cmd") {
-    const idx = argv.findIndex((item) => String(item).trim().toLowerCase() === "/c");
-    if (idx === -1) {
-      return null;
-    }
-    const tail = argv.slice(idx + 1).map((item) => String(item));
-    if (tail.length === 0) {
-      return null;
-    }
-    const cmd = tail.join(" ").trim();
-    return cmd.length > 0 ? cmd : null;
-  }
-
-  return null;
+  return extractShellWrapperCommand(argv).command;
 }
 
 export function validateSystemRunCommandConsistency(params: {
@@ -98,7 +54,7 @@ export function validateSystemRunCommandConsistency(params: {
     typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
       ? params.rawCommand.trim()
       : null;
-  const shellCommand = extractShellCommandFromArgv(params.argv);
+  const shellCommand = extractShellWrapperCommand(params.argv).command;
   const inferred = shellCommand !== null ? shellCommand.trim() : formatExecCommand(params.argv);
 
   if (raw && raw !== inferred) {

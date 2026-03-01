@@ -1,4 +1,36 @@
 import { vi } from "vitest";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildResult,
+} from "../../plugins/types.js";
+
+export const mockedGlobalHookRunner = {
+  hasHooks: vi.fn((_hookName: string) => false),
+  runBeforeAgentStart: vi.fn(
+    async (
+      _event: { prompt: string; messages?: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
+  ),
+  runBeforePromptBuild: vi.fn(
+    async (
+      _event: { prompt: string; messages: unknown[] },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
+  ),
+  runBeforeModelResolve: vi.fn(
+    async (
+      _event: { prompt: string },
+      _ctx: PluginHookAgentContext,
+    ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
+  ),
+};
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+}));
 
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),

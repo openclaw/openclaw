@@ -1,13 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
+  warnMissingProviderGroupPolicyFallbackOnce,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
@@ -426,8 +430,20 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.googlechat !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "googlechat",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
+    log: (message) => logVerbose(core, runtime, message),
+  });
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
@@ -485,7 +501,7 @@ async function processMessageWithPipeline(params: {
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
+    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];

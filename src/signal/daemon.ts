@@ -16,7 +16,19 @@ export type SignalDaemonOpts = {
 export type SignalDaemonHandle = {
   pid?: number;
   stop: () => void;
+  exited: Promise<SignalDaemonExitEvent>;
+  isExited: () => boolean;
 };
+
+export type SignalDaemonExitEvent = {
+  source: "process" | "spawn-error";
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
+  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+}
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
@@ -83,17 +95,51 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
   const log = opts.runtime?.log ?? (() => {});
   const error = opts.runtime?.error ?? (() => {});
+  let exited = false;
+  let settledExit = false;
+  let resolveExit!: (value: SignalDaemonExitEvent) => void;
+  const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
+    resolveExit = resolve;
+  });
+  const settleExit = (value: SignalDaemonExitEvent) => {
+    if (settledExit) {
+      return;
+    }
+    settledExit = true;
+    exited = true;
+    resolveExit(value);
+  };
 
   bindSignalCliOutput({ stream: child.stdout, log, error });
   bindSignalCliOutput({ stream: child.stderr, log, error });
+  child.once("exit", (code, signal) => {
+    settleExit({
+      source: "process",
+      code: typeof code === "number" ? code : null,
+      signal: signal ?? null,
+    });
+    error(
+      formatSignalDaemonExit({ source: "process", code: code ?? null, signal: signal ?? null }),
+    );
+  });
+  child.once("close", (code, signal) => {
+    settleExit({
+      source: "process",
+      code: typeof code === "number" ? code : null,
+      signal: signal ?? null,
+    });
+  });
   child.on("error", (err) => {
     error(`signal-cli spawn error: ${String(err)}`);
+    settleExit({ source: "spawn-error", code: null, signal: null });
   });
 
   return {
     pid: child.pid ?? undefined,
+    exited: exitedPromise,
+    isExited: () => exited,
     stop: () => {
-      if (!child.killed) {
+      if (!child.killed && !exited) {
         child.kill("SIGTERM");
       }
     },

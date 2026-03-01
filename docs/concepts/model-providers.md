@@ -131,11 +131,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
 - xAI: `xai` (`XAI_API_KEY`)
+- Mistral: `mistral` (`MISTRAL_API_KEY`)
+- Example model: `mistral/mistral-large-latest`
+- CLI: `openclaw onboard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 

@@ -5,7 +5,7 @@ import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
-export { XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
+export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
@@ -355,6 +355,18 @@ export function setXaiApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "xai",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setMistralApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "mistral:default",
+    credential: {
+      type: "api_key",
+      provider: "mistral",
       key,
     },
     agentDir: resolveAuthAgentDir(agentDir),

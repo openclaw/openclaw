@@ -1,5 +1,6 @@
 import os from "node:os";
 import type { OpenClawConfig } from "../config/types.js";
+import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
 
@@ -113,43 +114,12 @@ function resolveScheme(
   return cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
 }
 
-function parseIPv4Octets(address: string): [number, number, number, number] | null {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return null;
-  }
-  const octets = parts.map((part) => Number.parseInt(part, 10));
-  if (octets.some((value) => !Number.isFinite(value) || value < 0 || value > 255)) {
-    return null;
-  }
-  return [octets[0], octets[1], octets[2], octets[3]];
-}
-
 function isPrivateIPv4(address: string): boolean {
-  const octets = parseIPv4Octets(address);
-  if (!octets) {
-    return false;
-  }
-  const [a, b] = octets;
-  if (a === 10) {
-    return true;
-  }
-  if (a === 172 && b >= 16 && b <= 31) {
-    return true;
-  }
-  if (a === 192 && b === 168) {
-    return true;
-  }
-  return false;
+  return isRfc1918Ipv4Address(address);
 }
 
 function isTailnetIPv4(address: string): boolean {
-  const octets = parseIPv4Octets(address);
-  if (!octets) {
-    return false;
-  }
-  const [a, b] = octets;
-  return a === 100 && b >= 64 && b <= 127;
+  return isCarrierGradeNatIpv4Address(address);
 }
 
 function pickIPv4Matching(

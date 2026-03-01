@@ -10,14 +10,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../../config/config.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import {
-  classifyPortListener,
-  formatPortDiagnostics,
-  inspectPortUsage,
-  type PortUsage,
-} from "../../infra/ports.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -40,15 +33,21 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
-import { pathExists, sleep } from "../../utils.js";
+import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-cli.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import {
+  renderRestartDiagnostics,
+  terminateStaleGatewayPids,
+  waitForGatewayHealthyRestart,
+} from "../daemon-cli/restart-health.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
   DEFAULT_PACKAGE_NAME,
+  createGlobalCommandRunner,
   ensureGitCheckout,
   normalizeTag,
   parseTimeoutMsOrExit,
@@ -67,8 +66,6 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
-const POST_RESTART_HEALTH_ATTEMPTS = 8;
-const POST_RESTART_HEALTH_DELAY_MS = 450;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -97,13 +94,6 @@ function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
 
-type GatewayRestartSnapshot = {
-  runtime: GatewayServiceRuntime;
-  portUsage: PortUsage;
-  healthy: boolean;
-  staleGatewayPids: number[];
-};
-
 function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
   if (!root) {
     return [];
@@ -122,6 +112,65 @@ function formatCommandFailure(stdout: string, stderr: string): string {
     return "command returned a non-zero exit code";
   }
   return detail.split("\n").slice(-3).join("\n");
+}
+
+type UpdateDryRunPreview = {
+  dryRun: true;
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  mode: UpdateRunResult["mode"];
+  updateInstallKind: "git" | "package" | "unknown";
+  switchToGit: boolean;
+  switchToPackage: boolean;
+  restart: boolean;
+  requestedChannel: "stable" | "beta" | "dev" | null;
+  storedChannel: "stable" | "beta" | "dev" | null;
+  effectiveChannel: "stable" | "beta" | "dev";
+  tag: string;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  downgradeRisk: boolean;
+  actions: string[];
+  notes: string[];
+};
+
+function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): void {
+  if (jsonMode) {
+    defaultRuntime.log(JSON.stringify(preview, null, 2));
+    return;
+  }
+
+  defaultRuntime.log(theme.heading("Update dry-run"));
+  defaultRuntime.log(theme.muted("No changes were applied."));
+  defaultRuntime.log("");
+  defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+  defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
+  defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
+  defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+  defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+  if (preview.currentVersion) {
+    defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
+  }
+  if (preview.targetVersion) {
+    defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+  }
+  if (preview.downgradeRisk) {
+    defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(theme.heading("Planned actions:"));
+  for (const action of preview.actions) {
+    defaultRuntime.log(`  - ${action}`);
+  }
+
+  if (preview.notes.length > 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Notes:"));
+    for (const note of preview.notes) {
+      defaultRuntime.log(`  - ${theme.muted(note)}`);
+    }
+  }
 }
 
 async function refreshGatewayServiceEnv(params: {
@@ -149,126 +198,6 @@ async function refreshGatewayServiceEnv(params: {
   }
 
   await runDaemonInstall({ force: true, json: params.jsonMode || undefined });
-}
-
-async function inspectGatewayRestart(port: number): Promise<GatewayRestartSnapshot> {
-  const service = resolveGatewayService();
-  let runtime: GatewayServiceRuntime = { status: "unknown" };
-  try {
-    runtime = await service.readRuntime(process.env);
-  } catch (err) {
-    runtime = { status: "unknown", detail: String(err) };
-  }
-
-  let portUsage: PortUsage;
-  try {
-    portUsage = await inspectPortUsage(port);
-  } catch (err) {
-    portUsage = {
-      port,
-      status: "unknown",
-      listeners: [],
-      hints: [],
-      errors: [String(err)],
-    };
-  }
-
-  const gatewayListeners =
-    portUsage.status === "busy"
-      ? portUsage.listeners.filter((listener) => classifyPortListener(listener, port) === "gateway")
-      : [];
-  const running = runtime.status === "running";
-  const ownsPort =
-    runtime.pid != null
-      ? portUsage.listeners.some((listener) => listener.pid === runtime.pid)
-      : gatewayListeners.length > 0 ||
-        (portUsage.status === "busy" && portUsage.listeners.length === 0);
-  const healthy = running && ownsPort;
-  const staleGatewayPids = Array.from(
-    new Set(
-      gatewayListeners
-        .map((listener) => listener.pid)
-        .filter((pid): pid is number => Number.isFinite(pid))
-        .filter((pid) => runtime.pid == null || pid !== runtime.pid || !running),
-    ),
-  );
-
-  return {
-    runtime,
-    portUsage,
-    healthy,
-    staleGatewayPids,
-  };
-}
-
-async function waitForGatewayHealthyRestart(port: number): Promise<GatewayRestartSnapshot> {
-  let snapshot = await inspectGatewayRestart(port);
-  for (let attempt = 0; attempt < POST_RESTART_HEALTH_ATTEMPTS; attempt += 1) {
-    if (snapshot.healthy) {
-      return snapshot;
-    }
-    if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
-      return snapshot;
-    }
-    await sleep(POST_RESTART_HEALTH_DELAY_MS);
-    snapshot = await inspectGatewayRestart(port);
-  }
-  return snapshot;
-}
-
-function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): string[] {
-  const lines: string[] = [];
-  const runtimeSummary = [
-    snapshot.runtime.status ? `status=${snapshot.runtime.status}` : null,
-    snapshot.runtime.state ? `state=${snapshot.runtime.state}` : null,
-    snapshot.runtime.pid != null ? `pid=${snapshot.runtime.pid}` : null,
-    snapshot.runtime.lastExitStatus != null ? `lastExit=${snapshot.runtime.lastExitStatus}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
-  if (runtimeSummary) {
-    lines.push(`Service runtime: ${runtimeSummary}`);
-  }
-  if (snapshot.portUsage.status === "busy") {
-    lines.push(...formatPortDiagnostics(snapshot.portUsage));
-  } else {
-    lines.push(`Gateway port ${snapshot.portUsage.port} status: ${snapshot.portUsage.status}.`);
-  }
-  if (snapshot.portUsage.errors?.length) {
-    lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
-  }
-  return lines;
-}
-
-async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
-  const killed: number[] = [];
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-      killed.push(pid);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code !== "ESRCH") {
-        throw err;
-      }
-    }
-  }
-  if (killed.length === 0) {
-    return killed;
-  }
-  await sleep(400);
-  for (const pid of killed) {
-    try {
-      process.kill(pid, 0);
-      process.kill(pid, "SIGKILL");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code !== "ESRCH") {
-        throw err;
-      }
-    }
-  }
-  return killed;
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -339,10 +268,7 @@ async function runPackageInstallUpdate(params: {
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
   });
-  const runCommand = async (argv: string[], options: { timeoutMs: number }) => {
-    const res = await runCommandWithTimeout(argv, options);
-    return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-  };
+  const runCommand = createGlobalCommandRunner();
 
   const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
   const packageName =
@@ -633,7 +559,11 @@ async function maybeRestartService(params: {
       }
 
       if (!params.opts.json && restartInitiated) {
-        let health = await waitForGatewayHealthyRestart(params.gatewayPort);
+        const service = resolveGatewayService();
+        let health = await waitForGatewayHealthyRestart({
+          service,
+          port: params.gatewayPort,
+        });
         if (!health.healthy && health.staleGatewayPids.length > 0) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -644,7 +574,10 @@ async function maybeRestartService(params: {
           }
           await terminateStaleGatewayPids(health.staleGatewayPids);
           await runDaemonRestart();
-          health = await waitForGatewayHealthyRestart(params.gatewayPort);
+          health = await waitForGatewayHealthyRestart({
+            service,
+            port: params.gatewayPort,
+          });
         }
 
         if (health.healthy) {
@@ -739,11 +672,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const explicitTag = normalizeTag(opts.tag);
   let tag = explicitTag ?? channelToNpmTag(channel);
+  let currentVersion: string | null = null;
+  let targetVersion: string | null = null;
+  let downgradeRisk = false;
+  let fallbackToLatest = false;
 
   if (updateInstallKind !== "git") {
-    const currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    let fallbackToLatest = false;
-    const targetVersion = explicitTag
+    currentVersion = switchToPackage ? null : await readPackageVersion(root);
+    targetVersion = explicitTag
       ? await resolveTargetVersion(tag, timeoutMs)
       : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
           tag = resolved.tag;
@@ -752,38 +688,106 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
-    const needsConfirm =
+    downgradeRisk =
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null || (cmp != null && cmp > 0));
+  }
 
-    if (needsConfirm && !opts.yes) {
-      if (!process.stdin.isTTY || opts.json) {
-        defaultRuntime.error(
-          [
-            "Downgrade confirmation required.",
-            "Downgrading can break configuration. Re-run in a TTY to confirm.",
-          ].join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      const targetLabel = targetVersion ?? `${tag} (unknown)`;
-      const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
-      const ok = await confirm({
-        message: stylePromptMessage(message),
-        initialValue: false,
+  if (opts.dryRun) {
+    let mode: UpdateRunResult["mode"] = "unknown";
+    if (updateInstallKind === "git") {
+      mode = "git";
+    } else if (updateInstallKind === "package") {
+      mode = await resolveGlobalManager({
+        root,
+        installKind,
+        timeoutMs: timeoutMs ?? 20 * 60_000,
       });
-      if (isCancel(ok) || !ok) {
-        if (!opts.json) {
-          defaultRuntime.log(theme.muted("Update cancelled."));
-        }
-        defaultRuntime.exit(0);
-        return;
-      }
     }
-  } else if (opts.tag && !opts.json) {
+
+    const actions: string[] = [];
+    if (requestedChannel && requestedChannel !== storedChannel) {
+      actions.push(`Persist update.channel=${requestedChannel} in config`);
+    }
+    if (switchToGit) {
+      actions.push("Switch install mode from package to git checkout (dev channel)");
+    } else if (switchToPackage) {
+      actions.push(`Switch install mode from git to package manager (${mode})`);
+    } else if (updateInstallKind === "git") {
+      actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
+    } else {
+      actions.push(`Run global package manager update with spec openclaw@${tag}`);
+    }
+    actions.push("Run plugin update sync after core update");
+    actions.push("Refresh shell completion cache (if needed)");
+    actions.push(
+      shouldRestart
+        ? "Restart gateway service and run doctor checks"
+        : "Skip restart (because --no-restart is set)",
+    );
+
+    const notes: string[] = [];
+    if (opts.tag && updateInstallKind === "git") {
+      notes.push("--tag applies to npm installs only; git updates ignore it.");
+    }
+    if (fallbackToLatest) {
+      notes.push("Beta channel resolves to latest for this run (fallback).");
+    }
+
+    printDryRunPreview(
+      {
+        dryRun: true,
+        root,
+        installKind,
+        mode,
+        updateInstallKind,
+        switchToGit,
+        switchToPackage,
+        restart: shouldRestart,
+        requestedChannel,
+        storedChannel,
+        effectiveChannel: channel,
+        tag,
+        currentVersion,
+        targetVersion,
+        downgradeRisk,
+        actions,
+        notes,
+      },
+      Boolean(opts.json),
+    );
+    return;
+  }
+
+  if (downgradeRisk && !opts.yes) {
+    if (!process.stdin.isTTY || opts.json) {
+      defaultRuntime.error(
+        [
+          "Downgrade confirmation required.",
+          "Downgrading can break configuration. Re-run in a TTY to confirm.",
+        ].join("\n"),
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    const targetLabel = targetVersion ?? `${tag} (unknown)`;
+    const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+    const ok = await confirm({
+      message: stylePromptMessage(message),
+      initialValue: false,
+    });
+    if (isCancel(ok) || !ok) {
+      if (!opts.json) {
+        defaultRuntime.log(theme.muted("Update cancelled."));
+      }
+      defaultRuntime.exit(0);
+      return;
+    }
+  }
+
+  if (updateInstallKind === "git" && opts.tag && !opts.json) {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );

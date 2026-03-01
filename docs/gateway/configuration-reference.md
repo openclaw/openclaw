@@ -1,6 +1,10 @@
 ---
 title: "Configuration Reference"
 description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
+summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
+read_when:
+  - You need exact field-level config semantics or defaults
+  - You are validating channel, model, gateway, or tool config blocks
 ---
 
 # Configuration Reference
@@ -35,7 +39,7 @@ All channels support DM policies and group policies:
 <Note>
 `channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
 Pairing codes expire after 1 hour. Pending DM pairing requests are capped at **3 per channel**.
-Slack/Discord have a special fallback: if their provider section is missing entirely, runtime group policy can resolve to `open` (with a startup warning).
+If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
 </Note>
 
 ### Channel model overrides
@@ -151,7 +155,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streaming: true, // live preview on/off (default true)
+      streaming: "partial", // off | partial | block | progress (default: off)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 5,
@@ -161,7 +165,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         maxDelayMs: 30000,
         jitter: 0.1,
       },
-      network: { autoSelectFamily: false },
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
@@ -228,11 +235,17 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 20,
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
+      streaming: "off", // off | partial | block | progress (progress maps to partial on Discord)
       maxLinesPerMessage: 17,
       ui: {
         components: {
           accentColor: "#5865F2",
         },
+      },
+      threadBindings: {
+        enabled: true,
+        ttlHours: 24,
+        spawnSubagentSessions: false, // opt-in for sessions_spawn({ thread: true })
       },
       voice: {
         enabled: true,
@@ -263,8 +276,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.threadBindings` controls Discord thread-bound routing:
+  - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session ttl`, and bound delivery/routing)
+  - `ttlHours`: Discord override for auto-unfocus TTL (`0` disables)
+  - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
+- `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -348,6 +366,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       textChunkLimit: 4000,
       chunkMode: "length",
+      streaming: "partial", // off | partial | block | progress (preview mode)
+      nativeStreaming: true, // use Slack native streaming API when streaming=partial
       mediaMaxMb: 20,
     },
   },
@@ -357,6 +377,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
+- `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
@@ -1217,6 +1238,10 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       maxEntries: 500,
       rotateBytes: "10mb",
     },
+    threadBindings: {
+      enabled: true,
+      ttlHours: 24, // default auto-unfocus TTL for thread-bound sessions (0 disables)
+    },
     mainKey: "main", // legacy (runtime always uses "main")
     agentToAgent: { maxPingPongTurns: 5 },
     sendPolicy: {
@@ -1240,6 +1265,9 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
+- **`threadBindings`**: global defaults for thread-bound session features.
+  - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
+  - `ttlHours`: default auto-unfocus TTL in hours (`0` disables; providers can override)
 
 </Accordion>
 

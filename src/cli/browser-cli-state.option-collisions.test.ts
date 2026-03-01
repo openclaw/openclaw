@@ -49,6 +49,10 @@ describe("browser state option collisions", () => {
   const runBrowserCommand = async (argv: string[]) => {
     const program = createBrowserProgram();
     await program.parseAsync(["browser", ...argv], { from: "user" });
+  };
+
+  const runBrowserCommandAndGetRequest = async (argv: string[]) => {
+    await runBrowserCommand(argv);
     return getLastRequest();
   };
 
@@ -61,7 +65,7 @@ describe("browser state option collisions", () => {
   });
 
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
-    const request = await runBrowserCommand([
+    const request = await runBrowserCommandAndGetRequest([
       "cookies",
       "set",
       "session",
@@ -76,9 +80,64 @@ describe("browser state option collisions", () => {
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {
-    const request = (await runBrowserCommand(["set", "headers", "--json", '{"x-auth":"ok"}'])) as {
+    const request = (await runBrowserCommandAndGetRequest([
+      "set",
+      "headers",
+      "--json",
+      '{"x-auth":"ok"}',
+    ])) as {
       body?: { headers?: Record<string, string> };
     };
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
+  });
+
+  it("filters non-string header values from JSON payload", async () => {
+    const request = (await runBrowserCommandAndGetRequest([
+      "set",
+      "headers",
+      "--json",
+      '{"x-auth":"ok","retry":3,"enabled":true}',
+    ])) as {
+      body?: { headers?: Record<string, string> };
+    };
+    expect(request.body?.headers).toEqual({ "x-auth": "ok" });
+  });
+
+  it("errors when set offline receives an invalid value", async () => {
+    await runBrowserCommand(["set", "offline", "maybe"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("errors when set media receives an invalid value", async () => {
+    await runBrowserCommand(["set", "media", "sepia"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Expected dark|light|none"),
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("errors when headers JSON is missing", async () => {
+    await runBrowserCommand(["set", "headers"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Missing headers JSON"),
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("errors when headers JSON is not an object", async () => {
+    await runBrowserCommand(["set", "headers", "--json", "[]"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Headers JSON must be a JSON object"),
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });
 });

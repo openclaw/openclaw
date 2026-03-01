@@ -1,3 +1,4 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
@@ -5,6 +6,7 @@ import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.j
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
   model: string;
 };
 
@@ -40,6 +42,7 @@ export async function createOpenAiEmbeddingProvider(
     return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
+      ssrfPolicy: client.ssrfPolicy,
       body: { model: client.model, input },
       errorPrefix: "openai embeddings failed",
     });
@@ -63,11 +66,11 @@ export async function createOpenAiEmbeddingProvider(
 export async function resolveOpenAiEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<OpenAiEmbeddingClient> {
-  const { baseUrl, headers } = await resolveRemoteEmbeddingBearerClient({
+  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
   });
   const model = normalizeOpenAiModel(options.model);
-  return { baseUrl, headers, model };
+  return { baseUrl, headers, ssrfPolicy, model };
 }

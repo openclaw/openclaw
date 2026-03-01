@@ -197,7 +197,7 @@ async function noteChannelPrimer(
       "Multi-user DMs: run: " +
         formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
         ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       "",
       ...channelLines,
     ].join("\n"),
@@ -253,7 +253,7 @@ async function maybeConfigureDmPolicies(params: {
         "Multi-user DMs: run: " +
           formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
           ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-        `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
+        `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
       ].join("\n"),
       `${policy.label} DM access`,
     );

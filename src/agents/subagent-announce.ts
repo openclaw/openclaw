@@ -38,6 +38,12 @@ import type { SpawnSubagentMode } from "./subagent-spawn.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
+const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
+const FAST_TEST_RETRY_INTERVAL_MS = 8;
+const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
@@ -50,6 +56,14 @@ type SubagentAnnounceDeliveryResult = {
   path: SubagentDeliveryPath;
   error?: string;
 };
+
+function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
+  const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+}
 
 function buildCompletionDeliveryMessage(params: {
   findings: string;
@@ -217,7 +231,7 @@ async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
 }): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
   let result: string | undefined;
   while (Date.now() < deadline) {
@@ -239,7 +253,7 @@ async function waitForSubagentOutputChange(params: {
   if (!baseline) {
     return params.baselineReply;
   }
-  const RETRY_INTERVAL_MS = 100;
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 5_000));
   let latest = params.baselineReply;
   while (Date.now() < deadline) {
@@ -294,7 +308,8 @@ async function buildCompactAnnounceStatsLine(params: {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const tokenWaitAttempts = FAST_TEST_MODE ? 1 : 3;
+  for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
@@ -302,7 +317,9 @@ async function buildCompactAnnounceStatsLine(params: {
     if (hasTokenData) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (!FAST_TEST_MODE) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
     entry = loadSessionStore(storePath)[params.sessionKey];
   }
 
@@ -461,6 +478,8 @@ async function resolveSubagentCompletionOrigin(params: {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
+  const cfg = loadConfig();
+  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterDepth = getSubagentDepthFromSessionStore(item.sessionKey);
   const requesterIsSubagent = requesterDepth >= 1;
   const origin = item.origin;
@@ -487,7 +506,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       deliver: !requesterIsSubagent,
       idempotencyKey,
     },
-    timeoutMs: 15_000,
+    timeoutMs: announceTimeoutMs,
   });
 }
 
@@ -495,7 +514,7 @@ function resolveRequesterStoreKey(
   cfg: ReturnType<typeof loadConfig>,
   requesterSessionKey: string,
 ): string {
-  const raw = requesterSessionKey.trim();
+  const raw = (requesterSessionKey ?? "").trim();
   if (!raw) {
     return raw;
   }
@@ -523,13 +542,25 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
+function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
+  const accountId = normalizeAccountId(origin?.accountId);
+  if (!accountId) {
+    return sessionKey;
+  }
+  return `${sessionKey}:acct:${accountId}`;
+}
+
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
   triggerMessage: string;
   summaryLine?: string;
   requesterOrigin?: DeliveryContext;
+  signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none"> {
+  if (params.signal?.aborted) {
+    return "none";
+  }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const sessionId = entry?.sessionId;
@@ -560,7 +591,7 @@ async function maybeQueueSubagentAnnounce(params: {
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     enqueueAnnounce({
-      key: canonicalKey,
+      key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
         prompt: params.triggerMessage,
@@ -610,8 +641,16 @@ async function sendSubagentAnnounceDirectly(params: {
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
+  signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  if (params.signal?.aborted) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
   const cfg = loadConfig();
+  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -663,6 +702,12 @@ async function sendSubagentAnnounceDirectly(params: {
           completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
             ? String(completionDirectOrigin.threadId)
             : undefined;
+        if (params.signal?.aborted) {
+          return {
+            delivered: false,
+            path: "none",
+          };
+        }
         await callGateway({
           method: "send",
           params: {
@@ -674,7 +719,7 @@ async function sendSubagentAnnounceDirectly(params: {
             message: params.completionMessage,
             idempotencyKey: params.directIdempotencyKey,
           },
-          timeoutMs: 15_000,
+          timeoutMs: announceTimeoutMs,
         });
 
         return {
@@ -689,6 +734,12 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
+    if (params.signal?.aborted) {
+      return {
+        delivered: false,
+        path: "none",
+      };
+    }
     await callGateway({
       method: "agent",
       params: {
@@ -702,7 +753,7 @@ async function sendSubagentAnnounceDirectly(params: {
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
-      timeoutMs: 15_000,
+      timeoutMs: announceTimeoutMs,
     });
 
     return {
@@ -733,7 +784,14 @@ async function deliverSubagentAnnouncement(params: {
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
+  signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  if (params.signal?.aborted) {
+    return {
+      delivered: false,
+      path: "none",
+    };
+  }
   // Non-completion mode mirrors historical behavior: try queued/steered delivery first,
   // then (only if not queued) attempt direct delivery.
   if (!params.expectsCompletionMessage) {
@@ -743,6 +801,7 @@ async function deliverSubagentAnnouncement(params: {
       triggerMessage: params.triggerMessage,
       summaryLine: params.summaryLine,
       requesterOrigin: params.requesterOrigin,
+      signal: params.signal,
     });
     const queued = queueOutcomeToDeliveryResult(queueOutcome);
     if (queued.delivered) {
@@ -763,6 +822,7 @@ async function deliverSubagentAnnouncement(params: {
     directOrigin: params.directOrigin,
     requesterIsSubagent: params.requesterIsSubagent,
     expectsCompletionMessage: params.expectsCompletionMessage,
+    signal: params.signal,
   });
   if (direct.delivered || !params.expectsCompletionMessage) {
     return direct;
@@ -776,6 +836,7 @@ async function deliverSubagentAnnouncement(params: {
     triggerMessage: params.triggerMessage,
     summaryLine: params.summaryLine,
     requesterOrigin: params.requesterOrigin,
+    signal: params.signal,
   });
   if (queueOutcome === "steered" || queueOutcome === "queued") {
     return queueOutcomeToDeliveryResult(queueOutcome);
@@ -928,6 +989,7 @@ export async function runSubagentAnnounceFlow(params: {
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -1037,10 +1099,11 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (requesterDepth >= 1 && reply?.trim()) {
+      const minReplyChangeWaitMs = FAST_TEST_MODE ? FAST_TEST_REPLY_CHANGE_WAIT_MS : 250;
       reply = await waitForSubagentOutputChange({
         sessionKey: params.childSessionKey,
         baselineReply: reply,
-        maxWaitMs: Math.max(250, Math.min(params.timeoutMs, 2_000)),
+        maxWaitMs: Math.max(minReplyChangeWaitMs, Math.min(params.timeoutMs, 2_000)),
       });
     }
 
@@ -1187,6 +1250,7 @@ export async function runSubagentAnnounceFlow(params: {
       completionRouteMode: completionResolution.routeMode,
       spawnMode: params.spawnMode,
       directIdempotencyKey,
+      signal: params.signal,
     });
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {

@@ -317,6 +317,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   try {
     await runGatewayLoop({
       runtime: defaultRuntime,
+      lockPort: port,
       start: async () =>
         await startGatewayServer(port, {
           bind,

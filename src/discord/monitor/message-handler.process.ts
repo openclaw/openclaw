@@ -21,6 +21,7 @@ import {
   type StatusReactionAdapter,
 } from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -413,7 +414,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
 
   // --- Discord draft stream (edit-based preview streaming) ---
-  const discordStreamMode = discordConfig?.streamMode ?? "off";
+  const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
   const draftMaxChars = Math.min(textLimit, 2000);
   const accountBlockStreamingEnabled =
     typeof discordConfig?.blockStreaming === "boolean"

@@ -15,6 +15,11 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
@@ -704,6 +709,248 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+type ExecSafeBinCoverageHit = {
+  scopePath: string;
+  bin: string;
+  isInterpreter: boolean;
+};
+
+type ExecSafeBinScopeRef = {
+  scopePath: string;
+  safeBins: string[];
+  exec: Record<string, unknown>;
+  mergedProfiles: Record<string, unknown>;
+};
+
+function normalizeConfiguredSafeBins(entries: unknown): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .filter((entry) => entry.length > 0),
+    ),
+  ).toSorted();
+}
+
+function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
+  const scopes: ExecSafeBinScopeRef[] = [];
+  const globalExec = asObjectRecord(cfg.tools?.exec);
+  if (globalExec) {
+    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
+    if (safeBins.length > 0) {
+      scopes.push({
+        scopePath: "tools.exec",
+        safeBins,
+        exec: globalExec,
+        mergedProfiles:
+          resolveMergedSafeBinProfileFixtures({
+            global: globalExec,
+          }) ?? {},
+      });
+    }
+  }
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    const agentExec = asObjectRecord(agent.tools?.exec);
+    if (!agentExec) {
+      continue;
+    }
+    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    if (safeBins.length === 0) {
+      continue;
+    }
+    scopes.push({
+      scopePath: `agents.list.${agent.id}.tools.exec`,
+      safeBins,
+      exec: agentExec,
+      mergedProfiles:
+        resolveMergedSafeBinProfileFixtures({
+          global: globalExec,
+          local: agentExec,
+        }) ?? {},
+    });
+  }
+  return scopes;
+}
+
+function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
+  const hits: ExecSafeBinCoverageHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    for (const bin of scope.safeBins) {
+      if (scope.mergedProfiles[bin]) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        bin,
+        isInterpreter: interpreterBins.has(bin),
+      });
+    }
+  }
+  return hits;
+}
+
+function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+} {
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+  const warnings: string[] = [];
+
+  for (const scope of collectExecSafeBinScopes(next)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
+    if (missingBins.length === 0) {
+      continue;
+    }
+    const profileHolder =
+      asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
+    for (const bin of missingBins) {
+      if (interpreterBins.has(bin)) {
+        warnings.push(
+          `- ${scope.scopePath}.safeBins includes interpreter/runtime '${bin}' without profile; remove it from safeBins or use explicit allowlist entries.`,
+        );
+        continue;
+      }
+      if (profileHolder[bin] !== undefined) {
+        continue;
+      }
+      profileHolder[bin] = {};
+      changes.push(
+        `- ${scope.scopePath}.safeBinProfiles.${bin}: added scaffold profile {} (review and tighten flags/positionals).`,
+      );
+    }
+  }
+
+  if (changes.length === 0 && warnings.length === 0) {
+    return { config: cfg, changes: [], warnings: [] };
+  }
+  return { config: next, changes, warnings };
+}
+
+type LegacyToolsBySenderKeyHit = {
+  toolsBySenderPath: Array<string | number>;
+  pathLabel: string;
+  key: string;
+  targetKey: string;
+};
+
+function collectLegacyToolsBySenderKeyHits(
+  value: unknown,
+  pathParts: Array<string | number>,
+  hits: LegacyToolsBySenderKeyHit[],
+) {
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      collectLegacyToolsBySenderKeyHits(entry, [...pathParts, index], hits);
+    }
+    return;
+  }
+  const record = asObjectRecord(value);
+  if (!record) {
+    return;
+  }
+
+  const toolsBySender = asObjectRecord(record.toolsBySender);
+  if (toolsBySender) {
+    const path = [...pathParts, "toolsBySender"];
+    const pathLabel = formatPath(path);
+    for (const rawKey of Object.keys(toolsBySender)) {
+      const trimmed = rawKey.trim();
+      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
+        continue;
+      }
+      hits.push({
+        toolsBySenderPath: path,
+        pathLabel,
+        key: rawKey,
+        targetKey: `id:${trimmed}`,
+      });
+    }
+  }
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "toolsBySender") {
+      continue;
+    }
+    collectLegacyToolsBySenderKeyHits(nested, [...pathParts, key], hits);
+  }
+}
+
+function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKeyHit[] {
+  const hits: LegacyToolsBySenderKeyHit[] = [];
+  collectLegacyToolsBySenderKeyHits(cfg, [], hits);
+  return hits;
+}
+
+function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const next = structuredClone(cfg);
+  const hits = scanLegacyToolsBySenderKeys(next);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
+  let changed = false;
+
+  for (const hit of hits) {
+    const toolsBySender = asObjectRecord(resolvePathTarget(next, hit.toolsBySenderPath));
+    if (!toolsBySender || !(hit.key in toolsBySender)) {
+      continue;
+    }
+    const row = summary.get(hit.pathLabel) ?? { migrated: 0, dropped: 0, examples: [] };
+
+    if (toolsBySender[hit.targetKey] === undefined) {
+      toolsBySender[hit.targetKey] = toolsBySender[hit.key];
+      row.migrated++;
+      if (row.examples.length < 3) {
+        row.examples.push(`${hit.key} -> ${hit.targetKey}`);
+      }
+    } else {
+      row.dropped++;
+      if (row.examples.length < 3) {
+        row.examples.push(`${hit.key} (kept existing ${hit.targetKey})`);
+      }
+    }
+    delete toolsBySender[hit.key];
+    summary.set(hit.pathLabel, row);
+    changed = true;
+  }
+
+  if (!changed) {
+    return { config: cfg, changes: [] };
+  }
+
+  const changes: string[] = [];
+  for (const [pathLabel, row] of summary) {
+    if (row.migrated > 0) {
+      const suffix = row.examples.length > 0 ? ` (${row.examples.join(", ")})` : "";
+      changes.push(
+        `- ${pathLabel}: migrated ${row.migrated} legacy key${row.migrated === 1 ? "" : "s"} to typed id: entries${suffix}.`,
+      );
+    }
+    if (row.dropped > 0) {
+      changes.push(
+        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed.`,
+      );
+    }
+  }
+
+  return { config: next, changes };
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -859,6 +1106,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = allowFromRepair.config;
     }
+
+    const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
+    if (toolsBySenderRepair.changes.length > 0) {
+      note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
+      candidate = toolsBySenderRepair.config;
+      pendingChanges = true;
+      cfg = toolsBySenderRepair.config;
+    }
+
+    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
+    if (safeBinProfileRepair.changes.length > 0) {
+      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
+      candidate = safeBinProfileRepair.config;
+      pendingChanges = true;
+      cfg = safeBinProfileRepair.config;
+    }
+    if (safeBinProfileRepair.warnings.length > 0) {
+      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -892,6 +1158,55 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         "Doctor warnings",
       );
     }
+
+    const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
+    if (toolsBySenderHits.length > 0) {
+      const sample = toolsBySenderHits[0];
+      const sampleLabel = sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender";
+      note(
+        [
+          `- Found ${toolsBySenderHits.length} legacy untyped toolsBySender key${toolsBySenderHits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
+          "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to migrate legacy keys to typed id: entries.`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const safeBinCoverage = scanExecSafeBinCoverage(candidate);
+    if (safeBinCoverage.length > 0) {
+      const interpreterHits = safeBinCoverage.filter((hit) => hit.isInterpreter);
+      const customHits = safeBinCoverage.filter((hit) => !hit.isInterpreter);
+      const lines: string[] = [];
+      if (interpreterHits.length > 0) {
+        for (const hit of interpreterHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins includes interpreter/runtime '${hit.bin}' without profile.`,
+          );
+        }
+        if (interpreterHits.length > 5) {
+          lines.push(
+            `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      if (customHits.length > 0) {
+        for (const hit of customHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
+          );
+        }
+        if (customHits.length > 5) {
+          lines.push(
+            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      lines.push(
+        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
   }
 
   const unknown = stripUnknownConfigKeys(candidate);
@@ -919,6 +1234,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     } else if (fixHints.length > 0) {
       note(fixHints.join("\n"), "Doctor");
     }
+  }
+
+  if (shouldRepair && pendingChanges) {
+    shouldWriteConfig = true;
   }
 
   noteOpencodeProviderOverrides(cfg);

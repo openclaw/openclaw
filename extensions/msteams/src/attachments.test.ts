@@ -2,11 +2,37 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 
+/** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
+const publicResolveFn = async () => ({ address: "13.107.136.10" });
+
 const detectMimeMock = vi.fn(async () => "image/png");
 const saveMediaBufferMock = vi.fn(async () => ({
   path: "/tmp/saved.png",
   contentType: "image/png",
 }));
+const fetchRemoteMediaMock = vi.fn(
+  async (params: {
+    url: string;
+    maxBytes?: number;
+    filePathHint?: string;
+    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  }) => {
+    const fetchFn = params.fetchImpl ?? fetch;
+    const res = await fetchFn(params.url);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
+      throw new Error(`payload exceeds maxBytes ${params.maxBytes}`);
+    }
+    return {
+      buffer,
+      contentType: res.headers.get("content-type") ?? undefined,
+      fileName: params.filePathHint,
+    };
+  },
+);
 
 const runtimeStub = {
   media: {
@@ -14,6 +40,8 @@ const runtimeStub = {
   },
   channel: {
     media: {
+      fetchRemoteMedia:
+        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
       saveMediaBuffer:
         saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
     },
@@ -28,6 +56,7 @@ describe("msteams attachments", () => {
   beforeEach(() => {
     detectMimeMock.mockClear();
     saveMediaBufferMock.mockClear();
+    fetchRemoteMediaMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
   });
 
@@ -116,9 +145,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/img");
+      expect(fetchMock).toHaveBeenCalled();
       expect(saveMediaBufferMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.png");
@@ -143,9 +173,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/dl");
+      expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
     });
 
@@ -168,9 +199,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf");
+      expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.pdf");
       expect(media[0]?.placeholder).toBe("<media:document>");
@@ -195,10 +227,11 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png");
+      expect(fetchMock).toHaveBeenCalled();
     });
 
     it("stores inline data:image base64 payloads", async () => {
@@ -222,12 +255,8 @@ describe("msteams attachments", () => {
     it("retries with auth when the first request is unauthorized", async () => {
       const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
-        const hasAuth = Boolean(
-          opts &&
-          typeof opts === "object" &&
-          "headers" in opts &&
-          (opts.headers as Record<string, string>)?.Authorization,
-        );
+        const headers = new Headers(opts?.headers);
+        const hasAuth = Boolean(headers.get("Authorization"));
         if (!hasAuth) {
           return new Response("unauthorized", { status: 401 });
         }
@@ -244,23 +273,19 @@ describe("msteams attachments", () => {
         allowHosts: ["x"],
         authAllowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("skips auth retries when the host is not in auth allowlist", async () => {
       const { downloadMSTeamsAttachments } = await load();
       const tokenProvider = { getAccessToken: vi.fn(async () => "token") };
       const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
-        const hasAuth = Boolean(
-          opts &&
-          typeof opts === "object" &&
-          "headers" in opts &&
-          (opts.headers as Record<string, string>)?.Authorization,
-        );
+        const headers = new Headers(opts?.headers);
+        const hasAuth = Boolean(headers.get("Authorization"));
         if (!hasAuth) {
           return new Response("forbidden", { status: 403 });
         }
@@ -279,10 +304,11 @@ describe("msteams attachments", () => {
         allowHosts: ["azureedge.net"],
         authAllowHosts: ["graph.microsoft.com"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(media).toHaveLength(0);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalled();
       expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
     });
 
@@ -440,6 +466,88 @@ describe("msteams attachments", () => {
       });
 
       expect(media.media).toHaveLength(2);
+    });
+
+    it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
+      const { downloadMSTeamsGraphMedia } = await load();
+      const shareUrl = "https://contoso.sharepoint.com/site/file";
+      const escapedUrl = "https://evil.example/internal.pdf";
+      fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
+        const fetchFn = params.fetchImpl ?? fetch;
+        let currentUrl = params.url;
+        for (let i = 0; i < 5; i += 1) {
+          const res = await fetchFn(currentUrl, { redirect: "manual" });
+          if ([301, 302, 303, 307, 308].includes(res.status)) {
+            const location = res.headers.get("location");
+            if (!location) {
+              throw new Error("redirect missing location");
+            }
+            currentUrl = new URL(location, currentUrl).toString();
+            continue;
+          }
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          return {
+            buffer: Buffer.from(await res.arrayBuffer()),
+            contentType: res.headers.get("content-type") ?? undefined,
+            fileName: params.filePathHint,
+          };
+        }
+        throw new Error("too many redirects");
+      });
+
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url.endsWith("/hostedContents")) {
+          return new Response(JSON.stringify({ value: [] }), { status: 200 });
+        }
+        if (url.endsWith("/attachments")) {
+          return new Response(JSON.stringify({ value: [] }), { status: 200 });
+        }
+        if (url.endsWith("/messages/123")) {
+          return new Response(
+            JSON.stringify({
+              attachments: [
+                {
+                  id: "ref-1",
+                  contentType: "reference",
+                  contentUrl: shareUrl,
+                  name: "report.pdf",
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.startsWith("https://graph.microsoft.com/v1.0/shares/")) {
+          return new Response(null, {
+            status: 302,
+            headers: { location: escapedUrl },
+          });
+        }
+        if (url === escapedUrl) {
+          return new Response(Buffer.from("should-not-be-fetched"), {
+            status: 200,
+            headers: { "content-type": "application/pdf" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      });
+
+      const media = await downloadMSTeamsGraphMedia({
+        messageUrl: "https://graph.microsoft.com/v1.0/chats/19%3Achat/messages/123",
+        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        maxBytes: 1024 * 1024,
+        allowHosts: ["graph.microsoft.com", "contoso.sharepoint.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media.media).toHaveLength(0);
+      const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+      expect(
+        calledUrls.some((url) => url.startsWith("https://graph.microsoft.com/v1.0/shares/")),
+      ).toBe(true);
+      expect(calledUrls).not.toContain(escapedUrl);
     });
   });
 

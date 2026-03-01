@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { getSubagentDepth, isCronSessionKey } from "../sessions/session-key-utils.js";
+import {
+  deriveSessionChatType,
+  getSubagentDepth,
+  isCronSessionKey,
+} from "../sessions/session-key-utils.js";
 import { classifySessionKeyShape } from "./session-key.js";
 
 describe("classifySessionKeyShape", () => {
@@ -64,5 +68,28 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("agent:main:subagent:worker")).toBe(false);
     expect(isCronSessionKey("cron:job-1")).toBe(false);
     expect(isCronSessionKey(undefined)).toBe(false);
+  });
+});
+
+describe("deriveSessionChatType", () => {
+  it("detects canonical direct/group/channel session keys", () => {
+    expect(deriveSessionChatType("agent:main:discord:direct:user1")).toBe("direct");
+    expect(deriveSessionChatType("agent:main:telegram:group:g1")).toBe("group");
+    expect(deriveSessionChatType("agent:main:discord:channel:c1")).toBe("channel");
+  });
+
+  it("detects legacy direct markers", () => {
+    expect(deriveSessionChatType("agent:main:telegram:dm:123456")).toBe("direct");
+    expect(deriveSessionChatType("telegram:dm:123456")).toBe("direct");
+  });
+
+  it("detects legacy discord guild channel keys", () => {
+    expect(deriveSessionChatType("discord:acc-1:guild-123:channel-456")).toBe("channel");
+  });
+
+  it("returns unknown for main or malformed session keys", () => {
+    expect(deriveSessionChatType("agent:main:main")).toBe("unknown");
+    expect(deriveSessionChatType("agent:main")).toBe("unknown");
+    expect(deriveSessionChatType("")).toBe("unknown");
   });
 });

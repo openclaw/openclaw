@@ -1,19 +1,11 @@
+import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import { closePlaywrightBrowserConnection, createPageViaPlaywright } from "./pw-session.js";
 
-const connectOverCdpMock = vi.fn();
-const getChromeWebSocketUrlMock = vi.fn();
-
-vi.mock("playwright-core", () => ({
-  chromium: {
-    connectOverCDP: (...args: unknown[]) => connectOverCdpMock(...args),
-  },
-}));
-
-vi.mock("./chrome.js", () => ({
-  getChromeWebSocketUrl: (...args: unknown[]) => getChromeWebSocketUrlMock(...args),
-}));
+const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
+const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
 
 function installBrowserMocks() {
   const pageOn = vi.fn();
@@ -55,15 +47,15 @@ function installBrowserMocks() {
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
-  connectOverCdpMock.mockResolvedValue(browser);
-  getChromeWebSocketUrlMock.mockResolvedValue(null);
+  connectOverCdpSpy.mockResolvedValue(browser);
+  getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
   return { pageGoto, browserClose };
 }
 
 afterEach(async () => {
-  connectOverCdpMock.mockReset();
-  getChromeWebSocketUrlMock.mockReset();
+  connectOverCdpSpy.mockClear();
+  getChromeWebSocketUrlSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 

@@ -21,6 +21,12 @@ import {
 } from "../../config/commands.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -64,6 +70,7 @@ import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { createNoopThreadBindingManager, createThreadBindingManager } from "./thread-bindings.js";
+import { formatThreadBindingTtlLabel } from "./thread-bindings.messages.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -137,17 +144,8 @@ function resolveThreadBindingsEnabled(params: {
 }
 
 function formatThreadBindingSessionTtlLabel(ttlMs: number): string {
-  if (ttlMs <= 0) {
-    return "off";
-  }
-  if (ttlMs < 60_000) {
-    return "<1m";
-  }
-  const totalMinutes = Math.floor(ttlMs / 60_000);
-  if (totalMinutes % 60 === 0) {
-    return `${Math.floor(totalMinutes / 60)}h`;
-  }
-  return `${totalMinutes}m`;
+  const label = formatThreadBindingTtlLabel(ttlMs);
+  return label === "disabled" ? "off" : label;
 }
 
 function dedupeSkillCommandsForDiscord(
@@ -245,27 +243,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  const discordCfg = account.config;
+  const rawDiscordCfg = account.config;
   const discordRootThreadBindings = cfg.channels?.discord?.threadBindings;
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  const discordRestFetch = resolveDiscordRestFetch(discordCfg.proxy, runtime);
-  const dmConfig = discordCfg.dm;
-  let guildEntries = discordCfg.guilds;
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = discordCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
-  if (
-    discordCfg.groupPolicy === undefined &&
-    discordCfg.guilds === undefined &&
-    defaultGroupPolicy === undefined &&
-    groupPolicy === "open"
-  ) {
-    runtime.log?.(
-      warn(
-        'discord: groupPolicy defaults to "open" when channels.discord is missing; set channels.discord.groupPolicy (or channels.defaults.groupPolicy) or add channels.discord.guilds to restrict access.',
-      ),
-    );
-  }
+  const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  const dmConfig = rawDiscordCfg.dm;
+  let guildEntries = rawDiscordCfg.guilds;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const providerConfigPresent = cfg.channels?.discord !== undefined;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent,
+    groupPolicy: rawDiscordCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  const discordCfg =
+    rawDiscordCfg.groupPolicy === groupPolicy ? rawDiscordCfg : { ...rawDiscordCfg, groupPolicy };
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "discord",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.guild,
+    log: (message) => runtime.log?.(warn(message)),
+  });
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
   const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
@@ -622,6 +622,8 @@ async function clearDiscordNativeCommands(params: {
 export const __testing = {
   createDiscordGatewayPlugin,
   dedupeSkillCommandsForDiscord,
+  resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,
   resolveThreadBindingsEnabled,
 };

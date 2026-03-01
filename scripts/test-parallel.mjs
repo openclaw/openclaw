@@ -12,6 +12,8 @@ const unitIsolatedFilesRaw = [
   "src/plugins/tools.optional.test.ts",
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/security/fix.test.ts",
+  // Runtime source guard scans are sensitive to filesystem contention.
+  "src/security/temp-path-guard.test.ts",
   "src/security/audit.test.ts",
   "src/utils.test.ts",
   "src/auto-reply/tool-meta.test.ts",
@@ -31,6 +33,33 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/reply.block-streaming.test.ts",
   // Archive extraction/fixture-heavy suite; keep off unit-fast critical path.
   "src/hooks/install.test.ts",
+  // Download/extraction safety cases can spike under unit-fast contention.
+  "src/agents/skills-install.download.test.ts",
+  // Heavy runner/exec/archive suites are stable but contend on shared resources under vmForks.
+  "src/agents/pi-embedded-runner.test.ts",
+  "src/agents/bash-tools.test.ts",
+  "src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts",
+  "src/agents/bash-tools.exec.background-abort.test.ts",
+  "src/agents/subagent-announce.format.test.ts",
+  "src/infra/archive.test.ts",
+  "src/cli/daemon-cli.coverage.test.ts",
+  "test/media-understanding.auto.test.ts",
+  // Model normalization test imports config/model discovery stack; keep off unit-fast critical path.
+  "src/agents/models-config.normalizes-gemini-3-ids-preview-google-providers.test.ts",
+  // Auth profile rotation suite is retry-heavy and high-variance under vmForks contention.
+  "src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts",
+  // Heavy trigger command scenarios; keep off unit-fast critical path to reduce contention noise.
+  "src/auto-reply/reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.includes-error-cause-embedded-agent-throws.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.runs-greeting-prompt-bare-reset.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.runs-compact-as-gated-command.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.allows-activation-from-allowfrom-groups.test.ts",
+  "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.ignores-inline-elevated-directive-unapproved-sender.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.keeps-inline-status-unauthorized-senders.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.shows-endpoint-default-model-status-not-configured.test.ts",
+  "src/web/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
   // Setup-heavy bot bootstrap suite.
   "src/telegram/bot.create-telegram-bot.test.ts",
   // Medium-heavy bot behavior suite; move off unit-fast critical path.
@@ -144,7 +173,17 @@ const keepGatewaySerial =
   (isCI && process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1");
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const hostCpuCount = os.cpus().length;
+const baseLocalWorkers = Math.max(4, Math.min(16, hostCpuCount));
+const loadAwareDisabledRaw = process.env.OPENCLAW_TEST_LOAD_AWARE?.trim().toLowerCase();
+const loadAwareDisabled = loadAwareDisabledRaw === "0" || loadAwareDisabledRaw === "false";
+const loadRatio =
+  !isCI && !loadAwareDisabled && process.platform !== "win32" && hostCpuCount > 0
+    ? os.loadavg()[0] / hostCpuCount
+    : 0;
+// Keep the fast-path unchanged on normal load; only throttle under extreme host pressure.
+const extremeLoadScale = loadRatio >= 1.1 ? 0.75 : loadRatio >= 1 ? 0.85 : 1;
+const localWorkers = Math.max(4, Math.min(16, Math.floor(baseLocalWorkers * extremeLoadScale)));
 const defaultWorkerBudget =
   testProfile === "low"
     ? {
@@ -169,11 +208,12 @@ const defaultWorkerBudget =
           }
         : {
             // Local `pnpm test` runs multiple vitest groups concurrently;
-            // keep per-group workers conservative to avoid pegging all cores.
-            unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
-            unitIsolated: 1,
+            // bias workers toward unit-fast (wall-clock bottleneck) while
+            // keeping unit-isolated low enough that both groups finish closer together.
+            unit: Math.max(4, Math.min(14, Math.floor((localWorkers * 7) / 8))),
+            unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
             extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-            gateway: 2,
+            gateway: Math.max(2, Math.min(4, Math.floor(localWorkers / 3))),
           };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.

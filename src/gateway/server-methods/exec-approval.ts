@@ -17,6 +17,14 @@ export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
+    if (typeof context.hasExecApprovalClients === "function") {
+      return context.hasExecApprovalClients();
+    }
+    // Fail closed when no operator-scope probe is available.
+    return false;
+  };
+
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -96,16 +104,23 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      void opts?.forwarder
-        ?.handleRequested({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })
-        .catch((err) => {
+      let forwardedToTargets = false;
+      if (opts?.forwarder) {
+        try {
+          forwardedToTargets = await opts.forwarder.handleRequested({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          });
+        } catch (err) {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
-        });
+        }
+      }
+
+      if (!hasApprovalClients(context) && !forwardedToTargets) {
+        manager.expire(record.id, "auto-expire:no-approver-clients");
+      }
 
       // Only send immediate "accepted" response when twoPhase is requested.
       // This preserves single-response semantics for existing callers.
@@ -186,6 +201,7 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const snapshot = manager.getSnapshot(p.id);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {
@@ -194,11 +210,17 @@ export function createExecApprovalHandlers(
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now() },
+        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
-        ?.handleResolved({ id: p.id, decision, resolvedBy, ts: Date.now() })
+        ?.handleResolved({
+          id: p.id,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        })
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
         });

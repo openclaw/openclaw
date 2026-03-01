@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
+  canonicalizeAllowlistWithResolvedIds,
+  patchAllowlistUsersInConfigEntries,
 } from "./resolve-utils.js";
 
 describe("buildAllowlistResolutionSummary", () => {
@@ -38,5 +40,48 @@ describe("addAllowlistUserEntriesFromConfigEntry", () => {
     const target = new Set<string>(["a"]);
     addAllowlistUserEntriesFromConfigEntry(target, null);
     expect(Array.from(target)).toEqual(["a"]);
+  });
+});
+
+describe("canonicalizeAllowlistWithResolvedIds", () => {
+  it("replaces resolved names with ids and keeps unresolved entries", () => {
+    const resolvedMap = new Map([
+      ["Alice#1234", { input: "Alice#1234", resolved: true, id: "111" }],
+      ["bob", { input: "bob", resolved: false }],
+    ]);
+    const result = canonicalizeAllowlistWithResolvedIds({
+      existing: ["Alice#1234", "bob", "222", "*"],
+      resolvedMap,
+    });
+    expect(result).toEqual(["111", "bob", "222", "*"]);
+  });
+
+  it("deduplicates ids after canonicalization", () => {
+    const resolvedMap = new Map([["alice", { input: "alice", resolved: true, id: "111" }]]);
+    const result = canonicalizeAllowlistWithResolvedIds({
+      existing: ["alice", "111", "alice"],
+      resolvedMap,
+    });
+    expect(result).toEqual(["111"]);
+  });
+});
+
+describe("patchAllowlistUsersInConfigEntries", () => {
+  it("supports canonicalization strategy for nested users", () => {
+    const entries = {
+      alpha: { users: ["Alice", "111", "Bob"] },
+      beta: { users: ["*"] },
+    };
+    const resolvedMap = new Map([
+      ["Alice", { input: "Alice", resolved: true, id: "111" }],
+      ["Bob", { input: "Bob", resolved: false }],
+    ]);
+    const patched = patchAllowlistUsersInConfigEntries({
+      entries,
+      resolvedMap,
+      strategy: "canonicalize",
+    });
+    expect((patched.alpha as { users: string[] }).users).toEqual(["111", "Bob"]);
+    expect((patched.beta as { users: string[] }).users).toEqual(["*"]);
   });
 });

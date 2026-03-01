@@ -595,7 +595,7 @@ async function saveSessionStoreUnlocked(
           // Final attempt failed — skip this save.  The write lock ensures
           // the next save will retry with fresh data.  Log for diagnostics.
           if (i === 4) {
-            console.warn(`[session-store] rename failed after 5 attempts: ${storePath}`);
+            log.warn(`rename failed after 5 attempts: ${storePath}`);
           }
         }
       }
@@ -806,7 +806,7 @@ export async function updateSessionStoreEntry(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { skipCache: true });
     const existing = store[sessionKey];
     if (!existing) {
       return null;

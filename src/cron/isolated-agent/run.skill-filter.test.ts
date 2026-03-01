@@ -32,14 +32,20 @@ vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  getModelRefStatus: vi.fn().mockReturnValue({ allowed: false }),
-  isCliProvider: vi.fn().mockReturnValue(false),
-  resolveAllowedModelRef: vi.fn().mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } }),
-  resolveConfiguredModelRef: vi.fn().mockReturnValue({ provider: "openai", model: "gpt-4" }),
-  resolveHooksGmailModel: vi.fn().mockReturnValue(null),
-  resolveThinkingDefault: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock("../../agents/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+  return {
+    ...actual,
+    getModelRefStatus: vi.fn().mockReturnValue({ allowed: false }),
+    isCliProvider: vi.fn().mockReturnValue(false),
+    resolveAllowedModelRef: vi
+      .fn()
+      .mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } }),
+    resolveConfiguredModelRef: vi.fn().mockReturnValue({ provider: "openai", model: "gpt-4" }),
+    resolveHooksGmailModel: vi.fn().mockReturnValue(null),
+    resolveThinkingDefault: vi.fn().mockReturnValue(undefined),
+  };
+});
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: vi.fn().mockResolvedValue({
@@ -319,6 +325,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock.mock.calls[0][1]).toHaveProperty("skillFilter", [
       "weather",
     ]);
+  });
+
+  it("forces a fresh session for isolated cron runs", async () => {
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: true,
+    });
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

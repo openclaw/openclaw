@@ -38,9 +38,9 @@ Notes:
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
-- Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
-  the gateway host (no container) and **does not require approvals**. To require approvals, run with
-  `host=gateway` and configure exec approvals (or enable sandboxing).
+- Important: sandboxing is **off by default**. If sandboxing is off and `host=sandbox` is explicitly
+  configured/requested, exec now fails closed instead of silently running on the gateway host.
+  Enable sandboxing or use `host=gateway` with approvals.
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
   effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
   that file.
@@ -55,6 +55,8 @@ Notes:
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
+- `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted.
+- `tools.exec.safeBinProfiles`: optional custom argv policy per safe bin (`minPositional`, `maxPositional`, `allowedValueFlags`, `deniedFlags`).
 
 Example:
 
@@ -125,6 +127,18 @@ Allowlist enforcement matches **resolved binary paths only** (no basename matche
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
 allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
 Redirections remain unsupported.
+
+Use the two controls for different jobs:
+
+- `tools.exec.safeBins`: small, stdin-only stream filters.
+- `tools.exec.safeBinTrustedDirs`: explicit extra trusted directories for safe-bin executable paths.
+- `tools.exec.safeBinProfiles`: explicit argv policy for custom safe bins.
+- allowlist: explicit trust for executable paths.
+
+Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
+`openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries.
+
+For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).
 
 ## Examples
 

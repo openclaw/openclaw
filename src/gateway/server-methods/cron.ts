@@ -214,10 +214,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const logPath = resolveCronRunLogPath({
-      storePath: context.cronStorePath,
-      jobId,
-    });
+    let logPath: string;
+    try {
+      logPath = resolveCronRunLogPath({
+        storePath: context.cronStorePath,
+        jobId,
+      });
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: invalid id"),
+      );
+      return;
+    }
     const entries = await readCronRunLogEntries(logPath, {
       limit: p.limit,
       jobId,

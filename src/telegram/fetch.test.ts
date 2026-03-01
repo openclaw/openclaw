@@ -3,6 +3,7 @@ import { resolveFetch } from "../infra/fetch.js";
 import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.js";
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
+const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -12,11 +13,20 @@ vi.mock("node:net", async () => {
   };
 });
 
+vi.mock("node:dns", async () => {
+  const actual = await vi.importActual<typeof import("node:dns")>("node:dns");
+  return {
+    ...actual,
+    setDefaultResultOrder,
+  };
+});
+
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
+  setDefaultResultOrder.mockReset();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -104,5 +114,23 @@ describe("resolveTelegramFetch", () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);
+  });
+
+  it("applies dns result order from config", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "verbatim" } });
+    expect(setDefaultResultOrder).toHaveBeenCalledWith("verbatim");
+  });
+
+  it("retries dns setter on next call when previous attempt threw", async () => {
+    setDefaultResultOrder.mockImplementationOnce(() => {
+      throw new Error("dns setter failed once");
+    });
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+    resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
+
+    expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
   });
 });

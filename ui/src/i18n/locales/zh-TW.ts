@@ -94,6 +94,11 @@ export const zh_TW: TranslationMap = {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
       failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
     },
+    pairing: {
+      hint: "此裝置需要閘道主機的配對批准。",
+      mobileHint:
+        "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
+    },
     insecure: {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",
       stayHttp: "如果您必須保持 HTTP，請設置 {config} (僅限令牌)。",

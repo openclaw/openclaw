@@ -105,7 +105,8 @@ describe("rotateSessionFile", () => {
     let now = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 5));
     try {
-      for (let i = 0; i < 5; i++) {
+      // 4 rotations are enough to verify pruning to <=3 backups.
+      for (let i = 0; i < 4; i++) {
         await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
         await rotateSessionFile(storePath, 50);
       }

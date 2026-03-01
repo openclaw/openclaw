@@ -1,5 +1,8 @@
 ---
 summary: "Channel agnostic session binding architecture and iteration 1 delivery scope"
+read_when:
+  - Refactoring channel-agnostic session routing and bindings
+  - Investigating duplicate, stale, or missing session delivery across channels
 owner: "onutc"
 status: "in-progress"
 last_updated: "2026-02-21"
@@ -212,7 +215,7 @@ Tests:
 
 - `src/discord/monitor/provider*.test.ts`
 - `src/discord/monitor/reply-delivery.test.ts`
-- `src/agents/subagent-announce.format.e2e.test.ts`
+- `src/agents/subagent-announce.format.test.ts`
 
 ## Done criteria for iteration 1
 

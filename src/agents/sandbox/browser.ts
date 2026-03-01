@@ -227,6 +227,7 @@ export async function ensureSandboxBrowser(params: {
         "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
       },
       configHash: expectedHash,
+      includeBinds: false,
     });
     const mainMountSuffix =
       params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
@@ -239,6 +240,11 @@ export async function ensureSandboxBrowser(params: {
         "-v",
         `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
       );
+    }
+    if (browserDockerCfg.binds?.length) {
+      for (const bind of browserDockerCfg.binds) {
+        args.push("-v", bind);
+      }
     }
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (noVncEnabled) {

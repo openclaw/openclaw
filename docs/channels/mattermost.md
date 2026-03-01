@@ -103,6 +103,7 @@ Notes:
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs or `@username`).
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
+- Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## Targets for outbound delivery
 

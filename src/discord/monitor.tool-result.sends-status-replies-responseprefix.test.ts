@@ -16,14 +16,14 @@ type Config = ReturnType<typeof import("../config/config.js").loadConfig>;
 
 beforeEach(() => {
   __resetDiscordChannelInfoCacheForTest();
-  sendMock.mockReset().mockResolvedValue(undefined);
-  updateLastRouteMock.mockReset();
-  dispatchMock.mockReset().mockImplementation(async ({ dispatcher }) => {
+  sendMock.mockClear().mockResolvedValue(undefined);
+  updateLastRouteMock.mockClear();
+  dispatchMock.mockClear().mockImplementation(async ({ dispatcher }) => {
     dispatcher.sendFinalReply({ text: "hi" });
     return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
   });
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+  upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 const BASE_CFG: Config = {
@@ -51,15 +51,18 @@ const CATEGORY_GUILD_CFG = {
   },
 } satisfies Config;
 
-async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
-  return createDiscordMessageHandler({
-    cfg: opts.cfg,
-    discordConfig: opts.cfg.channels?.discord,
+function createHandlerBaseConfig(
+  cfg: Config,
+  runtimeError?: (err: unknown) => void,
+): Parameters<typeof createDiscordMessageHandler>[0] {
+  return {
+    cfg,
+    discordConfig: cfg.channels?.discord,
     accountId: "default",
     token: "token",
     runtime: {
       log: vi.fn(),
-      error: opts.runtimeError ?? vi.fn(),
+      error: runtimeError ?? vi.fn(),
       exit: (code: number): never => {
         throw new Error(`exit ${code}`);
       },
@@ -73,7 +76,11 @@ async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown
     dmEnabled: true,
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
-  });
+  };
+}
+
+async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
+  return createDiscordMessageHandler(createHandlerBaseConfig(opts.cfg, opts.runtimeError));
 }
 
 function createDmClient() {
@@ -87,29 +94,10 @@ function createDmClient() {
 
 async function createCategoryGuildHandler() {
   return createDiscordMessageHandler({
-    cfg: CATEGORY_GUILD_CFG,
-    discordConfig: CATEGORY_GUILD_CFG.channels?.discord,
-    accountId: "default",
-    token: "token",
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-    botUserId: "bot-id",
-    guildHistories: new Map(),
-    historyLimit: 0,
-    mediaMaxBytes: 10_000,
-    textLimit: 2000,
-    replyToMode: "off",
-    dmEnabled: true,
-    groupDmEnabled: false,
+    ...createHandlerBaseConfig(CATEGORY_GUILD_CFG),
     guildEntries: {
       "*": { requireMention: false, channels: { c1: { allow: true } } },
     },
-    threadBindings: createNoopThreadBindingManager("default"),
   });
 }
 
@@ -122,6 +110,32 @@ function createCategoryGuildClient() {
     }),
     rest: { get: vi.fn() },
   } as unknown as Client;
+}
+
+function createCategoryGuildEvent(params: {
+  messageId: string;
+  timestamp?: string;
+  author: Record<string, unknown>;
+}) {
+  return {
+    message: {
+      id: params.messageId,
+      content: "hello",
+      channelId: "c1",
+      timestamp: params.timestamp ?? new Date().toISOString(),
+      type: MessageType.Default,
+      attachments: [],
+      embeds: [],
+      mentionedEveryone: false,
+      mentionedUsers: [],
+      mentionedRoles: [],
+      author: params.author,
+    },
+    author: params.author,
+    member: { displayName: "Ada" },
+    guild: { id: "g1", name: "Guild" },
+    guild_id: "g1",
+  };
 }
 
 describe("discord tool result dispatch", () => {
@@ -137,25 +151,10 @@ describe("discord tool result dispatch", () => {
     const client = createCategoryGuildClient();
 
     await handler(
-      {
-        message: {
-          id: "m-category",
-          content: "hello",
-          channelId: "c1",
-          timestamp: new Date().toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada", tag: "Ada#1" },
-        },
+      createCategoryGuildEvent({
+        messageId: "m-category",
         author: { id: "u1", bot: false, username: "Ada", tag: "Ada#1" },
-        member: { displayName: "Ada" },
-        guild: { id: "g1", name: "Guild" },
-        guild_id: "g1",
-      },
+      }),
       client,
     );
 
@@ -174,25 +173,11 @@ describe("discord tool result dispatch", () => {
     const client = createCategoryGuildClient();
 
     await handler(
-      {
-        message: {
-          id: "m-prefix",
-          content: "hello",
-          channelId: "c1",
-          timestamp: new Date("2026-01-17T00:00:00Z").toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada", discriminator: "1234" },
-        },
+      createCategoryGuildEvent({
+        messageId: "m-prefix",
+        timestamp: new Date("2026-01-17T00:00:00Z").toISOString(),
         author: { id: "u1", bot: false, username: "Ada", discriminator: "1234" },
-        member: { displayName: "Ada" },
-        guild: { id: "g1", name: "Guild" },
-        guild_id: "g1",
-      },
+      }),
       client,
     );
 

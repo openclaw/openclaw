@@ -131,6 +131,7 @@ export function registerOnboardCommand(program: Command) {
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
+          mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,

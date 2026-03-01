@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
 
 let fixtureRoot = "";
 let fixtureCount = 0;
@@ -17,13 +19,23 @@ async function makeEnv() {
   await fs.writeFile(configPath, "{}", "utf8");
   await fs.mkdir(resolveGatewayLockDir(), { recursive: true });
   return {
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: dir,
-      OPENCLAW_CONFIG_PATH: configPath,
-    },
-    cleanup: async () => {},
+    ...process.env,
+    OPENCLAW_STATE_DIR: dir,
+    OPENCLAW_CONFIG_PATH: configPath,
   };
+}
+
+async function acquireForTest(
+  env: NodeJS.ProcessEnv,
+  opts: Omit<GatewayLockOptions, "env" | "allowInTests"> = {},
+) {
+  return await acquireGatewayLock({
+    env,
+    allowInTests: true,
+    timeoutMs: 30,
+    pollIntervalMs: 2,
+    ...opts,
+  });
 }
 
 function resolveLockPath(env: NodeJS.ProcessEnv) {
@@ -81,6 +93,28 @@ function mockProcStatRead(params: { onProcRead: () => string }) {
   });
 }
 
+async function writeLockFile(
+  env: NodeJS.ProcessEnv,
+  params: { startTime: number; createdAt?: string } = { startTime: 111 },
+) {
+  const { lockPath, configPath } = resolveLockPath(env);
+  const payload = createLockPayload({
+    configPath,
+    startTime: params.startTime,
+    createdAt: params.createdAt,
+  });
+  await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+  return { lockPath, configPath };
+}
+
+function createEaccesProcStatSpy() {
+  return mockProcStatRead({
+    onProcRead: () => {
+      throw new Error("EACCES");
+    },
+  });
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -105,38 +139,22 @@ describe("gateway lock", () => {
     // Fake timers can hang on Windows CI when combined with fs open loops.
     // Keep this test on real timers and use small timeouts.
     vi.useRealTimers();
-    const { env, cleanup } = await makeEnv();
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 50,
-      pollIntervalMs: 2,
-    });
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, { timeoutMs: 50 });
     expect(lock).not.toBeNull();
 
-    const pending = acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 15,
-      pollIntervalMs: 2,
-    });
+    const pending = acquireForTest(env, { timeoutMs: 15 });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     await lock?.release();
-    const lock2 = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 30,
-      pollIntervalMs: 2,
-    });
+    const lock2 = await acquireForTest(env);
     await lock2?.release();
-    await cleanup();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-06T10:05:00.000Z"));
-    const { env, cleanup } = await makeEnv();
+    const env = await makeEnv();
     const { lockPath, configPath } = resolveLockPath(env);
     const payload = createLockPayload({ configPath, startTime: 111 });
     await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
@@ -146,9 +164,7 @@ describe("gateway lock", () => {
       onProcRead: () => statValue,
     });
 
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
+    const lock = await acquireForTest(env, {
       timeoutMs: 80,
       pollIntervalMs: 5,
       platform: "linux",
@@ -157,59 +173,126 @@ describe("gateway lock", () => {
 
     await lock?.release();
     spy.mockRestore();
-    await cleanup();
   });
 
   it("keeps lock on linux when proc access fails unless stale", async () => {
     vi.useRealTimers();
-    const { env, cleanup } = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+    const env = await makeEnv();
+    await writeLockFile(env);
+    const spy = createEaccesProcStatSpy();
 
-    const spy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
-
-    const pending = acquireGatewayLock({
-      env,
-      allowInTests: true,
+    const pending = acquireForTest(env, {
       timeoutMs: 15,
-      pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "linux",
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
+  });
 
-    const stalePayload = createLockPayload({
-      configPath,
-      startTime: 111,
-      createdAt: new Date(0).toISOString(),
-    });
-    await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
+  it("keeps lock when fs.stat fails until payload is stale", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env);
+    const procSpy = createEaccesProcStatSpy();
+    const statSpy = vi
+      .spyOn(fs, "stat")
+      .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
 
-    const staleSpy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
-
-    const lock = await acquireGatewayLock({
-      env,
-      allowInTests: true,
-      timeoutMs: 30,
-      pollIntervalMs: 2,
-      staleMs: 1,
+    const pending = acquireForTest(env, {
+      timeoutMs: 20,
+      staleMs: 10_000,
       platform: "linux",
     });
-    expect(lock).not.toBeNull();
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
+    procSpy.mockRestore();
+    statSpy.mockRestore();
+  });
+
+  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new EventEmitter() as net.Socket;
+      socket.destroy = vi.fn();
+      setImmediate(() => {
+        socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+      });
+      return socket;
+    });
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "darwin",
+      port: 18789,
+    });
+    expect(lock).not.toBeNull();
     await lock?.release();
-    staleSpy.mockRestore();
-    await cleanup();
+    connectSpy.mockRestore();
+  });
+
+  it("keeps lock when configured port is busy and owner pid is alive", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new EventEmitter() as net.Socket;
+      socket.destroy = vi.fn();
+      setImmediate(() => {
+        socket.emit("connect");
+      });
+      return socket;
+    });
+    try {
+      const pending = acquireForTest(env, {
+        timeoutMs: 20,
+        pollIntervalMs: 2,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+      });
+      await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+
+  it("returns null when multi-gateway override is enabled", async () => {
+    const env = await makeEnv();
+    const lock = await acquireGatewayLock({
+      env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
+    });
+    expect(lock).toBeNull();
+  });
+
+  it("returns null in test env unless allowInTests is set", async () => {
+    const env = await makeEnv();
+    const lock = await acquireGatewayLock({
+      env: { ...env, VITEST: "1" },
+    });
+    expect(lock).toBeNull();
+  });
+
+  it("wraps unexpected fs errors as GatewayLockError", async () => {
+    const env = await makeEnv();
+    const openSpy = vi.spyOn(fs, "open").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), {
+        code: "EACCES",
+      }),
+    );
+
+    await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
+    openSpy.mockRestore();
   });
 });

@@ -84,7 +84,7 @@ If more than one person can DM your bot:
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
-- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
@@ -117,29 +117,34 @@ When the audit prints findings, treat this as a priority order:
 
 High-signal `checkId` values you will most likely see in real deployments (not exhaustive):
 
-| `checkId`                                     | Severity      | Why it matters                                                          | Primary fix key/path                                          | Auto-fix |
-| --------------------------------------------- | ------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
-| `fs.state_dir.perms_world_writable`           | critical      | Other users/processes can modify full OpenClaw state                    | filesystem perms on `~/.openclaw`                             | yes      |
-| `fs.config.perms_writable`                    | critical      | Others can change auth/tool policy/config                               | filesystem perms on `~/.openclaw/openclaw.json`               | yes      |
-| `fs.config.perms_world_readable`              | critical      | Config can expose tokens/settings                                       | filesystem perms on config file                               | yes      |
-| `gateway.bind_no_auth`                        | critical      | Remote bind without shared secret                                       | `gateway.bind`, `gateway.auth.*`                              | no       |
-| `gateway.loopback_no_auth`                    | critical      | Reverse-proxied loopback may become unauthenticated                     | `gateway.auth.*`, proxy setup                                 | no       |
-| `gateway.http.no_auth`                        | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                     | `gateway.auth.mode`, `gateway.http.endpoints.*`               | no       |
-| `gateway.tools_invoke_http.dangerous_allow`   | warn/critical | Re-enables dangerous tools over HTTP API                                | `gateway.tools.allow`                                         | no       |
-| `gateway.tailscale_funnel`                    | critical      | Public internet exposure                                                | `gateway.tailscale.mode`                                      | no       |
-| `gateway.control_ui.insecure_auth`            | warn          | Insecure-auth compatibility toggle enabled                              | `gateway.controlUi.allowInsecureAuth`                         | no       |
-| `gateway.control_ui.device_auth_disabled`     | critical      | Disables device identity check                                          | `gateway.controlUi.dangerouslyDisableDeviceAuth`              | no       |
-| `config.insecure_or_dangerous_flags`          | warn          | Any insecure/dangerous debug flags enabled                              | multiple keys (see finding detail)                            | no       |
-| `hooks.token_too_short`                       | warn          | Easier brute force on hook ingress                                      | `hooks.token`                                                 | no       |
-| `hooks.request_session_key_enabled`           | warn/critical | External caller can choose sessionKey                                   | `hooks.allowRequestSessionKey`                                | no       |
-| `hooks.request_session_key_prefixes_missing`  | warn/critical | No bound on external session key shapes                                 | `hooks.allowedSessionKeyPrefixes`                             | no       |
-| `logging.redact_off`                          | warn          | Sensitive values leak to logs/status                                    | `logging.redactSensitive`                                     | yes      |
-| `sandbox.docker_config_mode_off`              | warn          | Sandbox Docker config present but inactive                              | `agents.*.sandbox.mode`                                       | no       |
-| `tools.exec.host_sandbox_no_sandbox_defaults` | warn          | `exec host=sandbox` resolves to host exec when sandbox is off           | `tools.exec.host`, `agents.defaults.sandbox.mode`             | no       |
-| `tools.exec.host_sandbox_no_sandbox_agents`   | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode` | no       |
-| `tools.profile_minimal_overridden`            | warn          | Agent overrides bypass global minimal profile                           | `agents.list[].tools.profile`                                 | no       |
-| `plugins.tools_reachable_permissive_policy`   | warn          | Extension tools reachable in permissive contexts                        | `tools.profile` + tool allow/deny                             | no       |
-| `models.small_params`                         | critical/info | Small models + unsafe tool surfaces raise injection risk                | model choice + sandbox/tool policy                            | no       |
+| `checkId`                                          | Severity      | Why it matters                                                                     | Primary fix key/path                                                                              | Auto-fix |
+| -------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------- |
+| `fs.state_dir.perms_world_writable`                | critical      | Other users/processes can modify full OpenClaw state                               | filesystem perms on `~/.openclaw`                                                                 | yes      |
+| `fs.config.perms_writable`                         | critical      | Others can change auth/tool policy/config                                          | filesystem perms on `~/.openclaw/openclaw.json`                                                   | yes      |
+| `fs.config.perms_world_readable`                   | critical      | Config can expose tokens/settings                                                  | filesystem perms on config file                                                                   | yes      |
+| `gateway.bind_no_auth`                             | critical      | Remote bind without shared secret                                                  | `gateway.bind`, `gateway.auth.*`                                                                  | no       |
+| `gateway.loopback_no_auth`                         | critical      | Reverse-proxied loopback may become unauthenticated                                | `gateway.auth.*`, proxy setup                                                                     | no       |
+| `gateway.http.no_auth`                             | warn/critical | Gateway HTTP APIs reachable with `auth.mode="none"`                                | `gateway.auth.mode`, `gateway.http.endpoints.*`                                                   | no       |
+| `gateway.tools_invoke_http.dangerous_allow`        | warn/critical | Re-enables dangerous tools over HTTP API                                           | `gateway.tools.allow`                                                                             | no       |
+| `gateway.nodes.allow_commands_dangerous`           | warn/critical | Enables high-impact node commands (camera/screen/contacts/calendar/SMS)            | `gateway.nodes.allowCommands`                                                                     | no       |
+| `gateway.tailscale_funnel`                         | critical      | Public internet exposure                                                           | `gateway.tailscale.mode`                                                                          | no       |
+| `gateway.control_ui.insecure_auth`                 | warn          | Insecure-auth compatibility toggle enabled                                         | `gateway.controlUi.allowInsecureAuth`                                                             | no       |
+| `gateway.control_ui.device_auth_disabled`          | critical      | Disables device identity check                                                     | `gateway.controlUi.dangerouslyDisableDeviceAuth`                                                  | no       |
+| `gateway.real_ip_fallback_enabled`                 | warn/critical | Trusting `X-Real-IP` fallback can enable source-IP spoofing via proxy misconfig    | `gateway.allowRealIpFallback`, `gateway.trustedProxies`                                           | no       |
+| `discovery.mdns_full_mode`                         | warn/critical | mDNS full mode advertises `cliPath`/`sshPort` metadata on local network            | `discovery.mdns.mode`, `gateway.bind`                                                             | no       |
+| `config.insecure_or_dangerous_flags`               | warn          | Any insecure/dangerous debug flags enabled                                         | multiple keys (see finding detail)                                                                | no       |
+| `hooks.token_too_short`                            | warn          | Easier brute force on hook ingress                                                 | `hooks.token`                                                                                     | no       |
+| `hooks.request_session_key_enabled`                | warn/critical | External caller can choose sessionKey                                              | `hooks.allowRequestSessionKey`                                                                    | no       |
+| `hooks.request_session_key_prefixes_missing`       | warn/critical | No bound on external session key shapes                                            | `hooks.allowedSessionKeyPrefixes`                                                                 | no       |
+| `logging.redact_off`                               | warn          | Sensitive values leak to logs/status                                               | `logging.redactSensitive`                                                                         | yes      |
+| `sandbox.docker_config_mode_off`                   | warn          | Sandbox Docker config present but inactive                                         | `agents.*.sandbox.mode`                                                                           | no       |
+| `tools.exec.host_sandbox_no_sandbox_defaults`      | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                      | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                 | no       |
+| `tools.exec.host_sandbox_no_sandbox_agents`        | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off            | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                     | no       |
+| `tools.exec.safe_bins_interpreter_unprofiled`      | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                 | no       |
+| `security.exposure.open_groups_with_runtime_or_fs` | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards          | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode` | no       |
+| `tools.profile_minimal_overridden`                 | warn          | Agent overrides bypass global minimal profile                                      | `agents.list[].tools.profile`                                                                     | no       |
+| `plugins.tools_reachable_permissive_policy`        | warn          | Extension tools reachable in permissive contexts                                   | `tools.profile` + tool allow/deny                                                                 | no       |
+| `models.small_params`                              | critical/info | Small models + unsafe tool surfaces raise injection risk                           | model choice + sandbox/tool policy                                                                | no       |
 
 ## Control UI over HTTP
 
@@ -328,6 +333,7 @@ This is a messaging-context boundary, not a host-admin boundary. If users are mu
 Treat the snippet above as **secure DM mode**:
 
 - Default: `session.dmScope: "main"` (all DMs share one session for continuity).
+- Local CLI onboarding default: writes `session.dmScope: "per-channel-peer"` when unset (keeps existing explicit values).
 - Secure DM mode: `session.dmScope: "per-channel-peer"` (each channel+sender pair gets an isolated DM context).
 
 If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
