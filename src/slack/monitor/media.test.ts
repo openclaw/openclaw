@@ -245,6 +245,52 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects HTML auth pages for non-HTML files", async () => {
+    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!DOCTYPE html><html><body>login</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("allows expected HTML uploads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/page.html", "text/html"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!doctype html><html><body>ok</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/page.html",
+          name: "page.html",
+          mimetype: "text/html",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.[0]?.path).toBe("/tmp/page.html");
+  });
+
   it("overrides video/* MIME to audio/* for slack_audio voice messages", async () => {
     // saveMediaBuffer re-detects MIME from buffer bytes, so it may return
     // video/mp4 for MP4 containers.  Verify resolveSlackMedia preserves
@@ -525,6 +571,11 @@ describe("resolveSlackAttachmentContent", () => {
         },
       ],
     });
+    const firstCall = mockFetch.mock.calls[0];
+    expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
+    const firstInit = firstCall?.[1];
+    expect(firstInit?.redirect).toBe("manual");
+    expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });
 
