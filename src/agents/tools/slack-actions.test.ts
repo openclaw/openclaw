@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
@@ -19,6 +20,7 @@ const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 vi.mock("../../slack/actions.js", () => ({
   deleteSlackMessage: (...args: Parameters<typeof deleteSlackMessage>) =>
     deleteSlackMessage(...args),
+  downloadSlackFile: (...args: Parameters<typeof downloadSlackFile>) => downloadSlackFile(...args),
   editSlackMessage: (...args: Parameters<typeof editSlackMessage>) => editSlackMessage(...args),
   getSlackMemberInfo: (...args: Parameters<typeof getSlackMemberInfo>) =>
     getSlackMemberInfo(...args),
@@ -192,6 +194,26 @@ describe("handleSlackAction", () => {
       threadTs: "1234567890.123456",
       blocks: undefined,
     });
+  });
+
+  it("returns a friendly error when downloadFile cannot fetch the attachment", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+      },
+      slackConfig(),
+    );
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({ maxBytes: 20 * 1024 * 1024 }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({ ok: false }),
+      }),
+    );
   });
 
   it.each([
