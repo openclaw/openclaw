@@ -12,6 +12,10 @@ export type MonitorSlackOpts = {
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
+  /** Callback to update the channel account status snapshot (e.g. lastEventAt). */
+  setStatus?: (next: Record<string, unknown>) => void;
+  /** Callback to read the current channel account status snapshot. */
+  getStatus?: () => Record<string, unknown>;
 };
 
 export type SlackReactionEvent = {
