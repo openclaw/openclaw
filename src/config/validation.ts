@@ -15,7 +15,7 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
@@ -91,7 +91,11 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
     return [];
   }
   const customBindHost = config.gateway?.customBindHost;
-  if (bindMode === "custom" && isLoopbackIpAddress(customBindHost)) {
+  if (
+    bindMode === "custom" &&
+    isCanonicalDottedDecimalIPv4(customBindHost) &&
+    isLoopbackIpAddress(customBindHost)
+  ) {
     return [];
   }
   return [

@@ -31,6 +31,20 @@ describe("gateway tailscale bind validation", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects IPv6 custom bind host for tailscale serve/funnel", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "custom",
+        customBindHost: "::1",
+        tailscale: { mode: "serve" },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+    }
+  });
+
   it("rejects non-loopback bind when tailscale serve/funnel is enabled", () => {
     const lanRes = validateConfigObject({
       gateway: {
