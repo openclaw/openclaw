@@ -16,6 +16,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   getModelRefStatus,
   isCliProvider,
+  normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
@@ -160,6 +161,7 @@ export async function runCronIsolatedAgentTurn(params: {
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
+
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
@@ -167,6 +169,24 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     return catalog;
   };
+  // Isolated cron sessions are subagents — prefer subagents.model when set,
+  // but only if it passes the model allowlist.  #11461
+  const subagentModelRaw =
+    normalizeModelSelection(agentConfigOverride?.subagents?.model) ??
+    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  if (subagentModelRaw) {
+    const resolvedSubagent = resolveAllowedModelRef({
+      cfg: cfgWithAgentDefaults,
+      catalog: await loadCatalog(),
+      raw: subagentModelRaw,
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
+    });
+    if (!("error" in resolvedSubagent)) {
+      provider = resolvedSubagent.ref.provider;
+      model = resolvedSubagent.ref.model;
+    }
+  }
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
   const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
   let hooksGmailModelApplied = false;
