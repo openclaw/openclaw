@@ -174,6 +174,7 @@ Optional plugin tools:
 
 - [Flow](/tools/flow): typed workflow runtime with resumable approvals (requires the Flow CLI on the gateway host).
 - [LLM Task](/tools/llm-task): JSON-only LLM step for structured workflow output (optional schema validation).
+- [Diffs](/tools/diffs): read-only diff viewer and PNG renderer for before/after text or unified patches.
 
 ## Tool inventory
 

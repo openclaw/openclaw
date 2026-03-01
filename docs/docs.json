@@ -969,6 +969,7 @@
                 "pages": [
                   "tools/flow",
                   "tools/llm-task",
+                  "tools/diffs",
                   "tools/exec",
                   "tools/web",
                   "tools/apply-patch",
