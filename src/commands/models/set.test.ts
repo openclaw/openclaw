@@ -43,13 +43,7 @@ describe("models/set", () => {
   } as unknown as import("../../runtime.js").RuntimeEnv;
 
   beforeEach(() => {
-    mocks.readConfigFileSnapshot.mockClear();
-    mocks.writeConfigFile.mockClear();
-    mocks.logConfigUpdated.mockClear();
-    mockRuntime.log.mockClear();
-    mocks.resolveAgentModelPrimaryValue.mockClear();
-    mocks.applyDefaultModelPrimaryUpdate.mockClear();
-    mocks.resolveModelTarget.mockClear();
+    vi.clearAllMocks();
   });
 
   describe("auto-save old model as fallback", () => {

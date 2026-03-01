@@ -1,11 +1,7 @@
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  applyDefaultModelPrimaryUpdate,
-  resolveModelTarget,
-  updateConfig,
-} from "./shared.js";
+import { applyDefaultModelPrimaryUpdate, resolveModelTarget, updateConfig } from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   // Read current model before updating
@@ -23,7 +19,8 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     const newModelKey = `${resolved.provider}/${resolved.model}`;
 
     // Only add old model as fallback if it's not already the primary or in fallbacks
-    const currentFallbacks = updated.agents?.defaults?.model?.fallbacks ?? [];
+    const modelConfig = updated.agents?.defaults?.model;
+    const currentFallbacks = (modelConfig as { fallbacks?: string[] })?.fallbacks ?? [];
     if (oldModel !== newModelKey && !currentFallbacks.includes(oldModel)) {
       await updateConfig((cfg) => ({
         ...cfg,
@@ -32,7 +29,7 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
           defaults: {
             ...cfg.agents?.defaults,
             model: {
-              ...cfg.agents?.defaults?.model,
+              ...(typeof modelConfig === "object" ? modelConfig : {}),
               fallbacks: [...currentFallbacks, oldModel],
             },
           },
