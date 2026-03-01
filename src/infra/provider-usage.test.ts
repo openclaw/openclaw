@@ -123,6 +123,26 @@ describe("provider usage formatting", () => {
 });
 
 describe("provider usage loading", () => {
+  it("returns provider error snapshot when usage fetch throws", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com/api/oauth/usage")) {
+        throw new Error(
+          "Access to Anthropic models is not allowed from unsupported countries, regions, or territories.",
+        );
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      [{ provider: "anthropic", token: "token-geo-restricted" }],
+      mockFetch,
+    );
+
+    expect(summary.providers).toHaveLength(1);
+    expect(summary.providers[0]?.provider).toBe("anthropic");
+    expect(summary.providers[0]?.error).toContain("unsupported countries");
+  });
+
   it("loads usage snapshots with injected auth", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.anthropic.com")) {
