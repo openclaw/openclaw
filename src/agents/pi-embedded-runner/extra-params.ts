@@ -329,14 +329,15 @@ function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined)
     const typedOptions = options as
       | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
       | undefined;
-    return underlying(model, context, {
+    const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
       // Warm-up is optional in OpenAI docs; enabled by default here for lower
       // first-turn latency on WebSocket sessions. Set params.openaiWsWarmup=false
       // to disable per model.
       openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
-    });
+    } as SimpleStreamOptions;
+    return underlying(model, context, mergedOptions);
   };
 }
 
