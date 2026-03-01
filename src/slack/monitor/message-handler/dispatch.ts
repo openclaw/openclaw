@@ -21,7 +21,12 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
+import {
+  abandonSlackStream,
+  appendSlackStream,
+  startSlackStream,
+  stopSlackStream,
+} from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
@@ -466,6 +471,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (!anyReplyDelivered) {
+    // If a stream was started but no reply was ultimately delivered (e.g. the
+    // model produced NO_REPLY and the prefix leaked before the full token
+    // arrived), delete the stream message so the user doesn't see a stray
+    // partial like "NO" in the channel.
+    if (finalStream) {
+      try {
+        await abandonSlackStream(finalStream);
+      } catch (err) {
+        runtime.error?.(danger(`slack-stream: failed to abandon stream: ${String(err)}`));
+      }
+    }
     await draftStream.clear();
     if (prepared.isRoomish) {
       clearHistoryEntriesIfEnabled({
