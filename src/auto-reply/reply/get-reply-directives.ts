@@ -17,6 +17,7 @@ import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-di
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -304,7 +305,10 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.BodyStripped = cleanedBody;
 
   const messageProviderKey =
-    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
+    resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel ?? ctx.OriginatingChannel,
+      provider: sessionCtx.Provider ?? ctx.Provider,
+    }) ?? "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
