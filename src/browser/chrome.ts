@@ -79,27 +79,45 @@ type ChromeVersion = {
 };
 
 async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
-      signal: ctrl.signal,
-      headers: getHeadersWithAuth(versionUrl),
+  const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+  log.debug(`Fetching Chrome version from: ${versionUrl}`);
+
+  // Use native http module for better Windows compatibility
+  return await new Promise((resolve) => {
+    import("node:http").then((http) => {
+      const req = http.get(
+        versionUrl,
+        {
+          timeout: timeoutMs,
+          headers: getHeadersWithAuth(versionUrl),
+        },
+        (res: any) => {
+          let data = "";
+          res.on("data", (chunk: Buffer) => (data += chunk));
+          res.on("end", () => {
+            try {
+              const parsed = JSON.parse(data) as ChromeVersion;
+              log.debug(`Chrome version response: ${parsed.Browser ?? "unknown"}`);
+              resolve(parsed);
+            } catch {
+              resolve(null);
+            }
+          });
+        },
+      );
+      req.on("error", (err: Error) => {
+        log.warn(`fetchChromeVersion error: ${String(err)}`);
+        resolve(null);
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+    }).catch((err) => {
+      log.warn(`fetchChromeVersion import error: ${String(err)}`);
+      resolve(null);
     });
-    if (!res.ok) {
-      return null;
-    }
-    const data = (await res.json()) as ChromeVersion;
-    if (!data || typeof data !== "object") {
-      return null;
-    }
-    return data;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
+  });
 }
 
 export async function getChromeWebSocketUrl(
@@ -225,14 +243,26 @@ export async function launchOpenClawChrome(
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
-    return spawn(exe.path, args, {
+    log.info(`🦞 spawning Chrome: ${exe.path} ${args.join(' ')}`);
+    const proc = spawn(exe.path, args, {
       stdio: "pipe",
+      windowsHide: true, // Hide console window on Windows
       env: {
         ...process.env,
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
     });
+
+    proc.on('error', (err) => {
+      log.error(`Chrome spawn error: ${String(err)}`);
+    });
+
+    proc.stderr?.on('data', (data) => {
+      log.warn(`Chrome stderr: ${data.toString().trim()}`);
+    });
+
+    return proc;
   };
 
   const startedAt = Date.now();
@@ -286,15 +316,15 @@ export async function launchOpenClawChrome(
 
   const proc = spawnOnce();
   // Wait for CDP to come up.
-  const readyDeadline = Date.now() + 15_000;
+  const readyDeadline = Date.now() + 30_000; // Increased from 15s to 30s for Windows compatibility
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(profile.cdpUrl, 500)) {
+    if (await isChromeReachable(profile.cdpUrl, 2000)) { // Increased from 500ms to 2000ms for Windows
       break;
     }
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+  if (!(await isChromeReachable(profile.cdpUrl, 2000))) { // Increased from 500ms to 2000ms
     try {
       proc.kill("SIGKILL");
     } catch {
