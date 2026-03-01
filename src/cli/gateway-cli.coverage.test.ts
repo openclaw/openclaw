@@ -235,6 +235,20 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
     expect(runtimeErrors.join("\n")).toContain("gateway stop");
   });
+  it("exits 0 when gateway is already running (idempotent start)", async () => {
+    resetRuntimeCapture();
+
+    const { GatewayLockError } = await import("../infra/gateway-lock.js");
+    startGatewayServer.mockRejectedValueOnce(
+      new GatewayLockError("gateway already running (pid 12345); lock timeout after 5000ms"),
+    );
+    await expect(
+      runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:0");
+
+    expect(runtimeLogs.join("\n")).toContain("already running");
+    expect(runtimeErrors.join("\n")).not.toContain("Gateway failed to start:");
+  });
 
   it("uses env/config port when --port is omitted", async () => {
     await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {

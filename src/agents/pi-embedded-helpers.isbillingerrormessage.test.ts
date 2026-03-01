@@ -155,6 +155,19 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("treats 402 with rate-limit language as rate limit, not billing", () => {
+    // Claude Max plans return 402 for rate limits (not actual billing issues)
+    const rateLimitAs402 = [
+      "402 daily limit exceeded for this plan",
+      "402 usage limit reached, try again later",
+      "HTTP 402: rate limit exceeded for subscription",
+      "402 quota exceeded for current billing period",
+      "402 usage exceeded, upgrade or wait",
+    ];
+    for (const sample of rateLimitAs402) {
+      expect(isBillingErrorMessage(sample)).toBe(false);
+    }
+  });
 });
 
 describe("isCloudCodeAssistFormatError", () => {

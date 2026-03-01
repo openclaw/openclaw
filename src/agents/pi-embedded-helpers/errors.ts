@@ -15,7 +15,7 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key. If you are on a subscription plan (e.g. Claude Max), this may be a rate limit — try again shortly.";
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
@@ -628,6 +628,9 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    // Anthropic Max/subscription plans return 402 with rate-limit-like messages
+    // containing "daily", "limit", or "usage" keywords.
+    /\b402\b.*(?:daily.limit|usage.limit|rate.limit|quota.exceed|usage.exceed)/i,
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
@@ -731,6 +734,12 @@ const BILLING_ERROR_MAX_LENGTH = 512;
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) {
+    return false;
+  }
+  // Some providers (e.g. Anthropic Max plans) return HTTP 402 for rate limits
+  // rather than billing issues. When the message also matches rate-limit
+  // patterns, prefer the rate-limit classification.
+  if (isRateLimitErrorMessage(raw)) {
     return false;
   }
   // Real billing error messages from APIs are short structured payloads.
