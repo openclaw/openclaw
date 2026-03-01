@@ -201,4 +201,39 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
     expect(result.diagnostics).toEqual(["talk api key inactive"]);
   });
+
+  it("allows unresolved array-index refs when gateway marks concrete paths inactive", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: ["memory search ref inactive"],
+      inactiveRefPaths: ["agents.list.0.memorySearch.remote.apiKey"],
+    });
+
+    const config = {
+      agents: {
+        list: [
+          {
+            memorySearch: {
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_API_KEY" },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "memory status",
+      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+    });
+
+    expect(result.resolvedConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_MEMORY_API_KEY",
+    });
+    expect(result.diagnostics).toEqual(["memory search ref inactive"]);
+  });
 });
