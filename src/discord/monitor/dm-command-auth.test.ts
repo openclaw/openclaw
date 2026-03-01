@@ -38,6 +38,22 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
+  it("keeps command auth enabled for open DMs when configured allowlist does not match", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "open",
+      configuredAllowFrom: ["discord:999"],
+      sender,
+      allowNameMatching: false,
+      useAccessGroups: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.decision).toBe("allow");
+    expect(result.allowMatch.allowed).toBe(false);
+    expect(result.commandAuthorized).toBe(true);
+  });
+
   it("returns pairing decision and unauthorized command auth for unknown senders", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",
