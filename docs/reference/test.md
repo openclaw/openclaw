@@ -52,7 +52,6 @@ Usage:
 - `pnpm tsx scripts/bench-cli-startup.ts`
 - `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
 - `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
-- `pnpm tsx scripts/bench-cli-startup.ts --entry-primary dist/entry.js --entry-secondary dist/entry.mjs`
 
 This benchmarks these commands:
 
@@ -63,8 +62,6 @@ This benchmarks these commands:
 - `status`
 
 Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
-When `--entry-secondary` is set, it also prints avg deltas (`secondary - primary`)
-and percentages per command.
 
 ## Onboarding E2E (Docker)
 
