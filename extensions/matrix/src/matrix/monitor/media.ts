@@ -1,4 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixConfigForAccount } from "../client.js";
@@ -62,17 +63,23 @@ async function fetchMatrixMediaBuffer(params: {
   if (accessToken) {
     try {
       const authMediaUrl = `${baseUrl}/_matrix/client/v1/media/download/${parsed.serverName}/${parsed.mediaId}`;
-      const response = await fetch(authMediaUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+      const { response, release } = await fetchWithSsrFGuard({
+        url: authMediaUrl,
+        init: { headers: { Authorization: `Bearer ${accessToken}` } },
+        auditContext: "matrix.media.download",
       });
-      if (response.ok) {
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        if (buffer.byteLength > params.maxBytes) {
-          throw new Error("Matrix media exceeds configured size limit");
+      try {
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          if (buffer.byteLength > params.maxBytes) {
+            throw new Error("Matrix media exceeds configured size limit");
+          }
+          const contentType = response.headers.get("content-type") ?? undefined;
+          return { buffer, headerType: contentType };
         }
-        const contentType = response.headers.get("content-type") ?? undefined;
-        return { buffer, headerType: contentType };
+      } finally {
+        await release();
       }
     } catch {
       // Fall through to SDK fallback
