@@ -125,6 +125,7 @@ export async function createGatewayRuntimeState(params: {
   }
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   for (const host of bindHosts) {
     const httpServer = createGatewayHttpServer({
       canvasHost,
@@ -140,6 +141,7 @@ export async function createGatewayRuntimeState(params: {
       handlePluginRequest,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      chatAbortControllers,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
     });
     try {
@@ -187,7 +189,6 @@ export async function createGatewayRuntimeState(params: {
   const chatDeltaSentAt = chatRunState.deltaSentAt;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const toolEventRecipients = createToolEventRecipientRegistry();
 
   return {

@@ -32,6 +32,8 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { resolveChatRunExpiresAtMs } from "./chat-abort.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
@@ -52,6 +54,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -449,6 +452,23 @@ export async function handleOpenResponsesHttpRequest(
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
 
+  // Register abort controller so chat.abort can find this run
+  const abortController = new AbortController();
+  if (opts.chatAbortControllers) {
+    const now = Date.now();
+    const timeoutMs = 10 * 60_000; // 10 minute default
+    opts.chatAbortControllers.set(responseId, {
+      controller: abortController,
+      sessionId: responseId,
+      sessionKey,
+      startedAtMs: now,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+    });
+  }
+  const cleanupAbortController = () => {
+    opts.chatAbortControllers?.delete(responseId);
+  };
+
   if (!stream) {
     try {
       const result = await runResponsesAgentCommand({
@@ -525,6 +545,8 @@ export async function handleOpenResponsesHttpRequest(
         error: { code: "api_error", message: "internal error" },
       });
       sendJson(res, 500, response);
+    } finally {
+      cleanupAbortController();
     }
     return true;
   }
@@ -603,6 +625,7 @@ export async function handleOpenResponsesHttpRequest(
       return;
     }
     finalizeRequested = { status, text };
+    cleanupAbortController();
     maybeFinalize();
   };
 
@@ -679,6 +702,7 @@ export async function handleOpenResponsesHttpRequest(
   req.on("close", () => {
     closed = true;
     unsubscribe();
+    cleanupAbortController();
   });
 
   void (async () => {
@@ -819,6 +843,7 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
+      cleanupAbortController();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({
         runId: responseId,
