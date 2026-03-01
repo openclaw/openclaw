@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -79,6 +79,27 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
     return undefined;
   }
   return fetch as WebFetchConfig;
+}
+
+/**
+ * Resolve SSRF policy from fetch config.
+ * When `allowPrivateNetwork` is set in `tools.web.fetch`, pass it through
+ * so that `fetchWithSsrFGuard` allows private/special-use IP addresses.
+ * This is needed for environments using fake-ip DNS (e.g., Mihomo/Clash)
+ * where all domains resolve to `198.18.x.x` (RFC 2544 benchmark range).
+ */
+function resolveSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const allowPrivate =
+    "allowPrivateNetwork" in fetch && typeof fetch.allowPrivateNetwork === "boolean"
+      ? fetch.allowPrivateNetwork
+      : false;
+  if (!allowPrivate) {
+    return undefined;
+  }
+  return { allowPrivateNetwork: true };
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -378,6 +399,7 @@ async function runWebFetch(params: {
   firecrawlProxy: "auto" | "basic" | "stealth";
   firecrawlStoreInCache: boolean;
   firecrawlTimeoutSeconds: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
@@ -413,6 +435,7 @@ async function runWebFetch(params: {
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
+      policy: params.ssrfPolicy,
     });
     res = result.response;
     finalUrl = result.finalUrl;
@@ -681,6 +704,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        ssrfPolicy: resolveSsrfPolicy(fetch),
       });
       return jsonResult(result);
     },
