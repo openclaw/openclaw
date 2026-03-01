@@ -862,6 +862,29 @@ export function createBrowserTool(opts?: {
           } catch (err) {
             const msg = String(err);
             if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
+              const targetId =
+                typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+              // Some Chrome relay targetIds can go stale between snapshots and actions.
+              // Retry once without targetId to let relay use the currently attached tab.
+              if (targetId) {
+                const retryRequest = { ...request };
+                delete retryRequest.targetId;
+                try {
+                  const retryResult = proxyRequest
+                    ? await proxyRequest({
+                        method: "POST",
+                        path: "/act",
+                        profile,
+                        body: retryRequest,
+                      })
+                    : await browserAct(baseUrl, retryRequest as Parameters<typeof browserAct>[1], {
+                        profile,
+                      });
+                  return jsonResult(retryResult);
+                } catch {
+                  // Fall through to explicit stale-target guidance.
+                }
+              }
               const tabs = proxyRequest
                 ? ((
                     (await proxyRequest({
