@@ -309,15 +309,19 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
           ? [ctx.payload.mediaUrl]
           : [];
       if (urls.length > 0) {
-        let lastResult;
-        for (let i = 0; i < urls.length; i++) {
+        let lastResult = await zaloPlugin.outbound!.sendMedia!({
+          ...ctx,
+          text: ctx.payload.text ?? "",
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
           lastResult = await zaloPlugin.outbound!.sendMedia!({
             ...ctx,
-            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            text: "",
             mediaUrl: urls[i],
           });
         }
-        return lastResult!;
+        return lastResult;
       }
       return zaloPlugin.outbound!.sendText!({ ...ctx });
     },
