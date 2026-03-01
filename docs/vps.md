@@ -67,7 +67,6 @@ source ~/.bashrc
 
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
 - `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
-- Optional experimental path: `OPENCLAW_CLI_BUNDLED_ENTRY=1` uses `dist/entry.bundle.mjs` when available.
 - First command run warms cache; subsequent runs are faster.
 - For Raspberry Pi specifics, see [Raspberry Pi](/platforms/raspberry-pi).
 
