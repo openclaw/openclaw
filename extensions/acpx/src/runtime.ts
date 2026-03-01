@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline";
 import type {
   AcpRuntimeCapabilities,
   AcpRuntimeDoctorReport,
@@ -11,13 +12,8 @@ import type {
   PluginLogger,
 } from "bot/plugin-sdk";
 import { AcpRuntimeError } from "bot/plugin-sdk";
-import { createInterface } from "node:readline";
-import {
-  ACPX_LOCAL_INSTALL_COMMAND,
-  ACPX_PINNED_VERSION,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
-import { checkPinnedAcpxVersion } from "./ensure.js";
+import { type ResolvedAcpxPluginConfig } from "./config.js";
+import { checkAcpxVersion } from "./ensure.js";
 import {
   parseJsonLines,
   parsePromptEventLine,
@@ -121,10 +117,10 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async probeAvailability(): Promise<void> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
@@ -201,9 +197,6 @@ export class AcpxRuntime implements AcpRuntime {
       sessionName: state.name,
       cwd: state.cwd,
     });
-    const parseContext = {
-      promptRequestIds: new Set<string>(),
-    };
 
     const cancelOnAbort = async () => {
       await this.cancel({
@@ -245,7 +238,7 @@ export class AcpxRuntime implements AcpRuntime {
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
-        const parsed = parsePromptEventLine(line, parseContext);
+        const parsed = parsePromptEventLine(line);
         if (!parsed) {
           continue;
         }
@@ -382,15 +375,15 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    const versionCheck = await checkPinnedAcpxVersion({
+    const versionCheck = await checkAcpxVersion({
       command: this.config.command,
       cwd: this.config.cwd,
-      expectedVersion: ACPX_PINNED_VERSION,
+      expectedVersion: this.config.expectedVersion,
     });
     if (!versionCheck.ok) {
       this.healthy = false;
       const details = [
-        `expected=${versionCheck.expectedVersion}`,
+        versionCheck.expectedVersion ? `expected=${versionCheck.expectedVersion}` : null,
         versionCheck.installedVersion ? `installed=${versionCheck.installedVersion}` : null,
       ].filter((detail): detail is string => Boolean(detail));
       return {
@@ -416,7 +409,7 @@ export class AcpxRuntime implements AcpRuntime {
             ok: false,
             code: "ACP_BACKEND_UNAVAILABLE",
             message: `acpx command not found: ${this.config.command}`,
-            installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+            installCommand: this.config.installCommand,
           };
         }
         if (spawnFailure === "missing-cwd") {
@@ -446,7 +439,7 @@ export class AcpxRuntime implements AcpRuntime {
       this.healthy = true;
       return {
         ok: true,
-        message: `acpx command available (${this.config.command}, version ${versionCheck.version})`,
+        message: `acpx command available (${this.config.command}, version ${versionCheck.version}${this.config.expectedVersion ? `, expected ${this.config.expectedVersion}` : ""})`,
       };
     } catch (error) {
       this.healthy = false;

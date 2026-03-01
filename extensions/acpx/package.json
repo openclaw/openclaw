@@ -1,12 +1,12 @@
 {
-  "name": "@bot/acpx",
+  "name": "@hanzo/acpx",
   "version": "2026.2.27",
   "description": "Bot ACP runtime backend via acpx",
   "type": "module",
   "dependencies": {
-    "acpx": "^0.1.13"
+    "acpx": "0.1.15"
   },
-  "hanzo-bot": {
+  "bot": {
     "extensions": [
       "./index.ts"
     ]

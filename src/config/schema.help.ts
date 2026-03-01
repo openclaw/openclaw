@@ -166,11 +166,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
   "acp.maxConcurrentSessions":
     "Maximum concurrently active ACP sessions across this gateway process.",
-  "acp.stream": "ACP streaming projection controls for chunk sizing and coalescer flush timing.",
+  "acp.stream":
+    "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":
     "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
   "acp.stream.maxChunkChars":
     "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
+  "acp.stream.repeatSuppression":
+    "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
+  "acp.stream.deliveryMode":
+    "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
+  "acp.stream.hiddenBoundarySeparator":
+    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
+  "acp.stream.maxOutputChars":
+    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
+  "acp.stream.maxSessionUpdateChars":
+    "Maximum characters for projected ACP session/update lines (tool/status updates).",
+  "acp.stream.tagVisibility":
+    "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.ttlMinutes":
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
@@ -330,7 +343,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
-    "Optional URL prefix where the Control UI is served (e.g. /bot).",
+    "Optional URL prefix where the Control UI is served (e.g. /__bot__).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.allowedOrigins":
@@ -642,7 +655,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
   "models.providers.*.injectNumCtxForOpenAICompat":
-    "Controls whether Hanzo Bot injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+    "Controls whether Bot injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
@@ -740,7 +753,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
-    "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.hanzo/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
+    "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.hanzo/bot/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
     "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
   "agents.defaults.memorySearch.store.vector.extensionPath":
@@ -885,7 +898,7 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
   "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
   "plugins.installs.*.installPath":
-    "Resolved install directory (usually ~/.hanzo/extensions/<id>).",
+    "Resolved install directory (usually ~/.hanzo/bot/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
   "plugins.installs.*.resolvedVersion":

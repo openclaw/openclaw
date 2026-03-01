@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
+import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { BotConfig } from "../../config/config.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -15,8 +17,10 @@ const managerMocks = vi.hoisted(() => ({
 }));
 
 const policyMocks = vi.hoisted(() => ({
-  resolveAcpDispatchPolicyError: vi.fn(() => null),
-  resolveAcpAgentPolicyError: vi.fn(() => null),
+  resolveAcpDispatchPolicyError: vi.fn<(cfg: BotConfig) => AcpRuntimeError | null>(() => null),
+  resolveAcpAgentPolicyError: vi.fn<(cfg: BotConfig, agent: string) => AcpRuntimeError | null>(
+    () => null,
+  ),
 }));
 
 const routeMocks = vi.hoisted(() => ({
@@ -36,11 +40,13 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const sessionMetaMocks = vi.hoisted(() => ({
-  readAcpSessionEntry: vi.fn(() => null),
+  readAcpSessionEntry: vi.fn<
+    (params: { sessionKey: string; cfg?: BotConfig }) => AcpSessionStoreEntry | null
+  >(() => null),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
-  listBySession: vi.fn(() => []),
+  listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -68,7 +74,8 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (params: unknown) => sessionMetaMocks.readAcpSessionEntry(params),
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: BotConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
 }));
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
@@ -100,6 +107,20 @@ function setReadyAcpResolution() {
     kind: "ready",
     sessionKey: "agent:codex-acp:session-1",
     meta: createAcpSessionMeta(),
+  });
+}
+
+function createAcpConfigWithVisibleToolTags(): BotConfig {
+  return createAcpTestConfig({
+    acp: {
+      enabled: true,
+      stream: {
+        tagVisibility: {
+          tool_call: true,
+          tool_call_update: true,
+        },
+      },
+    },
   });
 }
 
@@ -202,7 +223,7 @@ describe("tryDispatchAcpReply", () => {
         SessionKey: "agent:codex-acp:session-1",
         BodyForAgent: "run tool",
       }),
-      cfg: createAcpTestConfig(),
+      cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       sessionKey: "agent:codex-acp:session-1",
       inboundAudio: false,
@@ -262,7 +283,7 @@ describe("tryDispatchAcpReply", () => {
         SessionKey: "agent:codex-acp:session-1",
         BodyForAgent: "run tool",
       }),
-      cfg: createAcpTestConfig(),
+      cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       sessionKey: "agent:codex-acp:session-1",
       inboundAudio: false,
@@ -279,7 +300,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
   });
 
-  it("starts reply lifecycle only when visible projected output is emitted", async () => {
+  it("starts reply lifecycle when ACP turn starts, including hidden-only turns", async () => {
     setReadyAcpResolution();
     const onReplyStart = vi.fn();
     const { dispatcher } = createDispatcher();
@@ -314,7 +335,7 @@ describe("tryDispatchAcpReply", () => {
       recordProcessed: vi.fn(),
       markIdle: vi.fn(),
     });
-    expect(onReplyStart).not.toHaveBeenCalled();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
 
     managerMocks.runTurn.mockImplementationOnce(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
@@ -340,7 +361,68 @@ describe("tryDispatchAcpReply", () => {
       recordProcessed: vi.fn(),
       markIdle: vi.fn(),
     });
+    expect(onReplyStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts reply lifecycle once per turn when output is delivered", async () => {
+    setReadyAcpResolution();
+    const onReplyStart = vi.fn();
+
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "visible", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "visible",
+      }),
+      cfg: createAcpTestConfig(),
+      dispatcher: createDispatcher().dispatcher,
+      sessionKey: "agent:codex-acp:session-1",
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      onReplyStart,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start reply lifecycle for empty ACP prompt", async () => {
+    setReadyAcpResolution();
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "   ",
+      }),
+      cfg: createAcpTestConfig(),
+      dispatcher,
+      sessionKey: "agent:codex-acp:session-1",
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      onReplyStart,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(onReplyStart).not.toHaveBeenCalled();
   });
 
   it("surfaces ACP policy errors as final error replies", async () => {

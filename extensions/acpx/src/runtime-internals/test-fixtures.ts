@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredBotTmpDir } from "../../../../src/infra/tmp-bot-dir.js";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
@@ -22,9 +22,11 @@ const args = process.argv.slice(2);
 const logPath = process.env.MOCK_ACPX_LOG;
 const writeLog = (entry) => {
   if (!logPath) return;
-  fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
+  fs.appendFileSync(logPath, JSON.stringify(entry) + "
+");
 };
-const emitJson = (payload) => process.stdout.write(JSON.stringify(payload) + "\n");
+const emitJson = (payload) => process.stdout.write(JSON.stringify(payload) + "
+");
 const emitUpdate = (sessionId, update) =>
   emitJson({
     jsonrpc: "2.0",
@@ -33,12 +35,14 @@ const emitUpdate = (sessionId, update) =>
   });
 
 if (args.includes("--version")) {
-  process.stdout.write("mock-acpx ${ACPX_PINNED_VERSION}\\n");
+  process.stdout.write("mock-acpx ${ACPX_PINNED_VERSION}
+");
   process.exit(0);
 }
 
 if (args.includes("--help")) {
-  process.stdout.write("mock-acpx help\\n");
+  process.stdout.write("mock-acpx help
+");
   process.exit(0);
 }
 
@@ -185,12 +189,9 @@ if (command === "prompt") {
 
   if (stdinText.includes("trigger-error")) {
     emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      error: {
-        code: -32000,
-        message: "mock failure",
-      },
+      type: "error",
+      code: "-32000",
+      message: "mock failure",
     });
     process.exit(1);
   }
@@ -208,13 +209,7 @@ if (command === "prompt") {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: " gamma" },
     });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
+    emitJson({ type: "done", stopReason: "end_turn" });
     process.exit(0);
   }
 
@@ -223,20 +218,8 @@ if (command === "prompt") {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "ok" },
     });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
+    emitJson({ type: "done", stopReason: "end_turn" });
+    emitJson({ type: "done", stopReason: "end_turn" });
     process.exit(0);
   }
 
@@ -255,22 +238,15 @@ if (command === "prompt") {
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "echo:" + stdinText.trim() },
   });
-  emitJson({
-    jsonrpc: "2.0",
-    id: requestId,
-    result: {
-      stopReason: "end_turn",
-    },
-  });
+  emitJson({ type: "done", stopReason: "end_turn" });
   process.exit(0);
 }
 
 writeLog({ kind: "unknown", args });
 emitJson({
-  error: {
-    code: "USAGE",
-    message: "unknown command",
-  },
+  type: "error",
+  code: "USAGE",
+  message: "unknown command",
 });
 process.exit(2);
 `;
@@ -283,7 +259,9 @@ export async function createMockRuntimeFixture(params?: {
   logPath: string;
   config: ResolvedAcpxPluginConfig;
 }> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "bot-acpx-runtime-test-"));
+  const dir = await mkdtemp(
+    path.join(resolvePreferredBotTmpDir(), "bot-acpx-runtime-test-"),
+  );
   tempDirs.push(dir);
   const scriptPath = path.join(dir, "mock-acpx.cjs");
   const logPath = path.join(dir, "calls.log");
@@ -319,7 +297,8 @@ export async function readMockRuntimeLogEntries(
   }
   const raw = await readFile(logPath, "utf8");
   return raw
-    .split(/\r?\n/)
+    .split(/?
+/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
