@@ -89,10 +89,10 @@ function normalizeSchemaNode(
       if (!isAnySchema(schema.additionalProperties)) {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        // Propagate unsupported paths from additionalProperties to ensure
-        // users are directed to Raw mode when nested fields cannot be edited
-        for (const entry of res.unsupportedPaths) {
-          unsupported.add(entry);
+        // Keep parent path unsupported if additionalProperties has unsupported paths
+        // This ensures users are directed to Raw mode for map branches with invalid value schemas
+        if (res.unsupportedPaths.length > 0) {
+          unsupported.add(pathLabel);
         }
       }
     }
