@@ -60,30 +60,21 @@ export function isSilentReplyPrefixText(
   if (!trimmed) {
     return false;
   }
-  // Guard against suppressing natural-language "No..." text while still
-  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== trimmed.toUpperCase()) {
+  // Only allow all-caps (with underscores) so we don't false-positive on
+  // normal words like "no" or "not". Check the original (not uppercased)
+  // text so that mixed-case like "No" is rejected.
+  if (/[^A-Z_]/.test(trimmed)) {
     return false;
   }
   const normalized = trimmed.toUpperCase();
-  if (!normalized) {
+  const upperToken = token.toUpperCase();
+  if (!upperToken.startsWith(normalized)) {
     return false;
   }
-  if (normalized.length < 2) {
-    return false;
-  }
-  if (/[^A-Z_]/.test(normalized)) {
-    return false;
-  }
-  const tokenUpper = token.toUpperCase();
-  if (!tokenUpper.startsWith(normalized)) {
-    return false;
-  }
-  if (normalized.includes("_")) {
-    return true;
-  }
-  // Keep underscore guard for generic tokens to avoid suppressing unrelated
-  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
-  // because NO_REPLY streaming can transiently emit that fragment.
-  return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
+  // Require at least the first word of the token (up to the first underscore)
+  // to avoid false-positives on single-letter prefixes like "N" while still
+  // catching "NO" (the first word of "NO_REPLY") which leaks into Slack streams.
+  const firstWordEnd = upperToken.indexOf("_");
+  const minLen = firstWordEnd > 0 ? firstWordEnd : upperToken.length;
+  return normalized.length >= minLen;
 }

@@ -82,6 +82,13 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("  HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
   });
 
+  it("matches first-word prefix to catch streaming leaks", () => {
+    // "NO" is the first word of "NO_REPLY" — must be caught before it
+    // leaks into Slack/Telegram streams as a visible message.
+    expect(isSilentReplyPrefixText("NO")).toBe(true);
+    expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(true);
+  });
+
   it("rejects ambiguous natural-language prefixes", () => {
     expect(isSilentReplyPrefixText("N")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
