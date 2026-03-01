@@ -60,6 +60,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     try {
       page = await lease.browser.newPage({
         viewport: { width: 1200, height: 900 },
+        deviceScaleFactor: 2,
         colorScheme: params.theme,
       });
       await page.route(`http://127.0.0.1${VIEWER_ASSET_PREFIX}*`, async (route) => {
@@ -121,14 +122,29 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         throw new Error("Diff frame was lost after resizing.");
       }
 
+      const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
+
+      // Raw clip in CSS px
+      const rawX = Math.max(box.x - padding, 0);
+      const rawY = Math.max(box.y - padding, 0);
+      const rawRight = rawX + clipWidth;
+      const rawBottom = rawY + clipHeight;
+
+      // Snap to device-pixel grid to avoid soft text from sub-pixel crop
+      const x = Math.floor(rawX * dpr) / dpr;
+      const y = Math.floor(rawY * dpr) / dpr;
+      const right = Math.ceil(rawRight * dpr) / dpr;
+      const bottom = Math.ceil(rawBottom * dpr) / dpr;
+
       await page.screenshot({
         path: params.outputPath,
         type: "png",
+        scale: "device",
         clip: {
-          x: Math.max(box.x - padding, 0),
-          y: Math.max(box.y - padding, 0),
-          width: clipWidth,
-          height: clipHeight,
+          x,
+          y,
+          width: right - x,
+          height: bottom - y,
         },
       });
       return params.outputPath;
@@ -231,7 +247,7 @@ async function acquireSharedBrowser(params: {
       .launch({
         headless: true,
         ...(executablePath ? { executablePath } : {}),
-        args: ["--disable-dev-shm-usage", "--disable-gpu"],
+        args: ["--disable-dev-shm-usage"],
       })
       .then((browser) => {
         if (sharedBrowserState?.browserPromise === browserPromise) {
