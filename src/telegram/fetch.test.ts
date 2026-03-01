@@ -261,4 +261,30 @@ describe("resolveTelegramFetch", () => {
       },
     });
   });
+
+  it("retries with ipv4 fallback once per request, not once per process", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: timeoutErr,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+    await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });

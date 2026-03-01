@@ -12,7 +12,6 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
-let forcedIpv4Fallback = false;
 const log = createSubsystemLogger("telegram/network");
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -168,10 +167,6 @@ function shouldRetryWithIpv4Fallback(err: unknown): boolean {
 }
 
 function applyTelegramIpv4Fallback(): void {
-  if (forcedIpv4Fallback) {
-    return;
-  }
-  forcedIpv4Fallback = true;
   applyTelegramNetworkWorkarounds({
     autoSelectFamily: false,
     dnsResultOrder: "ipv4first",
@@ -198,7 +193,7 @@ export function resolveTelegramFetch(
     try {
       return await sourceFetch(input, init);
     } catch (err) {
-      if (!forcedIpv4Fallback && shouldRetryWithIpv4Fallback(err)) {
+      if (shouldRetryWithIpv4Fallback(err)) {
         applyTelegramIpv4Fallback();
         return sourceFetch(input, init);
       }
@@ -211,5 +206,4 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
-  forcedIpv4Fallback = false;
 }
