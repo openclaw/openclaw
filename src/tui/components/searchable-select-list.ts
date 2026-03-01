@@ -286,7 +286,9 @@ export class SearchableSelectList implements Component {
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
           const line = `${prefix}${valueText}${spacing}${descText}`;
-          return isSelected ? this.theme.selectedText(line) : line;
+    const finalLine = isSelected ? this.theme.selectedText(line) : line;
+    // Ensure the final line does not exceed terminal width
+    return truncateToWidth(finalLine, width, "");
         }
       }
     }
@@ -295,7 +297,9 @@ export class SearchableSelectList implements Component {
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;
-    return isSelected ? this.theme.selectedText(line) : line;
+    const finalLine = isSelected ? this.theme.selectedText(line) : line;
+    // Ensure the final line does not exceed terminal width
+    return truncateToWidth(finalLine, width, "");
   }
 
   private getDescriptionLayout(
