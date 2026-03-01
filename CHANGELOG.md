@@ -2,19 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.2.28 (Unreleased)
-
-### Changes
-
-- Android/Voice: streaming TTS via ElevenLabs WebSocket for low-latency playback, mic barge-in, voice screen lifecycle (stop TTS on tab switch), and chat message display after voice responses. (#XXXXX) Thanks @gregmousseau.
-
-### Fixes
-
-- Android/Voice: fix chat messages not appearing after voice input — ChatController was dropping final chat events for runs it did not initiate; now only delta events are guarded by the pending-run check so history refreshes correctly after any voice response.
-- Android/Voice: fix streaming TTS silence on message 2 — deferred EOS is sent in onOpen when finish() was called before the WebSocket connected, and sendText() now returns true (not false) when finished=true to avoid spurious restart loops.
-- Android/Voice: fix dual TTS voices — finishStreamingTts coroutine now checks object identity before nulling streamingTts so a mid-drain restart cannot orphan a live TTS session.
-- Android/Voice: fix streaming TTS chunks queued correctly when WebSocket is still connecting — moved null-webSocket guard inside the send block so initial chunks are queued rather than causing a false diverge restart.
-
 ## 2026.2.27
 
 ### Changes
@@ -33,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Android/Voice screen TTS: stream assistant speech via ElevenLabs WebSocket in Talk Mode, stop cleanly on speaker mute/barge-in, and ignore stale out-of-order stream events. (#29521) Thanks @gregmousseau.
 - Web UI/Cron: include configured agent model defaults/fallbacks in cron model suggestions so scheduled-job model autocomplete reflects configured models. (#29709)
 - CLI/Cron: clarify `cron list` output by renaming `Agent` to `Agent ID` and adding a `Model` column for isolated agent-turn jobs. (#26259)
 - Cron/Delivery: disable the agent messaging tool when `delivery.mode` is `"none"` so cron output is not sent to Telegram or other channels. (#21808)
