@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -98,12 +99,16 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
-  fs.mkdirSync(path.dirname(settings.file), { recursive: true });
+  // Expand tilde in log file path (e.g., ~/.openclaw/logs -> /Users/<user>/.openclaw/logs)
+  const expandedFilePath = settings.file.startsWith("~")
+    ? path.join(os.homedir(), settings.file.slice(1))
+    : settings.file;
+  fs.mkdirSync(path.dirname(expandedFilePath), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
-  if (isRollingPath(settings.file)) {
-    pruneOldRollingLogs(path.dirname(settings.file));
+  if (isRollingPath(expandedFilePath)) {
+    pruneOldRollingLogs(path.dirname(expandedFilePath));
   }
-  let currentFileBytes = getCurrentLogFileBytes(settings.file);
+  let currentFileBytes = getCurrentLogFileBytes(expandedFilePath);
   let warnedAboutSizeCap = false;
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
@@ -125,16 +130,16 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
             time: new Date().toISOString(),
             level: "warn",
             subsystem: "logging",
-            message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
+            message: `log file size cap reached; suppressing writes file=${expandedFilePath} maxFileBytes=${settings.maxFileBytes}`,
           });
-          appendLogLine(settings.file, `${warningLine}\n`);
+          appendLogLine(expandedFilePath, `${warningLine}\n`);
           process.stderr.write(
-            `[openclaw] log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}\n`,
+            `[openclaw] log file size cap reached; suppressing writes file=${expandedFilePath} maxFileBytes=${settings.maxFileBytes}\n`,
           );
         }
         return;
       }
-      if (appendLogLine(settings.file, payload)) {
+      if (appendLogLine(expandedFilePath, payload)) {
         currentFileBytes = nextBytes;
       }
     } catch {
