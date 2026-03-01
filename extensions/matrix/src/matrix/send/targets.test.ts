@@ -37,8 +37,10 @@ describe("resolveMatrixRoomId", () => {
     const setAccountData = vi.fn().mockResolvedValue(undefined);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue([roomId]),
       getJoinedRoomMembers: vi.fn().mockResolvedValue(["@bot:example.org", userId]),
+      getRoomStateEvent: vi.fn().mockResolvedValue({ is_direct: true }),
       setAccountData,
     } as unknown as MatrixClient;
 
@@ -61,8 +63,10 @@ describe("resolveMatrixRoomId", () => {
       .mockResolvedValueOnce(["@bot:example.org", userId]);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue(["!bad:example.org", roomId]),
       getJoinedRoomMembers,
+      getRoomStateEvent: vi.fn().mockResolvedValue({ is_direct: true }),
       setAccountData,
     } as unknown as MatrixClient;
 
@@ -72,21 +76,23 @@ describe("resolveMatrixRoomId", () => {
     expect(setAccountData).toHaveBeenCalled();
   });
 
-  it("allows larger rooms when no 1:1 match exists", async () => {
+  it("does not infer direct room from member count only", async () => {
     const userId = "@group:example.org";
     const roomId = "!group:example.org";
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
       getJoinedRooms: vi.fn().mockResolvedValue([roomId]),
       getJoinedRoomMembers: vi
         .fn()
         .mockResolvedValue(["@bot:example.org", userId, "@extra:example.org"]),
+      getRoomStateEvent: vi.fn().mockResolvedValue({}),
       setAccountData: vi.fn().mockResolvedValue(undefined),
     } as unknown as MatrixClient;
 
-    const resolved = await resolveMatrixRoomId(client, userId);
-
-    expect(resolved).toBe(roomId);
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      "m.direct missing or is_direct not set",
+    );
   });
 });
 

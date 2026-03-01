@@ -16,7 +16,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const log = opts.log ?? (() => {});
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
-  const memberCountCache = new Map<string, { count: number; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
     if (cachedSelfUserId) {
@@ -43,23 +42,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     }
   };
 
-  const resolveMemberCount = async (roomId: string): Promise<number | null> => {
-    const cached = memberCountCache.get(roomId);
-    const now = Date.now();
-    if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
-      return cached.count;
-    }
-    try {
-      const members = await client.getJoinedRoomMembers(roomId);
-      const count = members.length;
-      memberCountCache.set(roomId, { count, ts: now });
-      return count;
-    } catch (err) {
-      log(`matrix: dm member count failed room=${roomId} (${String(err)})`);
-      return null;
-    }
-  };
-
   const hasDirectFlag = async (roomId: string, userId?: string): Promise<boolean> => {
     const target = userId?.trim();
     if (!target) {
@@ -83,12 +65,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
-      const memberCount = await resolveMemberCount(roomId);
-      if (memberCount === 2) {
-        log(`matrix: dm detected via member count room=${roomId} members=${memberCount}`);
-        return true;
-      }
-
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const directViaState =
         (await hasDirectFlag(roomId, senderId)) || (await hasDirectFlag(roomId, selfUserId ?? ""));
@@ -97,7 +73,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
-      log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
+      log(`matrix: dm check room=${roomId} result=group`);
       return false;
     },
   };
