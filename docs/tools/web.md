@@ -205,30 +205,18 @@ search:
     - json
 ```
 
-**Step 2: Update SearXNG's `docker-compose.yaml`** to join the OpenClaw network:
-
-```yaml
-services:
-  searxng:
-    # ... existing config ...
-    networks:
-      - searxng
-      - openclaw_default
-
-networks:
-  searxng:
-  openclaw_default:
-    external: true
-```
-
-**Step 3: Recreate the SearXNG container** to apply network changes:
+**Step 2: Run SearXNG container** joining the OpenClaw network:
 
 ```bash
-docker compose down
-docker compose up -d
+docker run --name searxng -d \
+  -p 127.0.0.1:8888:8080 \
+  --network openclaw_default \
+  -v "./config/:/etc/searxng/" \
+  -v "./data/:/var/cache/searxng/" \
+  docker.io/searxng/searxng:latest
 ```
 
-**Step 4: Configure OpenClaw** to use the SearXNG container name as hostname:
+**Step 3:** Configure OpenClaw to use the SearXNG container name as hostname:
 
 ```json5
 {
@@ -246,7 +234,7 @@ docker compose up -d
 }
 ```
 
-The `external: true` setting tells Docker to use an existing network (`openclaw_default`) rather than creating a new one. Once both containers are on the same network, they can communicate using their container names as hostnames.
+The `--network openclaw_default` flag joins an externally created network. Once both containers are on the same network, they can communicate using their container names as hostnames.
 
 ## Using Gemini (Google Search grounding)
 
