@@ -294,14 +294,23 @@ function extractSubagentOutputText(message: unknown): string {
   return "";
 }
 
+function sanitizeSubagentReplyText(reply: string | undefined): string | undefined {
+  if (typeof reply !== "string") {
+    return reply;
+  }
+  const sanitized = sanitizeTextContent(reply).trim();
+  return sanitized ? sanitized : undefined;
+}
+
 async function readLatestSubagentOutput(sessionKey: string): Promise<string | undefined> {
   try {
     const latestAssistant = await readLatestAssistantReply({
       sessionKey,
       limit: 50,
     });
-    if (latestAssistant?.trim()) {
-      return latestAssistant;
+    const sanitizedLatest = sanitizeSubagentReplyText(latestAssistant);
+    if (sanitizedLatest) {
+      return sanitizedLatest;
     }
   } catch {
     // Best-effort: fall back to richer history parsing below.
@@ -315,7 +324,7 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
     const msg = messages[i];
     const text = extractSubagentOutputText(msg);
     if (text) {
-      return text;
+      return sanitizeSubagentReplyText(text);
     }
   }
   return undefined;
@@ -1089,7 +1098,7 @@ export async function runSubagentAnnounceFlow(params: {
         : undefined;
     })();
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    let reply = params.roundOneReply;
+    let reply = sanitizeSubagentReplyText(params.roundOneReply);
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     // Lifecycle "end" can arrive before auto-compaction retries finish. If the
     // subagent is still active, wait for the embedded run to fully settle.
@@ -1138,18 +1147,20 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestSubagentOutput(params.childSessionKey);
+      reply = sanitizeSubagentReplyText(await readLatestSubagentOutput(params.childSessionKey));
     }
 
     if (!reply) {
-      reply = await readLatestSubagentOutput(params.childSessionKey);
+      reply = sanitizeSubagentReplyText(await readLatestSubagentOutput(params.childSessionKey));
     }
 
     if (!reply?.trim()) {
-      reply = await readLatestSubagentOutputWithRetry({
-        sessionKey: params.childSessionKey,
-        maxWaitMs: params.timeoutMs,
-      });
+      reply = sanitizeSubagentReplyText(
+        await readLatestSubagentOutputWithRetry({
+          sessionKey: params.childSessionKey,
+          maxWaitMs: params.timeoutMs,
+        }),
+      );
     }
 
     if (
@@ -1192,11 +1203,13 @@ export async function runSubagentAnnounceFlow(params: {
 
     if (requesterDepth >= 1 && reply?.trim()) {
       const minReplyChangeWaitMs = FAST_TEST_MODE ? FAST_TEST_REPLY_CHANGE_WAIT_MS : 250;
-      reply = await waitForSubagentOutputChange({
-        sessionKey: params.childSessionKey,
-        baselineReply: reply,
-        maxWaitMs: Math.max(minReplyChangeWaitMs, Math.min(params.timeoutMs, 2_000)),
-      });
+      reply = sanitizeSubagentReplyText(
+        await waitForSubagentOutputChange({
+          sessionKey: params.childSessionKey,
+          baselineReply: reply,
+          maxWaitMs: Math.max(minReplyChangeWaitMs, Math.min(params.timeoutMs, 2_000)),
+        }),
+      );
     }
 
     // Build status label

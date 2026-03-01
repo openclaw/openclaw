@@ -230,6 +230,28 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Keep this internal context private");
   });
 
+  it("sanitizes leaked assistant function-call wire text before announce delivery", async () => {
+    readLatestAssistantReplyMock.mockResolvedValueOnce(
+      `assistant to=functions.subagents.commentary json
+{"action":"list","recentMinutes":20}
+Done summary for the user.`,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-wire-leak",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("Done summary for the user.");
+    expect(msg).not.toContain("assistant to=functions.");
+    expect(msg).not.toContain('{"action":"list","recentMinutes":20}');
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({

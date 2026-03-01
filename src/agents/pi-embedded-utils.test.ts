@@ -537,6 +537,15 @@ describe("stripDowngradedToolCallText", () => {
         expected: "Intro.",
       },
       {
+        name: "strips leaked assistant function-call wire blocks",
+        text: `+#+#+#+#+#+assistant to=functions.subagents.commentary json
+{"action":"list","recentMinutes":20}
+assistant to=functions.sessions_list.commentary
+{"kinds":["subagent"],"limit":20}
+Final result for user.`,
+        expected: "Final result for user.",
+      },
+      {
         name: "no markers",
         text: "Just a normal response with no markers.",
         expected: "Just a normal response with no markers.",

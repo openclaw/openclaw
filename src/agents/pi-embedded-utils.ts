@@ -43,7 +43,10 @@ export function stripDowngradedToolCallText(text: string): string {
   if (!text) {
     return text;
   }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
+  const hasDowngradedMarkers =
+    /\[Tool (?:Call|Result)/i.test(text) || /\[Historical context/i.test(text);
+  const hasFunctionCallLeak = /assistant\s+to=functions\.[\w.-]+/i.test(text);
+  if (!hasDowngradedMarkers && !hasFunctionCallLeak) {
     return text;
   }
 
@@ -194,6 +197,61 @@ export function stripDowngradedToolCallText(text: string): string {
 
   // Remove [Historical context: ...] markers (self-contained within brackets).
   cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+
+  const stripFunctionCallLeakLines = (input: string): string => {
+    const lines = input.split(/\r?\n/);
+    const kept: string[] = [];
+    let skipPayload = false;
+    const functionCallLeakLineRe = /assistant\s+to=functions\.[\w.-]+/i;
+
+    const looksLikeFunctionPayloadLine = (line: string): boolean => {
+      if (!line) {
+        return false;
+      }
+      if (/^json\b/i.test(line)) {
+        return true;
+      }
+      if (/^```(?:json)?$/i.test(line) || line === "```") {
+        return true;
+      }
+      if (line.startsWith("{") || line.startsWith("[") || line === "}" || line === "]") {
+        return true;
+      }
+      if (/^["'\w-]+\s*:/.test(line)) {
+        return true;
+      }
+      const isJsonishCharsOnly = /^[\]{}(),:"'A-Za-z0-9_.+\-/]+$/.test(line);
+      const hasJsonPunctuation =
+        line.includes("{") ||
+        line.includes("}") ||
+        line.includes("[") ||
+        line.includes("]") ||
+        line.includes(":");
+      if (isJsonishCharsOnly && hasJsonPunctuation) {
+        return true;
+      }
+      return false;
+    };
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (functionCallLeakLineRe.test(rawLine)) {
+        skipPayload = true;
+        continue;
+      }
+      if (skipPayload && looksLikeFunctionPayloadLine(line)) {
+        continue;
+      }
+      if (skipPayload) {
+        skipPayload = false;
+      }
+      kept.push(rawLine);
+    }
+
+    return kept.join("\n");
+  };
+
+  cleaned = stripFunctionCallLeakLines(cleaned);
 
   return cleaned.trim();
 }
