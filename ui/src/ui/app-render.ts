@@ -477,6 +477,10 @@ export function renderApp(state: AppViewState) {
                 timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
                 deliveryToSuggestions,
                 onFormChange: (patch) => {
+                  const keys = Object.keys(patch) as Array<keyof typeof patch>;
+                  if (keys.every((k) => state.cronForm[k] === patch[k])) {
+                    return;
+                  }
                   state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
                   state.cronFieldErrors = validateCronForm(state.cronForm);
                 },
