@@ -37,6 +37,8 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
+  /** Target channel ID for output routing (e.g., Discord channel ID). Overrides requester channel. */
+  targetChannel?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -190,10 +192,11 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+  // If targetChannel is specified, route output there instead of requester channel
   const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
+    channel: params.targetChannel ? undefined : ctx.agentChannel,
     accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
+    to: params.targetChannel || ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
   const hookRunner = getGlobalHookRunner();

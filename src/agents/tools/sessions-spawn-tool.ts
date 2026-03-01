@@ -22,6 +22,8 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  /** Target channel ID for subagent output routing (e.g., Discord channel ID) */
+  targetChannel: Type.Optional(Type.String()),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -41,7 +43,7 @@ export function createSessionsSpawnTool(opts?: {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Use targetChannel to route output to a specific channel (e.g., Discord channel ID).',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -55,6 +57,7 @@ export function createSessionsSpawnTool(opts?: {
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const targetChannel = readStringParam(params, "targetChannel");
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -99,6 +102,7 @@ export function createSessionsSpawnTool(opts?: {
                 mode,
                 cleanup,
                 expectsCompletionMessage: true,
+                targetChannel: targetChannel || undefined,
               },
               {
                 agentSessionKey: opts?.agentSessionKey,
