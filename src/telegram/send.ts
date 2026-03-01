@@ -5,6 +5,7 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -461,6 +462,12 @@ export async function sendMessageTelegram(
   text: string,
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
+  const trimmedText = text?.trim() ?? "";
+  if (isSilentReplyText(trimmedText) && !opts.mediaUrl && !opts.buttons) {
+    logVerbose("telegram send: suppressed NO_REPLY token before API call");
+    return { messageId: "suppressed", chatId: "" };
+  }
+
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
