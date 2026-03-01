@@ -549,6 +549,7 @@ export function registerExecApprovalsCli(program: Command) {
           agentId: agentKey,
           minutes,
           grantedBy: "cli",
+          force: opts.force,
         })) as { ok: boolean; agentId?: string; expiresAt?: number; message?: string };
 
         if (!result?.ok || typeof result.expiresAt !== "number") {

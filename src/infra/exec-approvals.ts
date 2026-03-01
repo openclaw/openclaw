@@ -379,12 +379,20 @@ export function grantTrustWindow(params: {
   agentId?: string;
   minutes: number;
   grantedBy?: string;
+  force?: boolean;
 }): GrantTrustResult {
   const agentId = params.agentId?.trim() || "main";
   const { minutes } = params;
 
   if (minutes <= 0 || minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
     return { ok: false, error: `minutes must be between 1 and ${ABSOLUTE_MAX_TRUST_MINUTES}` };
+  }
+
+  if (minutes > DEFAULT_MAX_TRUST_MINUTES && !params.force) {
+    return {
+      ok: false,
+      error: `Duration exceeds default cap (${DEFAULT_MAX_TRUST_MINUTES}m). Use force to allow up to ${ABSOLUTE_MAX_TRUST_MINUTES}m.`,
+    };
   }
 
   const now = Date.now();

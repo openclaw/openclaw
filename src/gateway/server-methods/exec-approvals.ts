@@ -195,9 +195,14 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
   },
 
   "exec.approvals.trust": ({ params, respond }) => {
-    const p = params as { agentId?: string; minutes?: number; grantedBy?: string };
+    const p = params as { agentId?: string; minutes?: number; grantedBy?: string; force?: boolean };
     const minutes = typeof p.minutes === "number" ? p.minutes : 0;
-    const result = grantTrustWindow({ agentId: p.agentId, minutes, grantedBy: p.grantedBy });
+    const result = grantTrustWindow({
+      agentId: p.agentId,
+      minutes,
+      grantedBy: p.grantedBy,
+      force: p.force,
+    });
     if (!result.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
       return;
