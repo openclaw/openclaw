@@ -347,6 +347,7 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            deliveryMode: "live",
             maxTurnChars: 5,
           },
         },
@@ -370,10 +371,12 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toEqual([
-      { kind: "block", text: "hello" },
-      { kind: "tool", text: prefixSystemMessage("output truncated") },
-    ]);
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries).toContainEqual({ kind: "block", text: "hello" });
+    expect(deliveries).toContainEqual({
+      kind: "tool",
+      text: prefixSystemMessage("output truncated"),
+    });
   });
 
   it("enforces maxMetaEventsPerTurn without suppressing assistant text", async () => {

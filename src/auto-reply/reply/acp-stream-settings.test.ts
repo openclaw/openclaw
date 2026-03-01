@@ -9,7 +9,7 @@ import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 describe("acp stream settings", () => {
   it("resolves stable defaults", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
-    expect(settings.deliveryMode).toBe("live");
+    expect(settings.deliveryMode).toBe("final_only");
     expect(settings.repeatSuppression).toBe(true);
     expect(settings.maxTurnChars).toBe(24_000);
     expect(settings.maxMetaEventsPerTurn).toBe(64);
