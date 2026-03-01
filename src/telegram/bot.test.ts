@@ -279,6 +279,65 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("marks the default model in model-list callbacks when default is configured via alias", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: {
+            primary: "flash3",
+          },
+          models: {
+            "google/gemini-3-flash-preview": {
+              alias: "flash3",
+            },
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-models-default-alias",
+        data: "mdl_list_google_1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [, , , params] = editMessageTextSpy.mock.calls[0] ?? [];
+    const inlineKeyboard = (
+      params as
+        | {
+            reply_markup?: {
+              inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+            };
+          }
+        | undefined
+    )?.reply_markup?.inline_keyboard;
+    const firstModelButtonText = inlineKeyboard?.[0]?.[0]?.text ?? "";
+    expect(firstModelButtonText).toContain("gemini-3-flash-preview");
+    expect(firstModelButtonText).toContain("✓");
+  });
+
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();
