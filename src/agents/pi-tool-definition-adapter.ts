@@ -64,6 +64,9 @@ function compactToolParametersSchema(
   const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
   const seen = new WeakMap<object, unknown>();
   const compactSchema = (value: unknown, depth: number): unknown => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => compactSchema(entry, depth + 1));
+    }
     if (!value || typeof value !== "object") {
       return value;
     }

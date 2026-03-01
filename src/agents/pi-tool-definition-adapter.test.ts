@@ -215,6 +215,19 @@ describe("pi tool definition adapter", () => {
                   },
                 ],
               },
+              tupleArg: {
+                type: "array",
+                items: [
+                  {
+                    type: "string",
+                    description: "Tuple first entry",
+                  },
+                  {
+                    type: "number",
+                    description: "Tuple second entry",
+                  },
+                ],
+              },
             },
             required: ["query"],
           },
@@ -247,6 +260,17 @@ describe("pi tool definition adapter", () => {
             {
               title: "Keep example title",
               description: "Keep example description",
+            },
+          ],
+        },
+        tupleArg: {
+          type: "array",
+          items: [
+            {
+              type: "string",
+            },
+            {
+              type: "number",
             },
           ],
         },
