@@ -308,6 +308,7 @@ async function resolveGatewaySecretInputString(params: {
   config: OpenClawConfig;
   value: unknown;
   path: string;
+  env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
   const defaults = params.config.secrets?.defaults;
   const { ref } = resolveSecretInputRef({
@@ -319,7 +320,7 @@ async function resolveGatewaySecretInputString(params: {
   }
   const resolved = await resolveSecretRefValues([ref], {
     config: params.config,
-    env: process.env,
+    env: params.env,
   });
   const resolvedValue = trimToUndefined(resolved.get(secretRefKey(ref)));
   if (!resolvedValue) {
@@ -332,6 +333,16 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
   token?: string;
   password?: string;
 }> {
+  return resolveGatewayCredentialsWithEnv(context, process.env);
+}
+
+async function resolveGatewayCredentialsWithEnv(
+  context: ResolvedGatewayCallContext,
+  env: NodeJS.ProcessEnv,
+): Promise<{
+  token?: string;
+  password?: string;
+}> {
   if (context.explicitAuth.token || context.explicitAuth.password) {
     return {
       token: context.explicitAuth.token,
@@ -340,8 +351,8 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
   }
 
   let resolvedConfig = context.config;
-  const envToken = readGatewayTokenEnv(process.env);
-  const envPassword = readGatewayPasswordEnv(process.env);
+  const envToken = readGatewayTokenEnv(env);
+  const envPassword = readGatewayPasswordEnv(env);
   const defaults = context.config.secrets?.defaults;
   const auth = context.config.gateway?.auth;
   const remoteConfig = context.config.gateway?.remote;
@@ -368,6 +379,7 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
       config: resolvedConfig,
       value: resolvedConfig.gateway?.auth?.password,
       path: "gateway.auth.password",
+      env,
     });
     if (resolvedConfig.gateway?.auth) {
       resolvedConfig.gateway.auth.password = resolvedPassword;
@@ -389,6 +401,7 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
         config: resolvedConfig,
         value: remote.token,
         path: "gateway.remote.token",
+        env,
       });
     }
     if (
@@ -399,17 +412,42 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
         config: resolvedConfig,
         value: remote.password,
         path: "gateway.remote.password",
+        env,
       });
     }
   }
   return resolveGatewayCredentialsFromConfig({
     cfg: resolvedConfig,
-    env: process.env,
+    env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
     remotePasswordPrecedence: "env-first",
   });
+}
+
+export async function resolveGatewayCredentialsWithSecretInputs(params: {
+  config: OpenClawConfig;
+  explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const context: ResolvedGatewayCallContext = {
+    config: params.config,
+    configPath: resolveConfigPath(process.env, resolveStateDir(process.env)),
+    isRemoteMode: params.config.gateway?.mode === "remote",
+    remote:
+      params.config.gateway?.mode === "remote"
+        ? (params.config.gateway?.remote as GatewayRemoteSettings | undefined)
+        : undefined,
+    urlOverride: trimToUndefined(params.urlOverride),
+    remoteUrl:
+      params.config.gateway?.mode === "remote"
+        ? trimToUndefined((params.config.gateway?.remote as GatewayRemoteSettings | undefined)?.url)
+        : undefined,
+    explicitAuth: resolveExplicitGatewayAuth(params.explicitAuth),
+  };
+  return resolveGatewayCredentialsWithEnv(context, params.env ?? process.env);
 }
 
 async function resolveGatewayTlsFingerprint(params: {
