@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
   recordChannelActivity,
@@ -23,39 +23,77 @@ import {
 describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
-      const storePath = path.join(dir, "sessions.json");
-      await fs.writeFile(storePath, "[]", "utf-8");
+      await withTempDir("openclaw-session-store-", async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        await fs.writeFile(storePath, "[]", "utf-8");
 
-      const result = readSessionStoreJson5(storePath);
-      expect(result.ok).toBe(false);
-      expect(result.store).toEqual({});
+        const result = readSessionStoreJson5(storePath);
+        expect(result.ok).toBe(false);
+        expect(result.store).toEqual({});
+      });
+    });
+
+    it("parses JSON5 object session stores", async () => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        await fs.writeFile(
+          storePath,
+          "{\n  // comment allowed in JSON5\n  main: { sessionId: 's1', updatedAt: 123 },\n}\n",
+          "utf-8",
+        );
+
+        const result = readSessionStoreJson5(storePath);
+        expect(result.ok).toBe(true);
+        expect(result.store.main?.sessionId).toBe("s1");
+        expect(result.store.main?.updatedAt).toBe(123);
+      });
     });
   });
 
   describe("voicewake store", () => {
     it("returns defaults when missing", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
-      const cfg = await loadVoiceWakeConfig(baseDir);
-      expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
-      expect(cfg.updatedAtMs).toBe(0);
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
+        const cfg = await loadVoiceWakeConfig(baseDir);
+        expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
+        expect(cfg.updatedAtMs).toBe(0);
+      });
     });
 
     it("sanitizes and persists triggers", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
-      const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
-      expect(saved.triggers).toEqual(["hi", "there"]);
-      expect(saved.updatedAtMs).toBeGreaterThan(0);
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
+        const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
+        expect(saved.triggers).toEqual(["hi", "there"]);
+        expect(saved.updatedAtMs).toBeGreaterThan(0);
 
-      const loaded = await loadVoiceWakeConfig(baseDir);
-      expect(loaded.triggers).toEqual(["hi", "there"]);
-      expect(loaded.updatedAtMs).toBeGreaterThan(0);
+        const loaded = await loadVoiceWakeConfig(baseDir);
+        expect(loaded.triggers).toEqual(["hi", "there"]);
+        expect(loaded.updatedAtMs).toBeGreaterThan(0);
+      });
     });
 
     it("falls back to defaults when triggers empty", async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voicewake-"));
-      const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
-      expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
+        const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
+        expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
+      });
+    });
+
+    it("sanitizes malformed persisted config values", async () => {
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
+        await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
+        await fs.writeFile(
+          path.join(baseDir, "settings", "voicewake.json"),
+          JSON.stringify({
+            triggers: ["  wake ", "", 42, null],
+            updatedAtMs: -1,
+          }),
+          "utf-8",
+        );
+
+        const loaded = await loadVoiceWakeConfig(baseDir);
+        expect(loaded.triggers).toEqual(["wake"]);
+        expect(loaded.updatedAtMs).toBe(0);
+      });
     });
   });
 
@@ -179,6 +217,14 @@ describe("infra store", () => {
       expect(cache.check("a", 120)).toBe(false);
       expect(cache.check("c", 200)).toBe(false);
       expect(cache.size()).toBe(2);
+    });
+
+    it("supports non-mutating existence checks via peek()", () => {
+      const cache = createDedupeCache({ ttlMs: 1000, maxSize: 10 });
+      expect(cache.peek("a", 100)).toBe(false);
+      expect(cache.check("a", 100)).toBe(false);
+      expect(cache.peek("a", 200)).toBe(true);
+      expect(cache.peek("a", 1201)).toBe(false);
     });
   });
 });

@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -24,6 +23,7 @@ export function guardSessionManager(
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
     providerMetadata?: Record<string, unknown>;
+    allowedToolNames?: Iterable<string>;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -32,22 +32,24 @@ export function guardSessionManager(
 
   if (opts?.providerMetadata && Object.keys(opts.providerMetadata).length > 0) {
     const originalAppend = sessionManager.appendMessage.bind(sessionManager);
+    type SessionMessage = Parameters<typeof originalAppend>[0];
     const providerMetadata = opts.providerMetadata;
-    sessionManager.appendMessage = ((message: AgentMessage) => {
-      if (!message || typeof message !== "object") {
+    sessionManager.appendMessage = ((message: SessionMessage) => {
+      if (!message || typeof message !== "object" || Array.isArray(message as unknown)) {
         return originalAppend(message);
       }
-      const existing = (message as { providerMetadata?: unknown }).providerMetadata;
+      const messageRecord = message as unknown as Record<string, unknown>;
+      const existing = messageRecord.providerMetadata;
       const existingObj =
         existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
       const merged = {
-        ...(message as Record<string, unknown>),
+        ...messageRecord,
         providerMetadata: {
           ...(existingObj as Record<string, unknown>),
           ...providerMetadata,
         },
       };
-      return originalAppend(merged as AgentMessage);
+      return originalAppend(merged as unknown as SessionMessage);
     }) as SessionManager["appendMessage"];
   }
 
@@ -86,6 +88,7 @@ export function guardSessionManager(
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
+    allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;

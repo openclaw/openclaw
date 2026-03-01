@@ -28,6 +28,7 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
+import { hasExpectedToolNonce, shouldRetryToolReadProbe } from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
@@ -54,8 +55,77 @@ function parseFilter(raw?: string): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
+function toInt(value: string | undefined, fallback: number): number {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function capByProviderSpread<T>(
+  items: T[],
+  maxItems: number,
+  providerOf: (item: T) => string,
+): T[] {
+  if (maxItems <= 0 || items.length <= maxItems) {
+    return items;
+  }
+  const providerOrder: string[] = [];
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const provider = providerOf(item);
+    const bucket = grouped.get(provider);
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+    providerOrder.push(provider);
+    grouped.set(provider, [item]);
+  }
+
+  const selected: T[] = [];
+  while (selected.length < maxItems && grouped.size > 0) {
+    for (const provider of providerOrder) {
+      const bucket = grouped.get(provider);
+      if (!bucket || bucket.length === 0) {
+        continue;
+      }
+      const item = bucket.shift();
+      if (item) {
+        selected.push(item);
+      }
+      if (bucket.length === 0) {
+        grouped.delete(provider);
+      }
+      if (selected.length >= maxItems) {
+        break;
+      }
+    }
+  }
+  return selected;
+}
+
 function logProgress(message: string): void {
   console.log(`[live] ${message}`);
+}
+
+function formatFailurePreview(
+  failures: Array<{ model: string; error: string }>,
+  maxItems: number,
+): string {
+  const limit = Math.max(1, maxItems);
+  const lines = failures.slice(0, limit).map((failure, index) => {
+    const normalized = failure.error.replace(/\s+/g, " ").trim();
+    const clipped = normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
+    return `${index + 1}. ${failure.model}: ${clipped}`;
+  });
+  const remaining = failures.length - limit;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more`);
+  }
+  return lines.join("\n");
 }
 
 function assertNoReasoningTags(params: {
@@ -124,6 +194,16 @@ function isRefreshTokenReused(error: string): boolean {
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
+}
+
+function isProviderUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("no allowed providers are available") ||
+    msg.includes("provider unavailable") ||
+    msg.includes("upstream provider unavailable") ||
+    msg.includes("upstream error from google")
+  );
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -680,38 +760,75 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           // Real tool invocation: force the agent to Read a local file and echo a nonce.
           logProgress(`${progressLabel}: tool-read`);
           const runIdTool = randomUUID();
-          const toolProbe = await client.request<AgentFinalPayload>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${runIdTool}-tool`,
-              message:
-                "OpenClaw live tool probe (local, safe): " +
-                `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                "Then reply with the two nonce values you read (include both).",
-              thinking: params.thinkingLevel,
-              deliver: false,
-            },
-            { expectFinal: true },
-          );
-          if (toolProbe?.status !== "ok") {
-            throw new Error(`tool probe failed: status=${String(toolProbe?.status)}`);
-          }
-          const toolText = extractPayloadText(toolProbe?.result);
-          if (
-            isEmptyStreamText(toolText) &&
-            (model.provider === "minimax" || model.provider === "openai-codex")
+          const maxToolReadAttempts = 3;
+          let toolText = "";
+          for (
+            let toolReadAttempt = 0;
+            toolReadAttempt < maxToolReadAttempts;
+            toolReadAttempt += 1
           ) {
-            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-            break;
+            const strictReply = toolReadAttempt > 0;
+            const toolProbe = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+                message: strictReply
+                  ? "OpenClaw live tool probe (local, safe): " +
+                    `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                    `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                  : "OpenClaw live tool probe (local, safe): " +
+                    `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                    "Then reply with the two nonce values you read (include both).",
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
+            );
+            if (toolProbe?.status !== "ok") {
+              if (toolReadAttempt + 1 < maxToolReadAttempts) {
+                logProgress(
+                  `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) status=${String(toolProbe?.status)}`,
+                );
+                continue;
+              }
+              throw new Error(`tool probe failed: status=${String(toolProbe?.status)}`);
+            }
+            toolText = extractPayloadText(toolProbe?.result);
+            if (
+              isEmptyStreamText(toolText) &&
+              (model.provider === "minimax" || model.provider === "openai-codex")
+            ) {
+              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+              break;
+            }
+            assertNoReasoningTags({
+              text: toolText,
+              model: modelKey,
+              phase: "tool-read",
+              label: params.label,
+            });
+            if (hasExpectedToolNonce(toolText, nonceA, nonceB)) {
+              break;
+            }
+            if (
+              shouldRetryToolReadProbe({
+                text: toolText,
+                nonceA,
+                nonceB,
+                provider: model.provider,
+                attempt: toolReadAttempt,
+                maxAttempts: maxToolReadAttempts,
+              })
+            ) {
+              logProgress(
+                `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) malformed tool output`,
+              );
+              continue;
+            }
+            throw new Error(`tool probe missing nonce: ${toolText}`);
           }
-          assertNoReasoningTags({
-            text: toolText,
-            model: modelKey,
-            phase: "tool-read",
-            label: params.label,
-          });
-          if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
+          if (!hasExpectedToolNonce(toolText, nonceA, nonceB)) {
             throw new Error(`tool probe missing nonce: ${toolText}`);
           }
 
@@ -923,6 +1040,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (isProviderUnavailableErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
@@ -971,11 +1093,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
 
     if (failures.length > 0) {
-      const preview = failures
-        .slice(0, 20)
-        .map((f) => `- ${f.model}: ${f.error}`)
-        .join("\n");
-      throw new Error(`gateway live model failures (${failures.length}):\n${preview}`);
+      const preview = formatFailurePreview(failures, 20);
+      throw new Error(
+        `gateway live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
+      );
     }
     if (skippedCount === total) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
@@ -1023,6 +1144,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseFilter(rawModels) : null;
+      const maxModels = toInt(process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS, 0);
       const wanted = filter
         ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
         : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
@@ -1053,21 +1175,31 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         logProgress("[all-models] no API keys found; skipping");
         return;
       }
+      const selectedCandidates = capByProviderSpread(
+        candidates,
+        maxModels > 0 ? maxModels : candidates.length,
+        (model) => model.provider,
+      );
       logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
-      const imageCandidates = candidates.filter((m) => m.input?.includes("image"));
+      if (selectedCandidates.length < candidates.length) {
+        logProgress(
+          `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
+        );
+      }
+      const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
       if (imageCandidates.length === 0) {
         logProgress("[all-models] no image-capable models selected; image probe will be skipped");
       }
       await runGatewayModelSuite({
         label: "all-models",
         cfg,
-        candidates,
+        candidates: selectedCandidates,
         extraToolProbes: true,
         extraImageProbes: true,
         thinkingLevel: THINKING_LEVEL,
       });
 
-      const minimaxCandidates = candidates.filter((model) => model.provider === "minimax");
+      const minimaxCandidates = selectedCandidates.filter((model) => model.provider === "minimax");
       if (minimaxCandidates.length === 0) {
         logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
         return;

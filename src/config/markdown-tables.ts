@@ -1,4 +1,5 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { MarkdownTableMode } from "./types.base.js";
@@ -31,15 +32,7 @@ function resolveMarkdownModeFromSection(
   const normalizedAccountId = normalizeAccountId(accountId);
   const accounts = section.accounts;
   if (accounts && typeof accounts === "object") {
-    const direct = accounts[normalizedAccountId];
-    const directMode = direct?.markdown?.tables;
-    if (isMarkdownTableMode(directMode)) {
-      return directMode;
-    }
-    const matchKey = Object.keys(accounts).find(
-      (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
-    );
-    const match = matchKey ? accounts[matchKey] : undefined;
+    const match = resolveAccountEntry(accounts, normalizedAccountId);
     const matchMode = match?.markdown?.tables;
     if (isMarkdownTableMode(matchMode)) {
       return matchMode;

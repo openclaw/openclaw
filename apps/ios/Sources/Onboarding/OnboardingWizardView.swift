@@ -134,7 +134,10 @@ struct OnboardingWizardView: View {
                     Button("Done") {
                         UIApplication.shared.sendAction(
                             #selector(UIResponder.resignFirstResponder),
-                            to: nil, from: nil, for: nil)
+                            to: nil,
+                            from: nil,
+                            for: nil
+                        )
                     }
                 }
             }
@@ -716,8 +719,10 @@ struct OnboardingWizardView: View {
     private func detectQRCode(from data: Data) -> String? {
         guard let ciImage = CIImage(data: data) else { return nil }
         let detector = CIDetector(
-            ofType: CIDetectorTypeQRCode, context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+            ofType: CIDetectorTypeQRCode,
+            context: nil,
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
+        )
         let features = detector?.features(in: ciImage) ?? []
         for feature in features {
             if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {

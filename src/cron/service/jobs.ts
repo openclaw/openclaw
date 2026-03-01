@@ -83,6 +83,23 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
+const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
+
+function validateTelegramDeliveryTarget(to: string | undefined): string | undefined {
+  if (!to) {
+    return undefined;
+  }
+  const trimmed = to.trim();
+  if (TELEGRAM_TME_URL_REGEX.test(trimmed)) {
+    return undefined;
+  }
+  if (TELEGRAM_SLASH_TOPIC_REGEX.test(trimmed)) {
+    return `Invalid Telegram delivery target "${to}". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username`;
+  }
+  return undefined;
+}
+
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   if (!job.delivery) {
     return;
@@ -97,6 +114,12 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
   }
   if (job.sessionTarget !== "isolated") {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  if (job.delivery.channel === "telegram") {
+    const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
+    if (telegramError) {
+      throw new Error(telegramError);
+    }
   }
 }
 
@@ -113,11 +136,19 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return undefined;
   }
   if (job.schedule.kind === "every") {
+    const everyMs = Math.max(1, Math.floor(job.schedule.everyMs));
+    const lastRunAtMs = job.state.lastRunAtMs;
+    if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
+      const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
+      if (nextFromLastRun > nowMs) {
+        return nextFromLastRun;
+      }
+    }
     const anchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
       fallbackAnchorMs: job.createdAtMs,
     });
-    return computeNextRunAtMs({ ...job.schedule, anchorMs }, nowMs);
+    return computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
   }
   if (job.schedule.kind === "at") {
     // One-shot jobs stay due until they successfully finish.

@@ -18,66 +18,60 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("default");
   });
 
-  test("dmScope=per-peer isolates DM sessions by sender id", () => {
-    const cfg: OpenClawConfig = {
-      session: { dmScope: "per-peer" },
-    };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "whatsapp",
-      accountId: null,
-      peer: { kind: "direct", id: "+15551234567" },
-    });
-    expect(route.sessionKey).toBe("agent:main:direct:+15551234567");
-  });
-
-  test("dmScope=per-channel-peer isolates DM sessions per channel and sender", () => {
-    const cfg: OpenClawConfig = {
-      session: { dmScope: "per-channel-peer" },
-    };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "whatsapp",
-      accountId: null,
-      peer: { kind: "direct", id: "+15551234567" },
-    });
-    expect(route.sessionKey).toBe("agent:main:whatsapp:direct:+15551234567");
-  });
-
-  test("identityLinks collapses per-peer DM sessions across providers", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        dmScope: "per-peer",
-        identityLinks: {
-          alice: ["telegram:111111111", "discord:222222222222222222"],
-        },
+  test("dmScope controls direct-message session key isolation", () => {
+    const cases = [
+      { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
+      {
+        dmScope: "per-channel-peer" as const,
+        expected: "agent:main:whatsapp:direct:+15551234567",
       },
-    };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "telegram",
-      accountId: null,
-      peer: { kind: "direct", id: "111111111" },
-    });
-    expect(route.sessionKey).toBe("agent:main:direct:alice");
+    ];
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        session: { dmScope: testCase.dmScope },
+      };
+      const route = resolveAgentRoute({
+        cfg,
+        channel: "whatsapp",
+        accountId: null,
+        peer: { kind: "direct", id: "+15551234567" },
+      });
+      expect(route.sessionKey).toBe(testCase.expected);
+    }
   });
 
-  test("identityLinks applies to per-channel-peer DM sessions", () => {
-    const cfg: OpenClawConfig = {
-      session: {
-        dmScope: "per-channel-peer",
-        identityLinks: {
-          alice: ["telegram:111111111", "discord:222222222222222222"],
-        },
+  test("identityLinks applies to direct-message scopes", () => {
+    const cases = [
+      {
+        dmScope: "per-peer" as const,
+        channel: "telegram",
+        peerId: "111111111",
+        expected: "agent:main:direct:alice",
       },
-    };
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "discord",
-      accountId: null,
-      peer: { kind: "direct", id: "222222222222222222" },
-    });
-    expect(route.sessionKey).toBe("agent:main:discord:direct:alice");
+      {
+        dmScope: "per-channel-peer" as const,
+        channel: "discord",
+        peerId: "222222222222222222",
+        expected: "agent:main:discord:direct:alice",
+      },
+    ];
+    for (const testCase of cases) {
+      const cfg: OpenClawConfig = {
+        session: {
+          dmScope: testCase.dmScope,
+          identityLinks: {
+            alice: ["telegram:111111111", "discord:222222222222222222"],
+          },
+        },
+      };
+      const route = resolveAgentRoute({
+        cfg,
+        channel: testCase.channel,
+        accountId: null,
+        peer: { kind: "direct", id: testCase.peerId },
+      });
+      expect(route.sessionKey).toBe(testCase.expected);
+    }
   });
 
   test("peer binding wins over account binding", () => {
@@ -342,6 +336,21 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.channel");
   });
 
+  test("binding accountId matching is canonicalized", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [{ agentId: "biz", match: { channel: "discord", accountId: "BIZ" } }],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: " biz ",
+      peer: { kind: "direct", id: "u-1" },
+    });
+    expect(route.agentId).toBe("biz");
+    expect(route.matchedBy).toBe("binding.account");
+    expect(route.accountId).toBe("biz");
+  });
+
   test("defaultAgentId is used when no binding matches", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -508,6 +517,30 @@ describe("backward compatibility: peer.kind dm → direct", () => {
       accountId: null,
       // Runtime uses canonical "direct"
       peer: { kind: "direct", id: "+15551234567" },
+    });
+    expect(route.agentId).toBe("alex");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("runtime dm peer.kind matches config direct binding (#22730)", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "alex",
+          match: {
+            channel: "whatsapp",
+            // Config uses canonical "direct"
+            peer: { kind: "direct", id: "+15551234567" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      // Plugin sends "dm" instead of "direct"
+      peer: { kind: "dm" as ChatType, id: "+15551234567" },
     });
     expect(route.agentId).toBe("alex");
     expect(route.matchedBy).toBe("binding.peer");

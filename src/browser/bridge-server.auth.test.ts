@@ -35,6 +35,23 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
 describe("startBrowserBridgeServer auth", () => {
   const servers: Array<{ stop: () => Promise<void> }> = [];
 
+  async function expectAuthFlow(
+    authConfig: { authToken?: string; authPassword?: string },
+    headers: Record<string, string>,
+  ) {
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      ...authConfig,
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const unauth = await fetch(`${bridge.baseUrl}/`);
+    expect(unauth.status).toBe(401);
+
+    const authed = await fetch(`${bridge.baseUrl}/`, { headers });
+    expect(authed.status).toBe(200);
+  }
+
   afterEach(async () => {
     while (servers.length) {
       const s = servers.pop();
@@ -45,35 +62,14 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("rejects unauthenticated requests when authToken is set", async () => {
-    const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      authToken: "secret-token",
-    });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
-
-    const unauth = await fetch(`${bridge.baseUrl}/`);
-    expect(unauth.status).toBe(401);
-
-    const authed = await fetch(`${bridge.baseUrl}/`, {
-      headers: { Authorization: "Bearer secret-token" },
-    });
-    expect(authed.status).toBe(200);
+    await expectAuthFlow({ authToken: "secret-token" }, { Authorization: "Bearer secret-token" });
   });
 
   it("accepts x-openclaw-password when authPassword is set", async () => {
-    const bridge = await startBrowserBridgeServer({
-      resolved: buildResolvedConfig(),
-      authPassword: "secret-password",
-    });
-    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
-
-    const unauth = await fetch(`${bridge.baseUrl}/`);
-    expect(unauth.status).toBe(401);
-
-    const authed = await fetch(`${bridge.baseUrl}/`, {
-      headers: { "x-openclaw-password": "secret-password" },
-    });
-    expect(authed.status).toBe(200);
+    await expectAuthFlow(
+      { authPassword: "secret-password" },
+      { "x-openclaw-password": "secret-password" },
+    );
   });
 
   it("requires auth params", async () => {

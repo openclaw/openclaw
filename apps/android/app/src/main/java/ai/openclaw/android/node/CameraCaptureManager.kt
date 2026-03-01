@@ -81,8 +81,8 @@ class CameraCaptureManager(private val context: Context) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val facing = parseFacing(paramsJson) ?: "front"
-      val quality = (parseQuality(paramsJson) ?: 0.5).coerceIn(0.1, 1.0)
-      val maxWidth = parseMaxWidth(paramsJson) ?: 800
+      val quality = (parseQuality(paramsJson) ?: 0.95).coerceIn(0.1, 1.0)
+      val maxWidth = parseMaxWidth(paramsJson) ?: 1600
 
       val provider = context.cameraProvider()
       val capture = ImageCapture.Builder().build()

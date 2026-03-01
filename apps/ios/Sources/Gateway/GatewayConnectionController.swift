@@ -5,6 +5,7 @@ import CoreMotion
 import CryptoKit
 import EventKit
 import Foundation
+import Darwin
 import OpenClawKit
 import Network
 import Observation
@@ -162,7 +163,7 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = useTLS
+        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
@@ -211,8 +212,25 @@ final class GatewayConnectionController {
             await self.connectManual(host: host, port: port, useTLS: useTLS)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
-            await self.connectDiscoveredGateway(gateway)
+            _ = await self.connectDiscoveredGateway(gateway)
         }
+    }
+
+    /// Rebuild connect options from current local settings (caps/commands/permissions)
+    /// and re-apply the active gateway config so capability changes take effect immediately.
+    func refreshActiveGatewayRegistrationFromSettings() {
+        guard let appModel else { return }
+        guard let cfg = appModel.activeGatewayConnectConfig else { return }
+        guard appModel.gatewayAutoReconnectEnabled else { return }
+
+        let refreshedConfig = GatewayConnectConfig(
+            url: cfg.url,
+            stableID: cfg.stableID,
+            tls: cfg.tls,
+            token: cfg.token,
+            password: cfg.password,
+            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
+        appModel.applyGatewayConnectConfig(refreshedConfig)
     }
 
     func clearPendingTrustPrompt() {
@@ -309,7 +327,7 @@ final class GatewayConnectionController {
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
+            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
             guard let resolvedPort = self.resolveManualPort(
                 host: manualHost,
                 port: manualPort,
@@ -320,7 +338,7 @@ final class GatewayConnectionController {
             let tlsParams = self.resolveManualTLSParams(
                 stableID: stableID,
                 tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: manualHost))
+                allowTOFUReset: self.shouldRequireTLS(host: manualHost))
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -340,7 +358,7 @@ final class GatewayConnectionController {
 
         if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
             if case let .manual(host, port, useTLS, stableID) = lastKnown {
-                let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
+                let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
                 let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
@@ -381,7 +399,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(target)
+                _ = await self.connectDiscoveredGateway(target)
             }
             return
         }
@@ -393,7 +411,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(gateway)
+                _ = await self.connectDiscoveredGateway(gateway)
             }
             return
         }
@@ -614,7 +632,8 @@ final class GatewayConnectionController {
                             0,
                             NI_NUMERICHOST)
                         guard rc == 0 else { return nil }
-                        return String(cString: buffer)
+                        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                        return String(bytes: bytes, encoding: .utf8)
                     }
 
                     if let host, !host.isEmpty {
@@ -646,10 +665,63 @@ final class GatewayConnectionController {
         return components.url
     }
 
+    private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        useTLS || self.shouldRequireTLS(host: host)
+    }
+
+    private func shouldRequireTLS(host: String) -> Bool {
+        !Self.isLoopbackHost(host)
+    }
+
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
+    }
+
+    private static func isLoopbackHost(_ rawHost: String) -> Bool {
+        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else { return false }
+
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host.removeFirst()
+            host.removeLast()
+        }
+        if host.hasSuffix(".") {
+            host.removeLast()
+        }
+        if let zoneIndex = host.firstIndex(of: "%") {
+            host = String(host[..<zoneIndex])
+        }
+        if host.isEmpty { return false }
+
+        if host == "localhost" || host == "0.0.0.0" || host == "::" {
+            return true
+        }
+        return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
+    }
+
+    private static func isLoopbackIPv4(_ host: String) -> Bool {
+        var addr = in_addr()
+        let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
+        guard parsed else { return false }
+        let value = UInt32(bigEndian: addr.s_addr)
+        let firstOctet = UInt8((value >> 24) & 0xFF)
+        return firstOctet == 127
+    }
+
+    private static func isLoopbackIPv6(_ host: String) -> Bool {
+        var addr = in6_addr()
+        let parsed = host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
+        guard parsed else { return false }
+        return withUnsafeBytes(of: &addr) { rawBytes in
+            let bytes = rawBytes.bindMemory(to: UInt8.self)
+            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
+            if isV6Loopback { return true }
+
+            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
+            return isMappedV4 && bytes[12] == 127
+        }
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -818,11 +890,9 @@ final class GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] =
-            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
+        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] =
-            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
+        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
@@ -840,53 +910,19 @@ final class GatewayConnectionController {
 
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
+        case .authorizedAlways, .authorizedWhenInUse:
             return true
         default:
             return false
         }
     }
 
+    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess || status == .writeOnly
+    }
+
     private static func motionAvailable() -> Bool {
         CMMotionActivityManager.isActivityAvailable() || CMPedometer.isStepCountingAvailable()
-    }
-
-    private func platformString() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        let name = switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPadOS"
-        case .phone:
-            "iOS"
-        default:
-            "iOS"
-        }
-        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
-
-    private func deviceFamily() -> String {
-        switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPad"
-        case .phone:
-            "iPhone"
-        default:
-            "iOS"
-        }
-    }
-
-    private func modelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
-            String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
-        }
-        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "unknown" : trimmed
-    }
-
-    private func appVersion() -> String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 }
 
@@ -909,19 +945,19 @@ extension GatewayConnectionController {
     }
 
     func _test_platformString() -> String {
-        self.platformString()
+        DeviceInfoHelper.platformString()
     }
 
     func _test_deviceFamily() -> String {
-        self.deviceFamily()
+        DeviceInfoHelper.deviceFamily()
     }
 
     func _test_modelIdentifier() -> String {
-        self.modelIdentifier()
+        DeviceInfoHelper.modelIdentifier()
     }
 
     func _test_appVersion() -> String {
-        self.appVersion()
+        DeviceInfoHelper.appVersion()
     }
 
     func _test_setGateways(_ gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -942,10 +978,18 @@ extension GatewayConnectionController {
     {
         self.resolveDiscoveredTLSParams(gateway: gateway, allowTOFU: allowTOFU)
     }
+
+    func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
+        self.resolveManualUseTLS(host: host, useTLS: useTLS)
+    }
+
+    func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
+        self.resolveManualPort(host: host, port: port, useTLS: useTLS)
+    }
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let url: URL
     private let timeoutSeconds: Double
     private let onComplete: (String?) -> Void

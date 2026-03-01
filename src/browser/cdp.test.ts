@@ -4,6 +4,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
@@ -103,6 +104,21 @@ describe("cdp", () => {
           url: "http://127.0.0.1:8080",
         }),
       ).rejects.toBeInstanceOf(SsrFBlockedError);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("blocks unsupported non-network navigation URLs", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      await expect(
+        createTargetViaCdp({
+          cdpUrl: "http://127.0.0.1:9222",
+          url: "file:///etc/passwd",
+        }),
+      ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();

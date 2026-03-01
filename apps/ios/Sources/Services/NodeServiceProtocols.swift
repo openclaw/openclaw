@@ -3,10 +3,13 @@ import Foundation
 import OpenClawKit
 import UIKit
 
+typealias OpenClawCameraSnapResult = (format: String, base64: String, width: Int, height: Int)
+typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs: Int, hasAudio: Bool)
+
 protocol CameraServicing: Sendable {
     func listDevices() async -> [CameraController.CameraDeviceInfo]
-    func snap(params: OpenClawCameraSnapParams) async throws -> (format: String, base64: String, width: Int, height: Int)
-    func clip(params: OpenClawCameraClipParams) async throws -> (format: String, base64: String, durationMs: Int, hasAudio: Bool)
+    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult
+    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult
 }
 
 protocol ScreenRecordingServicing: Sendable {
@@ -73,6 +76,17 @@ struct WatchMessagingStatus: Sendable, Equatable {
     var activationState: String
 }
 
+struct WatchQuickReplyEvent: Sendable, Equatable {
+    var replyId: String
+    var promptId: String
+    var actionId: String
+    var actionLabel: String?
+    var sessionKey: String?
+    var note: String?
+    var sentAtMs: Int?
+    var transport: String
+}
+
 struct WatchNotificationSendResult: Sendable, Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
@@ -81,11 +95,10 @@ struct WatchNotificationSendResult: Sendable, Equatable {
 
 protocol WatchMessagingServicing: AnyObject, Sendable {
     func status() async -> WatchMessagingStatus
+    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?)
     func sendNotification(
         id: String,
-        title: String,
-        body: String,
-        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

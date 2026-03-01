@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import {
@@ -13,6 +14,7 @@ function createHuggingfacePrompter(params: {
   text: WizardPrompter["text"];
   select: WizardPrompter["select"];
   confirm?: WizardPrompter["confirm"];
+  note?: WizardPrompter["note"];
 }): WizardPrompter {
   const overrides: Partial<WizardPrompter> = {
     text: params.text,
@@ -20,6 +22,9 @@ function createHuggingfacePrompter(params: {
   };
   if (params.confirm) {
     overrides.confirm = params.confirm;
+  }
+  if (params.note) {
+    overrides.note = params.note;
   }
   return createWizardPrompter(overrides, { defaultSelect: "" });
 }
@@ -83,7 +88,9 @@ describe("applyAuthChoiceHuggingface", () => {
       provider: "huggingface",
       mode: "api_key",
     });
-    expect(result?.config.agents?.defaults?.model?.primary).toMatch(/^huggingface\/.+/);
+    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toMatch(
+      /^huggingface\/.+/,
+    );
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Hugging Face") }),
     );
@@ -95,9 +102,26 @@ describe("applyAuthChoiceHuggingface", () => {
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-test-token");
   });
 
-  it("does not prompt to reuse env token when opts.token already provided", async () => {
+  it.each([
+    {
+      caseName: "does not prompt to reuse env token when opts.token already provided",
+      tokenProvider: "huggingface",
+      token: "hf-opts-token",
+      envToken: "hf-env-token",
+    },
+    {
+      caseName: "accepts mixed-case tokenProvider from opts without prompting",
+      tokenProvider: "  HuGgInGfAcE  ",
+      token: "hf-opts-mixed",
+      envToken: undefined,
+    },
+  ])("$caseName", async ({ tokenProvider, token, envToken }) => {
     const agentDir = await setupTempState();
-    process.env.HF_TOKEN = "hf-env-token";
+    if (envToken) {
+      process.env.HF_TOKEN = envToken;
+    } else {
+      delete process.env.HF_TOKEN;
+    }
     delete process.env.HUGGINGFACE_HUB_TOKEN;
 
     const text = vi.fn().mockResolvedValue("hf-text-token");
@@ -115,8 +139,8 @@ describe("applyAuthChoiceHuggingface", () => {
       runtime,
       setDefaultModel: true,
       opts: {
-        tokenProvider: "huggingface",
-        token: "hf-opts-token",
+        tokenProvider,
+        token,
       },
     });
 
@@ -125,6 +149,39 @@ describe("applyAuthChoiceHuggingface", () => {
     expect(text).not.toHaveBeenCalled();
 
     const parsed = await readAuthProfiles(agentDir);
-    expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-opts-token");
+    expect(parsed.profiles?.["huggingface:default"]?.key).toBe(token);
+  });
+
+  it("notes when selected Hugging Face model uses a locked router policy", async () => {
+    await setupTempState();
+    delete process.env.HF_TOKEN;
+    delete process.env.HUGGINGFACE_HUB_TOKEN;
+
+    const text = vi.fn().mockResolvedValue("hf-test-token");
+    const select: WizardPrompter["select"] = vi.fn(async (params) => {
+      const options = (params.options ?? []) as Array<{ value: string }>;
+      const cheapest = options.find((option) => option.value.endsWith(":cheapest"));
+      return (cheapest?.value ?? options[0]?.value ?? "") as never;
+    });
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = createHuggingfacePrompter({ text, select, note });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceHuggingface({
+      authChoice: "huggingface-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
+    expect(String(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model))).toContain(
+      ":cheapest",
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Provider locked — router will choose backend by cost or speed.",
+      "Hugging Face",
+    );
   });
 });

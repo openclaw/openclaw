@@ -416,6 +416,48 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
+    @Test func seqGapClearsPendingRunsAndAutoRefreshesHistory() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "off")
+        let history2 = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "resynced after gap"]],
+                    "timestamp": now,
+                ]),
+            ],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history1, history2])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
+
+        await MainActor.run {
+            vm.input = "hello"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(.seqGap)
+
+        try await waitUntil("pending run clears on seqGap") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+        try await waitUntil("history refreshes on seqGap") {
+            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
     @Test func sessionChoicesPreferMainAndRecent() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 60 * 1000)
@@ -603,6 +645,35 @@ extension TestChatTransportState {
                     errorMessage: "boom")))
 
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
+    }
+
+    @Test func stripsInboundMetadataFromHistoryMessages() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": """
+Conversation info (untrusted metadata):
+```json
+{ \"sender\": \"openclaw-ios\" }
+```
+
+Hello?
+"""]],
+                    "timestamp": Date().timeIntervalSince1970 * 1000,
+                ]),
+            ],
+            thinkingLevel: "off")
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("history loaded") { await MainActor.run { !vm.messages.isEmpty } }
+
+        let sanitized = await MainActor.run { vm.messages.first?.content.first?.text }
+        #expect(sanitized == "Hello?")
     }
 
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {

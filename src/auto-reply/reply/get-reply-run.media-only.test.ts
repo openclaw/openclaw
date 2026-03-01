@@ -80,6 +80,8 @@ vi.mock("./typing-mode.js", () => ({
 }));
 
 import { runReplyAgent } from "./agent-runner.js";
+import { routeReply } from "./route-reply.js";
+import { resolveTypingMode } from "./typing-mode.js";
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -169,6 +171,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
+  it("keeps thread history context on follow-up turns", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+      }),
+    );
+    expect(result).toEqual({ text: "ok" });
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call).toBeTruthy();
+    expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
+    expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({
@@ -189,5 +205,93 @@ describe("runPreparedReply media-only handling", () => {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("omits auth key labels from /new and /reset confirmation messages", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { payload?: { text?: string } }
+      | undefined;
+    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+    expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
+    expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
+    expect(resetNoticeCall?.payload?.text).not.toContain("env:");
+  });
+
+  it("skips reset notice when only webchat fallback routing is available", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+          ChatType: "group",
+        },
+        command: {
+          isAuthorizedSender: true,
+          abortKey: "session-key",
+          ownerList: [],
+          senderIsOwner: false,
+          channel: "webchat",
+          from: undefined,
+          to: undefined,
+        } as never,
+      }),
+    );
+
+    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
+  });
+
+  it("uses inbound origin channel for run messageProvider", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:abc",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "group",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.messageProvider).toBe("webchat");
+  });
+
+  it("passes suppressTyping through typing mode resolution", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          suppressTyping: true,
+        },
+      }),
+    );
+
+    const call = vi.mocked(resolveTypingMode).mock.calls[0]?.[0] as
+      | { suppressTyping?: boolean }
+      | undefined;
+    expect(call?.suppressTyping).toBe(true);
   });
 });

@@ -36,7 +36,7 @@ If channels are up but nothing answers, check routing and policy before reconnec
 ```bash
 openclaw status
 openclaw channels status --probe
-openclaw pairing list <channel>
+openclaw pairing list --channel <channel> [--account <id>]
 openclaw config get channels
 openclaw logs --follow
 ```
@@ -125,7 +125,7 @@ If channel state is connected but message flow is dead, focus on policy, permiss
 
 ```bash
 openclaw channels status --probe
-openclaw pairing list <channel>
+openclaw pairing list --channel <channel> [--account <id>]
 openclaw status --deep
 openclaw logs --follow
 openclaw config get channels
@@ -174,6 +174,7 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
+- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 
 Related:
 
@@ -289,7 +290,7 @@ Common signatures:
 
 ```bash
 openclaw devices list
-openclaw pairing list <channel>
+openclaw pairing list --channel <channel> [--account <id>]
 openclaw logs --follow
 openclaw doctor
 ```

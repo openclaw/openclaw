@@ -1,15 +1,22 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
-import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
+import {
+  BLUE_BUBBLES_PRIVATE_API_STATUS,
+  installBlueBubblesFetchTestHooks,
+  mockBlueBubblesPrivateApiStatusOnce,
+} from "./test-harness.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
+const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
 
 installBlueBubblesFetchTestHooks({
   mockFetch,
-  privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+  privateApiStatusMock,
 });
 
 function mockResolvedHandleTarget(
@@ -35,6 +42,23 @@ function mockSendResponse(body: unknown) {
     ok: true,
     text: () => Promise.resolve(JSON.stringify(body)),
   });
+}
+
+function mockNewChatSendResponse(guid: string) {
+  mockFetch
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { guid },
+          }),
+        ),
+    });
 }
 
 describe("send", () => {
@@ -446,20 +470,7 @@ describe("send", () => {
     });
 
     it("strips markdown when creating a new chat", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ data: [] }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                data: { guid: "new-msg-stripped" },
-              }),
-            ),
-        });
+      mockNewChatSendResponse("new-msg-stripped");
 
       const result = await sendMessageBlueBubbles("+15550009999", "**Welcome** to the _chat_!", {
         serverUrl: "http://localhost:1234",
@@ -476,20 +487,7 @@ describe("send", () => {
     });
 
     it("creates a new chat when handle target is missing", async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({ data: [] }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          text: () =>
-            Promise.resolve(
-              JSON.stringify({
-                data: { guid: "new-msg-guid" },
-              }),
-            ),
-        });
+      mockNewChatSendResponse("new-msg-guid");
 
       const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
         serverUrl: "http://localhost:1234",
@@ -527,6 +525,10 @@ describe("send", () => {
     });
 
     it("uses private-api when reply metadata is present", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-124" } });
 
@@ -548,7 +550,10 @@ describe("send", () => {
     });
 
     it("downgrades threaded reply to plain send when private API is disabled", async () => {
-      vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValueOnce(false);
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+      );
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-plain" } });
 
@@ -568,6 +573,10 @@ describe("send", () => {
     });
 
     it("normalizes effect names and uses private-api for effects", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
       mockResolvedHandleTarget();
       mockSendResponse({ data: { guid: "msg-uuid-125" } });
 
@@ -584,6 +593,38 @@ describe("send", () => {
       const body = JSON.parse(sendCall[1].body);
       expect(body.method).toBe("private-api");
       expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
+    });
+
+    it("warns and downgrades private-api features when status is unknown", async () => {
+      const runtimeLog = vi.fn();
+      setBlueBubblesRuntime({ log: runtimeLog } as unknown as PluginRuntime);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-unknown" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Reply fallback", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+          replyToMessageGuid: "reply-guid-123",
+          effectId: "invisible ink",
+        });
+
+        expect(result.messageId).toBe("msg-uuid-unknown");
+        expect(runtimeLog).toHaveBeenCalledTimes(1);
+        expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+        expect(warnSpy).not.toHaveBeenCalled();
+
+        const sendCall = mockFetch.mock.calls[1];
+        const body = JSON.parse(sendCall[1].body);
+        expect(body.method).toBeUndefined();
+        expect(body.selectedMessageGuid).toBeUndefined();
+        expect(body.partIndex).toBeUndefined();
+        expect(body.effectId).toBeUndefined();
+      } finally {
+        clearBlueBubblesRuntime();
+        warnSpy.mockRestore();
+      }
     });
 
     it("sends message with chat_guid target directly", async () => {

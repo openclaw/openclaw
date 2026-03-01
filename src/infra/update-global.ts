@@ -13,6 +13,7 @@ export type CommandRunner = (
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
+const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 
 async function tryRealpath(targetPath: string): Promise<string> {
   try {
@@ -83,7 +84,8 @@ export async function detectGlobalInstallManagerForRoot(
     const globalReal = await tryRealpath(globalRoot);
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
-      if (path.resolve(expected) === path.resolve(pkgReal)) {
+      const expectedReal = await tryRealpath(expected);
+      if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
         return manager;
       }
     }
@@ -93,7 +95,8 @@ export async function detectGlobalInstallManagerForRoot(
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
   for (const name of ALL_PACKAGE_NAMES) {
     const bunExpected = path.join(bunGlobalReal, name);
-    if (path.resolve(bunExpected) === path.resolve(pkgReal)) {
+    const bunExpectedReal = await tryRealpath(bunExpected);
+    if (path.resolve(bunExpectedReal) === path.resolve(pkgReal)) {
       return "bun";
     }
   }
@@ -133,7 +136,7 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec];
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
