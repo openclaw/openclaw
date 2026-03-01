@@ -80,6 +80,7 @@ export type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimePromptMode,
+  AcpSessionUpdateTag,
   AcpRuntimeSessionMode,
   AcpRuntimeStatus,
   AcpRuntimeTurnInput,

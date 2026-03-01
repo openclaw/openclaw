@@ -44,6 +44,7 @@ describe("PromptStreamProjector", () => {
       type: "text_delta",
       text: "hello world",
       stream: "output",
+      tag: "agent_message_chunk",
     });
   });
 
@@ -71,6 +72,7 @@ describe("PromptStreamProjector", () => {
       type: "text_delta",
       text: "  indented",
       stream: "output",
+      tag: "agent_message_chunk",
     });
   });
 
@@ -98,10 +100,11 @@ describe("PromptStreamProjector", () => {
       type: "text_delta",
       text: "thinking",
       stream: "thought",
+      tag: "agent_thought_chunk",
     });
   });
 
-  it("maps tool call updates to tool_call events", () => {
+  it("maps tool call updates with metadata and stable fallback title", () => {
     const projector = new PromptStreamProjector();
     beginPrompt(projector);
     const event = projector.ingestLine(
@@ -111,9 +114,8 @@ describe("PromptStreamProjector", () => {
         params: {
           sessionId: "session-1",
           update: {
-            sessionUpdate: "tool_call",
-            toolCallId: "call-1",
-            title: "exec",
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call_ABC123",
             status: "in_progress",
           },
         },
@@ -122,7 +124,38 @@ describe("PromptStreamProjector", () => {
 
     expect(event).toEqual({
       type: "tool_call",
-      text: "exec (in_progress)",
+      text: "tool call (in_progress)",
+      tag: "tool_call_update",
+      toolCallId: "call_ABC123",
+      status: "in_progress",
+      title: "tool call",
+    });
+  });
+
+  it("maps usage updates with numeric metadata", () => {
+    const projector = new PromptStreamProjector();
+    beginPrompt(projector);
+    const event = projector.ingestLine(
+      jsonLine({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 12,
+            size: 500,
+          },
+        },
+      }),
+    );
+
+    expect(event).toEqual({
+      type: "status",
+      text: "usage updated: 12/500",
+      tag: "usage_update",
+      used: 12,
+      size: 500,
     });
   });
 
@@ -167,6 +200,7 @@ describe("PromptStreamProjector", () => {
       type: "text_delta",
       text: "new turn",
       stream: "output",
+      tag: "agent_message_chunk",
     });
   });
 
