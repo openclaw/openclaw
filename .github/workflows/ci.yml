@@ -91,7 +91,7 @@ jobs:
               # should not force the full native macOS lane.
               apps/macos/Sources/OpenClawProtocol/*|apps/shared/OpenClawKit/Sources/OpenClawProtocol/*)
                 ;;
-              apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
+              apps/macos/*|apps/shared/*|Swabble/*)
                 run_macos=true
                 ;;
             esac
