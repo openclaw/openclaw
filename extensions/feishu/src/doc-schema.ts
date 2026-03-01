@@ -154,14 +154,28 @@ export const FeishuDocSchema = Type.Union([
           "Image as data URI (data:image/png;base64,...) or plain base64 string. Use instead of url/file_path for DALL-E outputs, canvas screenshots, etc.",
       }),
     ),
+    after_block_id: Type.Optional(
+      Type.String({
+        description:
+          "Insert the image immediately after this block (preferred for mid-document insertion). " +
+          "The parent and index are resolved automatically. Takes priority over parent_block_id/index if both are supplied. " +
+          "Get block IDs from list_blocks or read.",
+      }),
+    ),
     parent_block_id: Type.Optional(
-      Type.String({ description: "Parent block ID (default: document root)" }),
+      Type.String({
+        description:
+          "Parent block ID. Use with index=0 to insert at the start of a block (e.g. first child), " +
+          "or omit index to append. Use after_block_id instead for most mid-document insertions.",
+      }),
     ),
     filename: Type.Optional(Type.String({ description: "Optional filename override" })),
     index: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "Insert position (0-based index among siblings). Omit to append.",
+        description:
+          "Insert position (0-based index among siblings, used with parent_block_id). " +
+          "Required when inserting as the first child (index=0). Omit to append.",
       }),
     ),
   }),

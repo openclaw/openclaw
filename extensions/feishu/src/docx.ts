@@ -9,6 +9,7 @@ import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
+import { getImageWidth } from "./docx-picture-ops.js";
 import {
   cleanBlocksForDescendant,
   insertTableRow,
@@ -540,7 +541,8 @@ async function processImages(
     return 0;
   }
 
-  const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+  const imageBlocks = insertedBlocks.filter((b: any) => b.block_type === 27);
 
   let processed = 0;
   for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
@@ -555,9 +557,7 @@ async function processImages(
 
       await client.docx.documentBlock.patch({
         path: { document_id: docToken, block_id: blockId },
-        data: {
-          replace_image: { token: fileToken },
-        },
+        data: { replace_image: { token: fileToken } },
       });
 
       processed++;
@@ -579,20 +579,54 @@ async function uploadImageBlock(
   filename?: string,
   index?: number,
   imageInput?: string, // data URI, plain base64, or local path
+  afterBlockId?: string, // takes priority over parentBlockId/index if provided
 ) {
+  // Resolve after_block_id → (parentBlockId, index) when provided.
+  if (afterBlockId) {
+    const blockInfo = await client.docx.documentBlock.get({
+      path: { document_id: docToken, block_id: afterBlockId },
+    });
+    if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+    parentBlockId = blockInfo.data?.block?.parent_id ?? docToken;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
+    const items: any[] = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await client.docx.documentBlockChildren.get({
+        path: { document_id: docToken, block_id: parentBlockId },
+        params: pageToken ? { page_token: pageToken } : {},
+      });
+      if (res.code !== 0) throw new Error(res.msg);
+      items.push(...(res.data?.items ?? []));
+      pageToken = res.data?.page_token ?? undefined;
+    } while (pageToken);
+    const idx = items.findIndex((item: any) => item.block_id === afterBlockId);
+    if (idx === -1) throw new Error(`after_block_id "${afterBlockId}" not found`);
+    index = idx + 1;
+  }
+
   // Step 1: Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
-  const insertRes = await client.docx.documentBlockChildren.create({
-    path: { document_id: docToken, block_id: parentBlockId ?? docToken },
-    params: { document_revision_id: -1 },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
-    data: { children: [{ block_type: 27, image: {} as any }], index: index ?? -1 },
+  // Use the Descendant API for all parents — it works for document root,
+  // regular blocks, and TableCell alike, while the Children API silently
+  // misroutes image blocks into TableCell parents.
+  const effectiveParentId = parentBlockId ?? docToken;
+  const tempId = `img_${Math.random().toString(36).slice(2, 10)}`;
+  /* eslint-disable @typescript-eslint/no-explicit-any -- SDK types */
+  const descRes = await (client.docx.documentBlockDescendant as any).create({
+    path: { document_id: docToken, block_id: effectiveParentId },
+    data: {
+      children_id: [tempId],
+      descendants: [{ block_id: tempId, block_type: 27, image: {} as any }],
+      index: index ?? -1,
+    },
   });
-  if (insertRes.code !== 0) {
-    throw new Error(`Failed to create image block: ${insertRes.msg}`);
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  if (descRes.code !== 0) {
+    throw new Error(`Failed to create image block: ${descRes.msg}`);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK return shape
-  const imageBlockId = insertRes.data?.children?.find((b: any) => b.block_type === 27)?.block_id;
+  const imageBlockId = descRes.data?.children?.find((b: any) => b.block_type === 27)?.block_id;
   if (!imageBlockId) {
     throw new Error("Failed to create image block");
   }
@@ -636,18 +670,19 @@ async function uploadFileBlock(
 ) {
   const blockId = parentBlockId ?? docToken;
 
-  // Feishu API does not allow creating empty file blocks (block_type 23).
-  // Workaround: create a placeholder text block, then replace it with file content.
-  // Actually, file blocks need a different approach: use markdown link as placeholder.
+  // Feishu does not support creating file blocks (block_type 23) directly via the
+  // block API. Workaround: insert a markdown-link placeholder block to reserve a
+  // document position, immediately delete it, then upload the file to Feishu Drive
+  // and return the file_token for the caller to reference.
   const upload = await resolveUploadInput(url, filePath, maxBytes, filename);
 
-  // Create a placeholder text block first
+  // Insert a temporary markdown-link placeholder, then immediately delete it.
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
   const converted = await convertMarkdown(client, placeholderMd);
   const sorted = sortBlocksByFirstLevel(converted.blocks, converted.firstLevelBlockIds);
   const { children: inserted } = await insertBlocks(client, docToken, sorted, blockId);
 
-  // Get the first inserted block - we'll delete it and create the file in its place
+  // Locate the placeholder so it can be deleted; no file block is inserted in the document.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK return shape
   const placeholderBlock = inserted[0];
   if (!placeholderBlock?.block_id) {
@@ -875,9 +910,6 @@ async function insertDoc(
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
-  // Paginate through all children to reliably locate after_block_id.
-  // documentBlockChildren.get returns up to 200 children per page; large
-  // parents require multiple requests.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   const items: any[] = [];
   let pageToken: string | undefined;
@@ -943,6 +975,7 @@ async function createTable(
   columnSize: number,
   parentBlockId?: string,
   columnWidth?: number[],
+  index?: number,
 ) {
   if (columnWidth && columnWidth.length !== columnSize) {
     throw new Error("column_width length must equal column_size");
@@ -964,6 +997,7 @@ async function createTable(
           },
         },
       ],
+      ...(index !== undefined ? { index } : {}),
     },
   });
 
@@ -1035,28 +1069,37 @@ async function writeTableCells(
       const cellId = cellIds[r * cols + c];
       if (!cellId) continue;
 
-      // table cell is a container block: clear existing children, then create text child blocks
+      // Clear existing children before writing new content.
       const childrenRes = await client.docx.documentBlockChildren.get({
         path: { document_id: docToken, block_id: cellId },
       });
-      if (childrenRes.code !== 0) {
-        throw new Error(childrenRes.msg);
-      }
-
+      if (childrenRes.code !== 0) throw new Error(childrenRes.msg);
       const existingChildren = childrenRes.data?.items ?? [];
       if (existingChildren.length > 0) {
         const delRes = await client.docx.documentBlockChildren.batchDelete({
           path: { document_id: docToken, block_id: cellId },
           data: { start_index: 0, end_index: existingChildren.length },
         });
-        if (delRes.code !== 0) {
-          throw new Error(delRes.msg);
-        }
+        if (delRes.code !== 0) throw new Error(delRes.msg);
       }
 
       const text = rowValues[c] ?? "";
+      // Skip empty cells — convertMarkdown("") returns 400 from the Feishu API.
+      if (text.trim() === "") {
+        written++;
+        continue;
+      }
+
       const converted = await convertMarkdown(client, text);
-      const sorted = sortBlocksByFirstLevel(converted.blocks, converted.firstLevelBlockIds);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+      const sorted = sortBlocksByFirstLevel(converted.blocks, converted.firstLevelBlockIds)
+        // Strip trailing empty paragraph that the convert API always appends.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+        .filter((b: any) => {
+          if (b.block_type !== 2) return true;
+          const elems = b.text?.elements ?? [];
+          return elems.length > 0 && elems.some((e: any) => e.text_run?.content?.trim());
+        });
 
       if (sorted.length > 0) {
         await insertBlocks(client, docToken, sorted, cellId);
@@ -1082,6 +1125,7 @@ async function createTableWithValues(
   values: string[][],
   parentBlockId?: string,
   columnWidth?: number[],
+  index?: number,
 ) {
   const created = await createTable(
     client,
@@ -1090,6 +1134,7 @@ async function createTableWithValues(
     columnSize,
     parentBlockId,
     columnWidth,
+    index,
   );
 
   const tableBlockId = created.table_block_id;
@@ -1113,6 +1158,15 @@ async function updateBlock(
   blockId: string,
   content: string,
 ) {
+  // Feishu rejects update_text_elements when content is empty (code 99992402).
+  // Throw early so the caller gets a clear message instead of an opaque API error.
+  if (!content) {
+    throw new Error(
+      "update_block: content must be a non-empty string. " +
+        "To insert an image into a document, use the upload_image action instead.",
+    );
+  }
+
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
@@ -1352,6 +1406,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.filename,
                       p.index,
                       p.image, // data URI or plain base64
+                      p.after_block_id,
                     ),
                   );
                 case "upload_file":
