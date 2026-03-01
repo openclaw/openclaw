@@ -73,16 +73,15 @@ describe("phase hooks merger", () => {
     expect(result?.systemPrompt).toBe("system A");
   });
 
-  it("before_prompt_build skips prependContext when same as appendSystemPrompt (fallback pattern)", async () => {
-    // Handler returns both with same content — fallback pattern
-    // Should use appendSystemPrompt, skip prependContext
+  it("before_prompt_build passes both appendSystemPrompt and prependContext independently", async () => {
+    // Both fields pass through — plugins decide what goes where
     addTypedHook(
       registry,
       "before_prompt_build",
       "plugin",
       () => ({
         appendSystemPrompt: "memory context here",
-        prependContext: "memory context here", // same content = fallback
+        prependContext: "memory context here",
       }),
       10,
     );
@@ -91,11 +90,10 @@ describe("phase hooks merger", () => {
     const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
 
     expect(result?.appendSystemPrompt).toBe("memory context here");
-    expect(result?.prependContext).toBeUndefined();
+    expect(result?.prependContext).toBe("memory context here");
   });
 
   it("before_prompt_build uses both when appendSystemPrompt differs from prependContext", async () => {
-    // Handler returns both with different content — legitimate dual use
     addTypedHook(
       registry,
       "before_prompt_build",

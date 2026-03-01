@@ -364,19 +364,15 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /** The current system prompt text, if available. Plugins can read this to make informed decisions. */
+  systemPrompt?: string;
 };
 
 export type PluginHookBeforePromptBuildResult = {
-  /**
-   * @deprecated Replaces the ENTIRE system prompt, nuking OpenClaw's built-in instructions.
-   * Use appendSystemPrompt instead for safe injection.
-   */
+  /** Replace the entire system prompt. Use appendSystemPrompt for additive injection. */
   systemPrompt?: string;
   prependContext?: string;
-  /**
-   * Text to append to the system prompt (preserves OpenClaw's built-in instructions).
-   * Preferred over systemPrompt for memory/context injection.
-   */
+  /** Text to append to the system prompt (preserves built-in instructions). */
   appendSystemPrompt?: string;
 };
 

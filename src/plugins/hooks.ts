@@ -139,28 +139,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
-  ): PluginHookBeforePromptBuildResult => {
-    // If handler returns both appendSystemPrompt and prependContext with same content,
-    // it's using fallback pattern — prefer appendSystemPrompt, skip prependContext
-    const nextPrependContext =
-      next.appendSystemPrompt &&
-      next.prependContext &&
-      next.appendSystemPrompt === next.prependContext
-        ? undefined
-        : next.prependContext;
-
-    return {
-      systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-      prependContext:
-        acc?.prependContext && nextPrependContext
-          ? `${acc.prependContext}\n\n${nextPrependContext}`
-          : (nextPrependContext ?? acc?.prependContext),
-      appendSystemPrompt:
-        acc?.appendSystemPrompt && next.appendSystemPrompt
-          ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
-          : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
-    };
-  };
+  ): PluginHookBeforePromptBuildResult => ({
+    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+    prependContext:
+      acc?.prependContext && next.prependContext
+        ? `${acc.prependContext}\n\n${next.prependContext}`
+        : (next.prependContext ?? acc?.prependContext),
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
+  });
 
   const mergeLlmInputResult = (
     acc: PluginHookLlmInputResult | undefined,
@@ -266,8 +255,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         )(event, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
-          // Always go through merge to apply per-handler transformations (e.g., fallback pattern)
-          if (mergeResults) {
+          if (mergeResults && result !== undefined) {
             result = mergeResults(result, handlerResult);
           } else {
             result = handlerResult;
