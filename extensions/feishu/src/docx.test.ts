@@ -443,6 +443,95 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.owner_permission_added).toBeUndefined();
   });
 
+  it("supports generic create permission grant parameters", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "Demo",
+      grant_member_type: "opendepartmentid",
+      grant_member_id: "od_root",
+      grant_perm_type: "edit",
+    });
+
+    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          member_type: "opendepartmentid",
+          member_id: "od_root",
+          perm: "edit",
+        }),
+      }),
+    );
+    expect(result.details.permission_added).toBe(true);
+    expect(result.details.permission_member_type).toBe("opendepartmentid");
+    expect(result.details.permission_member_id).toBe("od_root");
+    expect(result.details.permission_perm_type).toBe("edit");
+    expect(result.details.owner_permission_added).toBeUndefined();
+  });
+
+  it("uses configured default create permission grant when params are omitted", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+            docCreateGrantMemberType: "openid",
+            docCreateGrantMemberId: "ou_default_editor",
+            docCreateGrantPermType: "edit",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "Demo",
+    });
+
+    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          member_type: "openid",
+          member_id: "ou_default_editor",
+          perm: "edit",
+        }),
+      }),
+    );
+    expect(result.details.permission_added).toBe(true);
+    expect(result.details.owner_permission_added).toBe(true);
+    expect(result.details.owner_open_id).toBe("ou_default_editor");
+    expect(result.details.owner_perm_type).toBe("edit");
+  });
+
   it("returns an error when create response omits document_id", async () => {
     documentCreateMock.mockResolvedValueOnce({
       code: 0,

@@ -29,6 +29,35 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    grant_member_type: Type.Optional(
+      Type.Union(
+        [
+          Type.Literal("email"),
+          Type.Literal("openid"),
+          Type.Literal("unionid"),
+          Type.Literal("openchat"),
+          Type.Literal("opendepartmentid"),
+          Type.Literal("userid"),
+          Type.Literal("groupid"),
+          Type.Literal("wikispaceid"),
+        ],
+        {
+          description:
+            "Permission grant member type. Use with grant_member_id. For backward compatibility, owner_open_id still works.",
+        },
+      ),
+    ),
+    grant_member_id: Type.Optional(
+      Type.String({
+        description:
+          "Permission grant member id. For organization-wide edit, use your tenant root opendepartmentid.",
+      }),
+    ),
+    grant_perm_type: Type.Optional(
+      Type.Union([Type.Literal("view"), Type.Literal("edit"), Type.Literal("full_access")], {
+        description: "Permission type for grant_member_id/member_type (default: full_access)",
+      }),
+    ),
     owner_open_id: Type.Optional(
       Type.String({ description: "Open ID of the user to grant ownership permission" }),
     ),

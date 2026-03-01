@@ -33,6 +33,17 @@ function json(data: unknown) {
   };
 }
 
+type DrivePermissionMemberType =
+  | "email"
+  | "openid"
+  | "unionid"
+  | "openchat"
+  | "opendepartmentid"
+  | "userid"
+  | "groupid"
+  | "wikispaceid";
+type DrivePermissionType = "view" | "edit" | "full_access";
+
 /** Extract image URLs from markdown content */
 function extractImageUrls(markdown: string): string[] {
   const regex = /!\[[^\]]*\]\(([^)]+)\)/g;
@@ -751,8 +762,11 @@ async function createDoc(
   client: Lark.Client,
   title: string,
   folderToken?: string,
-  ownerOpenId?: string,
-  ownerPermType: "view" | "edit" | "full_access" = "full_access",
+  permissionGrant?: {
+    memberType: DrivePermissionMemberType;
+    memberId: string;
+    permType: DrivePermissionType;
+  },
 ) {
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
@@ -765,23 +779,22 @@ async function createDoc(
   if (!docToken) {
     throw new Error("Document creation succeeded but no document_id was returned");
   }
-  let ownerPermissionAdded = false;
+  let permissionAdded = false;
 
-  // Auto add owner permission if ownerOpenId is provided
-  if (docToken && ownerOpenId) {
+  if (docToken && permissionGrant) {
     try {
       await client.drive.permissionMember.create({
         path: { token: docToken },
         params: { type: "docx", need_notification: false },
         data: {
-          member_type: "openid",
-          member_id: ownerOpenId,
-          perm: ownerPermType,
+          member_type: permissionGrant.memberType,
+          member_id: permissionGrant.memberId,
+          perm: permissionGrant.permType,
         },
       });
-      ownerPermissionAdded = true;
+      permissionAdded = true;
     } catch (err) {
-      console.warn("Failed to add owner permission (non-critical):", err);
+      console.warn("Failed to add document permission grant (non-critical):", err);
     }
   }
 
@@ -789,11 +802,18 @@ async function createDoc(
     document_id: docToken,
     title: doc?.title,
     url: `https://feishu.cn/docx/${docToken}`,
-    ...(ownerOpenId &&
-      ownerPermissionAdded && {
+    ...(permissionGrant &&
+      permissionAdded && {
+        permission_added: true,
+        permission_member_type: permissionGrant.memberType,
+        permission_member_id: permissionGrant.memberId,
+        permission_perm_type: permissionGrant.permType,
+      }),
+    ...(permissionGrant?.memberType === "openid" &&
+      permissionAdded && {
         owner_permission_added: true,
-        owner_open_id: ownerOpenId,
-        owner_perm_type: ownerPermType,
+        owner_open_id: permissionGrant.memberId,
+        owner_perm_type: permissionGrant.permType,
       }),
   };
 }
@@ -1246,6 +1266,45 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     1024 *
     1024;
 
+  const getDocCreatePermissionGrant = (
+    params: FeishuDocExecuteParams,
+    defaultAccountId?: string,
+  ):
+    | {
+        memberType: DrivePermissionMemberType;
+        memberId: string;
+        permType: DrivePermissionType;
+      }
+    | undefined => {
+    const accountConfig = resolveFeishuToolAccount({
+      api,
+      executeParams: params,
+      defaultAccountId,
+    }).config;
+    const explicitMemberId = params.action === "create" ? params.grant_member_id?.trim() : "";
+    const legacyOwnerOpenId = params.action === "create" ? params.owner_open_id?.trim() : "";
+    const configuredMemberId = accountConfig.docCreateGrantMemberId?.trim() ?? "";
+    const memberId = explicitMemberId || legacyOwnerOpenId || configuredMemberId;
+    if (!memberId) {
+      return undefined;
+    }
+    const memberType: DrivePermissionMemberType =
+      (params.action === "create" ? params.grant_member_type : undefined) ??
+      (legacyOwnerOpenId ? "openid" : undefined) ??
+      accountConfig.docCreateGrantMemberType ??
+      "openid";
+    const permType: DrivePermissionType =
+      (params.action === "create" ? params.grant_perm_type : undefined) ??
+      (params.action === "create" ? params.owner_perm_type : undefined) ??
+      accountConfig.docCreateGrantPermType ??
+      "full_access";
+    return {
+      memberType,
+      memberId,
+      permType,
+    };
+  };
+
   // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
     api.registerTool(
@@ -1295,16 +1354,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       api.logger,
                     ),
                   );
-                case "create":
-                  return json(
-                    await createDoc(
-                      client,
-                      p.title,
-                      p.folder_token,
-                      p.owner_open_id,
-                      p.owner_perm_type,
-                    ),
-                  );
+                case "create": {
+                  const permissionGrant = getDocCreatePermissionGrant(p, defaultAccountId);
+                  return json(await createDoc(client, p.title, p.folder_token, permissionGrant));
+                }
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));
                 case "get_block":

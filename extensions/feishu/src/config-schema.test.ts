@@ -137,4 +137,25 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
   });
+
+  it("accepts default doc create permission grant settings", () => {
+    const result = FeishuConfigSchema.parse({
+      docCreateGrantMemberType: "openid",
+      docCreateGrantMemberId: "ou_default_editor",
+      docCreateGrantPermType: "edit",
+      accounts: {
+        main: {
+          docCreateGrantMemberType: "opendepartmentid",
+          docCreateGrantMemberId: "od_root_department",
+          docCreateGrantPermType: "edit",
+        },
+      },
+    });
+    expect(result.docCreateGrantMemberType).toBe("openid");
+    expect(result.docCreateGrantMemberId).toBe("ou_default_editor");
+    expect(result.docCreateGrantPermType).toBe("edit");
+    expect(result.accounts?.main?.docCreateGrantMemberType).toBe("opendepartmentid");
+    expect(result.accounts?.main?.docCreateGrantMemberId).toBe("od_root_department");
+    expect(result.accounts?.main?.docCreateGrantPermType).toBe("edit");
+  });
 });

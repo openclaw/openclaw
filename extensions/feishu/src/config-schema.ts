@@ -112,6 +112,19 @@ const GroupSessionScopeSchema = z
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
+const DocCreateGrantMemberTypeSchema = z
+  .enum([
+    "email",
+    "openid",
+    "unionid",
+    "openchat",
+    "opendepartmentid",
+    "userid",
+    "groupid",
+    "wikispaceid",
+  ])
+  .optional();
+const DocCreateGrantPermTypeSchema = z.enum(["view", "edit", "full_access"]).optional();
 
 /**
  * Reply-in-thread mode for group chats.
@@ -165,6 +178,9 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  docCreateGrantMemberType: DocCreateGrantMemberTypeSchema,
+  docCreateGrantMemberId: z.string().optional(),
+  docCreateGrantPermType: DocCreateGrantPermTypeSchema,
 };
 
 /**

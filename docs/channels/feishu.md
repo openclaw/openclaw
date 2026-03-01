@@ -581,28 +581,42 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                           | Description                     | Default          |
-| ------------------------------------------------- | ------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | Enable/disable channel          | `true`           |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`) | `feishu`         |
-| `channels.feishu.connectionMode`                  | Event transport mode            | `websocket`      |
-| `channels.feishu.verificationToken`               | Required for webhook mode       | -                |
-| `channels.feishu.webhookPath`                     | Webhook route path              | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook bind host               | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook bind port               | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                          | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                      | -                |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override | `feishu`         |
-| `channels.feishu.dmPolicy`                        | DM policy                       | `pairing`        |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)     | -                |
-| `channels.feishu.groupPolicy`                     | Group policy                    | `open`           |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                 | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                | `true`           |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`           |
-| `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`             |
-| `channels.feishu.streaming`                       | Enable streaming card output    | `true`           |
-| `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`           |
+| Setting                                           | Description                                                                        | Default          |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | Enable/disable channel                                                             | `true`           |
+| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)                                                    | `feishu`         |
+| `channels.feishu.connectionMode`                  | Event transport mode                                                               | `websocket`      |
+| `channels.feishu.verificationToken`               | Required for webhook mode                                                          | -                |
+| `channels.feishu.webhookPath`                     | Webhook route path                                                                 | `/feishu/events` |
+| `channels.feishu.webhookHost`                     | Webhook bind host                                                                  | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | Webhook bind port                                                                  | `3000`           |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                             | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                         | -                |
+| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override                                                    | `feishu`         |
+| `channels.feishu.dmPolicy`                        | DM policy                                                                          | `pairing`        |
+| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                                                        | -                |
+| `channels.feishu.groupPolicy`                     | Group policy                                                                       | `open`           |
+| `channels.feishu.groupAllowFrom`                  | Group allowlist                                                                    | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                                                                   | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                                                                       | `true`           |
+| `channels.feishu.textChunkLimit`                  | Message chunk size                                                                 | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | Media size limit                                                                   | `30`             |
+| `channels.feishu.streaming`                       | Enable streaming card output                                                       | `true`           |
+| `channels.feishu.blockStreaming`                  | Enable block streaming                                                             | `true`           |
+| `channels.feishu.docCreateGrantMemberType`        | Default `feishu_doc create` grant member type (`openid`, `opendepartmentid`, etc.) | -                |
+| `channels.feishu.docCreateGrantMemberId`          | Default `feishu_doc create` grant member id                                        | -                |
+| `channels.feishu.docCreateGrantPermType`          | Default `feishu_doc create` grant permission (`view`, `edit`, `full_access`)       | -                |
+
+You can set these defaults per account as well:
+
+- `channels.feishu.accounts.<id>.docCreateGrantMemberType`
+- `channels.feishu.accounts.<id>.docCreateGrantMemberId`
+- `channels.feishu.accounts.<id>.docCreateGrantPermType`
+
+For one-off document creation calls, `feishu_doc` also supports:
+
+- `grant_member_type`, `grant_member_id`, `grant_perm_type`
+- legacy compatibility fields: `owner_open_id`, `owner_perm_type`
 
 ---
 
