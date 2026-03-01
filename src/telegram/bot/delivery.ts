@@ -35,6 +35,7 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const VOICE_CAPTION_TOO_LONG_RE = /caption is too long/i;
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_MEDIA_SSRF_POLICY = {
   // Telegram file downloads should trust api.telegram.org even when DNS/proxy
@@ -259,6 +260,57 @@ export async function deliverReplies(params: {
               // Skip this media item; continue with next.
               continue;
             }
+            // Fall back to text if caption is too long for voice message.
+            // Telegram Bot API limits voice message captions to 1024 characters.
+            if (isVoiceCaptionTooLong(voiceErr)) {
+              const fallbackText = reply.text;
+              if (!fallbackText || !fallbackText.trim()) {
+                throw voiceErr;
+              }
+              logVerbose("telegram sendVoice caption too long; falling back to audio file + text");
+              // Send as regular audio file (not voice) so caption can be included,
+              // or send audio file without caption + separate text message.
+              const { caption, followUpText } = splitTelegramCaption(fallbackText);
+              const htmlCaption = caption
+                ? renderTelegramHtmlText(caption, { tableMode: params.tableMode })
+                : undefined;
+              // Send audio without voice flag (as regular audio file)
+              await withTelegramApiErrorLogging({
+                operation: "sendAudio",
+                runtime,
+                fn: () =>
+                  bot.api.sendAudio(chatId, file, {
+                    caption: htmlCaption,
+                    ...(htmlCaption ? { parse_mode: "HTML" } : {}),
+                    ...buildTelegramSendParams({
+                      replyToMessageId: replyToMessageIdForPayload,
+                      thread,
+                    }),
+                  }),
+              });
+              markDelivered();
+              // If there's follow-up text (original text exceeded caption limit), send it
+              if (followUpText) {
+                const chunks = chunkText(followUpText);
+                for (let i = 0; i < chunks.length; i += 1) {
+                  const chunk = chunks[i];
+                  await sendTelegramText(bot, chatId, chunk.html, runtime, {
+                    replyToMessageId: replyToMessageIdForPayload,
+                    thread,
+                    textMode: "html",
+                    plainText: chunk.text,
+                    linkPreview,
+                    replyMarkup: i === 0 ? replyMarkup : undefined,
+                  });
+                  markDelivered();
+                }
+              }
+              if (replyToMessageIdForPayload && !hasReplied) {
+                hasReplied = true;
+              }
+              // Continue to next media item
+              continue;
+            }
             throw voiceErr;
           }
         } else {
@@ -461,6 +513,13 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
     return VOICE_FORBIDDEN_RE.test(err.description);
   }
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+function isVoiceCaptionTooLong(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return VOICE_CAPTION_TOO_LONG_RE.test(err.description);
+  }
+  return VOICE_CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
 /**
