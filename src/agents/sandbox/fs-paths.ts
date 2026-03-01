@@ -1,4 +1,6 @@
+import os from "node:os";
 import path from "node:path";
+import { expandHomePrefix } from "../../infra/home-dir.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
@@ -51,7 +53,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
     : [];
   const writable = !optionParts.includes("ro");
   return {
-    hostRoot: path.resolve(hostToken),
+    hostRoot: path.resolve(expandHomePrefix(hostToken, { home: os.homedir() })),
     containerRoot: normalizeContainerPath(containerToken),
     writable,
   };

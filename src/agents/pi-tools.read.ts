@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -764,11 +766,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandHomePrefix(dir, { home: os.homedir() }));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath, { home: os.homedir() }));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
@@ -803,17 +805,17 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath, { home: os.homedir() }));
         return await fs.readFile(resolved);
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath, { home: os.homedir() }));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
       },
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath, { home: os.homedir() }));
         await fs.access(resolved);
       },
     } as const;
@@ -869,7 +871,7 @@ function toRelativePathInRoot(
   options?: { allowRoot?: boolean },
 ): string {
   const rootResolved = path.resolve(root);
-  const resolved = path.resolve(candidate);
+  const resolved = path.resolve(expandHomePrefix(candidate, { home: os.homedir() }));
   const relative = path.relative(rootResolved, resolved);
   if (relative === "" || relative === ".") {
     if (options?.allowRoot) {

@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -117,12 +118,13 @@ export function resolveWorkdir(workdir: string, warnings: string[]) {
   const current = safeCwd();
   const fallback = current ?? homedir();
   try {
-    const stats = statSync(workdir);
+    const expanded = path.resolve(expandHomePrefix(workdir, { home: homedir() }));
+    const stats = statSync(expanded);
     if (stats.isDirectory()) {
-      return workdir;
+      return expanded;
     }
   } catch {
-    // ignore, fallback below
+    // ignore — path.resolve can throw ENOENT if cwd is gone and workdir is relative
   }
   warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
   return fallback;
