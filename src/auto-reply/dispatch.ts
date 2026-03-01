@@ -73,7 +73,13 @@ async function dispatchInboundMessageInternal({
 }: DispatchInboundMessageInternalParams): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(ctx);
 
-  if (dispatcher.setDeliveryQueueContext) {
+  // Interaction-scoped dispatchers (Slack slash /openclaw, Discord native commands)
+  // use one-time callbacks (respond(), interaction.reply()) that cannot survive
+  // recovery. Skip outbox tracking for these to avoid replaying content to the
+  // wrong destination (e.g. DM fallback when the original callback has expired).
+  const isInteractionScoped = finalized.CommandSource === "native";
+
+  if (dispatcher.setDeliveryQueueContext && !isInteractionScoped) {
     const queueContext = resolveDeliveryQueueContext({ ctx: finalized });
     dispatcher.setDeliveryQueueContext(queueContext);
   }
