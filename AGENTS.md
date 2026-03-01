@@ -85,6 +85,7 @@
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+- **QMD subprocess spawning**: use `runSubprocess()` from `src/memory/qmd-manager.ts`. Do not create inline `spawn()` calls for QMD or mcporter commands — it handles output capping, timeout, Windows .cmd shimming, and discard mode.
 
 ## Release Channels (Naming)
 

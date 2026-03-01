@@ -1088,16 +1088,27 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async runQmd(
-    args: string[],
-    opts?: { timeoutMs?: number; discardOutput?: boolean },
-  ): Promise<{ stdout: string; stderr: string }> {
+  /**
+   * Canonical subprocess runner for QMD-related commands.
+   * USE THIS — do not create inline spawn logic. Handles output capping,
+   * timeout, Windows .cmd shimming, and discardOutput mode.
+   * @see AGENTS.md for project-level guidance.
+   */
+  private async runSubprocess(params: {
+    command: string;
+    args: string[];
+    label: string;
+    packageName: string;
+    timeoutMs?: number;
+    discardOutput?: boolean;
+  }): Promise<{ stdout: string; stderr: string }> {
+    const { command, args, label, packageName, timeoutMs, discardOutput } = params;
     return await new Promise((resolve, reject) => {
       const spawnInvocation = resolveSpawnInvocation({
-        command: this.qmd.command,
+        command,
         args,
         env: this.env,
-        packageName: "qmd",
+        packageName,
       });
       const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
         env: this.env,
@@ -1112,12 +1123,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       // When discardOutput is set, skip stdout accumulation entirely and keep
       // only a small stderr tail for diagnostics -- never fail on truncation.
       // This prevents large `qmd update` runs from hitting the output cap.
-      const discard = opts?.discardOutput === true;
-      const timer = opts?.timeoutMs
+      const discard = discardOutput === true;
+      const timer = timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
-            reject(new Error(`qmd ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
-          }, opts.timeoutMs)
+            reject(new Error(`${label} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+          }, timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
         if (discard) {
@@ -1145,7 +1156,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (!discard && (stdoutTruncated || stderrTruncated)) {
           reject(
             new Error(
-              `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
+              `${label} ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
             ),
           );
           return;
@@ -1153,9 +1164,22 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (code === 0) {
           resolve({ stdout, stderr });
         } else {
-          reject(new Error(`qmd ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`));
+          reject(
+            new Error(`${label} ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`),
+          );
         }
       });
+    });
+  }
+
+  private runQmd(args: string[], opts?: { timeoutMs?: number; discardOutput?: boolean }) {
+    // Subprocess spawning consolidated into runSubprocess() — use that for new commands.
+    return this.runSubprocess({
+      command: this.qmd.command,
+      args,
+      label: "qmd",
+      packageName: "qmd",
+      ...opts,
     });
   }
 
@@ -1194,70 +1218,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     await g.__openclawMcporterDaemonStart;
   }
 
-  private async runMcporter(
-    args: string[],
-    opts?: { timeoutMs?: number },
-  ): Promise<{ stdout: string; stderr: string }> {
-    return await new Promise((resolve, reject) => {
-      const spawnInvocation = resolveSpawnInvocation({
-        command: "mcporter",
-        args,
-        env: this.env,
-        packageName: "mcporter",
-      });
-      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
-        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-        env: this.env,
-        cwd: this.workspaceDir,
-        shell: spawnInvocation.shell,
-        windowsHide: spawnInvocation.windowsHide,
-      });
-      let stdout = "";
-      let stderr = "";
-      let stdoutTruncated = false;
-      let stderrTruncated = false;
-      const timer = opts?.timeoutMs
-        ? setTimeout(() => {
-            child.kill("SIGKILL");
-            reject(new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
-          }, opts.timeoutMs)
-        : null;
-      child.stdout.on("data", (data) => {
-        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
-        stdout = next.text;
-        stdoutTruncated = stdoutTruncated || next.truncated;
-      });
-      child.stderr.on("data", (data) => {
-        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
-        stderr = next.text;
-        stderrTruncated = stderrTruncated || next.truncated;
-      });
-      child.on("error", (err) => {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        reject(err);
-      });
-      child.on("close", (code) => {
-        if (timer) {
-          clearTimeout(timer);
-        }
-        if (stdoutTruncated || stderrTruncated) {
-          reject(
-            new Error(
-              `mcporter ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
-            ),
-          );
-          return;
-        }
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          reject(
-            new Error(`mcporter ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`),
-          );
-        }
-      });
+  private async runMcporter(args: string[], opts?: { timeoutMs?: number }) {
+    // Subprocess spawning consolidated into runSubprocess() — use that for new commands.
+    return this.runSubprocess({
+      command: "mcporter",
+      args,
+      label: "mcporter",
+      packageName: "mcporter",
+      ...opts,
     });
   }
 
