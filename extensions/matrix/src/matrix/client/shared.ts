@@ -84,7 +84,15 @@ async function ensureSharedClientStarted(params: {
       }
     }
 
-    await client.start();
+    // bot-sdk start() returns a promise that never resolves (infinite sync loop).
+    // Fire-and-forget: the sync loop runs, events fire on the client,
+    // but we must not await or the entire provider startup hangs.
+    // See: https://github.com/openclaw/openclaw/issues/NEW
+    client.start().catch((err: unknown) => {
+      LogService.error("MatrixClientLite", "client.start() error:", err);
+    });
+    // Give the sync loop a moment to initialize
+    await new Promise(resolve => setTimeout(resolve, 2000));
     params.state.started = true;
   })();
   sharedClientStartPromises.set(key, startPromise);
