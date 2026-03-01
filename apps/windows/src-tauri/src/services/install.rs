@@ -32,6 +32,47 @@ impl WslInstallService {
         );
     }
 
+    fn decode_wsl_text(output: &[u8]) -> String {
+        if output.contains(&0) && output.len().is_multiple_of(2) {
+            let utf16: Vec<u16> = output
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            String::from_utf16_lossy(&utf16)
+        } else {
+            String::from_utf8_lossy(output).to_string()
+        }
+    }
+
+    fn is_helper_distro(name: &str) -> bool {
+        let normalized = name.trim().to_ascii_lowercase();
+        matches!(normalized.as_str(), "docker-desktop" | "docker-desktop-data")
+    }
+
+    fn has_usable_distro_shell(&self, distro: &str) -> bool {
+        let args = ["-d", distro, "-e", "sh", "-lc", "true"];
+        self.provider
+            .run_command(&args, false)
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    fn find_target_distro(&self) -> Option<String> {
+        let output = self.provider.run_command(&["-l", "-q"], false).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let distros = Self::decode_wsl_text(&output.stdout);
+        distros
+            .lines()
+            .map(|line| line.trim().trim_matches('\0'))
+            .filter(|line| !line.is_empty())
+            .filter(|line| !Self::is_helper_distro(line))
+            .find(|line| self.has_usable_distro_shell(line))
+            .map(ToString::to_string)
+    }
+
     pub async fn check_and_install<F>(&self, on_pid: F) -> crate::error::Result<()>
     where
         F: FnOnce(u32) + Send + 'static,
@@ -39,7 +80,7 @@ impl WslInstallService {
         self.emit_status("wsl", "installing", Some("Checking WSL status..."));
         let mut on_pid = Some(on_pid);
 
-        if let Some(distro) = self.provider.get_distro() {
+        if let Some(distro) = self.find_target_distro() {
             self.emit_status(
                 "wsl",
                 "installed",

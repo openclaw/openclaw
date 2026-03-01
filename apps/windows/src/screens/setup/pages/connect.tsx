@@ -94,6 +94,7 @@ export default function SetupConnectPage() {
   };
 
   const [tokenSource, setTokenSource] = useState<"manual" | "ssh">("manual");
+  const [sshPort, setSshPort] = useState<number>(22);
   const [keyPath, setKeyPath] = useState<string | null>(null);
   const [isFetchingToken, setIsFetchingToken] = useState(false);
   const [tokenError, setTokenError] = useState("");
@@ -106,7 +107,7 @@ export default function SetupConnectPage() {
         type: "ssh",
         host: selectedGateway?.address,
         user: selectedGateway?.user,
-        port: Number(selectedGateway?.port),
+        port: sshPort > 0 ? sshPort : 22,
         key_path: keyPath,
       };
 
@@ -126,7 +127,7 @@ export default function SetupConnectPage() {
               : null,
           sshUser: selectedGateway?.user,
           sshHost: selectedGateway?.address,
-          sshPort: Number(selectedGateway?.port),
+          sshPort: sshPort > 0 ? sshPort : 22,
           sshKeyPath: keyPath,
         });
       }
@@ -179,6 +180,7 @@ export default function SetupConnectPage() {
     if (gatewayStatus.connected && isThisSelected) return;
 
     setSelectedGateway(gatewayData);
+    setSshPort(22);
     setTokenError("");
 
     try {
@@ -404,13 +406,11 @@ export default function SetupConnectPage() {
                         <Field label="Port" style={{ flex: 1 }}>
                           <Input
                             type="number"
-                            value={String(selectedGateway?.port || 22)}
-                            onChange={(_, d) =>
-                              setSelectedGateway((p) => ({
-                                ...p!,
-                                port: Number(d.value),
-                              }))
-                            }
+                            value={String(sshPort || 22)}
+                            onChange={(_, d) => {
+                              const next = Number(d.value);
+                              setSshPort(Number.isFinite(next) && next > 0 ? next : 22);
+                            }}
                           />
                         </Field>
                       </div>

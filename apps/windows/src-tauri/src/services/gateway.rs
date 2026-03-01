@@ -367,17 +367,25 @@ impl GatewayService {
         }
 
         for host in candidates {
-            let addr = format!("{}:{}", host, port);
             if let Ok(Ok(_)) = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                tokio::net::TcpStream::connect(&addr),
+                tokio::net::TcpStream::connect((host.as_str(), port)),
             )
             .await
             {
-                return Some(format!("ws://{}", addr));
+                return Some(format!("ws://{}", Self::format_host_port_for_ws(&host, port)));
             }
         }
         None
+    }
+
+    fn format_host_port_for_ws(host: &str, port: u16) -> String {
+        let normalized = host.trim().trim_matches(['[', ']']);
+        if normalized.contains(':') {
+            format!("[{}]:{}", normalized, port)
+        } else {
+            format!("{}:{}", normalized, port)
+        }
     }
 
     fn normalize_remote_direct_url(raw: &str) -> Option<String> {
