@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
+import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildSandboxFsMounts,
@@ -23,6 +24,7 @@ type PathSafetyOptions = {
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowMissingTarget?: boolean;
+  allowedTypes?: readonly SafeOpenSyncAllowedType[];
 };
 
 export type SandboxResolvedPath = {
@@ -132,7 +134,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowedTypes: ["directory"],
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -258,6 +264,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
       aliasPolicy: options.aliasPolicy,
+      allowedTypes: options.allowedTypes,
     });
     if (!guarded.ok) {
       if (guarded.reason !== "path" || options.allowMissingTarget === false) {
