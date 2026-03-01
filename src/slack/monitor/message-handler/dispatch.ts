@@ -415,6 +415,30 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   if (!anyReplyDelivered) {
     await draftStream.clear();
+    // Also remove ack reaction on NO_REPLY when removeAckAfterReply is enabled
+    if (ctx.removeAckAfterReply && prepared.ackReactionPromise) {
+      void prepared.ackReactionPromise.then((didAck) => {
+        if (!didAck) {
+          return;
+        }
+        removeSlackReaction(
+          message.channel,
+          prepared.ackReactionMessageTs ?? "",
+          prepared.ackReactionValue,
+          {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          },
+        ).catch((err) => {
+          logAckFailure({
+            log: shouldLogVerbose,
+            channel: "slack",
+            target: `${message.channel}/${message.ts}`,
+            error: err,
+          });
+        });
+      });
+    }
     if (prepared.isRoomish) {
       clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
