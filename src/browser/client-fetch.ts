@@ -104,11 +104,28 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = isLocal
     ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
-  // Model-facing suffix: explicitly tell the LLM NOT to retry.
-  // Without this, models see "try again" and enter an infinite tool-call loop.
-  const modelHint =
+  const parsedPath = (() => {
+    try {
+      return new URL(url, "http://localhost").pathname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  const actionPath =
+    parsedPath === "/act" ||
+    parsedPath === "/tabs/action" ||
+    parsedPath === "/screenshot" ||
+    parsedPath === "/navigate" ||
+    parsedPath === "/pdf" ||
+    parsedPath.startsWith("/hooks/");
+  // Model-facing suffix: avoid indefinite tool loops while still allowing a bounded
+  // recovery attempt for likely action-level timeouts.
+  const strictModelHint =
     "Do NOT retry the browser tool — it will keep failing. " +
     "Use an alternative approach or inform the user that the browser is currently unavailable.";
+  const boundedRetryHint =
+    'Do NOT blindly retry in a loop. Take a fresh browser snapshot (snapshotFormat="ai", refs="aria"), then retry this action once with updated refs. ' +
+    "If it still times out, report the browser as unavailable.";
   const msg = String(err);
   const msgLower = msg.toLowerCase();
   const looksLikeTimeout =
@@ -118,10 +135,12 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
   if (looksLikeTimeout) {
+    const modelHint = isLocal && actionPath ? boundedRetryHint : strictModelHint;
     return new Error(
       `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${modelHint}`,
     );
   }
+  const modelHint = strictModelHint;
   return new Error(
     `Can't reach the OpenClaw browser control service. ${operatorHint} ${modelHint} (${msg})`,
   );
