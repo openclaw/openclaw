@@ -346,6 +346,55 @@ describe("cron controller", () => {
     });
   });
 
+  it("omits failureAlert.cooldownMs when custom cooldown is left blank", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-alert-no-cooldown" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-alert-no-cooldown" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-alert-no-cooldown",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "alert job no cooldown",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+        failureAlertMode: "custom",
+        failureAlertAfter: "3",
+        failureAlertCooldownSeconds: "",
+        failureAlertChannel: "telegram",
+        failureAlertTo: "123456",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-alert-no-cooldown",
+      patch: {
+        failureAlert: {
+          after: 3,
+          channel: "telegram",
+          to: "123456",
+        },
+      },
+    });
+    expect(
+      (updateCall?.[1] as { patch?: { failureAlert?: { cooldownMs?: number } } })?.patch
+        ?.failureAlert,
+    ).not.toHaveProperty("cooldownMs");
+  });
+
   it("includes failureAlert=false when disabled per job", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
