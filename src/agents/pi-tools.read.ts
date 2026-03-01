@@ -843,7 +843,22 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      let relative: string;
+      try {
+        relative = toRelativePathInRoot(root, absolutePath);
+      } catch {
+        // Path is outside the workspace root (no symlink involved). Don't throw here —
+        // pi-coding-agent converts any access() error to a generic "File not found" message.
+        // Instead, only verify the file exists on disk so that readFile() can emit the
+        // accurate "Path escapes workspace root" error when called (issue #30724).
+        const resolved = path.resolve(absolutePath);
+        try {
+          await fs.access(resolved);
+        } catch {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        return;
+      }
       try {
         const opened = await openFileWithinRoot({
           rootDir: root,

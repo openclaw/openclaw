@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type CapturedEditOperations = {
   access: (absolutePath: string) => Promise<void>;
+  readFile: (absolutePath: string) => Promise<Buffer>;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -63,4 +64,25 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       ).rejects.toMatchObject({ code: "EACCES" });
     },
   );
+
+  it("access() succeeds for direct outside-workspace paths so readFile() can emit the accurate error (regression: #30724)", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
+    const workspaceDir = path.join(tmpDir, "workspace");
+    const outsideDir = path.join(tmpDir, "outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(outsideFile, "secret", "utf8");
+
+    createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
+    expect(mocks.operations).toBeDefined();
+
+    // access() must NOT throw "File not found" — the file exists, just outside workspace.
+    await expect(mocks.operations!.access(outsideFile)).resolves.toBeUndefined();
+
+    // readFile() must throw the accurate "Path escapes workspace root" error.
+    await expect(mocks.operations!.readFile(outsideFile)).rejects.toThrow(
+      /Path escapes workspace root/,
+    );
+  });
 });
