@@ -54,3 +54,34 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
   });
 });
+
+describe("deliverReplies mediaLocalRoots passthrough", () => {
+  beforeEach(() => {
+    sendMock.mockReset();
+  });
+
+  it("passes mediaLocalRoots to sendMessageSlack for media replies", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const mediaLocalRoots = ["/workspace/agent-123"];
+    await deliverReplies(
+      baseParams({
+        mediaLocalRoots,
+        replies: [{ text: "caption", mediaUrls: ["file:///workspace/agent-123/image.png"] }],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ mediaLocalRoots });
+  });
+
+  it("does not pass mediaLocalRoots for text-only replies", async () => {
+    sendMock.mockResolvedValue(undefined);
+    const mediaLocalRoots = ["/workspace/agent-123"];
+    await deliverReplies(baseParams({ mediaLocalRoots }));
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    // mediaLocalRoots should not be in the options for text-only messages
+    // since it's only needed when loading media
+    expect(sendMock.mock.calls[0][2]).not.toHaveProperty("mediaLocalRoots");
+  });
+});

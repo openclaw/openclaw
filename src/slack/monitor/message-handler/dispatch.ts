@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -192,6 +193,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
 
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
     await deliverReplies({
@@ -203,6 +206,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       textLimit: ctx.textLimit,
       replyThreadTs,
       replyToMode: prepared.replyToMode,
+      mediaLocalRoots,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     // Record the thread ts only after confirmed delivery success.

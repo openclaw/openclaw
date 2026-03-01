@@ -18,6 +18,7 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
+  mediaLocalRoots?: readonly string[];
 }) {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -49,6 +50,7 @@ export async function deliverReplies(params: {
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
+          mediaLocalRoots: params.mediaLocalRoots,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
