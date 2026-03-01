@@ -463,8 +463,11 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.disabled) {
         reasons.push("disabled");
       } else if (hook.events.length === 0) {
-        // Mirrors exclusive-priority logic in formatHookStatus / formatHookInfo
+        // Sole reason — missing-requirement details would mislead the user
+        // into fixing the wrong thing when the real issue is no events defined.
         reasons.push("no events defined");
+        lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+        continue;
       }
       if (hook.missing.bins.length > 0) {
         reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
