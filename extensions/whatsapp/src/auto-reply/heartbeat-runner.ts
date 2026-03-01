@@ -110,7 +110,7 @@ export async function runWebHeartbeatOnce(opts: {
       };
     });
   }
-  const sessionSnapshot = getSessionSnapshot(cfg, to, true);
+  const sessionSnapshot = getSessionSnapshot(cfg, to, true, { sessionKey });
   if (verbose) {
     heartbeatLogger.info(
       {

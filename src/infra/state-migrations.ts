@@ -1024,13 +1024,13 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
 
-  // Collect all known agent store paths (deduplicated).
-  const storePaths = new Set<string>();
+  // Collect all known agent store paths with their owning agentId (deduplicated by path).
+  const storeMap = new Map<string, string>();
   // Default agent store.
   const defaultStorePath = storeConfig
     ? resolveStorePathFromTemplate(storeConfig, agentId, stateDir)
     : path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-  storePaths.add(defaultStorePath);
+  storeMap.set(defaultStorePath, agentId);
   // Configured agents.
   for (const entry of params.cfg.agents?.list ?? []) {
     if (entry?.id) {
@@ -1038,7 +1038,9 @@ export async function migrateOrphanedSessionKeys(params: {
       const p = storeConfig
         ? resolveStorePathFromTemplate(storeConfig, id, stateDir)
         : path.join(stateDir, "agents", id, "sessions", "sessions.json");
-      storePaths.add(p);
+      if (!storeMap.has(p)) {
+        storeMap.set(p, id);
+      }
     }
   }
   // Agent directories present on disk.
@@ -1048,13 +1050,16 @@ export async function migrateOrphanedSessionKeys(params: {
       if (dirEntry.isDirectory()) {
         const diskAgentId = normalizeAgentId(dirEntry.name);
         if (diskAgentId) {
-          storePaths.add(path.join(agentsDir, diskAgentId, "sessions", "sessions.json"));
+          const diskPath = path.join(agentsDir, diskAgentId, "sessions", "sessions.json");
+          if (!storeMap.has(diskPath)) {
+            storeMap.set(diskPath, diskAgentId);
+          }
         }
       }
     }
   }
 
-  for (const storePath of storePaths) {
+  for (const [storePath, storeAgentId] of storeMap) {
     if (!fileExists(storePath)) {
       continue;
     }
@@ -1068,9 +1073,6 @@ export async function migrateOrphanedSessionKeys(params: {
     if (!parsed.ok) {
       continue;
     }
-
-    // Determine which agentId this store belongs to from path.
-    const storeAgentId = resolveAgentIdFromStorePath(storePath, stateDir) ?? agentId;
 
     const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
       store: parsed.store,
@@ -1116,16 +1118,6 @@ function resolveStorePathFromTemplate(
     return path.resolve(path.join(os.homedir(), template.slice(1)));
   }
   return path.resolve(template);
-}
-
-function resolveAgentIdFromStorePath(storePath: string, stateDir: string): string | null {
-  const agentsDir = path.join(stateDir, "agents") + path.sep;
-  if (!storePath.startsWith(agentsDir)) {
-    return null;
-  }
-  const relative = storePath.slice(agentsDir.length);
-  const agentPart = relative.split(path.sep)[0];
-  return agentPart ? normalizeAgentId(agentPart) : null;
 }
 
 export async function autoMigrateLegacyState(params: {
