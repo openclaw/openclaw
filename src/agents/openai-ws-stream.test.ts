@@ -70,6 +70,27 @@ const { MockManager } = vi.hoisted(() => {
         throw new Error("Mock send failure");
       }
       this.sentEvents.push(event);
+      const maybeEvent = event as { type?: string; generate?: boolean; model?: string } | null;
+      // Auto-complete warm-up events so warm-up-enabled tests don't hang waiting
+      // for the warm-up terminal event.
+      if (maybeEvent?.type === "response.create" && maybeEvent.generate === false) {
+        queueMicrotask(() => {
+          this.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject(`warmup-${Date.now()}`),
+          });
+        });
+      }
+    }
+
+    warmUp(params: { model: string; tools?: unknown[]; instructions?: string }): void {
+      this.send({
+        type: "response.create",
+        generate: false,
+        model: params.model,
+        ...(params.tools ? { tools: params.tools } : {}),
+        ...(params.instructions ? { instructions: params.instructions } : {}),
+      });
     }
 
     onMessage(handler: (event: unknown) => void): () => void {
@@ -966,6 +987,67 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       });
     });
+  });
+
+  it("sends warm-up event before first request when openaiWsWarmup=true", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-enabled");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { openaiWsWarmup: true } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-warm", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.type).toBe("response.create");
+    expect(sent[0]?.generate).toBe(false);
+    expect(sent[1]?.type).toBe("response.create");
+  });
+
+  it("skips warm-up when openaiWsWarmup=false", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-warmup-disabled");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { openaiWsWarmup: false } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-nowarm", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents as Array<Record<string, unknown>>;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.type).toBe("response.create");
+    expect(sent[0]?.generate).toBeUndefined();
   });
 });
 
