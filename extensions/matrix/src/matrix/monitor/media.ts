@@ -1,5 +1,8 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { resolveMatrixConfigForAccount } from "../client.js";
+import { loadMatrixCredentials } from "../credentials.js";
 
 // Type for encrypted file info
 type EncryptedFile = {
@@ -30,6 +33,7 @@ async function fetchMatrixMediaBuffer(params: {
   client: MatrixClient;
   mxcUrl: string;
   maxBytes: number;
+  accountId?: string | null;
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
   const parsed = parseMxcUrl(params.mxcUrl);
   if (!parsed) {
@@ -47,9 +51,13 @@ async function fetchMatrixMediaBuffer(params: {
 
   // Try the authenticated media endpoint first (MSC3916).
   // Required when the homeserver has unauthenticated media disabled.
-  const cfg = getMatrixRuntime().config.loadConfig();
-  const accessToken = (cfg as { channels?: { matrix?: { accessToken?: string } } }).channels?.matrix
-    ?.accessToken;
+  // Resolve the access token in account-aware order:
+  //   1. account-specific config / env (resolveMatrixConfigForAccount handles multi-account + MATRIX_ACCESS_TOKEN)
+  //   2. credential store (covers password-auth and previous token-auth logins)
+  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const resolvedCfg = resolveMatrixConfigForAccount(cfg, params.accountId);
+  const storedCreds = loadMatrixCredentials(process.env, params.accountId);
+  const accessToken = resolvedCfg.accessToken ?? storedCreds?.accessToken;
 
   if (accessToken) {
     try {
@@ -117,6 +125,7 @@ export async function downloadMatrixMedia(params: {
   sizeBytes?: number;
   maxBytes: number;
   file?: EncryptedFile;
+  accountId?: string | null;
 }): Promise<{
   path: string;
   contentType?: string;
@@ -140,6 +149,7 @@ export async function downloadMatrixMedia(params: {
       client: params.client,
       mxcUrl: params.mxcUrl,
       maxBytes: params.maxBytes,
+      accountId: params.accountId,
     });
   }
 

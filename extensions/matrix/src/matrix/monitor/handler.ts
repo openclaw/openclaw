@@ -350,6 +350,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: contentFile,
+            accountId: resolvedAccountId,
           });
         } catch (err) {
           logVerboseMessage(`matrix: media download failed: ${String(err)}`);
@@ -555,13 +556,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
+      // When history entries were prepended, use combinedBody for BodyForAgent so the
+      // buffered context actually reaches the model (pipeline prefers BodyForAgent over Body).
+      const bodyForAgent =
+        isRoom && combinedBody !== body
+          ? combinedBody
+          : resolveMatrixBodyForAgent({ isDirectMessage, bodyText, senderLabel });
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
-        BodyForAgent: resolveMatrixBodyForAgent({
-          isDirectMessage,
-          bodyText,
-          senderLabel,
-        }),
+        BodyForAgent: bodyForAgent,
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
