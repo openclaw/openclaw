@@ -78,6 +78,35 @@ HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18
 # Keep Podman default local-only unless explicitly overridden.
 # Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).
 GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
+PODMAN_SELINUX_LABEL="${OPENCLAW_PODMAN_SELINUX_LABEL:-auto}"
+
+resolve_selinux_mount_suffix() {
+  local mode="${1,,}"
+  case "$mode" in
+    on|yes|true|1|enabled)
+      printf '%s' ",Z"
+      return 0
+      ;;
+    off|no|false|0|disabled)
+      printf '%s' ""
+      return 0
+      ;;
+    auto|"")
+      local selinux_enabled
+      selinux_enabled="$(podman info --format '{{.Host.Security.SELinuxEnabled}}' 2>/dev/null || true)"
+      if [[ "${selinux_enabled,,}" == "true" ]]; then
+        printf '%s' ",Z"
+      else
+        printf '%s' ""
+      fi
+      return 0
+      ;;
+    *)
+      echo "Unsupported OPENCLAW_PODMAN_SELINUX_LABEL=$PODMAN_SELINUX_LABEL (expected: auto, on, off)." >&2
+      exit 2
+      ;;
+  esac
+}
 
 # Safe cwd for podman (openclaw is nologin; avoid inherited cwd from sudo)
 cd "$EFFECTIVE_HOME" 2>/dev/null || cd /tmp 2>/dev/null || true
@@ -178,6 +207,11 @@ else
   echo "Starting container without --user (OPENCLAW_PODMAN_USERNS=$PODMAN_USERNS), mounts may require ownership fixes." >&2
 fi
 
+VOLUME_PERMS="rw$(resolve_selinux_mount_suffix "$PODMAN_SELINUX_LABEL")"
+if [[ "$VOLUME_PERMS" == *",Z" ]]; then
+  echo "Using SELinux relabel (:Z) for Podman bind mounts." >&2
+fi
+
 ENV_FILE_ARGS=()
 [[ -f "$ENV_FILE" ]] && ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
 
@@ -187,8 +221,8 @@ if [[ "$RUN_SETUP" == true ]]; then
     "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" \
-    -v "$CONFIG_DIR:/home/node/.openclaw:rw" \
-    -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
+    -v "$CONFIG_DIR:/home/node/.openclaw:${VOLUME_PERMS}" \
+    -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:${VOLUME_PERMS}" \
     "${ENV_FILE_ARGS[@]}" \
     "$OPENCLAW_IMAGE" \
     node dist/index.js onboard "$@"
@@ -201,8 +235,8 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" \
   "${ENV_FILE_ARGS[@]}" \
-  -v "$CONFIG_DIR:/home/node/.openclaw:rw" \
-  -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw" \
+  -v "$CONFIG_DIR:/home/node/.openclaw:${VOLUME_PERMS}" \
+  -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:${VOLUME_PERMS}" \
   -p "${HOST_GATEWAY_PORT}:18789" \
   -p "${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
