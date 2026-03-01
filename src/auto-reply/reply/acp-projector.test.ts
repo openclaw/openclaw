@@ -573,4 +573,202 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries.length).toBe(1);
     expect(deliveries[0]?.text).toContain("Tool Call");
   });
+
+  it("inserts a newline boundary before visible text after hidden tool updates by default", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_hidden_1",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("fallback.\nI don't");
+  });
+
+  it("supports hiddenBoundarySeparator=space", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+            hiddenBoundarySeparator: "space",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_hidden_2",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("fallback. I don't");
+  });
+
+  it("supports hiddenBoundarySeparator=none", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+            hiddenBoundarySeparator: "none",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_hidden_3",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("fallback.I don't");
+  });
+
+  it("does not duplicate newlines when previous visible text already ends with newline", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "fallback.\n",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_hidden_4",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("fallback.\nI don't");
+  });
+
+  it("does not insert boundary separator for hidden non-tool status updates", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "status",
+      tag: "available_commands_update",
+      text: "available commands updated",
+    });
+    await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("AB");
+  });
 });
