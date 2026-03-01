@@ -1153,12 +1153,29 @@ export async function autoMigrateLegacyState(params: {
     log: params.log,
   });
 
+  const logMigrationResults = (changes: string[], warnings: string[]) => {
+    const logger = params.log ?? createSubsystemLogger("state-migrations");
+    if (changes.length > 0) {
+      logger.info(
+        `Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    if (warnings.length > 0) {
+      logger.warn(
+        `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+  };
+
   if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
+    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
+    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    logMigrationResults(changes, warnings);
     return {
       migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
       skipped: true,
-      changes: [...stateDirResult.changes, ...orphanKeys.changes],
-      warnings: [...stateDirResult.warnings, ...orphanKeys.warnings],
+      changes,
+      warnings,
     };
   }
 
@@ -1168,11 +1185,14 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
   });
   if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
+    const changes = [...stateDirResult.changes, ...orphanKeys.changes];
+    const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
+    logMigrationResults(changes, warnings);
     return {
       migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
       skipped: false,
-      changes: [...stateDirResult.changes, ...orphanKeys.changes],
-      warnings: [...stateDirResult.warnings, ...orphanKeys.warnings],
+      changes,
+      warnings,
     };
   }
 
@@ -1192,15 +1212,7 @@ export async function autoMigrateLegacyState(params: {
     ...agentDir.warnings,
   ];
 
-  const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (changes.length > 0) {
-    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
-  }
-  if (warnings.length > 0) {
-    logger.warn(
-      `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  }
+  logMigrationResults(changes, warnings);
 
   return {
     migrated: changes.length > 0,
