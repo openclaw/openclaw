@@ -17,7 +17,10 @@ let globalRegistry: PluginRegistry | null = null;
 
 /**
  * Initialize the global hook runner with a plugin registry.
- * Called once when plugins are loaded during gateway startup.
+ * Called exclusively from loadGatewayPlugins() during gateway startup
+ * and SIGUSR1 in-process restarts. Not called from runtime plugin
+ * reloads (tools, providers) — those use loadOpenClawPlugins() which
+ * no longer triggers hook runner initialization.
  */
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
   globalRegistry = registry;
@@ -30,7 +33,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
     catchErrors: true,
   });
 
-  const hookCount = registry.hooks.length;
+  const hookCount = registry.typedHooks.length + registry.hooks.length;
   if (hookCount > 0) {
     log.info(`hook runner initialized with ${hookCount} registered hooks`);
   }
