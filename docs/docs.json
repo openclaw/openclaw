@@ -1370,16 +1370,6 @@
                   "experiments/research/memory",
                   "experiments/proposals/model-config"
                 ]
-              },
-              {
-                "group": "Refactor plans",
-                "pages": [
-                  "refactor/clawnet",
-                  "refactor/exec-host",
-                  "refactor/outbound-session-mirroring",
-                  "refactor/plugin-sdk",
-                  "refactor/strict-config"
-                ]
               }
             ]
           },
