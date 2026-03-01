@@ -60,6 +60,35 @@ export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
   };
 }
 
+async function ensureLaunchAgentLogPathWritable(logPath: string): Promise<void> {
+  const logDir = path.dirname(logPath);
+  await fs.mkdir(logDir, { recursive: true });
+  try {
+    await fs.writeFile(logPath, "", { flag: "a" });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      [
+        `LaunchAgent log path is not writable: ${logPath}`,
+        `Reason: ${reason}`,
+        "launchd requires writable StandardOutPath/StandardErrorPath and exits with EX_CONFIG otherwise.",
+        "Fix permissions for the configured state/log directory and rerun `openclaw gateway install --force`.",
+      ].join("\n"),
+      { cause: error },
+    );
+  }
+}
+
+async function ensureLaunchAgentLogPathsWritable(args: {
+  stdoutPath: string;
+  stderrPath: string;
+}): Promise<void> {
+  const uniquePaths = [...new Set([args.stdoutPath, args.stderrPath])];
+  for (const logPath of uniquePaths) {
+    await ensureLaunchAgentLogPathWritable(logPath);
+  }
+}
+
 export async function readLaunchAgentProgramArguments(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -377,8 +406,8 @@ export async function installLaunchAgent({
   environment,
   description,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
-  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
-  await fs.mkdir(logDir, { recursive: true });
+  const { stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  await ensureLaunchAgentLogPathsWritable({ stdoutPath, stderrPath });
 
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });

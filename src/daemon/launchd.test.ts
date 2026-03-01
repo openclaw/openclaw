@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
+  writeFileFailures: new Set<string>(),
 }));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
@@ -67,6 +68,9 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
     writeFile: vi.fn(async (p: string, data: string) => {
       const key = String(p);
+      if (state.writeFileFailures.has(key)) {
+        throw new Error(`EACCES: permission denied, open '${key}'`);
+      }
       state.files.set(key, data);
       state.dirs.add(String(key.split("/").slice(0, -1).join("/")));
     }),
@@ -81,6 +85,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
+  state.writeFileFailures.clear();
   vi.clearAllMocks();
 });
 
@@ -184,6 +189,22 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("fails with actionable guidance when LaunchAgent log path is not writable", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.writeFileFailures.add("/Users/test/.openclaw/logs/gateway.log");
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow(
+      "LaunchAgent log path is not writable: /Users/test/.openclaw/logs/gateway.log",
+    );
+    expect(state.launchctlCalls).toEqual([]);
   });
 
   it("writes KeepAlive=true policy", async () => {
