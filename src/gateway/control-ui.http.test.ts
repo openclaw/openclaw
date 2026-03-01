@@ -326,6 +326,21 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("does not handle /api paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
+          const { handled } = runControlUiRequest({
+            url: apiPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${apiPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
   it("rejects absolute-path escape attempts under basePath routes", async () => {
     await withBasePathRootFixture({
       siblingDir: "ui-secrets",
