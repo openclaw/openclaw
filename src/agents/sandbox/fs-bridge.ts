@@ -23,6 +23,7 @@ type PathSafetyOptions = {
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowMissingTarget?: boolean;
+  allowExistingDirectory?: boolean;
 };
 
 export type SandboxResolvedPath = {
@@ -132,7 +133,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowExistingDirectory: true,
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -260,12 +265,20 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       aliasPolicy: options.aliasPolicy,
     });
     if (!guarded.ok) {
+      const existingDirectoryAllowed =
+        options.allowExistingDirectory &&
+        guarded.reason === "validation" &&
+        (await this.isExistingDirectory(target.hostPath));
       if (guarded.reason !== "path" || options.allowMissingTarget === false) {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+        if (existingDirectoryAllowed) {
+          // Keep going so canonical mount and writability checks still run.
+        } else {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
       }
     } else {
       fs.closeSync(guarded.fd);
@@ -285,6 +298,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
+    }
+  }
+
+  private async isExistingDirectory(hostPath: string): Promise<boolean> {
+    try {
+      const stat = await fs.promises.stat(hostPath);
+      return stat.isDirectory();
+    } catch {
+      return false;
     }
   }
 
