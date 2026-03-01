@@ -591,10 +591,17 @@ async function uploadImageBlock(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     const items: any[] = [];
     let pageToken: string | undefined;
+    let pages = 0;
+    const MAX_PAGES = 20; // 20 × 200 = 4000 siblings; enough for any real document
     do {
+      if (pages++ >= MAX_PAGES) {
+        throw new Error(
+          `after_block_id resolution exceeded ${MAX_PAGES} pages; parent block has too many children`,
+        );
+      }
       const res = await client.docx.documentBlockChildren.get({
         path: { document_id: docToken, block_id: parentBlockId },
-        params: pageToken ? { page_token: pageToken } : {},
+        params: { ...(pageToken ? { page_token: pageToken } : {}), page_size: 200 },
       });
       if (res.code !== 0) throw new Error(res.msg);
       items.push(...(res.data?.items ?? []));
