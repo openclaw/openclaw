@@ -5,7 +5,31 @@ vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   addWildcardAllowFrom: vi.fn(),
   formatDocsLink: (_url: string, fallback: string) => fallback,
+  hasConfiguredSecretInput: (value: unknown) => {
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const ref = value as { source?: unknown; provider?: unknown; id?: unknown };
+    const validSource = ref.source === "env" || ref.source === "file" || ref.source === "exec";
+    return (
+      validSource &&
+      typeof ref.provider === "string" &&
+      ref.provider.trim().length > 0 &&
+      typeof ref.id === "string" &&
+      ref.id.trim().length > 0
+    );
+  },
   mergeAllowFromEntries: (_existing: unknown, entries: string[]) => entries,
+  normalizeSecretInputString: (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  },
   normalizeAccountId: (value?: string | null) =>
     value && value.trim().length > 0 ? value : "default",
   promptAccountId: vi.fn(),
