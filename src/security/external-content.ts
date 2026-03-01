@@ -116,6 +116,16 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x27e9: ">", // mathematical right angle bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
+  0x00ab: "<", // left-pointing double angle quotation mark
+  0x00bb: ">", // right-pointing double angle quotation mark
+  0x300a: "<", // left double angle bracket
+  0x300b: ">", // right double angle bracket
+  0x27ea: "<", // mathematical left double angle bracket
+  0x27eb: ">", // mathematical right double angle bracket
+  0x276c: "<", // medium left-pointing angle bracket ornament
+  0x276d: ">", // medium right-pointing angle bracket ornament
+  0x276e: "<", // heavy left-pointing angle quotation mark ornament
+  0x276f: ">", // heavy right-pointing angle quotation mark ornament
 };
 
 function foldMarkerChar(char: string): string {
