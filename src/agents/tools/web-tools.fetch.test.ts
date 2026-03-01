@@ -377,7 +377,9 @@ describe("web_fetch extraction fallbacks", () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev/v2/scrape")) {
-        return Promise.resolve(firecrawlResponse("firecrawl timeout override")) as Promise<Response>;
+        return Promise.resolve(
+          firecrawlResponse("firecrawl timeout override"),
+        ) as Promise<Response>;
       }
       return Promise.resolve(
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
@@ -408,7 +410,9 @@ describe("web_fetch extraction fallbacks", () => {
     const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);
       if (url.includes("api.firecrawl.dev/v2/scrape")) {
-        return Promise.resolve(firecrawlResponse("firecrawl configured timeout")) as Promise<Response>;
+        return Promise.resolve(
+          firecrawlResponse("firecrawl configured timeout"),
+        ) as Promise<Response>;
       }
       return Promise.resolve(
         htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
