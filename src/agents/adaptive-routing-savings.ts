@@ -139,6 +139,12 @@ export type RecordAdaptiveRunParams =
  * Append one run's outcome to the savings ledger.
  * Uses a read-modify-write with best-effort (fire-and-forget): errors are
  * swallowed so a ledger write failure never breaks an agent run.
+ *
+ * Concurrency note: This uses a simple read-modify-write without file locking.
+ * Concurrent agent runs may race, causing some ledger updates to be lost.
+ * This is acceptable for best-effort telemetry — token savings are approximate.
+ * If accurate counting is required in the future, consider using proper file
+ * locking or an atomic append-only log format.
  */
 export async function recordAdaptiveRun(
   stateDir: string,

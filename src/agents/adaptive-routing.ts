@@ -365,6 +365,13 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
   const maxEscalations = arCfg.maxEscalations ?? 1;
   const validationMode = arCfg.validation?.mode ?? "heuristic";
 
+  if (validationMode === "llm") {
+    log.warn(
+      "[adaptive-routing] LLM validation mode is experimental and not fully implemented; " +
+        "will fall back to heuristic validation. See docs for details.",
+    );
+  }
+
   log.info(
     `[adaptive-routing] starting: local=${localProvider}/${localModel} cloud=${cloudProvider}/${cloudModel} validationMode=${validationMode}`,
   );
