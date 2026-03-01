@@ -62,6 +62,7 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import type { TabHistoryEntry } from "./conversation-tabs.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -118,6 +119,19 @@ function uniquePreserveOrder(values: string[]): string[] {
     output.push(normalized);
   }
   return output;
+}
+
+function formatHistoryDate(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+  if (sameDay) {
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
@@ -342,15 +356,7 @@ export function renderApp(state: AppViewState) {
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.resetToolStream();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
+                  state.setSessionKey(next);
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
@@ -973,81 +979,251 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "chat"
-            ? renderChat({
-                sessionKey: state.sessionKey,
-                onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.chatAttachments = [];
-                  state.chatStream = null;
-                  state.chatStreamStartedAt = null;
-                  state.chatRunId = null;
-                  state.chatQueue = [];
-                  state.resetToolStream();
-                  state.resetChatScroll();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
-                  void loadChatHistory(state);
-                  void refreshChatAvatar(state);
-                },
-                thinkingLevel: state.chatThinkingLevel,
-                showThinking,
-                loading: state.chatLoading,
-                sending: state.chatSending,
-                compactionStatus: state.compactionStatus,
-                fallbackStatus: state.fallbackStatus,
-                assistantAvatarUrl: chatAvatarUrl,
-                messages: state.chatMessages,
-                toolMessages: state.chatToolMessages,
-                stream: state.chatStream,
-                streamStartedAt: state.chatStreamStartedAt,
-                draft: state.chatMessage,
-                queue: state.chatQueue,
-                connected: state.connected,
-                canSend: state.connected,
-                disabledReason: chatDisabledReason,
-                error: state.lastError,
-                sessions: state.sessionsResult,
-                focusMode: chatFocus,
-                onRefresh: () => {
-                  state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
-                },
-                onToggleFocusMode: () => {
-                  if (state.onboarding) {
-                    return;
-                  }
-                  state.applySettings({
-                    ...state.settings,
-                    chatFocusMode: !state.settings.chatFocusMode,
-                  });
-                },
-                onChatScroll: (event) => state.handleChatScroll(event),
-                onDraftChange: (next) => (state.chatMessage = next),
-                attachments: state.chatAttachments,
-                onAttachmentsChange: (next) => (state.chatAttachments = next),
-                onSend: () => state.handleSendChat(),
-                canAbort: Boolean(state.chatRunId),
-                onAbort: () => void state.handleAbortChat(),
-                onQueueRemove: (id) => state.removeQueuedMessage(id),
-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
-                showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
-                onScrollToBottom: () => state.scrollToBottom(),
-                // Sidebar props for tool output viewing
-                sidebarOpen: state.sidebarOpen,
-                sidebarContent: state.sidebarContent,
-                sidebarError: state.sidebarError,
-                splitRatio: state.splitRatio,
-                onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
-                onCloseSidebar: () => state.handleCloseSidebar(),
-                onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
-                assistantName: state.assistantName,
-                assistantAvatar: state.assistantAvatar,
-              })
+            ? html`<div class="chat-with-tabs">
+                <div class="chat-tab-bar">
+                  ${state.conversationTabs.map(
+                    (t) => html`
+                      <div
+                        class="chat-tab ${t.id === state.activeConversationId ? "chat-tab--active" : ""} chat-tab--${t.color}"
+                        title="${t.label}"
+                      >
+                        <button
+                          type="button"
+                          class="chat-tab-inner"
+                          @click=${() => state.selectConversationTab(t.id)}
+                          @dblclick=${(e: Event) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            state.startEditingTab(t.id);
+                          }}
+                        >
+                          <span
+                            class="chat-tab-swatch"
+                            title="Change tab color"
+                            @click=${(e: Event) => {
+                              e.stopPropagation();
+                              state.setTabColor(t.id);
+                            }}
+                          ></span>
+                          <span class="chat-tab-icon">${icons.messageSquare}</span>
+                          <span class="chat-tab-label">${t.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="chat-tab-close"
+                          title="Close tab"
+                          @click=${(_e: Event) => state.closeConversationTab(t.id)}
+                        >×</button>
+                      </div>
+                    `,
+                  )}
+                  <button
+                    type="button"
+                    class="chat-tab-add"
+                    title="New conversation"
+                    @click=${() => state.addConversationTab()}
+                  >
+                    +
+                  </button>
+                </div>
+                ${
+                  state.editingTabId
+                    ? (() => {
+                        const editingTab = state.conversationTabs.find(
+                          (c) => c.id === state.editingTabId,
+                        );
+                        if (!editingTab) {
+                          return nothing;
+                        }
+                        return html`<div class="chat-rename-overlay" @click=${() => state.stopEditingTab()}>
+                        <div
+                          class="chat-rename-popup"
+                          @click=${(e: Event) => e.stopPropagation()}
+                        >
+                          <div class="chat-rename-title">Rename tab</div>
+                          <input
+                            class="chat-rename-input"
+                            type="text"
+                            .value=${editingTab.label}
+                            autofocus
+                            @keydown=${(e: KeyboardEvent) => {
+                              if (e.key === "Escape") {
+                                state.stopEditingTab();
+                              }
+                              if (e.key === "Enter") {
+                                const input = e.target as HTMLInputElement;
+                                state.setTabLabel(editingTab.id, input.value);
+                              }
+                            }}
+                          />
+                          <div class="chat-rename-actions">
+                            <button
+                              type="button"
+                              class="btn btn--secondary chat-rename-cancel"
+                              @click=${() => state.stopEditingTab()}
+                            >Cancel</button>
+                            <button
+                              type="button"
+                              class="btn btn--primary chat-rename-save"
+                              @click=${(e: Event) => {
+                                const input = (e.target as HTMLElement)
+                                  .closest(".chat-rename-popup")
+                                  ?.querySelector(".chat-rename-input") as HTMLInputElement;
+                                if (input) {
+                                  state.setTabLabel(editingTab.id, input.value);
+                                }
+                              }}
+                            >Save</button>
+                          </div>
+                        </div>
+                      </div>`;
+                      })()
+                    : nothing
+                }
+                ${
+                  state.deletingHistoryEntry
+                    ? (() => {
+                        const entry = state.deletingHistoryEntry;
+                        return html`<div class="chat-rename-overlay" @click=${() => state.cancelDeleteHistory()}>
+                        <div
+                          class="chat-rename-popup"
+                          @click=${(e: Event) => e.stopPropagation()}
+                        >
+                          <div class="chat-rename-title">Delete this tab?</div>
+                          <p class="chat-delete-message">"${entry.label}" will be removed from history. You can't undo this.</p>
+                          <div class="chat-rename-actions">
+                            <button
+                              type="button"
+                              class="btn btn--secondary chat-rename-cancel"
+                              @click=${() => state.cancelDeleteHistory()}
+                            >Cancel</button>
+                            <button
+                              type="button"
+                              class="btn danger chat-delete-confirm"
+                              @click=${() => state.confirmDeleteHistory()}
+                            >Delete</button>
+                          </div>
+                        </div>
+                      </div>`;
+                      })()
+                    : nothing
+                }
+                <div class="chat-body">
+                  <div class="chat-main">
+                    ${renderChat({
+                      sessionKey: state.sessionKey,
+                      onSessionKeyChange: (next) => {
+                        state.setSessionKey(next);
+                      },
+                      thinkingLevel: state.chatThinkingLevel,
+                      showThinking,
+                      loading: state.chatLoading,
+                      sending: state.chatSending,
+                      compactionStatus: state.compactionStatus,
+                      fallbackStatus: state.fallbackStatus,
+                      assistantAvatarUrl: chatAvatarUrl,
+                      messages: state.chatMessages,
+                      toolMessages: state.chatToolMessages,
+                      stream: state.chatStream,
+                      streamStartedAt: state.chatStreamStartedAt,
+                      draft: state.chatMessage,
+                      queue: state.chatQueue,
+                      connected: state.connected,
+                      canSend: state.connected,
+                      disabledReason: chatDisabledReason,
+                      error: state.lastError,
+                      sessions: state.sessionsResult,
+                      focusMode: chatFocus,
+                      onRefresh: () => {
+                        state.resetToolStream();
+                        return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                      },
+                      onToggleFocusMode: () => {
+                        if (state.onboarding) {
+                          return;
+                        }
+                        state.applySettings({
+                          ...state.settings,
+                          chatFocusMode: !state.settings.chatFocusMode,
+                        });
+                      },
+                      onChatScroll: (event) => state.handleChatScroll(event),
+                      onDraftChange: (next) => (state.chatMessage = next),
+                      attachments: state.chatAttachments,
+                      onAttachmentsChange: (next) => (state.chatAttachments = next),
+                      onSend: () => state.handleSendChat(),
+                      canAbort: Boolean(state.chatRunId),
+                      onAbort: () => void state.handleAbortChat(),
+                      onQueueRemove: (id) => state.removeQueuedMessage(id),
+                      onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                      showNewMessages:
+                        state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
+                      onScrollToBottom: () => state.scrollToBottom(),
+                      // Sidebar props for tool output viewing
+                      sidebarOpen: state.sidebarOpen,
+                      sidebarContent: state.sidebarContent,
+                      sidebarError: state.sidebarError,
+                      splitRatio: state.splitRatio,
+                      onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
+                      onCloseSidebar: () => state.handleCloseSidebar(),
+                      onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+                      assistantName: state.assistantName,
+                      assistantAvatar: state.assistantAvatar,
+                    })}
+                  </div>
+                  <aside class="chat-tab-history">
+                    <div class="chat-tab-history-header">Tab history</div>
+                    <div class="chat-tab-history-settings">
+                      <label for="history-limit">Keep last</label>
+                      <select
+                        id="history-limit"
+                        title="Number of closed conversations to keep"
+                        .value=${String(state.historyLimit)}
+                        @change=${(e: Event) => {
+                          const v = (e.target as HTMLSelectElement).value;
+                          const n = parseInt(v, 10);
+                          if (n === 10 || n === 20 || n === 30 || n === 40) {
+                            state.setHistoryLimit(n);
+                          }
+                        }}
+                      >
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                        <option value="30">30</option>
+                        <option value="40">40</option>
+                      </select>
+                      <span class="chat-tab-history-suffix">windows</span>
+                    </div>
+                    <div class="chat-tab-history-list">
+                      ${state.tabHistory.map(
+                        (entry: TabHistoryEntry) => html`
+                          <div class="chat-tab-history-item">
+                            <button
+                              type="button"
+                              class="chat-tab-history-item-main"
+                              @click=${() => state.reopenFromHistory(entry)}
+                            >
+                              <span class="chat-tab-history-swatch chat-tab-history-swatch--${entry.color}"></span>
+                              <span class="chat-tab-history-label">${entry.label}</span>
+                              <span class="chat-tab-history-date">${formatHistoryDate(entry.closedAt)}</span>
+                            </button>
+                            <button
+                              type="button"
+                              class="chat-tab-history-item-delete"
+                              title="Delete from history"
+                              @click=${(e: Event) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                state.startDeletingHistory(entry);
+                              }}
+                            >−</button>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  </aside>
+                </div>
+              </div>`
             : nothing
         }
 

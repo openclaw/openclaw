@@ -250,7 +250,7 @@
 .theme-toggle__track {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, var(--theme-item));
+  grid-template-columns: repeat(7, var(--theme-item));
   gap: var(--theme-gap);
   padding: var(--theme-pad);
   border-radius: var(--radius-full);
@@ -1698,7 +1698,7 @@
 }
 
 .chat-line.user {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .chat-line.assistant,
@@ -1713,7 +1713,7 @@
 }
 
 .chat-line.user .chat-msg {
-  justify-items: end;
+  justify-items: start;
 }
 
 /* Chat bubbles */
@@ -2001,7 +2001,7 @@
 }
 
 .chat-line.user .chat-stamp {
-  text-align: right;
+  text-align: left;
 }
 
 /* Chat compose */

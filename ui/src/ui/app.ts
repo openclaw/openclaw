@@ -18,6 +18,7 @@ import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  refreshChatAvatar,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -43,6 +44,7 @@ import {
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   onPopState as onPopStateInternal,
+  syncUrlWithSessionKey as syncUrlWithSessionKeyInternal,
 } from "./app-settings.ts";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -53,11 +55,21 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import {
+  loadConversationTabsState,
+  saveConversationTabsState,
+  trimHistoryToLimit,
+  TAB_COLORS,
+  type ConversationTab,
+  type TabHistoryEntry,
+  type HistoryLimit,
+} from "./conversation-tabs.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
@@ -112,6 +124,7 @@ export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
   @state() settings: UiSettings = loadSettings();
+  private initConvState = loadConversationTabsState(this.settings.sessionKey);
   constructor() {
     super();
     if (isSupportedLocale(this.settings.locale)) {
@@ -136,7 +149,16 @@ export class OpenClawApp extends LitElement {
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
 
-  @state() sessionKey = this.settings.sessionKey;
+  @state() conversationTabs: ConversationTab[] = this.initConvState.conversationTabs;
+  @state() activeConversationId: string | null = this.initConvState.activeConversationId;
+  @state() tabHistory: TabHistoryEntry[] = this.initConvState.tabHistory;
+  @state() historyLimit: HistoryLimit = this.initConvState.historyLimit;
+  @state() editingTabId: string | null = null;
+  @state() deletingHistoryEntry: TabHistoryEntry | null = null;
+  @state() sessionKey =
+    this.initConvState.conversationTabs.find(
+      (t) => t.id === this.initConvState.activeConversationId,
+    )?.sessionKey ?? this.settings.sessionKey;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
@@ -396,6 +418,28 @@ export class OpenClawApp extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    // After URL params: if we have tab state, make active tab's session win so reload shows correct conversation
+    const activeId = this.activeConversationId;
+    if (activeId) {
+      const tab = this.conversationTabs.find((t) => t.id === activeId);
+      if (tab && tab.sessionKey !== this.sessionKey) {
+        this.sessionKey = tab.sessionKey;
+        this.applySettings({
+          ...this.settings,
+          sessionKey: tab.sessionKey,
+          lastActiveSessionKey: tab.sessionKey,
+        });
+        syncUrlWithSessionKeyInternal(
+          this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+          tab.sessionKey,
+          true,
+        );
+        if (this.tab === "chat") {
+          void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+          void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+        }
+      }
+    }
   }
 
   protected firstUpdated() {
@@ -608,6 +652,260 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  private persistConversationTabs() {
+    saveConversationTabsState({
+      conversationTabs: this.conversationTabs,
+      activeConversationId: this.activeConversationId,
+      tabHistory: this.tabHistory,
+      historyLimit: this.historyLimit,
+    });
+  }
+
+  /**
+   * Set session key from a non-tab-switch path (e.g. session dropdown, URL).
+   * Updates active tab record and persists so switching tabs does not revert.
+   */
+  setSessionKey(next: string) {
+    const sessionKey = next.trim();
+    if (!sessionKey || this.sessionKey === sessionKey) {
+      return;
+    }
+    this.sessionKey = sessionKey;
+    this.chatMessage = "";
+    this.chatAttachments = [];
+    this.chatStream = null;
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.chatQueue = [];
+    this.resetToolStream();
+    this.resetChatScroll();
+    this.applySettings({
+      ...this.settings,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      sessionKey,
+      true,
+    );
+    const activeId = this.activeConversationId;
+    if (activeId) {
+      this.conversationTabs = this.conversationTabs.map((t) =>
+        t.id === activeId ? { ...t, sessionKey } : t,
+      );
+      this.persistConversationTabs();
+    }
+    void this.loadAssistantIdentity();
+    void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+    void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+  }
+
+  addConversationTab() {
+    const id = generateUUID();
+    const sessionKey = `main-${id.slice(0, 8)}`;
+    const newTab: ConversationTab = {
+      id,
+      label: "New chat",
+      color: "purple",
+      sessionKey,
+    };
+    this.conversationTabs = [...this.conversationTabs, newTab];
+    this.activeConversationId = id;
+    this.sessionKey = sessionKey;
+    this.chatMessage = "";
+    this.chatAttachments = [];
+    this.chatStream = null;
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.chatQueue = [];
+    this.resetToolStream();
+    this.resetChatScroll();
+    this.applySettings({
+      ...this.settings,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      sessionKey,
+      true,
+    );
+    void this.loadAssistantIdentity();
+    void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+    void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+    this.persistConversationTabs();
+  }
+
+  closeConversationTab(tabId: string) {
+    const tab = this.conversationTabs.find((t) => t.id === tabId);
+    if (!tab || this.conversationTabs.length <= 1) {
+      return;
+    }
+    const nextTabs = this.conversationTabs.filter((t) => t.id !== tabId);
+    const entry: TabHistoryEntry = {
+      id: tab.id,
+      label: tab.label,
+      color: tab.color,
+      sessionKey: tab.sessionKey,
+      closedAt: Date.now(),
+    };
+    let nextHistory = [entry, ...this.tabHistory];
+    nextHistory = trimHistoryToLimit(nextHistory, this.historyLimit);
+    this.tabHistory = nextHistory;
+    this.conversationTabs = nextTabs;
+    const wasActive = this.activeConversationId === tabId;
+    if (wasActive) {
+      const nextActive = nextTabs[0];
+      this.activeConversationId = nextActive.id;
+      this.sessionKey = nextActive.sessionKey;
+      this.chatMessage = "";
+      this.chatAttachments = [];
+      this.chatStream = null;
+      this.chatStreamStartedAt = null;
+      this.chatRunId = null;
+      this.chatQueue = [];
+      this.resetToolStream();
+      this.resetChatScroll();
+      this.applySettings({
+        ...this.settings,
+        sessionKey: nextActive.sessionKey,
+        lastActiveSessionKey: nextActive.sessionKey,
+      });
+      syncUrlWithSessionKeyInternal(
+        this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+        nextActive.sessionKey,
+        true,
+      );
+      void this.loadAssistantIdentity();
+      void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+      void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+    }
+    this.persistConversationTabs();
+  }
+
+  selectConversationTab(tabId: string) {
+    const tab = this.conversationTabs.find((t) => t.id === tabId);
+    if (!tab || this.activeConversationId === tabId) {
+      return;
+    }
+    this.activeConversationId = tabId;
+    this.sessionKey = tab.sessionKey;
+    this.chatMessage = "";
+    this.chatAttachments = [];
+    this.chatStream = null;
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.chatQueue = [];
+    this.resetToolStream();
+    this.resetChatScroll();
+    this.applySettings({
+      ...this.settings,
+      sessionKey: tab.sessionKey,
+      lastActiveSessionKey: tab.sessionKey,
+    });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      tab.sessionKey,
+      true,
+    );
+    void this.loadAssistantIdentity();
+    void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+    void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+    this.persistConversationTabs();
+  }
+
+  reopenFromHistory(entry: TabHistoryEntry) {
+    const newTab: ConversationTab = {
+      id: entry.id,
+      label: entry.label,
+      color: entry.color,
+      sessionKey: entry.sessionKey,
+    };
+    this.conversationTabs = [...this.conversationTabs, newTab];
+    this.tabHistory = this.tabHistory.filter((e) => e.id !== entry.id);
+    this.activeConversationId = newTab.id;
+    this.sessionKey = newTab.sessionKey;
+    this.chatMessage = "";
+    this.chatAttachments = [];
+    this.chatStream = null;
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.chatQueue = [];
+    this.resetToolStream();
+    this.resetChatScroll();
+    this.applySettings({
+      ...this.settings,
+      sessionKey: newTab.sessionKey,
+      lastActiveSessionKey: newTab.sessionKey,
+    });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      newTab.sessionKey,
+      true,
+    );
+    void this.loadAssistantIdentity();
+    void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+    void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+    this.persistConversationTabs();
+  }
+
+  setHistoryLimit(limit: HistoryLimit) {
+    this.historyLimit = limit;
+    this.tabHistory = trimHistoryToLimit(this.tabHistory, limit);
+    this.persistConversationTabs();
+  }
+
+  setTabColor(tabId: string) {
+    const tab = this.conversationTabs.find((t) => t.id === tabId);
+    if (!tab) {
+      return;
+    }
+    const idx = TAB_COLORS.indexOf(tab.color);
+    const nextColor = TAB_COLORS[(idx + 1) % TAB_COLORS.length];
+    this.conversationTabs = this.conversationTabs.map((t) =>
+      t.id === tabId ? { ...t, color: nextColor } : t,
+    );
+    this.persistConversationTabs();
+  }
+
+  setTabLabel(tabId: string, label: string) {
+    const trimmed = label.trim() || "New chat";
+    this.conversationTabs = this.conversationTabs.map((t) =>
+      t.id === tabId ? { ...t, label: trimmed } : t,
+    );
+    this.editingTabId = null;
+    this.persistConversationTabs();
+  }
+
+  startEditingTab(tabId: string) {
+    this.editingTabId = tabId;
+  }
+
+  stopEditingTab() {
+    this.editingTabId = null;
+  }
+
+  removeFromTabHistory(entry: TabHistoryEntry) {
+    this.tabHistory = this.tabHistory.filter((e) => e.id !== entry.id);
+    this.persistConversationTabs();
+  }
+
+  startDeletingHistory(entry: TabHistoryEntry) {
+    this.deletingHistoryEntry = entry;
+  }
+
+  cancelDeleteHistory() {
+    this.deletingHistoryEntry = null;
+  }
+
+  confirmDeleteHistory() {
+    if (this.deletingHistoryEntry) {
+      this.removeFromTabHistory(this.deletingHistoryEntry);
+      this.deletingHistoryEntry = null;
+    }
   }
 
   render() {

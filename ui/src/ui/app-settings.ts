@@ -276,7 +276,7 @@ export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) 
   }
   const root = document.documentElement;
   root.dataset.theme = resolved;
-  root.style.colorScheme = resolved;
+  root.style.colorScheme = resolved === "light" ? "light" : "dark";
 }
 
 export function attachThemeListener(host: SettingsHost) {

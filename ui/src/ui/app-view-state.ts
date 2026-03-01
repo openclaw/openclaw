@@ -5,10 +5,12 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import type { ConversationTab, TabHistoryEntry, HistoryLimit } from "./conversation-tabs.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ResolvedTheme } from "./theme.ts";
 import type { ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -52,7 +54,7 @@ export type AppViewState = {
   basePath: string;
   connected: boolean;
   theme: ThemeMode;
-  themeResolved: "light" | "dark";
+  themeResolved: ResolvedTheme;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -61,6 +63,24 @@ export type AppViewState = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
+  conversationTabs: ConversationTab[];
+  activeConversationId: string | null;
+  tabHistory: TabHistoryEntry[];
+  historyLimit: HistoryLimit;
+  addConversationTab: () => void;
+  closeConversationTab: (tabId: string) => void;
+  selectConversationTab: (tabId: string) => void;
+  reopenFromHistory: (entry: TabHistoryEntry) => void;
+  setHistoryLimit: (limit: HistoryLimit) => void;
+  setTabColor: (tabId: string) => void;
+  setTabLabel: (tabId: string, label: string) => void;
+  editingTabId: string | null;
+  startEditingTab: (tabId: string) => void;
+  stopEditingTab: () => void;
+  deletingHistoryEntry: TabHistoryEntry | null;
+  startDeletingHistory: (entry: TabHistoryEntry) => void;
+  cancelDeleteHistory: () => void;
+  confirmDeleteHistory: () => void;
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
