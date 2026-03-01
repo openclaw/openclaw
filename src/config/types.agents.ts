@@ -5,6 +5,19 @@ import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+/**
+ * Agent-level access control restrictions.
+ * Used to limit where an agent can respond.
+ */
+export type AgentRestrictionsConfig = {
+  /**
+   * Chat types this agent is allowed to participate in.
+   * Omit or empty = all types allowed.
+   * Example: ["direct"] to restrict agent to DMs only.
+   */
+  allowedChatTypes?: ChatType[];
+};
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
@@ -21,6 +34,8 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
+  /** Access control restrictions for this agent. */
+  restrictions?: AgentRestrictionsConfig;
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];

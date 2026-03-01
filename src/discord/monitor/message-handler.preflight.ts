@@ -1,4 +1,9 @@
 import { ChannelType, MessageType, type User } from "@buape/carbon";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
+import { checkAgentAllowedForChat } from "../../agents/agent-access-control.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import {
@@ -48,10 +53,6 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
-import type {
-  DiscordMessagePreflightContext,
-  DiscordMessagePreflightParams,
-} from "./message-handler.preflight.types.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -471,6 +472,28 @@ export async function preflightDiscordMessage(
   if (isGuildMessage) {
     logDebug(`[discord-preflight] pass: channel allowed`);
     logVerbose(`discord: allow channel ${messageChannelId} (${channelMatchMeta})`);
+  }
+
+  // Agent access control: check if agent is allowed in this chat context
+  const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
+  const accessCheck = checkAgentAllowedForChat({
+    agentId: route.agentId,
+    chatType,
+    cfg: params.cfg,
+  });
+  if (!accessCheck.allowed) {
+    logInboundDrop({
+      channel: "discord",
+      accountId: params.accountId,
+      peerId: isDirectMessage ? author.id : message.channelId,
+      reason: accessCheck.reason ?? "access_denied",
+      meta: {
+        agentId: route.agentId,
+        chatType,
+        description: accessCheck.description,
+      },
+    });
+    return null;
   }
 
   const textForHistory = resolveDiscordMessageText(message, {

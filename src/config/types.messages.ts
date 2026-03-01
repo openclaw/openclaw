@@ -4,6 +4,15 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Allowlist of agent IDs that can respond in group chats.
+   * If set, only these agents will be allowed to respond in groups.
+   * Omit or empty to allow all agents in group chats.
+   *
+   * Note: This can also be set at the channel-specific group config level
+   * (e.g., telegram.groups[].allowedAgents) for per-group restrictions.
+   */
+  allowedAgents?: string[];
 };
 
 export type DmConfig = {
