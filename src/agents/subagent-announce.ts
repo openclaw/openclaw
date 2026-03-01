@@ -555,7 +555,12 @@ async function resolveSubagentCompletionOrigin(params: {
         routeMode: "fallback",
       };
     }
-    if (hookOrigin.channel && !isDeliverableMessageChannel(hookOrigin.channel)) {
+    if (hookOrigin.channel && isInternalMessageChannel(hookOrigin.channel)) {
+      // Ignore internal channel hints (webchat) so a valid persisted route
+      // can still be used for outbound delivery. Non-standard channels that
+      // are not in the deliverable list should NOT be stripped here — doing
+      // so causes the session entry's stale lastChannel to override the
+      // hook-provided origin, leading to delivery failures.
       return {
         origin: requesterOrigin,
         routeMode: "fallback",
