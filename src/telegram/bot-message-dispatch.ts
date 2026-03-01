@@ -695,6 +695,26 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (!hasFinalResponse) {
+    // Remove ack reaction even when agent returns NO_REPLY (fixes #30585)
+    if (!statusReactionController) {
+      removeAckReactionAfterReply({
+        removeAfterReply: removeAckAfterReply,
+        ackReactionPromise,
+        ackReactionValue: ackReactionPromise ? "ack" : null,
+        remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+        onError: (err) => {
+          if (!msg.message_id) {
+            return;
+          }
+          logAckFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: `${chatId}/${msg.message_id}`,
+            error: err,
+          });
+        },
+      });
+    }
     clearGroupHistory();
     return;
   }
