@@ -188,6 +188,43 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
   });
 
+  test("dangerouslyDisableDeviceAuth allows without shared auth", () => {
+    const bypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    // When dangerouslyDisableDeviceAuth=true, allow connection even without shared auth
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+
+    // Also works for node role
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: false,
+        authOk: false,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+  });
+
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
     const cases: Array<{
       role: "operator" | "node";

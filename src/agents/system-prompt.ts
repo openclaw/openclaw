@@ -45,10 +45,7 @@ function buildMemorySection(params: {
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
+  const lines = ["## Memory Recall"];
   if (params.citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
