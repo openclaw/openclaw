@@ -9,6 +9,7 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
@@ -26,11 +27,9 @@ services:
         "--port",
         "18789",
       ]
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.openclaw.rule=Host(`openclaw.home.arpa`)"
-      - "traefik.http.routers.openclaw.entrypoints=web"
-      - "traefik.http.services.openclaw.loadbalancer.server.port=18789"
+    shm_size: '2gb'
+    cap_add:
+      - SYS_ADMIN
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}

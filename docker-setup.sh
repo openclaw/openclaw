@@ -327,6 +327,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   docker build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=1"
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"
