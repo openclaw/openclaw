@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **SerpApi Search** — SerpApi search provider with vertical search routing (News, Scholar, Images, Shopping, Maps, Jobs, Finance, Patents, YouTube, and alternative engines).
+  npm: `openclaw-serpapi-search`
+  repo: `https://github.com/xiaoyaner0201/openclaw-serpapi-search`
+  install: `openclaw plugins install openclaw-serpapi-search`
