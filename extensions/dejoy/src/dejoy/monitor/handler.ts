@@ -231,7 +231,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const senderName = await getMemberDisplayName(roomId, senderId);
       const storeAllowFrom = await pairing.readAllowFromStore().catch(() => []);
-      const effectiveAllowFrom = normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
+      // Allowlist policy: only configured allowFrom; do not merge pairing store (strict lock-down).
+      const effectiveAllowFrom =
+        dmPolicy === "allowlist"
+          ? normalizeMatrixAllowList(allowFrom)
+          : normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
       const groupAllowFrom = (cfg.channels?.dejoy?.groupAllowFrom ?? []) as Array<string | number>;
       const effectiveGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);
       const groupAllowConfigured = effectiveGroupAllowFrom.length > 0;
