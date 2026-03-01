@@ -1125,4 +1125,128 @@ describe("tts", () => {
       });
     });
   });
+  // ── textToSpeechTelephony (local provider) ──────────────────────────────
+
+  describe("local provider — textToSpeechTelephony", () => {
+    const baseCfg = (): OpenClawConfig => ({
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "local",
+          edge: { enabled: false },
+          local: {
+            command: "/usr/local/bin/fake-tts",
+            args: ["--format", "{{Format}}", "--out", "{{Output}}"],
+          },
+        },
+      },
+    });
+
+    const okResult = () => ({
+      stdout: "",
+      stderr: "",
+      code: 0 as number | null,
+      signal: null as NodeJS.Signals | null,
+      killed: false,
+      termination: "exit" as const,
+    });
+
+    beforeEach(() => {
+      vi.mocked(runCommandWithTimeout).mockResolvedValue(okResult());
+      vi.mocked(existsSync).mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      vi.mocked(existsSync).mockImplementation(_origExistsSync);
+    });
+
+    it("returns success with pcm format and 22050 sample rate", async () => {
+      const { writeFileSync } = await import("node:fs");
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        // Write a real PCM file to {{Output}} so readFileSync in the implementation succeeds.
+        const outIdx = argv.indexOf("--out");
+        if (outIdx !== -1) {
+          writeFileSync(argv[outIdx + 1], Buffer.alloc(44100));
+        }
+        return okResult();
+      });
+
+      const result = await tts.textToSpeechTelephony({
+        text: "Hello telephony",
+        cfg: baseCfg(),
+        prefsPath: `/tmp/tts-local-telephony-${Date.now()}.json`,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.provider).toBe("local");
+      expect(result.outputFormat).toBe("pcm");
+      expect(result.sampleRate).toBe(22050);
+      expect(result.audioBuffer).toBeDefined();
+    });
+
+    it("passes Format=pcm and Channel=telephony placeholders to command", async () => {
+      const { writeFileSync } = await import("node:fs");
+      const cfg: OpenClawConfig = {
+        ...baseCfg(),
+        messages: {
+          tts: {
+            ...baseCfg().messages!.tts,
+            local: {
+              command: "/usr/local/bin/fake-tts",
+              args: ["--format", "{{Format}}", "--channel", "{{Channel}}", "--out", "{{Output}}"],
+            },
+          },
+        },
+      };
+      let capturedArgv: string[] = [];
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+        capturedArgv = argv;
+        // Write a fake PCM file to {{Output}} so readFileSync succeeds.
+        const outIdx = argv.indexOf("--out");
+        if (outIdx !== -1) {
+          writeFileSync(argv[outIdx + 1], Buffer.alloc(0));
+        }
+        return okResult();
+      });
+
+      await tts.textToSpeechTelephony({
+        text: "test",
+        cfg,
+        prefsPath: `/tmp/tts-local-telephony-args-${Date.now()}.json`,
+      });
+
+      expect(capturedArgv).toContain("pcm"); // {{Format}} resolved
+      expect(capturedArgv).toContain("telephony"); // {{Channel}} resolved
+    });
+
+    it("falls back with error when local command is not configured", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: { provider: "local", edge: { enabled: false } } },
+      };
+
+      const result = await tts.textToSpeechTelephony({
+        text: "hello",
+        cfg,
+        prefsPath: `/tmp/tts-local-telephony-nocommand-${Date.now()}.json`,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("local: no command configured");
+    });
+
+    it("falls back with error when command exits 0 but output file is missing", async () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+
+      const result = await tts.textToSpeechTelephony({
+        text: "hello",
+        cfg: baseCfg(),
+        prefsPath: `/tmp/tts-local-telephony-nofile-${Date.now()}.json`,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("local: command exited 0 but did not create output file");
+    });
+  });
 });

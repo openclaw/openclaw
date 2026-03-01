@@ -836,6 +836,61 @@ export async function textToSpeechTelephony(params: {
         continue;
       }
 
+      if (provider === "local") {
+        const localCfg = config.local;
+        if (!localCfg?.command) {
+          errors.push("local: no command configured");
+          continue;
+        }
+        // local telephony: script must write raw 16-bit signed LE mono PCM at
+        // 22050 Hz to {{Output}} when {{Format}}=pcm. OpenClaw resamples to
+        // 8 kHz µ-law for delivery — the same pipeline used for ElevenLabs.
+        const LOCAL_TELEPHONY_SAMPLE_RATE = 22050;
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.pcm`);
+        const templCtx = {
+          Text: params.text,
+          Output: audioPath,
+          Channel: "telephony",
+          Format: "pcm",
+        };
+        const args = (localCfg.args ?? []).map((a) => applyTemplate(a, templCtx));
+        try {
+          const localResult = await runCommandWithTimeout([localCfg.command, ...args], {
+            timeoutMs: config.timeoutMs,
+          });
+          if (localResult.code !== 0) {
+            throw new Error(localResult.stderr.trim() || "local TTS command failed");
+          }
+          if (!existsSync(audioPath)) {
+            errors.push(
+              "local: command exited 0 but did not create output file — check {{Output}} placeholder in args",
+            );
+            rmSync(tempDir, { recursive: true, force: true });
+            continue;
+          }
+          const audioBuffer = readFileSync(audioPath);
+          scheduleCleanup(tempDir);
+          return {
+            success: true,
+            audioBuffer,
+            latencyMs: Date.now() - providerStart,
+            provider,
+            outputFormat: "pcm",
+            sampleRate: LOCAL_TELEPHONY_SAMPLE_RATE,
+          };
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
+      }
+
       const apiKey = resolveTtsApiKey(config, provider);
       if (!apiKey) {
         errors.push(`${provider}: no API key`);
