@@ -416,6 +416,8 @@ function renderUsageInsights(
         rate,
       };
     })
+    .slice()
+    // eslint-disable-next-line unicorn/no-array-sort
     .toSorted((a, b) => b.rate - a.rate)
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
@@ -625,21 +627,23 @@ function renderSessionsCard(
     return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
   };
 
-  const sortedSessions = [...sessions].toSorted((a, b) => {
-    switch (sessionSort) {
-      case "recent":
-        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-      case "messages":
-        return (b.usage?.messageCounts?.total ?? 0) - (a.usage?.messageCounts?.total ?? 0);
-      case "errors":
-        return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
-      case "cost":
-        return getSessionValue(b) - getSessionValue(a);
-      case "tokens":
-      default:
-        return getSessionValue(b) - getSessionValue(a);
-    }
-  });
+  const sortedSessions = [...sessions]
+    .slice() // eslint-disable-next-line unicorn/no-array-sort
+    .toSorted((a, b) => {
+      switch (sessionSort) {
+        case "recent":
+          return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+        case "messages":
+          return (b.usage?.messageCounts?.total ?? 0) - (a.usage?.messageCounts?.total ?? 0);
+        case "errors":
+          return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
+        case "cost":
+          return getSessionValue(b) - getSessionValue(a);
+        case "tokens":
+        default:
+          return getSessionValue(b) - getSessionValue(a);
+      }
+    });
   const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
 
   const totalValue = sortedWithDir.reduce((sum, session) => sum + getSessionValue(session), 0);

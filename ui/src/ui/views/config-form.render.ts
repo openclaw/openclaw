@@ -336,14 +336,17 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
-  const entries = Object.entries(properties).toSorted((a, b) => {
-    const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
-    const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-    return a[0].localeCompare(b[0]);
-  });
+  const entries = Object.entries(properties)
+    .slice()
+    // eslint-disable-next-line unicorn/no-array-sort
+    .toSorted((a, b) => {
+      const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
+      const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
+      return a[0].localeCompare(b[0]);
+    });
 
   const filteredEntries = entries.filter(([key, node]) => {
     if (activeSection && key !== activeSection) {

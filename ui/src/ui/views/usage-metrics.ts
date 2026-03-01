@@ -57,25 +57,29 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }
   }
 
-  return hourMsgs
-    .map((msgs, hour) => {
-      const errors = hourErrors[hour];
-      const rate = msgs > 0 ? errors / msgs : 0;
-      return {
-        hour,
-        rate,
-        errors,
-        msgs,
-      };
-    })
-    .filter((entry) => entry.msgs > 0 && entry.errors > 0)
-    .toSorted((a, b) => b.rate - a.rate)
-    .slice(0, 5)
-    .map((entry) => ({
-      label: formatHourLabel(entry.hour),
-      value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} errors · ${Math.round(entry.msgs)} msgs`,
-    }));
+  return (
+    hourMsgs
+      .map((msgs, hour) => {
+        const errors = hourErrors[hour];
+        const rate = msgs > 0 ? errors / msgs : 0;
+        return {
+          hour,
+          rate,
+          errors,
+          msgs,
+        };
+      })
+      .filter((entry) => entry.msgs > 0 && entry.errors > 0)
+      .slice()
+      // eslint-disable-next-line unicorn/no-array-sort
+      .toSorted((a, b) => b.rate - a.rate)
+      .slice(0, 5)
+      .map((entry) => ({
+        label: formatHourLabel(entry.hour),
+        value: `${(entry.rate * 100).toFixed(2)}%`,
+        sub: `${Math.round(entry.errors)} errors · ${Math.round(entry.msgs)} msgs`,
+      }))
+  );
 }
 
 type UsageMosaicStats = {
@@ -510,16 +514,22 @@ const buildAggregatesFromSessions = (
       uniqueTools: toolMap.size,
       tools: Array.from(toolMap.entries())
         .map(([name, count]) => ({ name, count }))
+        .slice()
+        // eslint-disable-next-line unicorn/no-array-sort
         .toSorted((a, b) => b.count - a.count),
     },
-    byModel: Array.from(modelMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byProvider: Array.from(providerMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
+    byModel: Array.from(modelMap.values())
+      .slice()
+      // eslint-disable-next-line unicorn/no-array-sort
+      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+    byProvider: Array.from(providerMap.values())
+      .slice()
+      // eslint-disable-next-line unicorn/no-array-sort
+      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
     byAgent: Array.from(agentMap.entries())
       .map(([agentId, totals]) => ({ agentId, totals }))
+      .slice()
+      // eslint-disable-next-line unicorn/no-array-sort
       .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
     ...tail,
   };
@@ -567,6 +577,8 @@ const buildUsageInsightStats = (
       messages: day.messages,
       rate: day.errors / day.messages,
     }))
+    .slice()
+    // eslint-disable-next-line unicorn/no-array-sort
     .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
 
   return {
