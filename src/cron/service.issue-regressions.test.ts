@@ -241,6 +241,55 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
+    const store = await makeStorePath();
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "legacy-isolated",
+            agentId: "feature-dev_planner",
+            sessionKey: "agent:main:main",
+            name: "legacy isolated",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 300_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "poll workflow queue" },
+            state: {},
+          },
+        ],
+      }),
+    );
+
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const status = await cron.status();
+    const jobs = await cron.list({ includeDisabled: true });
+    const isolated = jobs.find((job) => job.id === "legacy-isolated");
+    expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
+    expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number | null } }>;
+    };
+    const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
+    expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
+    expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
+
+    cron.stop();
+  });
+
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = await makeStorePath();
     const cron = await startCronForStore({ storePath: store.storePath });
