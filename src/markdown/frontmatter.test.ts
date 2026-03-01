@@ -72,4 +72,48 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
   });
+
+  it("handles description with unquoted colon (auto-quoting)", () => {
+    const content = `---
+name: test-skill
+description: Generate images using API. IMPORTANT: Must use anime style
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("test-skill");
+    expect(result.description).toContain("IMPORTANT");
+    expect(result.description).toContain("anime style");
+  });
+
+  it("handles multiple colons in description", () => {
+    const content = `---
+name: multi-colon
+description: Step 1: do this. Step 2: do that. Step 3: done
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("multi-colon");
+    expect(result.description).toContain("Step 1");
+    expect(result.description).toContain("Step 3");
+  });
+
+  it("preserves already-quoted values with colons", () => {
+    const content = `---
+name: quoted-skill
+description: "Has colon: inside quotes"
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.description).toBe("Has colon: inside quotes");
+  });
+
+  it("does not auto-quote values without colons", () => {
+    const content = `---
+name: normal-skill
+description: Simple description without extra colons
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.description).toBe("Simple description without extra colons");
+  });
 });
