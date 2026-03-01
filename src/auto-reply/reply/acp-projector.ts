@@ -29,6 +29,11 @@ type ToolLifecycleState = {
   lastRenderedHash?: string;
 };
 
+type BufferedToolDelivery = {
+  payload: ReplyPayload;
+  meta?: AcpProjectedDeliveryMeta;
+};
+
 function truncateText(input: string, maxChars: number): string {
   if (input.length <= maxChars) {
     return input;
@@ -109,6 +114,7 @@ export function createAcpReplyProjector(params: {
   let lastStatusHash: string | undefined;
   let lastToolHash: string | undefined;
   let lastUsageTuple: string | undefined;
+  const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
 
   const resetTurnState = () => {
@@ -118,6 +124,7 @@ export function createAcpReplyProjector(params: {
     lastStatusHash = undefined;
     lastToolHash = undefined;
     lastUsageTuple = undefined;
+    pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
   };
 
@@ -133,7 +140,17 @@ export function createAcpReplyProjector(params: {
     });
   };
 
+  const flushBufferedToolDeliveries = async (force: boolean) => {
+    if (!(settings.deliveryMode === "final_only" && force)) {
+      return;
+    }
+    for (const entry of pendingToolDeliveries.splice(0, pendingToolDeliveries.length)) {
+      await params.deliver("tool", entry.payload, entry.meta);
+    }
+  };
+
   const flush = async (force = false): Promise<void> => {
+    await flushBufferedToolDeliveries(force);
     drainChunker(force);
     await blockReplyPipeline.flush({ force });
   };
@@ -170,10 +187,15 @@ export function createAcpReplyProjector(params: {
     if (!consumeMetaQuota(opts?.force === true)) {
       return;
     }
-    if (settings.deliveryMode === "live") {
+    if (settings.deliveryMode === "final_only") {
+      pendingToolDeliveries.push({
+        payload: { text: formatted },
+        meta,
+      });
+    } else {
       await flush(true);
+      await params.deliver("tool", { text: formatted }, meta);
     }
-    await params.deliver("tool", { text: formatted }, meta);
     lastStatusHash = hash;
   };
 
@@ -226,19 +248,21 @@ export function createAcpReplyProjector(params: {
     if (!consumeMetaQuota(opts?.force === true)) {
       return;
     }
-    if (settings.deliveryMode === "live") {
+    const deliveryMeta: AcpProjectedDeliveryMeta = {
+      ...(event.tag ? { tag: event.tag } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
+      ...(status ? { toolStatus: status } : {}),
+      allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
+    };
+    if (settings.deliveryMode === "final_only") {
+      pendingToolDeliveries.push({
+        payload: { text: toolSummary },
+        meta: deliveryMeta,
+      });
+    } else {
       await flush(true);
+      await params.deliver("tool", { text: toolSummary }, deliveryMeta);
     }
-    await params.deliver(
-      "tool",
-      { text: toolSummary },
-      {
-        ...(event.tag ? { tag: event.tag } : {}),
-        ...(toolCallId ? { toolCallId } : {}),
-        ...(status ? { toolStatus: status } : {}),
-        allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
-      },
-    );
     lastToolHash = hash;
   };
 
