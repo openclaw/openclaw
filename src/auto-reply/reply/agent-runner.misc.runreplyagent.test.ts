@@ -1391,7 +1391,8 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     expect(String(payload?.text ?? "")).toContain("Usage:");
-    expect(String(payload?.text ?? "")).toContain(`· session ${sessionKey}`);
+    // Colons are replaced with middle dots to avoid Slack emoji shortcode parsing
+    expect(String(payload?.text ?? "")).toContain(`· session ${sessionKey.replace(/:/g, "·")}`);
   });
 
   it("does not append session key when responseUsage=tokens", async () => {

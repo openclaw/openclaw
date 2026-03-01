@@ -604,7 +604,9 @@ export async function runReplyAgent(params: {
         costConfig,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session ${sessionKey}`;
+        // Replace colons with middle dots to avoid Slack emoji shortcode parsing
+        const displaySessionKey = sessionKey.replace(/:/g, "·");
+        formatted = `${formatted} · session ${displaySessionKey}`;
       }
       if (formatted) {
         responseUsageLine = formatted;
