@@ -40,7 +40,8 @@ With parent:
 { "action": "get", "token": "ABC123def" }
 ```
 
-Returns: `node_token`, `obj_token`, `obj_type`, etc. Use `obj_token` with `feishu_doc` to read/write the document.
+Returns: `node_token`, `obj_token`, `obj_type`, etc. For `docx`, use `obj_token` with `feishu_doc`.
+For `sheet`, use `feishu_sheets_read_range` and pass `spreadsheet_token` from `obj_token`.
 
 ### Create Node
 
@@ -93,6 +94,11 @@ To edit a wiki page:
 1. Get node: `{ "action": "get", "token": "wiki_token" }` → returns `obj_token`
 2. Read doc: `feishu_doc { "action": "read", "doc_token": "obj_token" }`
 3. Write doc: `feishu_doc { "action": "write", "doc_token": "obj_token", "content": "..." }`
+
+For wiki sheets:
+
+1. Get node: `{ "action": "get", "token": "wiki_token" }` → returns `obj_token`
+2. Read sheet: `feishu_sheets_read_range { "spreadsheet_token": "obj_token", "sheet_id": "sh_xxx", "range": "A1:C20" }`
 
 ## Configuration
 

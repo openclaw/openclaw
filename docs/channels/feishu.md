@@ -426,6 +426,71 @@ openclaw pairing list feishu
 
 > Note: Feishu does not support native command menus yet, so commands must be sent as text.
 
+## Tools
+
+You can enable tool usage via channel tools configuration. `sheets` defaults to `true`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      tools: {
+        doc: true,
+        wiki: true,
+        drive: true,
+        sheets: true,
+      },
+    },
+  },
+}
+```
+
+Read a sheet range using `feishu_sheets_read_range`:
+
+```json
+{
+  "spreadsheet_token": "ss_xxx",
+  "sheet_id": "shxxxxxxxx",
+  "range": "A1:C10"
+}
+```
+
+If `range` is omitted, the tool resolves a best-effort range from sheet metadata:
+
+- uses `row_count` / `column_count` when metadata is available;
+- falls back to `A1:Z1000` when metadata is missing.
+
+Response:
+
+```json
+{
+  "spreadsheet_token": "ss_xxx",
+  "sheet_id": "shxxxxxxxx",
+  "requested_range": "A1:C10",
+  "resolved_range": "A1:C10",
+  "values": [
+    ["Name", "Score"],
+    ["Alice", 95]
+  ],
+  "value_range": {
+    "range": "A1:C10",
+    "major_dimension": "GRID",
+    "row_count": 2,
+    "column_count": 3
+  },
+  "sheet_meta": {
+    "title": "Budget",
+    "row_count": 1200,
+    "column_count": 12
+  },
+  "next_range_hint": "A11:C20"
+}
+```
+
+`include_markdown: true` adds a Markdown table preview to the output (keeps `values` unchanged).
+
+Wiki sheet pages (`obj_type = "sheet"`) return a hint from `feishu_wiki` pointing to `feishu_sheets_read_range`.
+
 ## Gateway management commands
 
 | Command                    | Description                   |

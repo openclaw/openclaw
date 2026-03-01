@@ -167,3 +167,15 @@ describe("FeishuConfigSchema defaultAccount", () => {
     }
   });
 });
+
+describe("FeishuConfigSchema tools", () => {
+  it("accepts tools.sheets override", () => {
+    const result = FeishuConfigSchema.parse({
+      tools: {
+        sheets: false,
+      },
+    });
+
+    expect(result.tools?.sheets).toBe(false);
+  });
+});

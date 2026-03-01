@@ -1,5 +1,7 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
+import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -7,9 +9,27 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
+function createConfig(tools?: { chat?: boolean }): OpenClawPluginApi["config"] {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: {
+          main: {
+            appId: "app-id",
+            appSecret: "app-secret",
+            tools,
+          },
+        },
+      },
+    },
+  } as OpenClawPluginApi["config"];
+}
+
 describe("registerFeishuChatTools", () => {
   const chatGetMock = vi.hoisted(() => vi.fn());
   const chatMembersGetMock = vi.hoisted(() => vi.fn());
+  type ToolResult = { details: Record<string, unknown> };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -22,31 +42,20 @@ describe("registerFeishuChatTools", () => {
   });
 
   it("registers feishu_chat and handles info/members actions", async () => {
-    const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret",
-            tools: { chat: true },
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
+    const { api, resolveTool } = createToolFactoryHarness(createConfig({ chat: true }));
+    registerFeishuChatTools(api);
+    const tool = resolveTool("feishu_chat", { agentAccountId: "main" });
 
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.name).toBe("feishu_chat");
+    expect(tool.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,
       data: { name: "group name", user_count: 3 },
     });
-    const infoResult = await tool.execute("tc_1", { action: "info", chat_id: "oc_1" });
+    const infoResult = (await tool.execute("tc_1", {
+      action: "info",
+      chat_id: "oc_1",
+    })) as ToolResult;
     expect(infoResult.details).toEqual(
       expect.objectContaining({ chat_id: "oc_1", name: "group name", user_count: 3 }),
     );
@@ -59,7 +68,10 @@ describe("registerFeishuChatTools", () => {
         items: [{ member_id: "ou_1", name: "member1", member_id_type: "open_id" }],
       },
     });
-    const membersResult = await tool.execute("tc_2", { action: "members", chat_id: "oc_1" });
+    const membersResult = (await tool.execute("tc_2", {
+      action: "members",
+      chat_id: "oc_1",
+    })) as ToolResult;
     expect(membersResult.details).toEqual(
       expect.objectContaining({
         chat_id: "oc_1",
@@ -69,21 +81,8 @@ describe("registerFeishuChatTools", () => {
   });
 
   it("skips registration when chat tool is disabled", () => {
-    const registerTool = vi.fn();
-    registerFeishuChatTools({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret",
-            tools: { chat: false },
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-    expect(registerTool).not.toHaveBeenCalled();
+    const { api, resolveTool } = createToolFactoryHarness(createConfig({ chat: false }));
+    registerFeishuChatTools(api);
+    expect(() => resolveTool("feishu_chat")).toThrow(/Tool not registered/);
   });
 });
