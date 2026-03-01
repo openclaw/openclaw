@@ -374,6 +374,92 @@ is managing multiple sessions/codexes and you want to see why it decided to ping
 you — but it can also leak more internal detail than you want. Prefer keeping it
 off in group chats.
 
+## Hooks
+
+Heartbeat runs emit hook events that let you react to the heartbeat lifecycle
+without modifying core code. Register handlers for `heartbeat:before` and
+`heartbeat:after` in any hook (workspace, managed, or bundled).
+
+See [Hooks → Heartbeat Events](/automation/hooks#heartbeat-events) for context
+fields, type definitions, and examples.
+
+### Why hooks?
+
+Hooks are the **extensibility surface** for heartbeat runs. Without them, any
+logic that needs to run before or after a heartbeat (metrics collection, health
+scoring, alert escalation, stuck detection) must be implemented as a separate
+scheduled task, duplicating scheduling, deduplication, and session resolution.
+
+With hooks, extensions receive structured context (agent ID, session key,
+status, duration) and run in-process — no extra cron jobs, no polling, no
+race conditions.
+
+### Example: HOOK.md for a heartbeat hook
+
+```markdown
+---
+name: heartbeat-metrics
+description: "Log heartbeat outcomes for monitoring"
+metadata: { "openclaw": { "emoji": "📊", "events": ["heartbeat:after"] } }
+---
+
+# Heartbeat Metrics
+
+Logs heartbeat status and duration after each run.
+```
+
+## Event History
+
+Heartbeat events are recorded in an in-memory ring buffer (last 50 events).
+Use `getHeartbeatEventHistory()` to query recent outcomes for trend analysis,
+health dashboards, or alert logic.
+
+### Why event history?
+
+A single `getLastHeartbeatEvent()` is not enough when you need to:
+
+- Compute a failure rate over a window (e.g., 3 of last 10 failed)
+- Detect stuck patterns (e.g., every run returns `ok-empty` for hours)
+- Build a health score from recent outcomes
+- Show a status timeline in a dashboard
+
+The ring buffer keeps the last 50 events in memory with zero persistence
+overhead. It is the **data source** that hooks and skills can query to make
+informed decisions.
+
+### API
+
+```typescript
+import { getHeartbeatEventHistory, getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
+
+// Get all recorded events (up to 50)
+const all = getHeartbeatEventHistory();
+
+// Get the last 10 events
+const recent = getHeartbeatEventHistory(10);
+
+// Compute failure rate
+const failRate = recent.filter((e) => e.status === "failed").length / recent.length;
+
+// Still available: last single event
+const last = getLastHeartbeatEvent();
+```
+
+### Event payload
+
+Each event in the history has the same shape as `HeartbeatEventPayload`:
+
+```typescript
+{
+  ts: number,              // Unix timestamp (ms)
+  agentId: string,         // Agent identifier
+  status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed",
+  durationMs?: number,     // Wall-clock duration
+  channel?: string,        // Delivery channel
+  reason?: string,         // Why the run was triggered
+}
+```
+
 ## Cost awareness
 
 Heartbeats run full agent turns. Shorter intervals burn more tokens. Keep

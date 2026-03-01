@@ -33,12 +33,22 @@ export function resolveIndicatorType(
   }
 }
 
+// ── Event history ────────────────────────────────────────────────────────────
+
+/** Maximum number of heartbeat events retained in memory. */
+export const HEARTBEAT_HISTORY_MAX = 50;
+
 let lastHeartbeat: HeartbeatEventPayload | null = null;
+const heartbeatHistory: HeartbeatEventPayload[] = [];
 const listeners = new Set<(evt: HeartbeatEventPayload) => void>();
 
 export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, "ts">) {
   const enriched: HeartbeatEventPayload = { ts: Date.now(), ...evt };
   lastHeartbeat = enriched;
+  heartbeatHistory.push(enriched);
+  if (heartbeatHistory.length > HEARTBEAT_HISTORY_MAX) {
+    heartbeatHistory.shift();
+  }
   for (const listener of listeners) {
     try {
       listener(enriched);
@@ -55,4 +65,29 @@ export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void)
 
 export function getLastHeartbeatEvent(): HeartbeatEventPayload | null {
   return lastHeartbeat;
+}
+
+/**
+ * Return recent heartbeat events, newest last.
+ *
+ * @param limit - If provided, return only the last `limit` events.
+ *                Omit or pass `undefined` to get the full history.
+ */
+export function getHeartbeatEventHistory(limit?: number): readonly HeartbeatEventPayload[] {
+  if (limit == null || limit >= heartbeatHistory.length) {
+    return heartbeatHistory.slice();
+  }
+  if (limit <= 0) {
+    return [];
+  }
+  return heartbeatHistory.slice(-limit);
+}
+
+/**
+ * Clear all recorded heartbeat history and reset the last-event pointer.
+ * Intended for testing; production code should rarely need this.
+ */
+export function clearHeartbeatEventHistory(): void {
+  heartbeatHistory.length = 0;
+  lastHeartbeat = null;
 }

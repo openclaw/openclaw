@@ -207,7 +207,7 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message' | 'heartbeat',
   action: string,              // e.g., 'new', 'reset', 'stop', 'received', 'sent'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
@@ -313,6 +313,91 @@ const handler = async (event) => {
     console.log(`[message-logger] Received from ${event.context.from}: ${event.context.content}`);
   } else if (isMessageSentEvent(event as { type: string; action: string })) {
     console.log(`[message-logger] Sent to ${event.context.to}: ${event.context.content}`);
+  }
+};
+
+export default handler;
+```
+
+### Heartbeat Events
+
+Triggered around each heartbeat run. These hooks let you observe, measure, or
+extend heartbeat lifecycle without modifying core code.
+
+- **`heartbeat`**: All heartbeat events (general listener)
+- **`heartbeat:before`**: Before the heartbeat agent call (after preflight passes)
+- **`heartbeat:after`**: After the heartbeat run completes (sent, skipped, or failed)
+
+#### Why heartbeat hooks?
+
+Heartbeat runs are periodic agent turns — they happen in the background with no
+user interaction. Without hooks, there is no extensible way to:
+
+- Collect per-run metrics (duration, status, failure rate)
+- Trigger follow-up actions on specific outcomes (e.g., escalate after N failures)
+- Build health dashboards or scoring systems on top of heartbeat data
+- Integrate with external monitoring or alerting services
+
+Heartbeat hooks provide the **event surface** that makes all of the above possible
+without forking or patching the heartbeat runner.
+
+#### Heartbeat Event Context
+
+```typescript
+// heartbeat:before context
+{
+  agentId: string,          // Normalized agent identifier
+  sessionKey: string,       // Session key for this run
+  reason?: string,          // Trigger reason ("interval", "cron", "manual", etc.)
+  prompt: string,           // Resolved heartbeat prompt
+}
+
+// heartbeat:after context
+{
+  agentId: string,
+  sessionKey: string,
+  reason?: string,
+  status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed",
+  // "skipped" means the heartbeat ran but was not delivered externally
+  // (e.g., duplicate suppression, no target, alerts disabled, channel not ready).
+  // The function still completes successfully — "skipped" describes delivery, not execution.
+  durationMs: number,       // Wall-clock duration in ms
+  preview?: string,         // First 200 chars of reply
+  channel?: string,         // Delivery channel
+  hasMedia?: boolean,       // Whether reply included media
+}
+```
+
+#### Example: Heartbeat Metrics Hook
+
+```typescript
+const handler = async (event) => {
+  if (event.type !== "heartbeat" || event.action !== "after") return;
+  const { status, durationMs, agentId } = event.context;
+  console.log(`[heartbeat] agent=${agentId} status=${status} duration=${durationMs}ms`);
+};
+
+export default handler;
+```
+
+#### Example: Failure Escalation Hook
+
+```typescript
+import { getHeartbeatEventHistory } from "../infra/heartbeat-events.js";
+
+const handler = async (event) => {
+  if (event.type !== "heartbeat" || event.action !== "after") return;
+
+  // Use event history to count recent consecutive failures
+  const recent = getHeartbeatEventHistory(10);
+  let consecutive = 0;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].status !== "failed") break;
+    consecutive++;
+  }
+
+  if (consecutive >= 3) {
+    event.messages.push(`⚠️ Heartbeat has failed ${consecutive} times in a row`);
   }
 };
 

@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "heartbeat";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -91,6 +97,54 @@ export type MessageSentHookEvent = InternalHookEvent & {
   type: "message";
   action: "sent";
   context: MessageSentHookContext;
+};
+
+// ============================================================================
+// Heartbeat Hook Events
+// ============================================================================
+
+/** Context available before the heartbeat agent call. */
+export type HeartbeatBeforeHookContext = {
+  /** Normalized agent identifier. */
+  agentId: string;
+  /** Session key for this heartbeat run. */
+  sessionKey: string;
+  /** Trigger reason (e.g., "interval", "cron", "manual", "hook:..."). */
+  reason?: string;
+  /** Resolved heartbeat prompt that will be sent to the model. */
+  prompt: string;
+};
+
+export type HeartbeatBeforeHookEvent = InternalHookEvent & {
+  type: "heartbeat";
+  action: "before";
+  context: HeartbeatBeforeHookContext;
+};
+
+/** Context available after the heartbeat run completes. */
+export type HeartbeatAfterHookContext = {
+  /** Normalized agent identifier. */
+  agentId: string;
+  /** Session key for this heartbeat run. */
+  sessionKey: string;
+  /** Trigger reason. */
+  reason?: string;
+  /** Outcome status matching HeartbeatEventPayload.status. */
+  status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed";
+  /** Wall-clock duration in milliseconds. */
+  durationMs: number;
+  /** First 200 chars of the heartbeat reply (if any). */
+  preview?: string;
+  /** Delivery channel (e.g., "telegram", "whatsapp"). */
+  channel?: string;
+  /** Whether the reply included media attachments. */
+  hasMedia?: boolean;
+};
+
+export type HeartbeatAfterHookEvent = InternalHookEvent & {
+  type: "heartbeat";
+  action: "after";
+  context: HeartbeatAfterHookContext;
 };
 
 export interface InternalHookEvent {
@@ -281,4 +335,28 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
   );
+}
+
+export function isHeartbeatBeforeEvent(
+  event: InternalHookEvent,
+): event is HeartbeatBeforeHookEvent {
+  if (event.type !== "heartbeat" || event.action !== "before") {
+    return false;
+  }
+  const context = event.context as Partial<HeartbeatBeforeHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.agentId === "string" && typeof context.prompt === "string";
+}
+
+export function isHeartbeatAfterEvent(event: InternalHookEvent): event is HeartbeatAfterHookEvent {
+  if (event.type !== "heartbeat" || event.action !== "after") {
+    return false;
+  }
+  const context = event.context as Partial<HeartbeatAfterHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.agentId === "string" && typeof context.status === "string";
 }

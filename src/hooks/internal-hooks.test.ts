@@ -5,6 +5,8 @@ import {
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
+  isHeartbeatAfterEvent,
+  isHeartbeatBeforeEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
   registerInternalHook,
@@ -12,6 +14,8 @@ import {
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
+  type HeartbeatAfterHookContext,
+  type HeartbeatBeforeHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
 } from "./internal-hooks.js";
@@ -453,6 +457,206 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
+    });
+  });
+
+  // ── Heartbeat hook type guards ────────────────────────────────────────────
+
+  describe("isHeartbeatBeforeEvent", () => {
+    const cases: Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }> = [
+      {
+        name: "returns true for heartbeat:before events with expected context",
+        event: createInternalHookEvent("heartbeat", "before", "test-session", {
+          agentId: "agent-1",
+          sessionKey: "test-session",
+          reason: "interval",
+          prompt: "Check things",
+        } satisfies HeartbeatBeforeHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false for non-heartbeat events",
+        event: createInternalHookEvent("command", "new", "test-session"),
+        expected: false,
+      },
+      {
+        name: "returns false for heartbeat:after events",
+        event: createInternalHookEvent("heartbeat", "after", "test-session", {
+          agentId: "agent-1",
+          sessionKey: "test-session",
+          status: "sent",
+          durationMs: 100,
+        } satisfies HeartbeatAfterHookContext),
+        expected: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        expect(isHeartbeatBeforeEvent(testCase.event)).toBe(testCase.expected);
+      });
+    }
+
+    it("returns false when context fields are missing", () => {
+      const missingPrompt = createInternalHookEvent("heartbeat", "before", "test-session", {
+        agentId: "agent-1",
+        // missing prompt
+      });
+      expect(isHeartbeatBeforeEvent(missingPrompt)).toBe(false);
+
+      const missingAgentId = createInternalHookEvent("heartbeat", "before", "test-session", {
+        prompt: "Check things",
+        // missing agentId
+      });
+      expect(isHeartbeatBeforeEvent(missingAgentId)).toBe(false);
+    });
+  });
+
+  describe("isHeartbeatAfterEvent", () => {
+    const cases: Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }> = [
+      {
+        name: "returns true for heartbeat:after events with expected context",
+        event: createInternalHookEvent("heartbeat", "after", "test-session", {
+          agentId: "agent-1",
+          sessionKey: "test-session",
+          status: "sent",
+          durationMs: 150,
+          preview: "Something happened",
+          channel: "telegram",
+          hasMedia: false,
+        } satisfies HeartbeatAfterHookContext),
+        expected: true,
+      },
+      {
+        name: "returns true for failed status",
+        event: createInternalHookEvent("heartbeat", "after", "test-session", {
+          agentId: "agent-1",
+          sessionKey: "test-session",
+          status: "failed",
+          durationMs: 200,
+        } satisfies HeartbeatAfterHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false for heartbeat:before events",
+        event: createInternalHookEvent("heartbeat", "before", "test-session", {
+          agentId: "agent-1",
+          sessionKey: "test-session",
+          prompt: "Check things",
+        } satisfies HeartbeatBeforeHookContext),
+        expected: false,
+      },
+      {
+        name: "returns false for non-heartbeat events",
+        event: createInternalHookEvent("message", "sent", "test-session"),
+        expected: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        expect(isHeartbeatAfterEvent(testCase.event)).toBe(testCase.expected);
+      });
+    }
+
+    it("returns false when context fields are missing", () => {
+      const missingStatus = createInternalHookEvent("heartbeat", "after", "test-session", {
+        agentId: "agent-1",
+        // missing status
+      });
+      expect(isHeartbeatAfterEvent(missingStatus)).toBe(false);
+    });
+  });
+
+  // ── Heartbeat hook triggering ─────────────────────────────────────────────
+
+  describe("heartbeat hooks", () => {
+    it("should trigger heartbeat:before handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("heartbeat:before", handler);
+
+      const context: HeartbeatBeforeHookContext = {
+        agentId: "agent-1",
+        sessionKey: "test-session",
+        reason: "interval",
+        prompt: "Check things",
+      };
+      const event = createInternalHookEvent("heartbeat", "before", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger heartbeat:after handlers", async () => {
+      const handler = vi.fn();
+      registerInternalHook("heartbeat:after", handler);
+
+      const context: HeartbeatAfterHookContext = {
+        agentId: "agent-1",
+        sessionKey: "test-session",
+        status: "sent",
+        durationMs: 100,
+        preview: "Alert text",
+        channel: "telegram",
+      };
+      const event = createInternalHookEvent("heartbeat", "after", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
+    it("should trigger general heartbeat handlers for both before and after", async () => {
+      const handler = vi.fn();
+      registerInternalHook("heartbeat", handler);
+
+      const beforeEvent = createInternalHookEvent("heartbeat", "before", "test-session", {
+        agentId: "agent-1",
+        sessionKey: "test-session",
+        prompt: "Check",
+      } satisfies HeartbeatBeforeHookContext);
+      await triggerInternalHook(beforeEvent);
+
+      const afterEvent = createInternalHookEvent("heartbeat", "after", "test-session", {
+        agentId: "agent-1",
+        sessionKey: "test-session",
+        status: "ok-empty",
+        durationMs: 50,
+      } satisfies HeartbeatAfterHookContext);
+      await triggerInternalHook(afterEvent);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenNthCalledWith(1, beforeEvent);
+      expect(handler).toHaveBeenNthCalledWith(2, afterEvent);
+    });
+
+    it("should handle hook errors without breaking heartbeat processing", async () => {
+      const errorHandler = vi.fn(() => {
+        throw new Error("Hook failed");
+      });
+      const successHandler = vi.fn();
+
+      registerInternalHook("heartbeat:after", errorHandler);
+      registerInternalHook("heartbeat:after", successHandler);
+
+      const context: HeartbeatAfterHookContext = {
+        agentId: "agent-1",
+        sessionKey: "test-session",
+        status: "sent",
+        durationMs: 100,
+      };
+      const event = createInternalHookEvent("heartbeat", "after", "test-session", context);
+      await triggerInternalHook(event);
+
+      expect(errorHandler).toHaveBeenCalled();
+      expect(successHandler).toHaveBeenCalled();
     });
   });
 });
