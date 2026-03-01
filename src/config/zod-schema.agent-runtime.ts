@@ -669,6 +669,16 @@ export const MemorySearchSchema = z
   })
   .strict()
   .optional();
+
+export const AgentRestrictionsSchema = z
+  .object({
+    allowedChatTypes: z
+      .array(z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]))
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export { AgentModelSchema };
 export const AgentEntrySchema = z
   .object({
@@ -684,6 +694,7 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    restrictions: AgentRestrictionsSchema,
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
