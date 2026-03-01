@@ -619,6 +619,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     const channelOverride = resolveChannelModelOverride({
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
+      accountId: entry.accountId,
       groupId: entry.groupId,
       groupSpace: entry.space,
       groupChannel: entry.groupChannel,

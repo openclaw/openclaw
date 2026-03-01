@@ -623,12 +623,12 @@ describe("legacy config detection", () => {
       channels: {
         discord: {
           guilds: {
-            guildA: {
+            "111": {
               channels: {
                 general: { model: "openai/gpt-4.1" },
               },
             },
-            guildB: {
+            "222": {
               channels: {
                 general: { model: "anthropic/claude-sonnet-4-6" },
               },
@@ -639,17 +639,103 @@ describe("legacy config detection", () => {
     });
 
     expect(res.changes).toContain(
-      "Moved channels.discord.guilds.guildA.channels.general.model → channels.modelByChannel.discord.guildA:general.",
+      "Moved channels.discord.guilds.111.channels.general.model → channels.modelByChannel.discord.111:general.",
     );
     expect(res.changes).toContain(
-      "Moved channels.discord.guilds.guildB.channels.general.model → channels.modelByChannel.discord.guildB:general.",
+      "Moved channels.discord.guilds.222.channels.general.model → channels.modelByChannel.discord.222:general.",
     );
-    expect(res.config?.channels?.modelByChannel?.discord?.["guildA:general"]).toBe(
-      "openai/gpt-4.1",
-    );
-    expect(res.config?.channels?.modelByChannel?.discord?.["guildB:general"]).toBe(
+    expect(res.config?.channels?.modelByChannel?.discord?.["111:general"]).toBe("openai/gpt-4.1");
+    expect(res.config?.channels?.modelByChannel?.discord?.["222:general"]).toBe(
       "anthropic/claude-sonnet-4-6",
     );
+  });
+
+  it("migrates account-scoped discord channel models without cross-account collisions", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              guilds: {
+                "100": {
+                  channels: {
+                    "200": { model: "openai/gpt-4.1" },
+                  },
+                },
+              },
+            },
+            personal: {
+              guilds: {
+                "100": {
+                  channels: {
+                    "200": { model: "anthropic/claude-sonnet-4-6" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.guilds.100.channels.200.model → channels.modelByChannel.discord.work:100:200.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.personal.guilds.100.channels.200.model → channels.modelByChannel.discord.personal:100:200.",
+    );
+    expect(res.config?.channels?.modelByChannel?.discord?.["work:100:200"]).toBe("openai/gpt-4.1");
+    expect(res.config?.channels?.modelByChannel?.discord?.["personal:100:200"]).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+  });
+
+  it("keeps slug-keyed guild model migration runtime-resolvable", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          guilds: {
+            support: {
+              channels: {
+                general: { model: "openai/gpt-4.1" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.support.channels.general.model → channels.modelByChannel.discord.general.",
+    );
+    expect(res.config?.channels?.modelByChannel?.discord?.general).toBe("openai/gpt-4.1");
+  });
+
+  it("drops invalid legacy discord groupPolicy values instead of forcing allow=false", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                "200": {
+                  groupPolicy: "unexpected-value",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed channels.discord.guilds.100.channels.200.groupPolicy (invalid value).",
+    );
+    const channel = res.config?.channels?.discord?.guilds?.["100"]?.channels?.["200"] as
+      | { allow?: boolean; groupPolicy?: unknown }
+      | undefined;
+    expect(channel?.allow).toBeUndefined();
+    expect(channel?.groupPolicy).toBeUndefined();
   });
 
   it("normalizes discord streaming fields during validation", async () => {

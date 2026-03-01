@@ -95,6 +95,46 @@ describe("resolveChannelModelOverride", () => {
       },
       expected: { model: "openai/gpt-4.1", matchKey: "guild-1:general" },
     },
+    {
+      name: "prefers account-scoped discord key over shared keys",
+      input: {
+        cfg: {
+          channels: {
+            modelByChannel: {
+              discord: {
+                "work:100:200": "anthropic/claude-sonnet-4-6",
+                "100:200": "openai/gpt-4.1",
+                "200": "openai/gpt-4.1-mini",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        channel: "discord",
+        accountId: "work",
+        groupId: "200",
+        groupSpace: "100",
+      },
+      expected: { model: "anthropic/claude-sonnet-4-6", matchKey: "work:100:200" },
+    },
+    {
+      name: "matches account-scoped unscoped channel key when guild scope is unavailable",
+      input: {
+        cfg: {
+          channels: {
+            modelByChannel: {
+              discord: {
+                "work:general": "openai/gpt-4.1",
+                general: "openai/gpt-4.1-mini",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        channel: "discord",
+        accountId: "work",
+        groupChannel: "#general",
+      },
+      expected: { model: "openai/gpt-4.1", matchKey: "work:general" },
+    },
   ] as const;
 
   for (const testCase of cases) {

@@ -22,6 +22,7 @@ type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 type ChannelModelOverrideParams = {
   cfg: OpenClawConfig;
   channel?: string | null;
+  accountId?: string | null;
   groupId?: string | null;
   groupSpace?: string | null;
   groupChannel?: string | null;
@@ -73,14 +74,28 @@ function buildScopedKey(scope: string | undefined, key: string | undefined): str
   return `${scope}:${key}`;
 }
 
+function prefixCandidates(prefix: string | undefined, candidates: string[]): string[] {
+  if (!prefix) {
+    return [];
+  }
+  return candidates.map((candidate) => `${prefix}:${candidate}`);
+}
+
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "channel" | "groupId" | "groupSpace" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    | "channel"
+    | "accountId"
+    | "groupId"
+    | "groupSpace"
+    | "groupChannel"
+    | "groupSubject"
+    | "parentSessionKey"
   >,
 ) {
   const normalizedChannel =
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
+  const accountId = params.accountId?.trim();
   const groupId = params.groupId?.trim();
   const groupSpace = params.groupSpace?.trim();
   const parentGroupId = resolveParentGroupId(groupId);
@@ -93,6 +108,17 @@ function buildChannelCandidates(
   const subjectBare = groupSubject ? groupSubject.replace(/^#/, "") : undefined;
   const channelSlug = channelBare ? normalizeChannelSlug(channelBare) : undefined;
   const subjectSlug = subjectBare ? normalizeChannelSlug(subjectBare) : undefined;
+  const baseCandidates = buildChannelKeyCandidates(
+    groupId,
+    parentGroupId,
+    parentGroupIdResolved,
+    groupChannel,
+    channelBare,
+    channelSlug,
+    groupSubject,
+    subjectBare,
+    subjectSlug,
+  );
   const scopedDiscordCandidates =
     normalizedChannel === "discord"
       ? buildChannelKeyCandidates(
@@ -108,18 +134,14 @@ function buildChannelCandidates(
           buildScopedKey(groupSpace, "*"),
         )
       : [];
+  const accountScopedDiscordCandidates = prefixCandidates(accountId, scopedDiscordCandidates);
+  const accountScopedBaseCandidates = prefixCandidates(accountId, baseCandidates);
 
   return buildChannelKeyCandidates(
+    ...accountScopedDiscordCandidates,
     ...scopedDiscordCandidates,
-    groupId,
-    parentGroupId,
-    parentGroupIdResolved,
-    groupChannel,
-    channelBare,
-    channelSlug,
-    groupSubject,
-    subjectBare,
-    subjectSlug,
+    ...accountScopedBaseCandidates,
+    ...baseCandidates,
   );
 }
 

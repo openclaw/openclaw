@@ -107,11 +107,27 @@ function normalizeLegacyAllowFromList(value: unknown): string[] | null {
   return [...new Set(normalized)];
 }
 
+function isNumericKey(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
+function resolveDiscordModelOverrideTargetKey(params: {
+  guildKey: string;
+  channelKey: string;
+  accountId?: string;
+}): string {
+  const guildKey = params.guildKey.trim();
+  const channelKey = params.channelKey.trim();
+  const scopedOrFallback = isNumericKey(guildKey) ? `${guildKey}:${channelKey}` : channelKey;
+  return params.accountId ? `${params.accountId}:${scopedOrFallback}` : scopedOrFallback;
+}
+
 function migrateDiscordGuildChannelLegacyConfigWriteKeys(params: {
   raw: Record<string, unknown>;
   owner: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
+  accountId?: string;
 }) {
   const guilds = getRecord(params.owner.guilds);
   if (!guilds) {
@@ -165,8 +181,10 @@ function migrateDiscordGuildChannelLegacyConfigWriteKeys(params: {
         const mappedAllow =
           groupPolicy === "disabled"
             ? false
-            : groupPolicy === "open" || groupPolicy === "allowlist";
-        if (channel.allow === undefined && groupPolicy) {
+            : groupPolicy === "open" || groupPolicy === "allowlist"
+              ? true
+              : undefined;
+        if (channel.allow === undefined && mappedAllow !== undefined) {
           channel.allow = mappedAllow;
           params.changes.push(
             `Mapped ${pathPrefix}.groupPolicy="${groupPolicy}" → ${pathPrefix}.allow=${String(mappedAllow)}.`,
@@ -185,23 +203,27 @@ function migrateDiscordGuildChannelLegacyConfigWriteKeys(params: {
         const model = typeof channel.model === "string" ? channel.model.trim() : "";
         if (model) {
           const modelByChannel = ensureDiscordModelByChannel();
-          const scopedChannelKey = `${guildId}:${channelId}`;
-          const existingScoped =
-            typeof modelByChannel[scopedChannelKey] === "string"
-              ? String(modelByChannel[scopedChannelKey]).trim()
+          const targetKey = resolveDiscordModelOverrideTargetKey({
+            guildKey: guildId,
+            channelKey: channelId,
+            accountId: params.accountId,
+          });
+          const existingTarget =
+            typeof modelByChannel[targetKey] === "string"
+              ? String(modelByChannel[targetKey]).trim()
               : "";
           const existingUnscoped =
             typeof modelByChannel[channelId] === "string"
               ? String(modelByChannel[channelId]).trim()
               : "";
-          if (!existingScoped && !existingUnscoped) {
-            modelByChannel[scopedChannelKey] = model;
+          if (!existingTarget && !existingUnscoped) {
+            modelByChannel[targetKey] = model;
             params.changes.push(
-              `Moved ${pathPrefix}.model → channels.modelByChannel.discord.${scopedChannelKey}.`,
+              `Moved ${pathPrefix}.model → channels.modelByChannel.discord.${targetKey}.`,
             );
-          } else if (existingScoped) {
+          } else if (existingTarget) {
             params.changes.push(
-              `Removed ${pathPrefix}.model (channels.modelByChannel.discord.${scopedChannelKey} already set).`,
+              `Removed ${pathPrefix}.model (channels.modelByChannel.discord.${targetKey} already set).`,
             );
           } else {
             params.changes.push(
@@ -459,6 +481,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
             owner: account,
             pathPrefix: `channels.discord.accounts.${accountId}`,
             changes,
+            accountId,
           });
           accounts[accountId] = account;
         }

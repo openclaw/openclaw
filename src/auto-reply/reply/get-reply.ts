@@ -191,6 +191,7 @@ export async function getReplyFromConfig(
         ? finalized.OriginatingChannel
         : undefined) ??
       finalized.Provider,
+    accountId: sessionEntry.accountId ?? sessionCtx.AccountId ?? finalized.AccountId,
     groupId: groupResolution?.id ?? sessionEntry.groupId,
     groupSpace: sessionEntry.space ?? sessionCtx.GroupSpace ?? finalized.GroupSpace,
     groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
