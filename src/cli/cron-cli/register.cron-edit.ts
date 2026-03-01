@@ -62,6 +62,15 @@ export function registerCronEditCommand(cron: Command) {
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
+      .option("--failure-alert", "Enable failure alerts for this job")
+      .option("--no-failure-alert", "Disable failure alerts for this job")
+      .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
+      .option(
+        "--failure-alert-channel <channel>",
+        `Failure alert channel (${getCronChannelOptions()})`,
+      )
+      .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -262,6 +271,49 @@ export function registerCronEditCommand(cron: Command) {
               delivery.bestEffort = opts.bestEffortDeliver;
             }
             patch.delivery = delivery;
+          }
+
+          const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
+          const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
+          const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
+          const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
+          const hasFailureAlertFields =
+            hasFailureAlertAfter ||
+            hasFailureAlertChannel ||
+            hasFailureAlertTo ||
+            hasFailureAlertCooldown;
+          const failureAlertFlag =
+            typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
+          if (failureAlertFlag === false && hasFailureAlertFields) {
+            throw new Error("Use --no-failure-alert alone (without failure-alert-* options).");
+          }
+          if (failureAlertFlag === false) {
+            patch.failureAlert = false;
+          } else if (failureAlertFlag === true || hasFailureAlertFields) {
+            const failureAlert: Record<string, unknown> = {};
+            if (hasFailureAlertAfter) {
+              const after = Number.parseInt(String(opts.failureAlertAfter), 10);
+              if (!Number.isFinite(after) || after <= 0) {
+                throw new Error("Invalid --failure-alert-after (must be a positive integer).");
+              }
+              failureAlert.after = after;
+            }
+            if (hasFailureAlertChannel) {
+              const channel = String(opts.failureAlertChannel).trim().toLowerCase();
+              failureAlert.channel = channel ? channel : undefined;
+            }
+            if (hasFailureAlertTo) {
+              const to = String(opts.failureAlertTo).trim();
+              failureAlert.to = to ? to : undefined;
+            }
+            if (hasFailureAlertCooldown) {
+              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              if (!cooldownMs && cooldownMs !== 0) {
+                throw new Error("Invalid --failure-alert-cooldown.");
+              }
+              failureAlert.cooldownMs = cooldownMs;
+            }
+            patch.failureAlert = failureAlert;
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {

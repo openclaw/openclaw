@@ -10,6 +10,12 @@ export type CronRetryConfig = {
   retryOn?: CronRetryOn[];
 };
 
+export type CronFailureAlertConfig = {
+  enabled?: boolean;
+  after?: number;
+  cooldownMs?: number;
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -37,4 +43,5 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  failureAlert?: CronFailureAlertConfig;
 };

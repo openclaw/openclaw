@@ -395,6 +395,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        failureAlert: z
+          .object({
+            enabled: z.boolean().optional(),
+            after: z.number().int().min(1).optional(),
+            cooldownMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
