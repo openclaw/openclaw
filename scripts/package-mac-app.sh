@@ -35,7 +35,20 @@ canonical_build_from_version() {
     local year="${BASH_REMATCH[1]}"
     local month="${BASH_REMATCH[2]}"
     local day="${BASH_REMATCH[3]}"
-    printf "%d%02d%02d0" "$year" "$month" "$day"
+    local suffix="${BASH_REMATCH[4]:-}"
+    local lane=90
+    # Keep stable releases above same-day prereleases so Sparkle can advance beta -> stable.
+    if [[ -n "$suffix" ]]; then
+      if [[ "$suffix" =~ ([0-9]+)$ ]]; then
+        lane=$((10#${BASH_REMATCH[1]}))
+        if (( lane > 89 )); then
+          lane=89
+        fi
+      else
+        lane=1
+      fi
+    fi
+    printf "%d%02d%02d%02d" "$year" "$month" "$day" "$lane"
     return 0
   fi
   return 1
