@@ -532,6 +532,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKeyRaw) {
         return;
       }
+      const shouldUseScopedWake = shouldUseSessionScopedExecWake(sessionKeyRaw);
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
@@ -581,7 +582,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         contextKey: runId ? `exec:${runId}` : "exec",
       });
       if (queued) {
-        if (shouldUseSessionScopedExecWake(sessionKey)) {
+        if (shouldUseScopedWake) {
           requestHeartbeatNow({ reason: "exec-event", sessionKey });
         } else {
           requestHeartbeatNow({ reason: "exec-event" });

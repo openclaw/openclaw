@@ -139,7 +139,7 @@ describe("node exec events", () => {
     });
   });
 
-  it("canonicalizes exec event session key before enqueue and wake", async () => {
+  it("keeps fallback exec wakes unscoped when canonical key is agent-scoped", async () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("node-node-2"),
       canonicalKey: "agent:main:node-node-2",
@@ -162,7 +162,6 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
-      sessionKey: "agent:main:node-node-2",
     });
   });
 
