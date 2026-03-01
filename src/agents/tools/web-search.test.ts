@@ -18,6 +18,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveXSearchApiKey,
+  resolveXSearchModel,
+  resolveXSearchInlineCitations,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -180,6 +183,44 @@ describe("web_search grok config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
     expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  });
+});
+
+describe("x_search config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveXSearchApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+  });
+
+  it("falls back to XAI_API_KEY env var", () => {
+    withEnv({ XAI_API_KEY: "xai-env-key" }, () => {
+      expect(resolveXSearchApiKey({})).toBe("xai-env-key");
+    });
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ XAI_API_KEY: undefined }, () => {
+      expect(resolveXSearchApiKey({})).toBeUndefined();
+      expect(resolveXSearchApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("uses default model when not specified", () => {
+    expect(resolveXSearchModel({})).toBe("grok-4-1-fast");
+    expect(resolveXSearchModel(undefined)).toBe("grok-4-1-fast");
+  });
+
+  it("uses config model when provided", () => {
+    expect(resolveXSearchModel({ model: "grok-3" })).toBe("grok-3");
+  });
+
+  it("defaults inlineCitations to false", () => {
+    expect(resolveXSearchInlineCitations({})).toBe(false);
+    expect(resolveXSearchInlineCitations(undefined)).toBe(false);
+  });
+
+  it("respects inlineCitations config", () => {
+    expect(resolveXSearchInlineCitations({ inlineCitations: true })).toBe(true);
+    expect(resolveXSearchInlineCitations({ inlineCitations: false })).toBe(false);
   });
 });
 

@@ -23,6 +23,7 @@ import {
 } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const XAI_TOOL_TYPES = ["web_search", "x_search"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -120,6 +121,15 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type XSearchConfig = {
+  enabled?: boolean;
+  apiKey?: string;
+  model?: string;
+  inlineCitations?: boolean;
+  timeoutSeconds?: number;
+  cacheTtlMinutes?: number;
 };
 
 type GrokSearchResponse = {
@@ -933,6 +943,8 @@ async function runGrokSearch(params: {
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
+  /** xAI tool type to use (defaults to "web_search"). */
+  xaiToolType?: (typeof XAI_TOOL_TYPES)[number];
 }): Promise<{
   content: string;
   citations: string[];
@@ -946,7 +958,7 @@ async function runGrokSearch(params: {
         content: params.query,
       },
     ],
-    tools: [{ type: "web_search" }],
+    tools: [{ type: params.xaiToolType ?? "web_search" }],
   };
 
   // Note: xAI's /v1/responses endpoint does not support the `include`
@@ -1476,6 +1488,117 @@ export function createWebSearchTool(options?: {
   };
 }
 
+const XSearchSchema = Type.Object({
+  query: Type.String({ description: "Search query string." }),
+});
+
+function resolveXSearchConfig(cfg?: OpenClawConfig): XSearchConfig {
+  const raw = cfg?.tools?.web?.x_search;
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  return raw as XSearchConfig;
+}
+
+function resolveXSearchEnabled(xSearch?: XSearchConfig): boolean {
+  if (typeof xSearch?.enabled === "boolean") {
+    return xSearch.enabled;
+  }
+  return true;
+}
+
+function resolveXSearchApiKey(xSearch?: XSearchConfig): string | undefined {
+  const fromConfig = normalizeApiKey(xSearch?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.XAI_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveXSearchModel(xSearch?: XSearchConfig): string {
+  const fromConfig =
+    xSearch && "model" in xSearch && typeof xSearch.model === "string" ? xSearch.model.trim() : "";
+  return fromConfig || DEFAULT_GROK_MODEL;
+}
+
+function resolveXSearchInlineCitations(xSearch?: XSearchConfig): boolean {
+  return xSearch?.inlineCitations === true;
+}
+
+const X_SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+export function createXSearchTool(options?: { config?: OpenClawConfig }): AnyAgentTool | null {
+  const xSearch = resolveXSearchConfig(options?.config);
+  if (!resolveXSearchEnabled(xSearch)) {
+    return null;
+  }
+
+  return {
+    label: "X Search",
+    name: "x_search",
+    description:
+      "Search X (formerly Twitter) using xAI Grok. Returns AI-synthesized answers with citations from real-time X post search.",
+    parameters: XSearchSchema,
+    execute: async (_toolCallId, args) => {
+      const apiKey = resolveXSearchApiKey(xSearch);
+      if (!apiKey) {
+        return jsonResult({
+          error: "missing_xai_api_key",
+          message:
+            "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.x_search.apiKey.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+
+      const params = args as Record<string, unknown>;
+      const query = readStringParam(params, "query", { required: true });
+      const model = resolveXSearchModel(xSearch);
+      const inlineCitations = resolveXSearchInlineCitations(xSearch);
+      const timeoutSeconds = resolveTimeoutSeconds(
+        xSearch?.timeoutSeconds,
+        DEFAULT_TIMEOUT_SECONDS,
+      );
+      const cacheTtlMs = resolveCacheTtlMs(xSearch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+
+      const cacheKey = normalizeCacheKey(`x_search:${query}:${model}:${String(inlineCitations)}`);
+      const cached = readCache(X_SEARCH_CACHE, cacheKey);
+      if (cached) {
+        return jsonResult({ ...cached.value, cached: true });
+      }
+
+      const start = Date.now();
+      const {
+        content,
+        citations,
+        inlineCitations: inlineCitationsData,
+      } = await runGrokSearch({
+        query,
+        apiKey,
+        model,
+        timeoutSeconds,
+        inlineCitations,
+        xaiToolType: "x_search",
+      });
+
+      const payload = {
+        query,
+        tookMs: Date.now() - start,
+        externalContent: {
+          untrusted: true,
+          source: "x_search",
+          wrapped: true,
+        },
+        content: wrapWebContent(content),
+        citations,
+        inlineCitations: inlineCitationsData,
+      };
+      writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+      return jsonResult(payload);
+    },
+  };
+}
+
 export const __testing = {
   resolveSearchProvider,
   inferPerplexityBaseUrlFromApiKey,
@@ -1494,4 +1617,7 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl,
+  resolveXSearchApiKey,
+  resolveXSearchModel,
+  resolveXSearchInlineCitations,
 } as const;

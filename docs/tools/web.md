@@ -1,19 +1,21 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, Gemini Google Search grounding)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, Gemini Google Search grounding, xAI Grok, X (formerly Twitter) search)"
 read_when:
-  - You want to enable web_search or web_fetch
+  - You want to enable web_search, web_fetch, or x_search
   - You need Brave Search API key setup
   - You want to use Perplexity Sonar for web search
   - You want to use Gemini with Google Search grounding
+  - You want to use xAI Grok for web search or X (formerly Twitter) search
 title: "Web Tools"
 ---
 
 # Web tools
 
-OpenClaw ships two lightweight web tools:
+OpenClaw ships three lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, or Gemini with Google Search grounding.
+- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, Gemini with Google Search grounding, or xAI Grok.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
+- `x_search` — Search X (formerly Twitter) posts via xAI Grok.
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
 [Browser tool](/tools/browser).
@@ -24,6 +26,8 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
   - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
+  - **Grok**: returns AI-synthesized answers with citations via xAI's Grok model.
+- `x_search` queries X (formerly Twitter) posts via xAI Grok and returns AI-synthesized answers with citations.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -36,6 +40,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 | **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
+| **Grok**            | AI-synthesized answers, citations, real-time | Requires xAI API key                     | `XAI_API_KEY`                                |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
@@ -59,7 +64,7 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave", // or "perplexity" or "gemini"
+        provider: "brave", // or "perplexity", "gemini", or "grok"
       },
     },
   },
@@ -198,6 +203,31 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using Grok (xAI)
+
+Grok uses xAI's Responses API with the built-in `web_search` tool to return AI-synthesized answers with citations.
+
+### Setting up Grok search
+
+Set `XAI_API_KEY` in your environment, or configure the key directly:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "grok",
+        grok: {
+          apiKey: "xai-...", // optional if XAI_API_KEY is set
+          model: "grok-4-1-fast", // default
+          inlineCitations: false, // embed citation links inline (default: false)
+        },
+      },
+    },
+  },
+}
+```
+
 ## web_search
 
 Search the web using your configured provider.
@@ -208,6 +238,7 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
 
 ### Config
 
@@ -320,5 +351,36 @@ Notes:
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
-- If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
+- If you use tool profiles/allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
 - If the Brave key is missing, `web_search` returns a short setup hint with a docs link.
+
+## x_search
+
+Search X (formerly Twitter) posts using xAI Grok. Returns AI-synthesized answers with citations from real-time X post search.
+
+### x_search requirements
+
+- `XAI_API_KEY` or `tools.web.x_search.apiKey`
+
+### x_search config
+
+```json5
+{
+  tools: {
+    web: {
+      x_search: {
+        enabled: true,
+        apiKey: "xai-...", // optional if XAI_API_KEY is set
+        model: "grok-4-1-fast", // default
+        inlineCitations: false, // embed citation links inline (default: false)
+        timeoutSeconds: 30,
+        cacheTtlMinutes: 15,
+      },
+    },
+  },
+}
+```
+
+### x_search tool parameters
+
+- `query` (required)

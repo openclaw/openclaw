@@ -318,10 +318,23 @@ export const ToolsWebFetchSchema = z
   .strict()
   .optional();
 
+export const ToolsWebXSearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: z.string().optional().register(sensitive),
+    model: z.string().optional(),
+    inlineCitations: z.boolean().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
+    x_search: ToolsWebXSearchSchema,
   })
   .strict()
   .optional();

@@ -475,6 +475,21 @@ export type ToolsConfig = {
         model?: string;
       };
     };
+    /** X (formerly Twitter) search tool configuration using xAI Grok. */
+    x_search?: {
+      /** Enable X search tool (default: true when XAI_API_KEY is present). */
+      enabled?: boolean;
+      /** API key for xAI (defaults to XAI_API_KEY env var). */
+      apiKey?: string;
+      /** Model to use (defaults to "grok-4-1-fast"). */
+      model?: string;
+      /** Include inline citations in response text as markdown links (default: false). */
+      inlineCitations?: boolean;
+      /** Timeout in seconds for search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for search results. */
+      cacheTtlMinutes?: number;
+    };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;

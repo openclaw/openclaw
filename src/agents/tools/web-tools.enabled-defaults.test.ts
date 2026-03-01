@@ -1,7 +1,7 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
+import { createWebFetchTool, createWebSearchTool, createXSearchTool } from "./web-tools.js";
 
 function installMockFetch(payload: unknown) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -551,5 +551,47 @@ describe("web_search external content wrapping", () => {
     // Citations are URLs - should NOT be wrapped for tool chaining
     expect(details.citations?.[0]).toBe(citation);
     expect(details.citations?.[0]).not.toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+  });
+});
+
+describe("x_search tool", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("creates the tool with name x_search", () => {
+    const tool = createXSearchTool({ config: {} });
+    expect(tool?.name).toBe("x_search");
+  });
+
+  it("returns null when disabled", () => {
+    const tool = createXSearchTool({
+      config: { tools: { web: { x_search: { enabled: false } } } },
+    });
+    expect(tool).toBeNull();
+  });
+
+  it("sends {type: x_search} in the xAI request body", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-test-key");
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            output: [{ type: "message", content: [{ type: "output_text", text: "results" }] }],
+            citations: [],
+          }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createXSearchTool({ config: {} });
+    await tool?.execute?.("call-1", { query: "openai news" });
+
+    const body = parseFirstRequestBody(mockFetch);
+    expect((body.tools as Array<{ type: string }>)?.[0]?.type).toBe("x_search");
   });
 });

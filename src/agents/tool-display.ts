@@ -80,7 +80,9 @@ export function resolveToolDisplay(params: {
       ? "search"
       : key === "web_fetch"
         ? "fetch"
-        : key.replace(/_/g, " ").replace(/\./g, " ");
+        : key === "x_search"
+          ? "search X"
+          : key.replace(/_/g, " ").replace(/\./g, " ");
   const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
 
   let detail: string | undefined;
@@ -94,7 +96,7 @@ export function resolveToolDisplay(params: {
     detail = resolveWriteDetail(key, params.args);
   }
 
-  if (!detail && key === "web_search") {
+  if (!detail && (key === "web_search" || key === "x_search")) {
     detail = resolveWebSearchDetail(params.args);
   }
 
