@@ -98,6 +98,7 @@ type ChannelHandler = {
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   supportsMedia: boolean;
+  prependTextChunksToPayload?: boolean;
   sendPayload?: (
     payload: ReplyPayload,
     overrides?: {
@@ -171,6 +172,7 @@ function createPluginHandler(
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     supportsMedia: Boolean(sendMedia),
+    prependTextChunksToPayload: outbound.prependTextChunksToPayload,
     sendPayload: outbound.sendPayload
       ? async (payload, overrides) =>
           outbound.sendPayload!({
@@ -714,7 +716,23 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId ?? undefined,
       };
       if (handler.sendPayload && effectivePayload.channelData) {
-        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
+        let payloadForSend = effectivePayload;
+        // When text exceeds the chunk limit, send leading chunks as plain text and
+        // attach channelData only to the final chunk to preserve inline buttons.
+        // Only adapters that opt in via prependTextChunksToPayload get this behavior;
+        // others (e.g. Line) control payload ordering internally in sendPayload.
+        if (handler.prependTextChunksToPayload && handler.chunker && textLimit !== undefined) {
+          const fullText = effectivePayload.text ?? "";
+          const chunks = handler.chunker(fullText, textLimit);
+          if (chunks.length > 1) {
+            for (const chunk of chunks.slice(0, -1)) {
+              throwIfAborted(abortSignal);
+              results.push(await handler.sendText(chunk, sendOverrides));
+            }
+            payloadForSend = { ...effectivePayload, text: chunks.at(-1) ?? "" };
+          }
+        }
+        const delivery = await handler.sendPayload(payloadForSend, sendOverrides);
         results.push(delivery);
         emitMessageSent({
           success: true,

@@ -118,6 +118,10 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
+  /** When true, long text in sendPayload calls is pre-chunked via sendText before
+   *  the final chunk is passed to sendPayload with channelData attached. Adapters
+   *  that control their own payload ordering (e.g. Line) should leave this unset. */
+  prependTextChunksToPayload?: boolean;
   sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;

@@ -66,3 +66,5 @@ export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegr
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+
+export type { TelegramInlineButtons, TelegramInlineButton } from "../telegram/button-types.js";

@@ -293,6 +293,7 @@ describe("deliverOutboundPayloads", () => {
 
     await deliverTelegramPayload({
       sendTelegram,
+      cfg: { channels: { telegram: { botToken: "tok-1", textChunkLimit: 4000 } } },
       payload: {
         text: "<b>hello</b>",
         channelData: { telegram: { buttons: [] } },
@@ -926,6 +927,75 @@ describe("deliverOutboundPayloads", () => {
       }),
     );
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
+  });
+
+  it("chunks text before sendPayload and attaches buttons only to the last chunk", async () => {
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", chatId: "c1" })
+      .mockResolvedValueOnce({ messageId: "m2", chatId: "c1" });
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+
+    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
+      await deliverOutboundPayloads({
+        cfg: telegramChunkConfig, // textChunkLimit: 2
+        channel: "telegram",
+        to: "123",
+        payloads: [{ text: "abcd", channelData: { telegram: { buttons } } }],
+        deps: { sendTelegram },
+      });
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    // first chunk: sendText path, no buttons
+    expect(sendTelegram.mock.calls[0][2]).not.toHaveProperty("buttons");
+    // last chunk: sendPayload path, buttons attached
+    expect(sendTelegram.mock.calls[1][2]).toMatchObject({ buttons });
+  });
+
+  it("does not pre-chunk sendPayload text when prependTextChunksToPayload is unset", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-chunk" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    // Adapter has chunker + sendPayload but NOT prependTextChunksToPayload
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker: (text, limit) => {
+                const chunks: string[] = [];
+                for (let i = 0; i < text.length; i += limit) {
+                  chunks.push(text.slice(i, i + limit));
+                }
+                return chunks;
+              },
+              textChunkLimit: 2,
+              sendPayload,
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } },
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "abcd", channelData: { custom: true } }],
+    });
+
+    // sendText should NOT be called for leading chunks
+    expect(sendText).not.toHaveBeenCalled();
+    // sendPayload should receive the full text unchanged
+    expect(sendPayload).toHaveBeenCalledOnce();
+    expect(sendPayload).toHaveBeenCalledWith(expect.objectContaining({ text: "abcd" }));
   });
 
   it("falls back to one sendText call for multi-media payloads when sendMedia is omitted", async () => {
