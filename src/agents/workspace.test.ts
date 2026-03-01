@@ -7,8 +7,6 @@ import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -139,42 +137,15 @@ describe("ensureAgentWorkspace", () => {
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {
-  const getMemoryEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
-    files.filter((file) =>
-      [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME].includes(file.name),
-    );
-
-  const expectSingleMemoryEntry = (
-    files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>,
-    content: string,
-  ) => {
-    const memoryEntries = getMemoryEntries(files);
-    expect(memoryEntries).toHaveLength(1);
-    expect(memoryEntries[0]?.missing).toBe(false);
-    expect(memoryEntries[0]?.content).toBe(content);
-  };
-
-  it("includes MEMORY.md when present", async () => {
+  it("does not include MEMORY.md or memory.md in injected bootstrap files", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "memory" });
+    await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "memory-alt" });
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expectSingleMemoryEntry(files, "memory");
-  });
-
-  it("includes memory.md when MEMORY.md is absent", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
-
-    const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expectSingleMemoryEntry(files, "alt");
-  });
-
-  it("omits memory entries when no memory files exist", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-
-    const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expect(getMemoryEntries(files)).toHaveLength(0);
+    const names = files.map((file) => file.name);
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).not.toContain("memory.md");
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {
