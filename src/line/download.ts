@@ -55,7 +55,7 @@ export async function downloadLineMedia(
   };
 }
 
-function detectContentType(buffer: Buffer): string {
+export function detectContentType(buffer: Buffer): string {
   // Check magic bytes
   if (buffer.length >= 2) {
     // JPEG
@@ -83,15 +83,22 @@ function detectContentType(buffer: Buffer): string {
     ) {
       return "image/webp";
     }
-    // MP4
-    if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
-      return "video/mp4";
-    }
-    // M4A/AAC
-    if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x00) {
-      if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+    // MPEG-4 container (ftyp box at bytes 4-7)
+    // Both MP4 video and M4A audio share the same ftyp magic bytes,
+    // so we must check the brand string at bytes 8-11 to distinguish them.
+    if (
+      buffer.length >= 12 &&
+      buffer[4] === 0x66 &&
+      buffer[5] === 0x74 &&
+      buffer[6] === 0x79 &&
+      buffer[7] === 0x70
+    ) {
+      const brand = buffer.toString("ascii", 8, 12);
+      // M4A audio brands: M4A (iTunes AAC), M4B (audiobook), F4A (Adobe audio)
+      if (brand === "M4A " || brand === "M4B " || brand === "F4A ") {
         return "audio/mp4";
       }
+      return "video/mp4";
     }
   }
 
