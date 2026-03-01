@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setupFeishuTestRuntime } from "./test-runtime.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -10,6 +11,10 @@ vi.mock("./probe.js", () => ({
 import { feishuPlugin } from "./channel.js";
 
 describe("feishuPlugin.status.probeAccount", () => {
+  beforeEach(() => {
+    setupFeishuTestRuntime();
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {

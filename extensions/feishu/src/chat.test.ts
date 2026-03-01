@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
+import { setupFeishuTestRuntime } from "./test-runtime.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -12,6 +13,7 @@ describe("registerFeishuChatTools", () => {
   const chatMembersGetMock = vi.hoisted(() => vi.fn());
 
   beforeEach(() => {
+    setupFeishuTestRuntime();
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({
       im: {

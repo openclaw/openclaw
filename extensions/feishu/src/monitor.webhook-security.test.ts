@@ -30,6 +30,7 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+import { setFeishuRuntime } from "./runtime.js";
 
 async function getFreePort(): Promise<number> {
   const server = createServer();
@@ -84,6 +85,53 @@ function buildConfig(params: {
   } as ClawdbotConfig;
 }
 
+function createMockPluginRuntime(cfg: ClawdbotConfig) {
+  const feishuCfg = cfg?.channels?.feishu as { accounts?: Record<string, unknown> } | undefined;
+  const accounts = feishuCfg?.accounts ?? {};
+  const ids = Object.keys(accounts).filter(Boolean);
+  const accountIds = ids.length > 0 ? ids : ["default"];
+  return {
+    version: "test",
+    config: {},
+    system: {},
+    media: {},
+    tts: {},
+    tools: {},
+    channel: {
+      feishu: {
+        listFeishuAccountIds: () => accountIds,
+        resolveDefaultFeishuAccountId: () => accountIds[0] ?? "default",
+        resolveFeishuAccount: ({ accountId }: { accountId?: string }) => {
+          const id = accountId ?? "default";
+          const acct = (accounts[id] ?? {}) as Record<string, unknown>;
+          return {
+            accountId: id,
+            enabled: true,
+            configured: Boolean(acct.appId),
+            appId: acct.appId,
+            appSecret: acct.appSecret,
+            domain: "feishu" as const,
+            config: feishuCfg ?? {},
+          };
+        },
+        probeFeishu: probeFeishuMock,
+        sendMessageFeishu: vi.fn(),
+        getMessageFeishu: vi.fn(),
+        sendCardFeishu: vi.fn(),
+        sendMarkdownCardFeishu: vi.fn(),
+        updateCardFeishu: vi.fn(),
+        editMessageFeishu: vi.fn(),
+        buildMarkdownCard: (t: string) => ({
+          body: { elements: [{ tag: "markdown", content: t }] },
+        }),
+      },
+      text: { resolveMarkdownTableMode: () => "native", convertMarkdownTables: (t: string) => t },
+    },
+    logging: {},
+    state: {},
+  };
+}
+
 async function withRunningWebhookMonitor(
   params: {
     accountId: string;
@@ -99,6 +147,8 @@ async function withRunningWebhookMonitor(
     port,
     verificationToken: params.verificationToken,
   });
+
+  setFeishuRuntime(createMockPluginRuntime(cfg) as never);
 
   const abortController = new AbortController();
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -127,12 +177,12 @@ afterEach(() => {
 describe("Feishu webhook security hardening", () => {
   it("rejects webhook mode without verificationToken", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-
     const cfg = buildConfig({
       accountId: "missing-token",
       path: "/hook-missing-token",
       port: await getFreePort(),
     });
+    setFeishuRuntime(createMockPluginRuntime(cfg) as never);
 
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(
       /requires verificationToken/i,

@@ -16,8 +16,47 @@ vi.mock("./runtime.js", () => ({
       media: {
         fetchRemoteMedia: fetchRemoteMediaMock,
       },
+      feishu: {
+        listFeishuAccountIds: () => ["default"],
+        resolveDefaultFeishuAccountId: () => "default",
+        resolveFeishuAccount: ({
+          cfg,
+          accountId,
+        }: {
+          cfg: Record<string, unknown>;
+          accountId?: string;
+        }) => {
+          const channels = cfg?.channels as { feishu?: Record<string, unknown> } | undefined;
+          const fc = channels?.feishu as Record<string, unknown> | undefined;
+          const accts = (fc?.accounts as Record<string, Record<string, unknown>>) ?? {};
+          const id = accountId ?? "default";
+          const acct = accts[id] ?? fc ?? {};
+          return {
+            accountId: id,
+            enabled: true,
+            configured: true,
+            appId: (acct as { appId?: string }).appId ?? "cli_test",
+            appSecret: (acct as { appSecret?: string }).appSecret ?? "secret",
+            domain: "feishu" as const,
+            config: { ...fc, ...acct },
+          };
+        },
+        probeFeishu: vi.fn(),
+        sendMessageFeishu: vi.fn(),
+        getMessageFeishu: vi.fn(),
+        sendCardFeishu: vi.fn(),
+        sendMarkdownCardFeishu: vi.fn(),
+        updateCardFeishu: vi.fn(),
+        editMessageFeishu: vi.fn(),
+        buildMarkdownCard: (t: string) => ({
+          body: { elements: [{ tag: "markdown", content: t }] },
+        }),
+        clearProbeCache: vi.fn(),
+      },
+      text: { resolveMarkdownTableMode: () => "native", convertMarkdownTables: (t: string) => t },
     },
   }),
+  setFeishuRuntime: vi.fn(),
 }));
 
 import { registerFeishuDocTools } from "./docx.js";

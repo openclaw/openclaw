@@ -67,6 +67,21 @@ import { probeDiscord } from "../../discord/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
+import {
+  listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+} from "../../feishu/accounts.js";
+import { clearProbeCache as clearFeishuProbeCache, probeFeishu } from "../../feishu/probe.js";
+import {
+  buildMarkdownCard,
+  editMessageFeishu,
+  getMessageFeishu,
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  updateCardFeishu,
+} from "../../feishu/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
@@ -238,7 +253,7 @@ function loadWhatsAppActions() {
 }
 
 export function createPluginRuntime(): PluginRuntime {
-  return {
+  const runtime: PluginRuntime = {
     version: resolveVersion(),
     config: createRuntimeConfig(),
     system: createRuntimeSystem(),
@@ -249,6 +264,7 @@ export function createPluginRuntime(): PluginRuntime {
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
   };
+  return runtime;
 }
 
 function createRuntimeConfig(): PluginRuntime["config"] {
@@ -442,6 +458,20 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
       monitorLineProvider,
+    },
+    feishu: {
+      listFeishuAccountIds,
+      resolveDefaultFeishuAccountId,
+      resolveFeishuAccount,
+      probeFeishu,
+      clearProbeCache: clearFeishuProbeCache,
+      sendMessageFeishu,
+      getMessageFeishu,
+      sendCardFeishu,
+      sendMarkdownCardFeishu,
+      updateCardFeishu,
+      editMessageFeishu,
+      buildMarkdownCard,
     },
   };
 }

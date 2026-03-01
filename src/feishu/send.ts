@@ -1,0 +1,301 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
+import { convertMarkdownTables } from "../markdown/tables.js";
+import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
+import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
+import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import { resolveFeishuSendTarget } from "./send-target.js";
+import type { FeishuSendResult, MentionTarget } from "./types.js";
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+};
+
+export async function getMessageFeishu(params: {
+  cfg: OpenClawConfig;
+  messageId: string;
+  accountId?: string;
+}): Promise<FeishuMessageInfo | null> {
+  const { cfg, messageId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+
+  try {
+    const response = (await client.im.message.get({
+      path: { message_id: messageId },
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          message_id?: string;
+          chat_id?: string;
+          msg_type?: string;
+          body?: { content?: string };
+          sender?: {
+            id?: string;
+            id_type?: string;
+            sender_type?: string;
+          };
+          create_time?: string;
+        }>;
+      };
+    };
+
+    if (response.code !== 0) {
+      return null;
+    }
+
+    const item = response.data?.items?.[0];
+    if (!item) {
+      return null;
+    }
+
+    let content = item.body?.content ?? "";
+    try {
+      const parsed = JSON.parse(content);
+      if (item.msg_type === "text" && parsed.text) {
+        content = parsed.text;
+      } else if (item.msg_type === "interactive" && parsed.elements) {
+        const texts: string[] = [];
+        for (const element of parsed.elements) {
+          if (element.tag === "div" && element.text?.content) {
+            texts.push(element.text.content);
+          } else if (element.tag === "markdown" && element.content) {
+            texts.push(element.content);
+          }
+        }
+        content = texts.join("\n") || "[Interactive Card]";
+      }
+    } catch {
+      // Keep raw content if parsing fails
+    }
+
+    return {
+      messageId: item.message_id ?? messageId,
+      chatId: item.chat_id ?? "",
+      senderId: item.sender?.id,
+      senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+      senderType: item.sender?.sender_type,
+      content,
+      contentType: item.msg_type ?? "text",
+      createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export type SendFeishuMessageParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  mentions?: MentionTarget[];
+  accountId?: string;
+};
+
+function buildFeishuPostMessagePayload(params: { messageText: string }): {
+  content: string;
+  msgType: string;
+} {
+  const { messageText } = params;
+  return {
+    content: JSON.stringify({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: messageText,
+            },
+          ],
+        ],
+      },
+    }),
+    msgType: "post",
+  };
+}
+
+export async function sendMessageFeishu(
+  params: SendFeishuMessageParams,
+): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+
+  let rawText = text ?? "";
+  if (mentions && mentions.length > 0) {
+    rawText = buildMentionedMessage(mentions, rawText);
+  }
+  const messageText = convertMarkdownTables(rawText, tableMode);
+
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+
+  if (replyToMessageId) {
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: msgType,
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    assertFeishuMessageApiSuccess(response, "Feishu reply failed");
+    return toFeishuSendResult(response, receiveId);
+  }
+
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: msgType,
+    },
+  });
+  assertFeishuMessageApiSuccess(response, "Feishu send failed");
+  return toFeishuSendResult(response, receiveId);
+}
+
+export type SendFeishuCardParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  card: Record<string, unknown>;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  accountId?: string;
+};
+
+export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
+  const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const content = JSON.stringify(card);
+
+  if (replyToMessageId) {
+    const response = await client.im.message.reply({
+      path: { message_id: replyToMessageId },
+      data: {
+        content,
+        msg_type: "interactive",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
+      },
+    });
+    assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
+    return toFeishuSendResult(response, receiveId);
+  }
+
+  const response = await client.im.message.create({
+    params: { receive_id_type: receiveIdType },
+    data: {
+      receive_id: receiveId,
+      content,
+      msg_type: "interactive",
+    },
+  });
+  assertFeishuMessageApiSuccess(response, "Feishu card send failed");
+  return toFeishuSendResult(response, receiveId);
+}
+
+export async function updateCardFeishu(params: {
+  cfg: OpenClawConfig;
+  messageId: string;
+  card: Record<string, unknown>;
+  accountId?: string;
+}): Promise<void> {
+  const { cfg, messageId, card, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const content = JSON.stringify(card);
+
+  const response = await client.im.message.patch({
+    path: { message_id: messageId },
+    data: { content },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
+  }
+}
+
+export function buildMarkdownCard(text: string): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: {
+      wide_screen_mode: true,
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: text,
+        },
+      ],
+    },
+  };
+}
+
+export async function sendMarkdownCardFeishu(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  mentions?: MentionTarget[];
+  accountId?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildMarkdownCard(cardText);
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+}
+
+export async function editMessageFeishu(params: {
+  cfg: OpenClawConfig;
+  messageId: string;
+  text: string;
+  accountId?: string;
+}): Promise<void> {
+  const { cfg, messageId, text, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const messageText = convertMarkdownTables(text ?? "", tableMode);
+
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+
+  const response = await client.im.message.update({
+    path: { message_id: messageId },
+    data: {
+      msg_type: msgType,
+      content,
+    },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
+  }
+}

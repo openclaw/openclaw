@@ -145,6 +145,46 @@ describe("handleFeishuMessage command authorization", () => {
         enqueueSystemEvent: vi.fn(),
       },
       channel: {
+        feishu: {
+          listFeishuAccountIds: () => ["default"],
+          resolveDefaultFeishuAccountId: () => "default",
+          resolveFeishuAccount: ({
+            cfg,
+            accountId,
+          }: {
+            cfg: ClawdbotConfig;
+            accountId?: string;
+          }) => {
+            const fc = cfg?.channels?.feishu as Record<string, unknown> | undefined;
+            const accts = (fc?.accounts as Record<string, Record<string, unknown>>) ?? {};
+            const id = accountId ?? "default";
+            const acct = accts[id] ?? {};
+            return {
+              accountId: id,
+              enabled: true,
+              configured: true,
+              appId: acct.appId,
+              appSecret: acct.appSecret,
+              domain: "feishu" as const,
+              config: { ...fc, ...acct },
+            };
+          },
+          probeFeishu: vi.fn(),
+          sendMessageFeishu: mockSendMessageFeishu,
+          getMessageFeishu: mockGetMessageFeishu,
+          sendCardFeishu: vi.fn(),
+          sendMarkdownCardFeishu: vi.fn(),
+          updateCardFeishu: vi.fn(),
+          editMessageFeishu: vi.fn(),
+          buildMarkdownCard: (t: string) => ({
+            body: { elements: [{ tag: "markdown", content: t }] },
+          }),
+          clearProbeCache: vi.fn(),
+        },
+        text: {
+          resolveMarkdownTableMode: () => "native",
+          convertMarkdownTables: (t: string) => t,
+        },
         routing: {
           resolveAgentRoute: mockResolveAgentRoute,
         },
@@ -342,6 +382,7 @@ describe("handleFeishuMessage command authorization", () => {
         feishu: {
           dmPolicy: "pairing",
           allowFrom: [],
+          resolveSenderNames: false,
         },
       },
     } as ClawdbotConfig;
@@ -788,6 +829,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           dmPolicy: "open",
+          resolveSenderNames: false,
         },
       },
     } as ClawdbotConfig;

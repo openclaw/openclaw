@@ -589,6 +589,23 @@ export {
 } from "../line/markdown-to-line.js";
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
+// Feishu core types and functions
+export type {
+  FeishuDomain,
+  FeishuConfig as FeishuCoreConfig,
+  FeishuAccountConfig as FeishuCoreAccountConfig,
+  ResolvedFeishuAccount as FeishuCoreResolvedAccount,
+  FeishuSendResult,
+  FeishuIdType,
+  MentionTarget as FeishuMentionTarget,
+  FeishuProbeResult,
+} from "../feishu/types.js";
+export type {
+  FeishuMessageInfo,
+  SendFeishuMessageParams,
+  SendFeishuCardParams,
+} from "../feishu/send.js";
+
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
 
