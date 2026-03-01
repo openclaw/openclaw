@@ -1,34 +1,23 @@
 """
-OpenClaw 网关与路由系统 - 完整教程 (s05 + s06 合并版)
-
 "From single-agent gateway to multi-agent routing"
 
-本文件整合了 s05 (WebSocket Gateway) 和 s06 (Message Routing) 的完整实现,
-展示如何从基础的网络通信层逐步扩展到多 Agent 的智能路由系统.
-
-【架构演进】
-  s05: 单一 Agent, 多客户端 WebSocket 网关
-  s06: 多 Agent, 优先级路由和会话隔离
-  本文件: 完整集成 + 生产级参考注释
-
-【对标 OpenClaw 生产版】
-- 认证: src/gateway/auth.ts
-- 路由: src/routing/resolve-route.ts
-- 会话: src/routing/session-key.ts
-- 广播: src/gateway/server-broadcast.ts
+本文件展示如何从基础的网络通信层逐步扩展到多 Agent 的智能路由系统.
 
 【运行方式】
 1. 服务器模式 (启动网关):
-   python s05_s06_unified.py
+   python agents/s05_gateway.py
 
-2. 测试客户端 (演示路由和多 Agent):
-   python s05_s06_unified.py --test-client
+2. 测试客户端 (自动化演示路由和多 Agent):
+   python agents/s05_gateway.py --test-client
 
-3. 交互式 REPL (本地测试路由逻辑):
-   python s05_s06_unified.py --repl
+3. 交互式对话 (自由提问，验证会话记录和工具调用):
+   python agents/s05_gateway.py --chat
+
+4. 交互式 REPL (本地测试路由逻辑，无需网关):
+   python agents/s05_gateway.py --repl
 
 【依赖】
-pip install anthropic python-dotenv websockets
+pip install python-dotenv websockets
 """
 
 from __future__ import annotations
@@ -40,24 +29,43 @@ import sys
 import time
 import uuid
 import logging
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any
 
 import websockets
 from websockets.asyncio.server import ServerConnection
 from dotenv import load_dotenv
-from anthropic import Anthropic
+
+_agents_dir = Path(__file__).resolve().parent
+if str(_agents_dir) not in sys.path:
+    sys.path.insert(0, str(_agents_dir))
+
+from llm_client import (
+    load_env_if_exists,
+    deepseek_chat_with_tools,
+    LLMClientConfig,
+    LLMClientError,
+    LLMValidationError,
+)
+
+# 从 s04 导入完整工具链和 agent 逻辑
+from s04_multi_channel import (
+    TOOLS_OPENAI,
+    SessionStore as S04SessionStore,
+    SYSTEM_PROMPT as S04_SYSTEM_PROMPT,
+    process_tool_call,
+)
 
 # ================================================================================
 # 环境与配置
 # ================================================================================
 
 load_dotenv()
+load_env_if_exists()
 
-# LLM 配置 (使用 Anthropic API)
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL")
-MODEL_ID = os.getenv("MODEL_ID", "claude-sonnet-4-20250514")
+# LLM 配置 (使用 DeepSeek / llm_client，与 s04 一致)
+MODEL = os.getenv("DEEPSEEK_DEFAULT_MODEL", "deepseek-chat")
 
 # 网关配置
 GATEWAY_HOST = os.getenv("GATEWAY_HOST", "127.0.0.1")
@@ -72,12 +80,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("gateway")
 
-# Anthropic 客户端初始化
-_client_kwargs: dict[str, Any] = {"api_key": ANTHROPIC_API_KEY}
-if ANTHROPIC_BASE_URL:
-    _client_kwargs["base_url"] = ANTHROPIC_BASE_URL
-client = Anthropic(**_client_kwargs)
-
 # ================================================================================
 # Part 1: Agent 配置与多 Agent 管理
 # ================================================================================
@@ -85,7 +87,7 @@ client = Anthropic(**_client_kwargs)
 # 【参考】OpenClaw src/config/types.agents.ts
 #
 # AgentConfig 定义每个 Agent 的配置. 每个 Agent 可以有不同的:
-# - 模型 (可以用不同的 Claude 版本)
+# - 模型 (可用不同模型，默认与 s04 一致使用 DeepSeek)
 # - system prompt (决定 Agent 的"性格"和能力)
 # - 工具集 (虽然教学版这里是空的, 生产版会有完整的工具)
 
@@ -123,8 +125,8 @@ class Binding:
     """
     channel: str | None = None
     account_id: str | None = None
-    peer_id: str | None = None
-    peer_kind: str | None = None  # "direct" 或 "group"
+    peer_id: str | None = None  # 对方的ID或群组ID
+    peer_kind: str | None = None  # "direct"(1v1 私聊) 或 "group" （多人群聊）
     guild_id: str | None = None
     agent_id: str = "main"
     priority: int = 0
@@ -144,6 +146,110 @@ class Binding:
         cond_str = ", ".join(conditions) if conditions else "*"
         return f"Binding({cond_str} -> {self.agent_id}, p={self.priority})"
 
+'''
+例子 1: 群组消息（Discord dev-server）
+# 小张在 Discord 开发群里说了一句话
+message = {
+    "channel": "discord",         # 通道是 Discord
+    "peer_kind": "group",         # 这是群组消息
+    "peer_id": "dev-server",      # 群组ID是 dev-server
+    "sender": "xiaozs",           # 发送者是 xiaozs
+    "text": "大家好！"
+}
+# 构建 session key：
+# peer_kind="group" → 群组消息
+# 所以会按 agent:alice:discord:group:dev-server 隔离
+# 这个群里所有人的消息都在同一个会话中！
+
+例子 2: 一对一消息（DM）
+# 小张私聊 Alice
+message = {
+    "channel": "telegram",        # 通道是 Telegram
+    "peer_kind": "direct",        # 这是一对一消息
+    "peer_id": "xiaozs",          # 对方是 xiaozs
+    "sender": "xiaozs",           # 发送者是 xiaozs
+    "text": "Hi Alice, 能帮我看下代码吗？"
+}
+
+# 构建 session key (假设 dm_scope="per-peer"):
+# peer_kind="direct" → DM 消息
+# 所以会按 agent:alice:direct:xiaozs 隔离
+# 这个对话的所有消息都在这个 session 中
+
+例子 3: 同一个人在不同群里
+# 小张在 Discord dev-server 说话
+message1 = {
+    "channel": "discord",
+    "peer_kind": "group",
+    "peer_id": "dev-server",  # 群ID
+    "sender": "xiaozs"
+}
+
+# 小张在 Slack 工程频道说话
+message2 = {
+    "channel": "slack",
+    "peer_kind": "group",
+    "peer_id": "engineering",  # 不同群ID
+    "sender": "xiaozs"
+}
+
+# 结果：两个不同的 session key，分别是：
+# agent:alice:discord:group:dev-server
+# agent:alice:slack:group:engineering
+# ↓
+# Alice 会分别记住两个群的聊天记录
+
+场景 1: dm_scope = "per-peer" （多用户机器人）
+# 小张的 DM
+build_session_key(
+    agent_id="alice",
+    peer_kind="direct",
+    peer_id="user-123",  # 小张
+    dm_scope="per-peer"
+)
+# 结果: "agent:alice:direct:user-123"
+
+# 小李的 DM
+build_session_key(
+    agent_id="alice",
+    peer_kind="direct",
+    peer_id="user-456",  # 小李
+    dm_scope="per-peer"
+)
+# 结果: "agent:alice:direct:user-456"  ← 【不同！】
+
+# 意味着：
+
+公开 Discord 机器人
+  - 小张: "hi"
+  - Alice: "你好！"（小张的私聊记录）
+  
+  - 小李: "hi"
+  - Alice: "你好！"（小李的私聊记录，独立的）
+  
+小张和小李的 DM 完全分开，不会混淆
+
+场景 2: dm_scope = "per-channel-peer" （多通道多用户）
+# 小张在 Telegram 的 DM
+build_session_key(
+    agent_id="alice",
+    channel="telegram",
+    peer_kind="direct",
+    peer_id="user-123",  # 小张
+    dm_scope="per-channel-peer"
+)
+# 结果: "agent:alice:telegram:direct:user-123"
+
+# 小张在 Discord 的 DM
+build_session_key(
+    agent_id="alice",
+    channel="discord",
+    peer_kind="direct",
+    peer_id="user-123",  # 同一个小张
+    dm_scope="per-channel-peer"
+)
+# 结果: "agent:alice:discord:direct:user-123"  ← 【不同！】
+'''
 
 def build_session_key(
     agent_id: str,
@@ -167,8 +273,8 @@ def build_session_key(
     peer_id = peer_id.strip().lower()
     peer_kind = peer_kind.strip().lower() or "direct"
 
-    # 群组消息总是按 channel + kind + peerId 隔离
-    if peer_kind != "direct":
+    # 群组消息（group，多人对话）总是按 channel + kind + peerId 隔离
+    if peer_kind != "direct":  # direct: 仅两个人的私密对话
         return f"agent:{agent_id}:{channel}:{peer_kind}:{peer_id}"
 
     # DM 会话根据 scope 决定隔离粒度
@@ -220,6 +326,15 @@ class MessageRouter:
     ) -> tuple[AgentConfig, str]:
         """
         解析入站消息应由哪个 Agent 处理, 以及使用哪个 session key.
+        
+        即：
+        一条新消息来了
+            ↓
+        MessageRouter.resolve() 回答两个问题：
+            1. 这条消息应该给谁处理？(哪个 Agent)
+            2. 这条消息应该存在哪个对话记录里？(哪个 session key)
+            ↓
+        返回答案
 
         参数:
             channel: 消息来源通道 ("telegram", "discord", "websocket" 等)
@@ -298,89 +413,114 @@ class MessageRouter:
 # ================================================================================
 # Part 3: 会话管理
 # ================================================================================
-
-@dataclass
-class SessionEntry:
-    """一个会话的元数据和消息历史."""
-    session_key: str
-    agent_id: str = "main"
-    messages: list[dict[str, str]] = field(default_factory=list)
-    created_at: float = field(default_factory=time.time)
-    last_active: float = field(default_factory=time.time)
-
-
-class SessionStore:
-    """内存会话存储, 支持多 Agent 的 session 管理."""
-
-    def __init__(self) -> None:
-        self._sessions: dict[str, SessionEntry] = {}
-
-    def get_or_create(self, session_key: str, agent_id: str = "main") -> SessionEntry:
-        """获取会话, 不存在则自动创建 (懒加载)."""
-        if session_key not in self._sessions:
-            self._sessions[session_key] = SessionEntry(
-                session_key=session_key,
-                agent_id=agent_id,
-            )
-            log.info("session created: %s (agent=%s)", session_key, agent_id)
-        return self._sessions[session_key]
-
-    def get_history(self, session_key: str) -> list[dict[str, str]]:
-        """获取指定会话的消息历史."""
-        entry = self._sessions.get(session_key)
-        return list(entry.messages) if entry else []
-
-    def list_sessions(self) -> list[dict[str, Any]]:
-        """列出所有活跃会话."""
-        return [
-            {
-                "session_key": e.session_key,
-                "agent_id": e.agent_id,
-                "message_count": len(e.messages),
-                "last_active": e.last_active,
-            }
-            for e in self._sessions.values()
-        ]
+#
+# 使用 s04 的 SessionStore（持久化到 workspace/.sessions）.
+# 网关通过 S04SessionStore 提供 load_session / save_turn / list_sessions.
+#
 
 
 # ================================================================================
-# Part 4: Agent Runner
+# Part 4: Agent Runner（与 s04 agent_loop 等效，支持多 Agent 的 system_prompt 和 model）
 # ================================================================================
 
-def run_agent(agent: AgentConfig, session: SessionEntry, user_text: str) -> str:
+def run_agent_with_tools(
+    agent: AgentConfig,
+    session_store: S04SessionStore,
+    session_key: str,
+    user_text: str,
+) -> str:
     """
-    使用指定 Agent 的配置调用 LLM 生成回复.
+    处理一轮用户输入，调用 LLM（含工具循环），返回最终文本回复.
+    逻辑与 s04 的 agent_loop 一致，但支持 AgentConfig 的 system_prompt 和 model.
 
     参数:
-        agent: AgentConfig, Agent 的配置 (包含 model, system_prompt 等)
-        session: SessionEntry, 会话对象 (包含消息历史)
-        user_text: 用户输入文本
+        agent: AgentConfig，决定 model 和 system_prompt
+        session_store: s04 SessionStore，持久化会话
+        session_key: 会话键
+        user_text: 用户输入
 
     返回:
-        Assistant 的文本回复
+        助手的最终文本回复
     """
-    # 追加用户消息到历史
-    session.messages.append({"role": "user", "content": user_text})
-    session.last_active = time.time()
+    session_data = session_store.load_session(session_key)
+    messages = session_data["history"]
+    messages.append({"role": "user", "content": user_text})
 
-    # 调用 LLM
-    response = client.messages.create(
-        model=agent.model,
-        max_tokens=2048,
-        system=agent.system_prompt,
-        messages=session.messages,
-    )
+    # 合并 s04 的工具说明与 agent 个性（每个 agent 都具备工具能力）
+    system_prompt = f"{S04_SYSTEM_PROMPT}\n\nPersonality: {agent.system_prompt}"
 
-    # 提取回复
-    assistant_text = ""
-    for block in response.content:
-        if block.type == "text":
-            assistant_text += block.text
+    all_assistant_blocks: list = []
 
-    # 追加 assistant 消息到历史
-    session.messages.append({"role": "assistant", "content": assistant_text})
+    while True:
+        resp = deepseek_chat_with_tools(
+            messages,
+            TOOLS_OPENAI,
+            model=agent.model,
+            system_prompt=system_prompt,
+            max_tokens=4096,
+        )
 
-    return assistant_text
+        content = resp.get("content") or ""
+        tool_calls = resp.get("tool_calls") or []
+        finish_reason = resp.get("finish_reason") or "stop"
+
+        if content:
+            all_assistant_blocks.append({"type": "text", "text": content})
+        for tc in tool_calls:
+            try:
+                tc_args = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+            except json.JSONDecodeError:
+                tc_args = {}
+            all_assistant_blocks.append({
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["name"],
+                "input": tc_args,
+            })
+
+        if tool_calls:
+            assistant_msg: dict = {"role": "assistant", "content": content}
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                }
+                for tc in tool_calls
+            ]
+            messages.append(assistant_msg)
+
+            for tc in tool_calls:
+                try:
+                    args = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                except json.JSONDecodeError:
+                    args = {}
+
+                log.info("  [tool] %s(%s)", tc["name"], json.dumps(args, ensure_ascii=False)[:80])
+                result = process_tool_call(tc["name"], args)
+
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                }
+                messages.append(tool_msg)
+
+                all_assistant_blocks.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "output": result,
+                })
+
+            continue
+
+        if content:
+            messages.append({"role": "assistant", "content": content})
+        final_text = content
+        break
+
+    session_store.save_turn(session_key, user_text, all_assistant_blocks)
+    return final_text
 
 
 # ================================================================================
@@ -391,12 +531,12 @@ DEFAULT_CONFIG = {
     "agents": [
         {
             "id": "main",
-            "model": MODEL_ID,
+            "model": MODEL,
             "system_prompt": "You are a helpful general assistant.",
         },
         {
             "id": "alice",
-            "model": MODEL_ID,
+            "model": MODEL,
             "system_prompt": (
                 "You are Alice, a creative writing assistant. "
                 "You speak in a literary, poetic style and help with creative writing tasks."
@@ -404,7 +544,7 @@ DEFAULT_CONFIG = {
         },
         {
             "id": "bob",
-            "model": MODEL_ID,
+            "model": MODEL,
             "system_prompt": (
                 "You are Bob, a technical assistant. "
                 "You are precise and methodical, focusing on code and engineering topics."
@@ -440,7 +580,7 @@ def load_routing_config(config_path: str | None = None) -> tuple[dict[str, Agent
     for a in raw.get("agents", []):
         cfg = AgentConfig(
             id=a["id"],
-            model=a.get("model", MODEL_ID),
+            model=a.get("model", MODEL),
             system_prompt=a.get("system_prompt", "You are a helpful assistant."),
             tools=a.get("tools", []),
         )
@@ -524,6 +664,41 @@ class ConnectedClient:
     account_id: str = ""
     connected_at: float = field(default_factory=time.time)
 
+"""
+下面相当于是定义并实现了暴露的网关所提供的服务，下面是个例子
+// 客户端
+client.send(JSON.stringify({
+    jsonrpc: "2.0",
+    id: "chat-001",
+    method: "chat.send",  // ← 调用 self._methods["chat.send"]
+    params: {
+        text: "你好，请介绍一下自己",
+        channel: "telegram",
+        sender: "alice",
+    }
+}));
+
+// 服务器处理流程：
+// 1. 查找 self._methods["chat.send"]
+// 2. 调用 self._handle_chat_send()
+// 3. 内部逻辑：
+//    - 调用 self.router.resolve() 确定用哪个 Agent
+//    - 调用 run_agent_with_tools() 执行 LLM（含工具循环，与 s04 agent_loop 等效）
+//    - 会话由 s04 SessionStore 持久化
+// 4. 返回结果
+
+// 客户端收到响应：
+{
+    "jsonrpc": "2.0",
+    "id": "chat-001",
+    "result": {
+        "text": "你好！我是一个 AI 助手...",
+        "agent_id": "alice",
+        "session_key": "telegram:alice:direct",
+        "message_count": 2
+    }
+}
+"""
 
 class RoutingGateway:
     """
@@ -542,7 +717,7 @@ class RoutingGateway:
         host: str,
         port: int,
         router: MessageRouter,
-        sessions: SessionStore,
+        sessions: S04SessionStore,
         token: str = "",
     ) -> None:
         self.host = host
@@ -707,30 +882,40 @@ class RoutingGateway:
             "agent_id": agent_config.id,
         }))
 
-        # 调用 Agent (使用对应的配置)
-        session = self.sessions.get_or_create(session_key, agent_id=agent_config.id)
-        assistant_text = run_agent(agent_config, session, text)
+        # 调用 Agent（与 s04 agent_loop 等效：含工具循环、持久化会话）
+        try:
+            assistant_text = await asyncio.to_thread(
+                run_agent_with_tools,
+                agent_config,
+                self.sessions,
+                session_key,
+                text,
+            )
+        except LLMClientError as e:
+            log.warning("LLM 请求失败 agent=%s: %s", agent_config.id, e)
+            raise ValueError(f"LLM 请求失败: {e}") from e
 
-        # 【可选】广播 done 事件 (多客户端同步, s05 的特性)
-        # await self._broadcast(make_event("chat.done", {...}))
+        session_data = self.sessions.load_session(session_key)
+        message_count = len(session_data["history"])
 
         return {
             "text": assistant_text,
             "agent_id": agent_config.id,
             "session_key": session_key,
-            "message_count": len(session.messages),
+            "message_count": message_count,
         }
 
     async def _handle_chat_history(self, client: ConnectedClient, params: dict) -> dict:
-        """chat.history -- 获取会话的消息历史."""
+        """chat.history -- 获取会话的消息历史（来自 s04 持久化存储）."""
         session_key = params.get("session_key", "")
         if not session_key:
             raise ValueError("'session_key' is required")
-        messages = self.sessions.get_history(session_key)
+        session_data = self.sessions.load_session(session_key)
+        messages = session_data["history"]
         limit = params.get("limit", 50)
         if len(messages) > limit:
             messages = messages[-limit:]
-        return {"session_key": session_key, "messages": messages, "total": len(messages)}
+        return {"session_key": session_key, "messages": messages, "total": len(session_data["history"])}
 
     async def _handle_routing_resolve(self, client: ConnectedClient, params: dict) -> dict:
         """
@@ -783,8 +968,20 @@ class RoutingGateway:
         }
 
     async def _handle_sessions_list(self, client: ConnectedClient, params: dict) -> dict:
-        """sessions.list -- 列出所有活跃会话."""
-        return {"sessions": self.sessions.list_sessions()}
+        """sessions.list -- 列出所有活跃会话（适配 s04 SessionStore 格式）."""
+        raw = self.sessions.list_sessions()
+        sessions = []
+        for m in raw:
+            sk = m.get("session_key", "")
+            parts = sk.split(":") if sk else []
+            agent_id = parts[1] if len(parts) > 1 else "main"
+            sessions.append({
+                "session_key": sk,
+                "agent_id": agent_id,
+                "message_count": m.get("message_count", 0),
+                "last_active": m.get("updated_at", ""),
+            })
+        return {"sessions": sessions}
 
     # -- 服务器启动 -----
 
@@ -809,7 +1006,7 @@ class RoutingGateway:
 async def test_client() -> None:
     """
     测试客户端: 模拟来自不同通道和用户的消息, 观察路由结果.
-    启动: python s05_s06_unified.py --test-client
+    启动: python s05_gateway.py.py --test-client
     """
     uri = f"ws://{GATEWAY_HOST}:{GATEWAY_PORT}"
     headers = {}
@@ -924,6 +1121,107 @@ async def test_client() -> None:
 
 
 # ================================================================================
+# Part 8b: 交互式对话客户端 -- 可自由提问以验证会话和工具
+# ================================================================================
+
+async def interactive_chat() -> None:
+    """
+    交互式对话客户端: 连接网关后可持续输入问题，验证会话记录和工具调用.
+    启动: python agents/s05_gateway.py --chat
+
+    命令: /quit 退出  /sessions 列出会话  /history 查看当前会话历史
+    """
+    uri = f"ws://{GATEWAY_HOST}:{GATEWAY_PORT}"
+    headers = {}
+    if GATEWAY_TOKEN:
+        headers["Authorization"] = f"Bearer {GATEWAY_TOKEN}"
+
+    print(f"[chat] connecting to {uri} ...")
+    try:
+        ws = await websockets.connect(uri, additional_headers=headers)
+    except Exception as e:
+        print(f"[chat] Failed to connect. Is the gateway running? {e}")
+        return
+
+    welcome = json.loads(await ws.recv())
+    client_id = welcome.get("params", {}).get("client_id", "?")
+    print(f"[chat] connected as {client_id}\n")
+
+    req_counter = 0
+    current_session_key: str | None = None
+
+    async def rpc(method: str, params: dict) -> dict:
+        nonlocal req_counter
+        req_counter += 1
+        rid = f"r-{req_counter}"
+        await ws.send(json.dumps({
+            "jsonrpc": "2.0",
+            "id": rid,
+            "method": method,
+            "params": params,
+        }))
+        while True:
+            raw = await ws.recv()
+            msg = json.loads(raw)
+            if msg.get("id") == rid:
+                return msg.get("result", msg.get("error", {}))
+            event_type = msg.get("params", {}).get("type", "?")
+            if event_type == "chat.typing":
+                print("  ... ", end="", flush=True)
+
+    print("=" * 50)
+    print("  交互式对话 - 验证会话记录与工具调用")
+    print("  输入问题后回车发送，/quit 退出")
+    print("  命令: /sessions 列出会话  /history 查看当前会话历史")
+    print("=" * 50)
+
+    chat_params = {"channel": "websocket", "sender": "chat-user"}
+
+    try:
+        while True:
+            try:
+                user_input = await asyncio.to_thread(input, "\nYou> ")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            text = user_input.strip()
+            if not text:
+                continue
+
+            if text.lower() in ("/quit", "/exit", "q", "quit", "exit"):
+                print("Bye.")
+                break
+            if text.lower() == "/sessions":
+                result = await rpc("sessions.list", {})
+                for s in result.get("sessions", []):
+                    print(f"  {s['agent_id']:<8} msgs={s['message_count']:<3} {s['session_key']}")
+                continue
+            if text.lower() == "/history":
+                if current_session_key:
+                    result = await rpc("chat.history", {"session_key": current_session_key})
+                    for m in result.get("messages", []):
+                        role = m.get("role", "?")
+                        content = (m.get("content") or "")[:200]
+                        print(f"  [{role}] {content}{'...' if len(m.get('content',''))>200 else ''}")
+                else:
+                    print("  (先发送一条消息以建立会话)")
+                continue
+
+            result = await rpc("chat.send", {**chat_params, "text": text})
+            if isinstance(result, dict) and "text" in result:
+                current_session_key = result.get("session_key") or current_session_key
+                print(f"\nAgent> {result['text']}")
+            else:
+                err = result.get("message", str(result)) if isinstance(result, dict) else str(result)
+                print(f"\nAgent> [Error] {err}")
+
+    finally:
+        await ws.close()
+    print("\n[chat] disconnected")
+
+
+# ================================================================================
 # Part 9: 交互式 REPL -- 本地路由调试
 # ================================================================================
 
@@ -932,7 +1230,7 @@ def repl(router: MessageRouter) -> None:
     交互式 REPL, 输入模拟消息参数, 查看路由结果.
     不需要启动网关, 直接在本地测试路由逻辑.
 
-    使用: python s05_s06_unified.py --repl
+    使用: python s05_gateway.py.py --repl
     """
     print("=" * 60)
     print("  Routing REPL -- test binding resolution locally")
@@ -988,10 +1286,12 @@ def main() -> None:
     """程序入口: 根据命令行参数启动网关或测试客户端."""
     import sys
 
-    # 检查 API 密钥
-    if not ANTHROPIC_API_KEY:
-        print("Error: ANTHROPIC_API_KEY not set.")
-        print("Set it in .env file or environment variable.")
+    # 检查 API 密钥（与 s04 一致使用 DeepSeek / llm_client）
+    try:
+        LLMClientConfig().require_api_key()
+    except LLMValidationError as e:
+        print(f"Error: {e}")
+        print("Set DEEPSEEK_API_KEY in .env file or environment variable.")
         sys.exit(1)
 
     # 加载配置
@@ -1005,8 +1305,11 @@ def main() -> None:
     router = MessageRouter(agents, bindings, default_agent, dm_scope)
 
     if "--test-client" in sys.argv:
-        # 测试客户端
+        # 测试客户端（自动化测试套件）
         asyncio.run(test_client())
+    elif "--chat" in sys.argv:
+        # 交互式对话（可自由提问，验证会话和工具）
+        asyncio.run(interactive_chat())
     elif "--repl" in sys.argv:
         # 交互式 REPL
         repl(router)
@@ -1023,13 +1326,14 @@ def main() -> None:
         print(f"  DM Scope: {dm_scope}")
         print()
         print("  Commands:")
-        print("    python s05_s06_unified.py                 # start gateway")
-        print("    python s05_s06_unified.py --test-client   # run test suite")
-        print("    python s05_s06_unified.py --repl          # local routing REPL")
-        print("    python s05_s06_unified.py --config cfg.json # custom config")
+        print("    python agents/s05_gateway.py                   # start gateway")
+        print("    python agents/s05_gateway.py --test-client     # run test suite")
+        print("    python agents/s05_gateway.py --chat             # interactive chat (ask questions)")
+        print("    python agents/s05_gateway.py --repl            # local routing REPL")
+        print("    python agents/s05_gateway.py --config cfg.json # custom config")
         print("=" * 60)
 
-        sessions = SessionStore()
+        sessions = S04SessionStore()
         gateway = RoutingGateway(
             host=GATEWAY_HOST,
             port=GATEWAY_PORT,
