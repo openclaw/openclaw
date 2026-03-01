@@ -156,9 +156,11 @@ function canonicalizeSessionKeyForAgent(params: {
     return canonicalMain.toLowerCase();
   }
 
-  // Handle cross-agent orphaned keys: "agent:main:xyz" in a store belonging to
-  // a different agent (e.g. "ops"). These are created when write paths used the
-  // hardcoded DEFAULT_AGENT_ID ("main") instead of the configured agent (#29683).
+  // Handle cross-agent orphaned main-session keys: "agent:main:main" or
+  // "agent:main:<mainKey>" in a store belonging to a different agent (e.g.
+  // "ops"). Only remap provable orphan aliases — other agent:main:* keys
+  // (hooks, subagents, cron, per-sender) may be intentional cross-agent
+  // references and must not be touched (#29683).
   const defaultPrefix = `agent:${DEFAULT_AGENT_ID}:`;
   const rawLower = raw.toLowerCase();
   if (
@@ -167,13 +169,16 @@ function canonicalizeSessionKeyForAgent(params: {
     !params.skipCrossAgentRemap
   ) {
     const rest = rawLower.slice(defaultPrefix.length);
-    const remapped = `agent:${agentId}:${rest}`;
-    const canonicalized = canonicalizeMainSessionAlias({
-      cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
-      agentId,
-      sessionKey: remapped,
-    });
-    return canonicalized.toLowerCase();
+    const isOrphanAlias = rest === DEFAULT_MAIN_KEY || rest === params.mainKey;
+    if (isOrphanAlias) {
+      const remapped = `agent:${agentId}:${rest}`;
+      const canonicalized = canonicalizeMainSessionAlias({
+        cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
+        agentId,
+        sessionKey: remapped,
+      });
+      return canonicalized.toLowerCase();
+    }
   }
 
   if (raw.toLowerCase().startsWith("agent:")) {
