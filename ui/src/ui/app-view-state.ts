@@ -243,6 +243,9 @@ export type AppViewState = {
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
+  memoryLoading: boolean;
+  memoryStatus: import("./controllers/memory.js").MemoryStatusResult | null;
+  memoryError: string | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
   debugHealth: HealthSnapshot | null;
