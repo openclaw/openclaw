@@ -163,6 +163,56 @@ describe("stripHeartbeatToken", () => {
       didStrip: true,
     });
   });
+
+  it("preserves multi-sentence steered responses in heartbeat mode", () => {
+    // This is the main bug fix: when user message injected during heartbeat
+    // gets HEARTBEAT_OK + answer, the answer should NOT be suppressed
+    expect(
+      stripHeartbeatToken(`HEARTBEAT_OK Sure! Here is the answer.`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: "Sure! Here is the answer.",
+      didStrip: true,
+    });
+    expect(
+      stripHeartbeatToken(`HEARTBEAT_OK The server is fine. Deploy at 3:42.`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: "The server is fine. Deploy at 3:42.",
+      didStrip: true,
+    });
+  });
+
+  it("still suppresses single-fragment acks in heartbeat mode", () => {
+    // Single-sentence/fragment responses should still be suppressed
+    expect(stripHeartbeatToken(`HEARTBEAT_OK Nothing to report`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+    expect(stripHeartbeatToken(`HEARTBEAT_OK all good`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+  });
+
+  it("preserves question/answer patterns in heartbeat mode", () => {
+    // Questions with answers (multi-sentence) should be preserved
+    expect(
+      stripHeartbeatToken(`HEARTBEAT_OK Yes, the server is running fine. It started at 9am.`, {
+        mode: "heartbeat",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: "Yes, the server is running fine. It started at 9am.",
+      didStrip: true,
+    });
+  });
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {

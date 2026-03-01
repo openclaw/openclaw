@@ -59,6 +59,20 @@ export function resolveHeartbeatPrompt(raw?: string): string {
 
 export type StripHeartbeatMode = "heartbeat" | "message";
 
+/**
+ * Check if text has multi-sentence structure (potential substantive response vs. brief ack).
+ * Returns true if text contains sentence-ending punctuation [.!?] followed by more content.
+ * This helps distinguish between:
+ * - Brief heartbeat ack: "Nothing to report" (single fragment)
+ * - Real user response: "Sure! Here is the answer." (multi-sentence)
+ */
+function hasMultiSentenceStructure(text: string): boolean {
+  // Look for sentence-ending punctuation followed by more content
+  // Pattern: [.!?] followed by at least one non-whitespace character
+  const multiSentencePattern = /[.!?]\s+\S+/;
+  return multiSentencePattern.test(text);
+}
+
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
   if (!text) {
@@ -162,7 +176,15 @@ export function stripHeartbeatToken(
 
   const rest = picked.text.trim();
   if (mode === "heartbeat") {
+    // Check if remaining text is short enough to potentially skip
     if (rest.length <= maxAckChars) {
+      // BUT: if the remaining text has multi-sentence structure,
+      // it's likely a substantive user response (not just a brief ack),
+      // so we should NOT skip it.
+      if (hasMultiSentenceStructure(rest)) {
+        return { shouldSkip: false, text: rest, didStrip: true };
+      }
+      // Otherwise, it's a brief ack - skip it
       return { shouldSkip: true, text: "", didStrip: true };
     }
   }
