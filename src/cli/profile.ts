@@ -27,6 +27,57 @@ function takeValue(
   return { value: trimmed || null, consumedNext: Boolean(next) };
 }
 
+const ARBITRARY_ARG_COMMAND_PATHS = [["nodes", "run"], ["docs"]] as const;
+
+function shouldGuardTrailingArgsFromProfileParsing(args: string[]): boolean {
+  const commandTokens: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === "--") {
+      break;
+    }
+
+    if (arg === "--dev") {
+      continue;
+    }
+
+    if (arg === "--profile" || arg.startsWith("--profile=")) {
+      if (arg === "--profile") {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      continue;
+    }
+
+    commandTokens.push(arg);
+
+    if (
+      ARBITRARY_ARG_COMMAND_PATHS.some(
+        (path) =>
+          path.length === commandTokens.length &&
+          path.every((part, idx) => part === commandTokens[idx]),
+      )
+    ) {
+      return true;
+    }
+
+    const couldStillMatch = ARBITRARY_ARG_COMMAND_PATHS.some(
+      (path) =>
+        commandTokens.length <= path.length &&
+        commandTokens.every((part, idx) => path[idx] === part),
+    );
+    if (!couldStillMatch) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (argv.length < 2) {
     return { ok: true, profile: null, argv };
@@ -39,6 +90,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   let sawTerminator = false;
 
   const args = argv.slice(2);
+  const guardTrailingArgs = shouldGuardTrailingArgsFromProfileParsing(args);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === undefined) {
@@ -56,7 +108,10 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    if (sawCommand && arg !== "--profile" && !arg.startsWith("--profile=")) {
+    if (
+      sawCommand &&
+      (guardTrailingArgs || (arg !== "--profile" && !arg.startsWith("--profile=")))
+    ) {
       out.push(arg);
       continue;
     }
@@ -147,12 +202,7 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
-  // Exception: clear inherited service-scoped env vars for profile isolation.
   env.OPENCLAW_PROFILE = profile;
-  delete env.OPENCLAW_GATEWAY_PORT;
-  delete env.OPENCLAW_LAUNCHD_LABEL;
-  delete env.OPENCLAW_SYSTEMD_UNIT;
-  delete env.OPENCLAW_SERVICE_VERSION;
 
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
   if (!env.OPENCLAW_STATE_DIR?.trim()) {
@@ -163,7 +213,7 @@ export function applyCliProfileEnv(params: {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 
-  if (profile === "dev") {
+  if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
     env.OPENCLAW_GATEWAY_PORT = "19001";
   }
 }

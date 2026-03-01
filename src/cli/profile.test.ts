@@ -103,6 +103,48 @@ describe("parseCliProfileArgs", () => {
     ]);
   });
 
+  it("does not intercept --profile in nodes run argv without passthrough terminator", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "nodes",
+      "run",
+      "--node",
+      "abc123",
+      "aws",
+      "--profile",
+      "prod",
+      "sts",
+      "get-caller-identity",
+    ]);
+  });
+
+  it("does not intercept --profile in docs query args", () => {
+    const res = parseCliProfileArgs(["node", "openclaw", "docs", "aws", "--profile", "prod"]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual(["node", "openclaw", "docs", "aws", "--profile", "prod"]);
+  });
+
   it("keeps passthrough --profile when global --profile is set before terminator", () => {
     const res = parseCliProfileArgs([
       "node",
@@ -183,12 +225,11 @@ describe("applyCliProfileEnv", () => {
       homedir: () => "/home/peter",
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
-    // OPENCLAW_GATEWAY_PORT is intentionally reset for profile isolation.
-    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
   });
 
-  it("clears inherited OPENCLAW_GATEWAY_PORT for non-dev profiles", () => {
+  it("preserves explicit OPENCLAW_GATEWAY_PORT for non-dev profiles", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_GATEWAY_PORT: "18789",
     };
@@ -197,10 +238,10 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
-    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
   });
 
-  it("clears inherited service env vars for profile isolation", () => {
+  it("preserves service override env vars", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_GATEWAY_PORT: "18789",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
@@ -212,11 +253,21 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
-    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
-    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
-    expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
-    expect(env.OPENCLAW_SERVICE_VERSION).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+    expect(env.OPENCLAW_SERVICE_VERSION).toBe("2026.1.0");
     expect(env.OPENCLAW_PROFILE).toBe("work");
+  });
+
+  it("uses 19001 for dev profile only when OPENCLAW_GATEWAY_PORT is unset", () => {
+    const env: Record<string, string | undefined> = {};
+    applyCliProfileEnv({
+      profile: "dev",
+      env,
+      homedir: () => "/home/peter",
+    });
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
   it("uses OPENCLAW_HOME when deriving profile state dir", () => {
