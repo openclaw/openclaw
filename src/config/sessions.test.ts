@@ -7,6 +7,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
@@ -460,6 +461,7 @@ describe("sessions", () => {
       expect(sessionFile).toBe(
         path.join(path.resolve("/custom/state"), "agents", "codex", "sessions", "sess-2.jsonl"),
       );
+<<<<<<< HEAD
     } finally {
       if (prev === undefined) {
         delete process.env.BOT_STATE_DIR;
@@ -467,6 +469,118 @@ describe("sessions", () => {
         process.env.BOT_STATE_DIR = prev;
       }
     }
+=======
+    });
+  });
+
+  it("resolves cross-agent absolute sessionFile paths", () => {
+    const stateDir = path.resolve("/home/user/.openclaw");
+    withStateDir(stateDir, () => {
+      const bot2Session = path.join(stateDir, "agents", "bot2", "sessions", "sess-1.jsonl");
+      // Agent bot1 resolves a sessionFile that belongs to agent bot2
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2Session },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(bot2Session);
+    });
+  });
+
+  it("resolves cross-agent paths when OPENCLAW_STATE_DIR differs from stored paths", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
+      // sessionFile was created under a different state dir than current env
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: bot2Session },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(bot2Session);
+    });
+  });
+
+  it("falls back when structural cross-root path traverses after sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const unsafe = path.join(originalBase, "agents", "bot2", "sessions", "..", "..", "etc");
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: path.join(unsafe, "passwd") },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+      );
+    });
+  });
+
+  it("falls back when structural cross-root path nests under sessions", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/original/state");
+      const nested = path.join(
+        originalBase,
+        "agents",
+        "bot2",
+        "sessions",
+        "nested",
+        "sess-1.jsonl",
+      );
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: nested },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
+      );
+    });
+  });
+
+  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute store path", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const resolved = resolveSessionFilePathOptions({
+      agentId: "bot2",
+      storePath,
+    });
+    expect(resolved?.agentId).toBe("bot2");
+    expect(resolved?.sessionsDir).toBe(path.dirname(path.resolve(storePath)));
+  });
+
+  it("resolves sibling agent absolute sessionFile using alternate agentId from options", () => {
+    const stateDir = path.resolve("/home/user/.openclaw");
+    withStateDir(stateDir, () => {
+      const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const bot2Session = path.join(stateDir, "agents", "bot2", "sessions", "sess-1.jsonl");
+      const opts = resolveSessionFilePathOptions({
+        agentId: "bot2",
+        storePath: mainStorePath,
+      });
+
+      const sessionFile = resolveSessionFilePath("sess-1", { sessionFile: bot2Session }, opts);
+      expect(sessionFile).toBe(bot2Session);
+    });
+  });
+
+  it("falls back to derived transcript path when sessionFile is outside agent sessions directories", () => {
+    withStateDir(path.resolve("/home/user/.openclaw"), () => {
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: path.resolve("/etc/passwd") },
+        { agentId: "bot1" },
+      );
+      expect(sessionFile).toBe(
+        path.join(
+          path.resolve("/home/user/.openclaw"),
+          "agents",
+          "bot1",
+          "sessions",
+          "sess-1.jsonl",
+        ),
+      );
+    });
+>>>>>>> 53d6e07a6 (fix(sessions): set transcriptPath to agent sessions directory (openclaw#24775) thanks @martinfrancois)
   });
 
   it("updateSessionStoreEntry merges concurrent patches", async () => {

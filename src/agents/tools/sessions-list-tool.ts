@@ -1,8 +1,13 @@
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import path from "node:path";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveStorePath,
+} from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
@@ -154,16 +159,26 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
         let transcriptPath: string | undefined;
-        if (sessionId && storePath) {
+        if (sessionId) {
           try {
-            const sessionPathOpts = resolveSessionFilePathOptions({
-              agentId: resolveAgentIdFromSessionKey(key),
-              storePath,
+            const agentId = resolveAgentIdFromSessionKey(key);
+            const trimmedStorePath = storePath?.trim();
+            let effectiveStorePath: string | undefined;
+            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
+              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
+                effectiveStorePath = resolveStorePath(trimmedStorePath, { agentId });
+              } else if (path.isAbsolute(trimmedStorePath)) {
+                effectiveStorePath = trimmedStorePath;
+              }
+            }
+            const filePathOpts = resolveSessionFilePathOptions({
+              agentId,
+              storePath: effectiveStorePath,
             });
             transcriptPath = resolveSessionFilePath(
               sessionId,
               sessionFile ? { sessionFile } : undefined,
-              sessionPathOpts,
+              filePathOpts,
             );
           } catch {
             transcriptPath = undefined;
