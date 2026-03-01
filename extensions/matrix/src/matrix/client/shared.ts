@@ -87,16 +87,19 @@ async function ensureSharedClientStarted(params: {
     // bot-sdk start() returns a promise that never resolves (infinite sync loop).
     // Fire-and-forget: the sync loop runs and events fire on the client,
     // but we must not await or the entire provider startup hangs forever.
-    let startFailed = false;
+    // If start() rejects during the grace window (e.g. bad token, unreachable
+    // homeserver), we propagate the error so the caller knows startup failed.
+    let startError: unknown = undefined;
     client.start().catch((err: unknown) => {
-      startFailed = true;
+      startError = err;
       LogService.error("MatrixClientLite", "client.start() error:", err);
     });
     // Give the sync loop a moment to initialize before marking ready
     await new Promise(resolve => setTimeout(resolve, 2000));
-    if (!startFailed) {
-      params.state.started = true;
+    if (startError) {
+      throw startError;
     }
+    params.state.started = true;
   })();
   sharedClientStartPromises.set(key, startPromise);
   try {
