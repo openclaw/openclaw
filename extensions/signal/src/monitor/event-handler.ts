@@ -50,6 +50,7 @@ import {
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+import { maybeSendSignalAckReaction } from "./ack-reaction.js";
 import type {
   SignalEnvelope,
   SignalEventHandlerDeps,
@@ -798,6 +799,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+    if (typeof envelope.timestamp === "number") {
+      maybeSendSignalAckReaction({
+        cfg: deps.cfg,
+        senderRecipient,
+        targetTimestamp: envelope.timestamp,
+        isGroup,
+        groupId,
+        baseUrl: deps.baseUrl,
+        account: deps.account,
+        accountId: deps.accountId,
+      });
+    }
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
