@@ -183,7 +183,11 @@ agents:
           minScore: 0.75
 ```
 
-#### Optional LLM validator
+#### Optional LLM validator (experimental)
+
+> **Note:** LLM validation mode is experimental and not yet fully implemented. When
+> `mode: "llm"` is configured, the current implementation falls back to heuristic
+> validation with a warning. Full LLM validation support is planned for a future release.
 
 ```yaml
 validation:
@@ -195,9 +199,9 @@ validation:
   redactSecrets: true
 ```
 
-When `mode: "llm"`, a small validator prompt is sent to `validatorModel`. The validator must
-return JSON `{ "score": 0..1, "passed": true/false, "reason": "..." }`. Invalid JSON or
-validator errors are treated as a fail, triggering escalation.
+When `mode: "llm"` is fully implemented, a small validator prompt will be sent to
+`validatorModel`. The validator must return JSON `{ "score": 0..1, "passed": true/false, "reason": "..." }`.
+Invalid JSON or validator errors are treated as a fail, triggering escalation.
 
 ### Heuristic validation rules
 
