@@ -286,9 +286,9 @@ export class SearchableSelectList implements Component {
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
           const line = `${prefix}${valueText}${spacing}${descText}`;
-    const finalLine = isSelected ? this.theme.selectedText(line) : line;
-    // Ensure the final line does not exceed terminal width
-    return truncateToWidth(finalLine, width, "");
+          const finalLine = isSelected ? this.theme.selectedText(line) : line;
+          // Ensure the final line does not exceed terminal width
+          return truncateToWidth(finalLine, width, "");
         }
       }
     }
