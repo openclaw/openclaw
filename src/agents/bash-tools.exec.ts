@@ -525,7 +525,7 @@ export function createExecTool(
             },
           });
 
-        const onYieldNow = async () => {
+        const onYieldNow = () => {
           if (yieldTimer) {
             clearTimeout(yieldTimer);
           }
@@ -533,24 +533,27 @@ export function createExecTool(
             return;
           }
           yielded = true;
-          // Allow a brief moment for any buffered stdout/stderr to be drained
-          // before marking the session as backgrounded. This mitigates output
-          // loss when processes with block-buffered stdout (e.g., bun, node, python)
-          // are transitioned to background mode.
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          // Mark as backgrounded immediately to ensure the session is tracked
+          // even if the process exits during the drain delay window.
           markBackgrounded(run.session);
-          resolveRunning();
+          // Allow a brief moment for any buffered stdout/stderr to be drained
+          // before resolving. This mitigates output loss when processes with
+          // block-buffered stdout (e.g., bun, node, python) are transitioned
+          // to background mode.
+          setTimeout(() => {
+            resolveRunning();
+          }, 50);
         };
 
         if (allowBackground && yieldWindow !== null) {
           if (yieldWindow === 0) {
-            void onYieldNow();
+            onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
               if (yielded) {
                 return;
               }
-              void onYieldNow();
+              onYieldNow();
             }, yieldWindow);
           }
         }
