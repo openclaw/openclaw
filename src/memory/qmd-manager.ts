@@ -886,7 +886,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.shouldRunEmbed(force)) {
         try {
           await runWithQmdEmbedLock(async () => {
-            await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
+            await this.runQmd(["embed"], {
+              timeoutMs: this.qmd.update.embedTimeoutMs,
+              discardOutput: true,
+            });
           });
           this.lastEmbedAt = Date.now();
           this.embedBackoffUntil = null;
@@ -926,12 +929,18 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmdUpdateOnce(reason: string): Promise<void> {
     try {
-      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+      await this.runQmd(["update"], {
+        timeoutMs: this.qmd.update.updateTimeoutMs,
+        discardOutput: true,
+      });
     } catch (err) {
       if (!(await this.tryRepairNullByteCollections(err, reason))) {
         throw err;
       }
-      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+      await this.runQmd(["update"], {
+        timeoutMs: this.qmd.update.updateTimeoutMs,
+        discardOutput: true,
+      });
     }
   }
 
@@ -1054,7 +1063,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmd(
     args: string[],
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
       const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
@@ -1065,6 +1074,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       let stderr = "";
       let stdoutTruncated = false;
       let stderrTruncated = false;
+      // When discardOutput is set, skip stdout accumulation entirely and keep
+      // only a small stderr tail for diagnostics -- never fail on truncation.
+      // This prevents large `qmd update` runs from hitting the output cap.
+      const discard = opts?.discardOutput === true;
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
@@ -1072,6 +1085,9 @@ export class QmdMemoryManager implements MemorySearchManager {
           }, opts.timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
+        if (discard) {
+          return; // drain without accumulating
+        }
         const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
         stdout = next.text;
         stdoutTruncated = stdoutTruncated || next.truncated;
@@ -1091,7 +1107,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (timer) {
           clearTimeout(timer);
         }
-        if (stdoutTruncated || stderrTruncated) {
+        if (!discard && (stdoutTruncated || stderrTruncated)) {
           reject(
             new Error(
               `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
