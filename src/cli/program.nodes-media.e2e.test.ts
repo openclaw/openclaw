@@ -13,6 +13,23 @@ function getFirstRuntimeLogLine(): string {
   return first;
 }
 
+async function expectLoggedSingleMediaFile(params?: {
+  expectedContent?: string;
+  expectedPathPattern?: RegExp;
+}): Promise<string> {
+  const out = getFirstRuntimeLogLine();
+  const mediaPath = out.replace(/^MEDIA:/, "").trim();
+  if (params?.expectedPathPattern) {
+    expect(mediaPath).toMatch(params.expectedPathPattern);
+  }
+  try {
+    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(params?.expectedContent ?? "hi");
+  } finally {
+    await fs.unlink(mediaPath).catch(() => {});
+  }
+  return mediaPath;
+}
+
 const IOS_NODE = {
   nodeId: "ios-node",
   displayName: "iOS Node",
@@ -20,18 +37,16 @@ const IOS_NODE = {
   connected: true,
 } as const;
 
-function mockCameraGateway(
-  command: "camera.snap" | "camera.clip",
-  payload: Record<string, unknown>,
-) {
-  callGateway.mockImplementation(async (opts: { method?: string }) => {
+function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
+  callGateway.mockImplementation(async (...args: unknown[]) => {
+    const opts = (args[0] ?? {}) as { method?: string };
     if (opts.method === "node.list") {
       return {
         ts: Date.now(),
         nodes: [IOS_NODE],
       };
     }
-    if (opts.method === "node.invoke") {
+    if (opts.method === "node.invoke" && command) {
       return {
         ok: true,
         nodeId: IOS_NODE.nodeId,
@@ -52,7 +67,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
-    mockCameraGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
+    mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -63,7 +78,7 @@ describe("cli program (nodes media)", () => {
       .filter((call) => call.method === "node.invoke");
     const facings = invokeCalls
       .map((call) => (call.params?.params as { facing?: string } | undefined)?.facing)
-      .filter(Boolean)
+      .filter((facing): facing is string => Boolean(facing))
       .toSorted((a, b) => a.localeCompare(b));
     expect(facings).toEqual(["back", "front"]);
 
@@ -85,34 +100,11 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera clip and prints one MEDIA path", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "camera.clip",
-          payload: {
-            format: "mp4",
-            base64: "aGk=",
-            durationMs: 3000,
-            hasAudio: true,
-          },
-        };
-      }
-      return { ok: true };
+    mockNodeGateway("camera.clip", {
+      format: "mp4",
+      base64: "aGk=",
+      durationMs: 3000,
+      hasAudio: true,
     });
 
     const program = buildProgram();
@@ -140,19 +132,13 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = getFirstRuntimeLogLine();
-    const mediaPath = out.replace(/^MEDIA:/, "").trim();
-    expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
-
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
+    });
   });
 
   it("runs nodes camera snap with facing front and passes params", async () => {
-    mockCameraGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
+    mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -196,45 +182,15 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = getFirstRuntimeLogLine();
-    const mediaPath = out.replace(/^MEDIA:/, "").trim();
-
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
+    await expectLoggedSingleMediaFile();
   });
 
   it("runs nodes camera clip with --no-audio", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "camera.clip",
-          payload: {
-            format: "mp4",
-            base64: "aGk=",
-            durationMs: 3000,
-            hasAudio: false,
-          },
-        };
-      }
-      return { ok: true };
+    mockNodeGateway("camera.clip", {
+      format: "mp4",
+      base64: "aGk=",
+      durationMs: 3000,
+      hasAudio: false,
     });
 
     const program = buildProgram();
@@ -271,45 +227,15 @@ describe("cli program (nodes media)", () => {
       }),
     );
 
-    const out = getFirstRuntimeLogLine();
-    const mediaPath = out.replace(/^MEDIA:/, "").trim();
-
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
+    await expectLoggedSingleMediaFile();
   });
 
   it("runs nodes camera clip with human duration (10s)", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "camera.clip",
-          payload: {
-            format: "mp4",
-            base64: "aGk=",
-            durationMs: 10_000,
-            hasAudio: true,
-          },
-        };
-      }
-      return { ok: true };
+    mockNodeGateway("camera.clip", {
+      format: "mp4",
+      base64: "aGk=",
+      durationMs: 10_000,
+      hasAudio: true,
     });
 
     const program = buildProgram();
@@ -332,30 +258,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes canvas snapshot and prints MEDIA path", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      if (opts.method === "node.invoke") {
-        return {
-          ok: true,
-          nodeId: "ios-node",
-          command: "canvas.snapshot",
-          payload: { format: "png", base64: "aGk=" },
-        };
-      }
-      return { ok: true };
-    });
+    mockNodeGateway("canvas.snapshot", { format: "png", base64: "aGk=" });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -364,34 +267,13 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    const out = getFirstRuntimeLogLine();
-    const mediaPath = out.replace(/^MEDIA:/, "").trim();
-    expect(mediaPath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
-
-    try {
-      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
-    } finally {
-      await fs.unlink(mediaPath).catch(() => {});
-    }
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-canvas-snapshot-.*\.png$/,
+    });
   });
 
   it("fails nodes camera snap on invalid facing", async () => {
-    callGateway.mockImplementation(async (opts: { method?: string }) => {
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
+    mockNodeGateway();
 
     const program = buildProgram();
     runtime.error.mockClear();
@@ -426,34 +308,11 @@ describe("cli program (nodes media)", () => {
     });
 
     it("runs nodes camera snap with url payload", async () => {
-      callGateway.mockImplementation(async (opts: { method?: string }) => {
-        if (opts.method === "node.list") {
-          return {
-            ts: Date.now(),
-            nodes: [
-              {
-                nodeId: "ios-node",
-                displayName: "iOS Node",
-                remoteIp: "192.168.0.88",
-                connected: true,
-              },
-            ],
-          };
-        }
-        if (opts.method === "node.invoke") {
-          return {
-            ok: true,
-            nodeId: "ios-node",
-            command: "camera.snap",
-            payload: {
-              format: "jpg",
-              url: "https://example.com/photo.jpg",
-              width: 640,
-              height: 480,
-            },
-          };
-        }
-        return { ok: true };
+      mockNodeGateway("camera.snap", {
+        format: "jpg",
+        url: "https://example.com/photo.jpg",
+        width: 640,
+        height: 480,
       });
 
       const program = buildProgram();
@@ -463,46 +322,18 @@ describe("cli program (nodes media)", () => {
         { from: "user" },
       );
 
-      const out = getFirstRuntimeLogLine();
-      const mediaPath = out.replace(/^MEDIA:/, "").trim();
-      expect(mediaPath).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
-
-      try {
-        await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("url-content");
-      } finally {
-        await fs.unlink(mediaPath).catch(() => {});
-      }
+      await expectLoggedSingleMediaFile({
+        expectedPathPattern: /openclaw-camera-snap-front-.*\.jpg$/,
+        expectedContent: "url-content",
+      });
     });
 
     it("runs nodes camera clip with url payload", async () => {
-      callGateway.mockImplementation(async (opts: { method?: string }) => {
-        if (opts.method === "node.list") {
-          return {
-            ts: Date.now(),
-            nodes: [
-              {
-                nodeId: "ios-node",
-                displayName: "iOS Node",
-                remoteIp: "192.168.0.88",
-                connected: true,
-              },
-            ],
-          };
-        }
-        if (opts.method === "node.invoke") {
-          return {
-            ok: true,
-            nodeId: "ios-node",
-            command: "camera.clip",
-            payload: {
-              format: "mp4",
-              url: "https://example.com/clip.mp4",
-              durationMs: 5000,
-              hasAudio: true,
-            },
-          };
-        }
-        return { ok: true };
+      mockNodeGateway("camera.clip", {
+        format: "mp4",
+        url: "https://example.com/clip.mp4",
+        durationMs: 5000,
+        hasAudio: true,
       });
 
       const program = buildProgram();
@@ -512,15 +343,10 @@ describe("cli program (nodes media)", () => {
         { from: "user" },
       );
 
-      const out = getFirstRuntimeLogLine();
-      const mediaPath = out.replace(/^MEDIA:/, "").trim();
-      expect(mediaPath).toMatch(/openclaw-camera-clip-front-.*\.mp4$/);
-
-      try {
-        await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("url-content");
-      } finally {
-        await fs.unlink(mediaPath).catch(() => {});
-      }
+      await expectLoggedSingleMediaFile({
+        expectedPathPattern: /openclaw-camera-clip-front-.*\.mp4$/,
+        expectedContent: "url-content",
+      });
     });
   });
 

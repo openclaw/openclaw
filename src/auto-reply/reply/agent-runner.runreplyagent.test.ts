@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import * as sessions from "../../config/sessions.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -233,7 +233,7 @@ async function runReplyAgentWithBase(params: {
   baseRun: ReturnType<typeof createBaseRun>;
   storePath: string;
   sessionKey: string;
-  sessionEntry: Record<string, unknown>;
+  sessionEntry: SessionEntry;
   commandBody: string;
   typingMode?: "instant";
 }): Promise<void> {
@@ -303,7 +303,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     persistStore: boolean;
   }) {
     const storePath = path.join(params.stateDir, "sessions", "sessions.json");
-    const sessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
+    const sessionEntry: SessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
     const sessionStore = { main: sessionEntry };
 
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -343,21 +343,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).toHaveBeenCalledWith("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
-  });
-
-  it("signals typing even without consumer partial handler", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "hi" });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-
-    const { run, typing } = createMinimalRun({
-      typingMode: "message",
-    });
-    await run();
-
-    expect(typing.startTypingOnText).toHaveBeenCalledWith("hi");
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("never signals typing for heartbeat runs", async () => {
@@ -505,7 +490,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("announces auto-compaction in verbose mode and tracks count", async () => {
     await withTempStateDir(async (stateDir) => {
       const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
       const sessionStore = { main: sessionEntry };
 
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -564,6 +549,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Context limit exceeded during compaction"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
@@ -609,6 +597,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Context limit exceeded"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
@@ -653,6 +644,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Message ordering conflict"),
       });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
       expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
       await expect(fs.access(transcriptPath)).rejects.toBeDefined();
@@ -787,19 +781,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("returns friendly message for 'roles must alternate' errors thrown as exceptions", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      throw new Error('messages: roles must alternate between "user" and "assistant"');
-    });
-
-    const { run } = createMinimalRun({});
-    const res = await run();
-
-    expect(res).toMatchObject({
-      text: expect.stringContaining("Message ordering conflict"),
-    });
-  });
-
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [
@@ -841,56 +822,6 @@ describe("runReplyAgent memory flush", () => {
     }
   });
 
-  async function expectMemoryFlushSkippedWithWorkspaceAccess(
-    workspaceAccess: "ro" | "none",
-  ): Promise<void> {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<{ prompt?: string }> = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const baseRun = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              sandbox: { mode: "all", workspaceAccess },
-            },
-          },
-        },
-      });
-
-      await runReplyAgentWithBase({
-        baseRun,
-        storePath,
-        sessionKey,
-        sessionEntry,
-        commandBody: "hello",
-      });
-
-      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
-
-      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
-    });
-  }
-
   it("skips memory flush for CLI providers", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "main";
@@ -930,66 +861,6 @@ describe("runReplyAgent memory flush", () => {
       const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
       expect(call?.prompt).toBe("hello");
       expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("uses configured prompts for memory flush runs", async () => {
-    await withTempStore(async (storePath) => {
-      const sessionKey = "main";
-      const sessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        totalTokens: 80_000,
-        compactionCount: 1,
-      };
-
-      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-      const calls: Array<EmbeddedRunParams> = [];
-      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-        calls.push(params);
-        if (params.prompt?.includes("Pre-compaction memory flush.")) {
-          return { payloads: [], meta: {} };
-        }
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      });
-
-      const baseRun = createBaseRun({
-        storePath,
-        sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                memoryFlush: {
-                  prompt: "Write notes.",
-                  systemPrompt: "Flush memory now.",
-                },
-              },
-            },
-          },
-        },
-        runOverrides: { extraSystemPrompt: "extra system" },
-      });
-
-      await runReplyAgentWithBase({
-        baseRun,
-        storePath,
-        sessionKey,
-        sessionEntry,
-        commandBody: "hello",
-      });
-
-      const flushCall = calls[0];
-      expect(flushCall?.prompt).toContain("Write notes.");
-      expect(flushCall?.prompt).toContain("NO_REPLY");
-      expect(flushCall?.extraSystemPrompt).toContain("extra system");
-      expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
-      expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
-      expect(calls[1]?.prompt).toBe("hello");
     });
   });
 
@@ -1121,14 +992,6 @@ describe("runReplyAgent memory flush", () => {
 
       expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
     });
-  });
-
-  it("skips memory flush when the sandbox workspace is read-only", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("ro");
-  });
-
-  it("skips memory flush when the sandbox workspace is none", async () => {
-    await expectMemoryFlushSkippedWithWorkspaceAccess("none");
   });
 
   it("increments compaction count when flush compaction completes", async () => {

@@ -86,7 +86,7 @@ describe("attachChildProcessBridge", () => {
     if (!addedSigterm) {
       throw new Error("expected SIGTERM listener");
     }
-    addedSigterm();
+    addedSigterm("SIGTERM");
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);

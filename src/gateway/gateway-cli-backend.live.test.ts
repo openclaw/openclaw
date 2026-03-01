@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
+import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
@@ -17,7 +18,7 @@ const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_P
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
-const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
 const DEFAULT_CLAUDE_ARGS = ["-p", "--output-format", "json", "--dangerously-skip-permissions"];
 const DEFAULT_CODEX_ARGS = [
   "exec",
@@ -119,54 +120,11 @@ function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[]
   return next;
 }
 
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
-        srv.close();
-        reject(new Error("failed to acquire free port"));
-        return;
-      }
-      const port = addr.port;
-      srv.close((err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(port);
-        }
-      });
-    });
-  });
-}
-
-async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-    return false;
-  }
-  return await new Promise((resolve) => {
-    const srv = createServer();
-    srv.once("error", () => resolve(false));
-    srv.listen(port, "127.0.0.1", () => {
-      srv.close(() => resolve(true));
-    });
-  });
-}
-
 async function getFreeGatewayPort(): Promise<number> {
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    const port = await getFreePort();
-    const candidates = [port, port + 1, port + 2, port + 4];
-    const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
-      Boolean,
-    );
-    if (ok) {
-      return port;
-    }
-  }
-  throw new Error("failed to acquire a free gateway port block");
+  return await getFreePortBlockWithPermissionFallback({
+    offsets: [0, 1, 2, 4],
+    fallbackBase: 40_000,
+  });
 }
 
 async function connectClient(params: { url: string; token: string }) {
@@ -187,7 +145,7 @@ async function connectClient(params: { url: string; token: string }) {
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
-      clientName: "vitest-live-cli-backend",
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: "test",
       onHelloOk: () => stop(undefined, client),

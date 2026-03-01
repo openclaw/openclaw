@@ -1,6 +1,6 @@
-import type { GatewayRequestHandler } from "./types.js";
 import { ErrorCodes, errorShape, validateNodeInvokeResultParams } from "../protocol/index.js";
 import { respondInvalidParams } from "./nodes.helpers.js";
+import type { GatewayRequestHandler } from "./types.js";
 
 function normalizeNodeInvokeResultParams(params: unknown): unknown {
   if (!params || typeof params !== "object") {

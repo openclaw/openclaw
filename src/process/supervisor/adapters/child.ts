@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
-import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
+import type { ManagedRunStdin } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 function resolveCommand(command: string): string {
@@ -42,11 +42,17 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
+  // On Windows, `detached: true` creates a new process group and can prevent
+  // stdout/stderr pipes from connecting when running under a Scheduled Task
+  // (headless, no console). Default to `detached: false` on Windows; on
+  // POSIX systems keep `detached: true` so the child survives parent exit.
+  const useDetached = process.platform !== "win32";
+
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdio: ["pipe", "pipe", "pipe"],
-    detached: true,
+    detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   };
@@ -59,12 +65,14 @@ export async function createChildAdapter(params: {
   const spawned = await spawnWithFallback({
     argv: resolvedArgv,
     options,
-    fallbacks: [
-      {
-        label: "no-detach",
-        options: { detached: false },
-      },
-    ],
+    fallbacks: useDetached
+      ? [
+          {
+            label: "no-detach",
+            options: { detached: false },
+          },
+        ]
+      : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;

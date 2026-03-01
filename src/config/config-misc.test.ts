@@ -153,12 +153,35 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts zero to disable monitor", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: 0,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative intervals", () => {
+    const res = validateConfigObject({
+      gateway: {
+        channelHealthCheckMinutes: -1,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.channelHealthCheckMinutes");
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
-  it("accepts cron.webhook and cron.webhookToken", () => {
+  it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
         enabled: true,
-        webhook: "https://example.invalid/cron",
+        webhook: "https://example.invalid/legacy-cron-webhook",
         webhookToken: "secret-token",
       },
     });
@@ -166,10 +189,10 @@ describe("cron webhook schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects non-http(s) cron.webhook URLs", () => {
+  it("rejects non-http cron.webhook URLs", () => {
     const res = OpenClawSchema.safeParse({
       cron: {
-        webhook: "ftp://example.invalid/cron",
+        webhook: "ftp://example.invalid/legacy-cron-webhook",
       },
     });
 

@@ -1,6 +1,7 @@
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DiscordAccountConfig } from "../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -12,29 +13,9 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
-  const accounts = cfg.channels?.discord?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return [];
-  }
-  return Object.keys(accounts).filter(Boolean);
-}
-
-export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-  return ids.toSorted((a, b) => a.localeCompare(b));
-}
-
-export function resolveDefaultDiscordAccountId(cfg: OpenClawConfig): string {
-  const ids = listDiscordAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
-}
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+export const listDiscordAccountIds = listAccountIds;
+export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(
   cfg: OpenClawConfig,
@@ -53,6 +34,26 @@ function mergeDiscordAccountConfig(cfg: OpenClawConfig, accountId: string): Disc
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
+}
+
+export function createDiscordActionGate(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
+  const accountId = normalizeAccountId(params.accountId);
+  const baseActions = params.cfg.channels?.discord?.actions;
+  const accountActions = resolveAccountConfig(params.cfg, accountId)?.actions;
+  return (key, defaultValue = true) => {
+    const accountValue = accountActions?.[key];
+    if (accountValue !== undefined) {
+      return accountValue;
+    }
+    const baseValue = baseActions?.[key];
+    if (baseValue !== undefined) {
+      return baseValue;
+    }
+    return defaultValue;
+  };
 }
 
 export function resolveDiscordAccount(params: {

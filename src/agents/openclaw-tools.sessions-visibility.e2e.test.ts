@@ -20,15 +20,42 @@ vi.mock("../config/config.js", async (importOriginal) => {
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
+function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
+  const tool = createOpenClawTools({
+    agentSessionKey: "main",
+    sandboxed: options?.sandboxed,
+  }).find((candidate) => candidate.name === "sessions_history");
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error("missing sessions_history tool");
+  }
+  return tool;
+}
+
+function mockGatewayWithHistory(
+  extra?: (req: { method?: string; params?: Record<string, unknown> }) => unknown,
+) {
+  callGatewayMock.mockReset();
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const req = opts as { method?: string; params?: Record<string, unknown> };
+    const handled = extra?.(req);
+    if (handled !== undefined) {
+      return handled;
+    }
+    if (req.method === "chat.history") {
+      return { messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] };
+    }
+    return {};
+  });
+}
+
 describe("sessions tools visibility", () => {
   it("defaults to tree visibility (self + spawned) for sessions_history", async () => {
     mockConfig = {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { agentToAgent: { enabled: false } },
     };
-    callGatewayMock.mockReset();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const req = opts as { method?: string; params?: Record<string, unknown> };
+    mockGatewayWithHistory((req) => {
       if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
         return { sessions: [{ key: "subagent:child-1" }] };
       }
@@ -36,19 +63,10 @@ describe("sessions tools visibility", () => {
         const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
         return { key };
       }
-      if (req.method === "chat.history") {
-        return { messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] };
-      }
-      return {};
+      return undefined;
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "sessions_history",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionsHistoryTool();
 
     const denied = await tool.execute("call1", {
       sessionKey: "agent:main:discord:direct:someone-else",
@@ -66,22 +84,8 @@ describe("sessions tools visibility", () => {
       session: { mainKey: "main", scope: "per-sender" },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
     };
-    callGatewayMock.mockReset();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const req = opts as { method?: string; params?: Record<string, unknown> };
-      if (req.method === "chat.history") {
-        return { messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] };
-      }
-      return {};
-    });
-
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "sessions_history",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    mockGatewayWithHistory();
+    const tool = getSessionsHistoryTool();
 
     const result = await tool.execute("call3", {
       sessionKey: "agent:main:discord:direct:someone-else",
@@ -97,25 +101,14 @@ describe("sessions tools visibility", () => {
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
     };
-    callGatewayMock.mockReset();
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const req = opts as { method?: string; params?: Record<string, unknown> };
+    mockGatewayWithHistory((req) => {
       if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
         return { sessions: [] };
       }
-      if (req.method === "chat.history") {
-        return { messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }] };
-      }
-      return {};
+      return undefined;
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main", sandboxed: true }).find(
-      (candidate) => candidate.name === "sessions_history",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionsHistoryTool({ sandboxed: true });
 
     const denied = await tool.execute("call4", {
       sessionKey: "agent:other:main",

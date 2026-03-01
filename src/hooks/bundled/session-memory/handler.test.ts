@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { HookHandler } from "../../hooks.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import type { HookHandler } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
@@ -21,7 +21,7 @@ beforeAll(async () => {
  * Create a mock session JSONL file with various entry types
  */
 function createMockSessionContent(
-  entries: Array<{ role: string; content: string } | { type: string }>,
+  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
 ): string {
   return entries
     .map((entry) => {
@@ -253,6 +253,183 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Third message");
     expect(memoryContent).toContain("assistant: Second message");
     expect(memoryContent).toContain("assistant: Fourth message");
+  });
+
+  it("falls back to latest .jsonl.reset.* transcript when active file is empty", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activeSessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: "",
+    });
+
+    // Simulate /new rotation where useful content is now in .reset.* file
+    const resetContent = createMockSessionContent([
+      { role: "user", content: "Message from rotated transcript" },
+      { role: "assistant", content: "Recovered from reset fallback" },
+    ]);
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
+      content: resetContent,
+    });
+
+    const cfg = {
+      agents: { defaults: { workspace: tempDir } },
+    } satisfies OpenClawConfig;
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile: activeSessionFile,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+    expect(memoryContent).toContain("user: Message from rotated transcript");
+    expect(memoryContent).toContain("assistant: Recovered from reset fallback");
+  });
+
+  it("handles reset-path session pointers from previousSessionEntry", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionId = "reset-pointer-session";
+    const resetSessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Message from reset pointer" },
+        { role: "assistant", content: "Recovered directly from reset file" },
+      ]),
+    });
+
+    const cfg = {
+      agents: { defaults: { workspace: tempDir } },
+    } satisfies OpenClawConfig;
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId,
+        sessionFile: resetSessionFile,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+    expect(memoryContent).toContain("user: Message from reset pointer");
+    expect(memoryContent).toContain("assistant: Recovered directly from reset file");
+  });
+
+  it("recovers transcript when previousSessionEntry.sessionFile is missing", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionId = "missing-session-file";
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl`,
+      content: "",
+    });
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
+      content: createMockSessionContent([
+        { role: "user", content: "Recovered with missing sessionFile pointer" },
+        { role: "assistant", content: "Recovered by sessionId fallback" },
+      ]),
+    });
+
+    const cfg = {
+      agents: { defaults: { workspace: tempDir } },
+    } satisfies OpenClawConfig;
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+    expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
+    expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
+  });
+
+  it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activeSessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: "",
+    });
+
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Older rotated transcript" },
+        { role: "assistant", content: "Old summary" },
+      ]),
+    });
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Newest rotated transcript" },
+        { role: "assistant", content: "Newest summary" },
+      ]),
+    });
+
+    const cfg = {
+      agents: { defaults: { workspace: tempDir } },
+    } satisfies OpenClawConfig;
+
+    const event = createHookEvent("command", "new", "agent:main:main", {
+      cfg,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile: activeSessionFile,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+
+    expect(memoryContent).toContain("user: Newest rotated transcript");
+    expect(memoryContent).toContain("assistant: Newest summary");
+    expect(memoryContent).not.toContain("Older rotated transcript");
   });
 
   it("handles empty session files gracefully", async () => {

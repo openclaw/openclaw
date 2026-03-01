@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandContext } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 
@@ -10,7 +11,7 @@ export function buildCommandTestParams(
   options?: {
     workspaceDir?: string;
   },
-) {
+): HandleCommandsParams {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -29,7 +30,7 @@ export function buildCommandTestParams(
     commandAuthorized: true,
   });
 
-  return {
+  const params: HandleCommandsParams = {
     ctx,
     cfg,
     command,
@@ -38,12 +39,13 @@ export function buildCommandTestParams(
     sessionKey: "agent:main:main",
     workspaceDir: options?.workspaceDir ?? "/tmp",
     defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off" as const,
-    resolvedReasoningLevel: "off" as const,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
     provider: "whatsapp",
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
   };
+  return params;
 }

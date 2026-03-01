@@ -44,10 +44,10 @@ describe("gateway config.apply", () => {
           },
         }),
       );
-      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
+        const msg = o as { type?: string; id?: string };
+        return msg.type === "res" && msg.id === id;
+      });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toMatch(/invalid|SyntaxError/i);
     } finally {
@@ -69,10 +69,10 @@ describe("gateway config.apply", () => {
           },
         }),
       );
-      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(
-        ws,
-        (o) => o.type === "res" && o.id === id,
-      );
+      const res = await onceMessage<{ ok: boolean; error?: { message?: string } }>(ws, (o) => {
+        const msg = o as { type?: string; id?: string };
+        return msg.type === "res" && msg.id === id;
+      });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("raw");
     } finally {

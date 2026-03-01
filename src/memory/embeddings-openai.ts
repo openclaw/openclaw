@@ -1,5 +1,6 @@
+import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
+import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
@@ -36,20 +37,12 @@ export async function createOpenAiEmbeddingProvider(
     if (input.length === 0) {
       return [];
     }
-    const res = await fetch(url, {
-      method: "POST",
+    return await fetchRemoteEmbeddingVectors({
+      url,
       headers: client.headers,
-      body: JSON.stringify({ model: client.model, input }),
+      body: { model: client.model, input },
+      errorPrefix: "openai embeddings failed",
     });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`openai embeddings failed: ${res.status} ${text}`);
-    }
-    const payload = (await res.json()) as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-    const data = payload.data ?? [];
-    return data.map((entry) => entry.embedding ?? []);
   };
 
   return {
@@ -70,29 +63,11 @@ export async function createOpenAiEmbeddingProvider(
 export async function resolveOpenAiEmbeddingClient(
   options: EmbeddingProviderOptions,
 ): Promise<OpenAiEmbeddingClient> {
-  const remote = options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
-  const remoteBaseUrl = remote?.baseUrl?.trim();
-
-  const apiKey = remoteApiKey
-    ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
-          provider: "openai",
-          cfg: options.config,
-          agentDir: options.agentDir,
-        }),
-        "openai",
-      );
-
-  const providerConfig = options.config.models?.providers?.openai;
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    ...headerOverrides,
-  };
+  const { baseUrl, headers } = await resolveRemoteEmbeddingBearerClient({
+    provider: "openai",
+    options,
+    defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
+  });
   const model = normalizeOpenAiModel(options.model);
   return { baseUrl, headers, model };
 }

@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { getFreePort } from "./test-port.js";
+
+export { getFreePort } from "./test-port.js";
 
 type HarnessState = {
   testPort: number;
@@ -225,22 +227,6 @@ vi.mock("./screenshot.js", () => ({
 const server = await import("./server.js");
 export const startBrowserControlServerFromConfig = server.startBrowserControlServerFromConfig;
 export const stopBrowserControlServer = server.stopBrowserControlServer;
-
-export async function getFreePort(): Promise<number> {
-  while (true) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const s = createServer();
-      s.once("error", reject);
-      s.listen(0, "127.0.0.1", () => {
-        const assigned = (s.address() as AddressInfo).port;
-        s.close((err) => (err ? reject(err) : resolve(assigned)));
-      });
-    });
-    if (port < 65535) {
-      return port;
-    }
-  }
-}
 
 export function makeResponse(
   body: unknown,

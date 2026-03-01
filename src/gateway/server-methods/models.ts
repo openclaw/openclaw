@@ -1,13 +1,10 @@
-import type { GatewayRequestHandlers } from "./types.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { buildAllowedModelSet, resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateModelsListParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
@@ -23,22 +20,8 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
-      const catalog = await context.loadGatewayModelCatalog();
-      const agentId = resolveDefaultAgentId(cfg);
-      const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
-      const allowed = buildAllowedModelSet({
-        cfg,
-        catalog,
-        defaultProvider: defaultModel.provider,
-        defaultModel: defaultModel.model,
-      });
-      // Mark each model with whether it's allowed for session switching
-      const models = catalog.map((m) => ({
-        ...m,
-        allowed: allowed.allowAny || allowed.allowedKeys.has(`${m.provider}/${m.id}`),
-      }));
-      respond(true, { models, allowAny: allowed.allowAny }, undefined);
+      const models = await context.loadGatewayModelCatalog();
+      respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

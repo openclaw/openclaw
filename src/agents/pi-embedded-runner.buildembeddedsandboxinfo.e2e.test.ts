@@ -1,6 +1,40 @@
 import { describe, expect, it } from "vitest";
-import type { SandboxContext } from "./sandbox.js";
 import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
+import type { SandboxContext } from "./sandbox.js";
+
+function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
+  const base = {
+    enabled: true,
+    sessionKey: "session:test",
+    workspaceDir: "/tmp/openclaw-sandbox",
+    agentWorkspaceDir: "/tmp/openclaw-workspace",
+    workspaceAccess: "none",
+    containerName: "openclaw-sbx-test",
+    containerWorkdir: "/workspace",
+    docker: {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: true,
+      tmpfs: ["/tmp"],
+      network: "none",
+      user: "1000:1000",
+      capDrop: ["ALL"],
+      env: { LANG: "C.UTF-8" },
+    },
+    tools: {
+      allow: ["exec"],
+      deny: ["browser"],
+    },
+    browserAllowHostControl: true,
+    browser: {
+      bridgeUrl: "http://localhost:9222",
+      noVncUrl: "http://localhost:6080",
+      containerName: "openclaw-sbx-browser-test",
+    },
+  } satisfies SandboxContext;
+  return { ...base, ...overrides };
+}
 
 describe("buildEmbeddedSandboxInfo", () => {
   it("returns undefined when sandbox is missing", () => {
@@ -8,36 +42,7 @@ describe("buildEmbeddedSandboxInfo", () => {
   });
 
   it("maps sandbox context into prompt info", () => {
-    const sandbox = {
-      enabled: true,
-      sessionKey: "session:test",
-      workspaceDir: "/tmp/openclaw-sandbox",
-      agentWorkspaceDir: "/tmp/openclaw-workspace",
-      workspaceAccess: "none",
-      containerName: "openclaw-sbx-test",
-      containerWorkdir: "/workspace",
-      docker: {
-        image: "openclaw-sandbox:bookworm-slim",
-        containerPrefix: "openclaw-sbx-",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: ["/tmp"],
-        network: "none",
-        user: "1000:1000",
-        capDrop: ["ALL"],
-        env: { LANG: "C.UTF-8" },
-      },
-      tools: {
-        allow: ["exec"],
-        deny: ["browser"],
-      },
-      browserAllowHostControl: true,
-      browser: {
-        bridgeUrl: "http://localhost:9222",
-        noVncUrl: "http://localhost:6080",
-        containerName: "openclaw-sbx-browser-test",
-      },
-    } satisfies SandboxContext;
+    const sandbox = createSandboxContext();
 
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
       enabled: true,
@@ -52,31 +57,10 @@ describe("buildEmbeddedSandboxInfo", () => {
   });
 
   it("includes elevated info when allowed", () => {
-    const sandbox = {
-      enabled: true,
-      sessionKey: "session:test",
-      workspaceDir: "/tmp/openclaw-sandbox",
-      agentWorkspaceDir: "/tmp/openclaw-workspace",
-      workspaceAccess: "none",
-      containerName: "openclaw-sbx-test",
-      containerWorkdir: "/workspace",
-      docker: {
-        image: "openclaw-sandbox:bookworm-slim",
-        containerPrefix: "openclaw-sbx-",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: ["/tmp"],
-        network: "none",
-        user: "1000:1000",
-        capDrop: ["ALL"],
-        env: { LANG: "C.UTF-8" },
-      },
-      tools: {
-        allow: ["exec"],
-        deny: ["browser"],
-      },
+    const sandbox = createSandboxContext({
       browserAllowHostControl: false,
-    } satisfies SandboxContext;
+      browser: undefined,
+    });
 
     expect(
       buildEmbeddedSandboxInfo(sandbox, {

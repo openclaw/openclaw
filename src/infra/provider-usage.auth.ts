@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { UsageProviderId } from "./provider-usage.types.js";
 import {
+  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -12,6 +12,7 @@ import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
   provider: UsageProviderId;
@@ -144,14 +145,7 @@ async function resolveOAuthToken(params: {
     store,
     provider: params.provider,
   });
-
-  const candidates = order;
-  const deduped: string[] = [];
-  for (const entry of candidates) {
-    if (!deduped.includes(entry)) {
-      deduped.push(entry);
-    }
-  }
+  const deduped = dedupeProfileIds(order);
 
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];

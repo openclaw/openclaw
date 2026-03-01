@@ -1,6 +1,6 @@
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgress } from "../../cli/progress.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
@@ -52,6 +52,21 @@ function appendBaseUrlBit(bits: string[], account: Record<string, unknown>) {
   if (typeof account.baseUrl === "string" && account.baseUrl) {
     bits.push(`url:${account.baseUrl}`);
   }
+}
+
+function buildChannelAccountLine(
+  provider: ChatChannel,
+  account: Record<string, unknown>,
+  bits: string[],
+): string {
+  const accountId = typeof account.accountId === "string" ? account.accountId : "default";
+  const name = typeof account.name === "string" ? account.name.trim() : "";
+  const labelText = formatChannelAccountLabel({
+    channel: provider,
+    accountId,
+    name: name || undefined,
+  });
+  return `- ${labelText}: ${bits.join(", ")}`;
 }
 
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
@@ -131,14 +146,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
       }
-      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-      const name = typeof account.name === "string" ? account.name.trim() : "";
-      const labelText = formatChannelAccountLabel({
-        channel: provider,
-        accountId,
-        name: name || undefined,
-      });
-      return `- ${labelText}: ${bits.join(", ")}`;
+      return buildChannelAccountLine(provider, account, bits);
     });
 
   const plugins = listChannelPlugins();
@@ -199,14 +207,7 @@ async function formatConfigChannelsStatusLines(
       appendModeBit(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
-      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-      const name = typeof account.name === "string" ? account.name.trim() : "";
-      const labelText = formatChannelAccountLabel({
-        channel: provider,
-        accountId,
-        name: name || undefined,
-      });
-      return `- ${labelText}: ${bits.join(", ")}`;
+      return buildChannelAccountLine(provider, account, bits);
     });
 
   const plugins = listChannelPlugins();

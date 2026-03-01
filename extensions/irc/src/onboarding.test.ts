@@ -1,7 +1,15 @@
 import type { RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
 import { ircOnboardingAdapter } from "./onboarding.js";
+import type { CoreConfig } from "./types.js";
+
+const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
+  const first = params.options[0];
+  if (!first) {
+    throw new Error("no options");
+  }
+  return first.value;
+};
 
 describe("irc onboarding", () => {
   it("configures host and nick via onboarding prompts", async () => {
@@ -9,7 +17,7 @@ describe("irc onboarding", () => {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: vi.fn(async () => "allowlist"),
+      select: selectFirstOption as WizardPrompter["select"],
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC server host") {
@@ -50,7 +58,9 @@ describe("irc onboarding", () => {
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: vi.fn(),
-      exit: vi.fn(),
+      exit: vi.fn((code: number): never => {
+        throw new Error(`exit ${code}`);
+      }),
     };
 
     const result = await ircOnboardingAdapter.configure({
@@ -78,7 +88,7 @@ describe("irc onboarding", () => {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: vi.fn(async () => "allowlist"),
+      select: selectFirstOption as WizardPrompter["select"],
       multiselect: vi.fn(async () => []),
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "IRC allowFrom (nick or nick!user@host)") {
