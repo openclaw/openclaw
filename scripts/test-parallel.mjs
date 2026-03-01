@@ -352,6 +352,37 @@ function buildReporterArgs(entry, extraArgs) {
   return ["--reporter=default", "--reporter=json", "--outputFile", outputFile];
 }
 
+const ensureA2uiBundle = async () => {
+  const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
+  const a2uiIndexPath = path.join(a2uiRoot, "index.html");
+  const a2uiBundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+  if (!fs.existsSync(a2uiIndexPath) || fs.existsSync(a2uiBundlePath)) {
+    return 0;
+  }
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(pnpm, ["canvas:a2ui:bundle"], {
+        stdio: "inherit",
+        env: process.env,
+        shell: isWindows,
+      });
+    } catch (err) {
+      console.error(`[test-parallel] failed to start a2ui bundle command: ${String(err)}`);
+      resolve(1);
+      return;
+    }
+    children.add(child);
+    child.on("error", (err) => {
+      console.error(`[test-parallel] a2ui bundle command error: ${String(err)}`);
+    });
+    child.on("exit", (code, signal) => {
+      children.delete(child);
+      resolve(code ?? (signal ? 1 : 0));
+    });
+  });
+};
+
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
     const maxWorkers = maxWorkersForRun(entry.name);
@@ -474,6 +505,11 @@ if (passthroughArgs.length > 0) {
     });
   });
   process.exit(Number(code) || 0);
+}
+
+const a2uiBundleCode = await ensureA2uiBundle();
+if (a2uiBundleCode !== 0) {
+  process.exit(a2uiBundleCode);
 }
 
 const parallelCodes = await Promise.all(parallelRuns.map(run));
