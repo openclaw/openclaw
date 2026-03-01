@@ -117,6 +117,11 @@ describe("argv helpers", () => {
       expected: false,
     },
     {
+      name: "help before subcommand token",
+      argv: ["node", "openclaw", "--help", "status"],
+      expected: false,
+    },
+    {
       name: "help after -- terminator",
       argv: ["node", "openclaw", "nodes", "run", "--", "git", "--help"],
       expected: false,
@@ -124,6 +129,11 @@ describe("argv helpers", () => {
     {
       name: "unknown root flag before help",
       argv: ["node", "openclaw", "--unknown", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag after help",
+      argv: ["node", "openclaw", "--help", "--unknown"],
       expected: false,
     },
   ])("detects root-only help invocations: $name", ({ argv, expected }) => {
