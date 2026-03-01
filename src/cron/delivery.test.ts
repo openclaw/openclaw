@@ -270,4 +270,18 @@ describe("resolveFailureDestination", () => {
     expect(result?.channel).toBe("slack");
     expect(result?.to).toBe("#alerts");
   });
+
+  it("detects duplicate when primary has no explicit channel (defaults to last)", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        to: "123",
+        failureDestination: {
+          to: "123",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).toBeNull();
+  });
 });

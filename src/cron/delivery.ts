@@ -187,8 +187,11 @@ function isSameDeliveryTarget(
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
   }
 
+  const primaryChannelNormalized = primaryChannel ?? "last";
+  const failureChannelNormalized = failurePlan.channel ?? "last";
+
   return (
-    failurePlan.channel === primaryChannel &&
+    failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
     failurePlan.accountId === primaryAccountId
   );
