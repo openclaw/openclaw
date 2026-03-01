@@ -20,6 +20,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -68,6 +69,50 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+const GATEWAY_DRAINING_REPLY_TTL_MS = 15_000;
+const GATEWAY_DRAINING_REPLY_MAX = 5000;
+
+const gatewayDrainingReplyDedupe = createDedupeCache({
+  ttlMs: GATEWAY_DRAINING_REPLY_TTL_MS,
+  maxSize: GATEWAY_DRAINING_REPLY_MAX,
+});
+
+function isGatewayDrainingErrorMessage(message: string): boolean {
+  return /gateway is draining for restart;\s*new tasks are not accepted/i.test(message);
+}
+
+function buildGatewayDrainingReplyDedupeKey(params: {
+  sessionCtx: TemplateContext;
+  sessionKey?: string;
+}): string | null {
+  const channel = (
+    params.sessionCtx.OriginatingChannel ??
+    params.sessionCtx.Provider ??
+    params.sessionCtx.Surface
+  )
+    ?.trim()
+    .toLowerCase();
+  const to = (
+    params.sessionCtx.OriginatingTo ??
+    params.sessionCtx.To ??
+    params.sessionCtx.From ??
+    params.sessionKey
+  )?.trim();
+  if (!channel || !to) {
+    return null;
+  }
+  const accountId = params.sessionCtx.AccountId?.trim() ?? "";
+  const threadId =
+    params.sessionCtx.MessageThreadId !== undefined && params.sessionCtx.MessageThreadId !== null
+      ? String(params.sessionCtx.MessageThreadId).trim()
+      : "";
+  return [channel, to, accountId, threadId].filter(Boolean).join("|");
+}
+
+export function resetGatewayDrainingReplyDedupe(): void {
+  gatewayDrainingReplyDedupe.clear();
+}
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
@@ -476,6 +521,7 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const isGatewayDraining = isGatewayDrainingErrorMessage(message);
       const isTransientHttp = isTransientHttpError(message);
 
       if (
@@ -561,6 +607,22 @@ export async function runAgentTurnWithFallback(params: {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
         });
         continue;
+      }
+
+      if (isGatewayDraining) {
+        const dedupeKey = buildGatewayDrainingReplyDedupeKey({
+          sessionCtx: params.sessionCtx,
+          sessionKey: params.sessionKey,
+        });
+        if (dedupeKey && gatewayDrainingReplyDedupe.check(dedupeKey)) {
+          logVerbose(`Suppressed duplicate restart-drain error reply for ${dedupeKey}`);
+          return {
+            kind: "final",
+            payload: {
+              text: SILENT_REPLY_TOKEN,
+            },
+          };
+        }
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);

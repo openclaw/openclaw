@@ -7,7 +7,9 @@ import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions } from "../types.js";
+import { resetGatewayDrainingReplyDedupe } from "./agent-runner-execution.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -87,6 +89,7 @@ beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
+  resetGatewayDrainingReplyDedupe();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -1353,6 +1356,23 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(persisted.main).toBeDefined();
     });
+  });
+
+  it("suppresses duplicate restart-drain failure replies for the same route", async () => {
+    const drainError = "Gateway is draining for restart; new tasks are not accepted";
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      throw new Error(drainError);
+    });
+
+    const firstRun = createMinimalRun({});
+    const first = await firstRun.run();
+    expect(first).toMatchObject({
+      text: expect.stringContaining("Gateway is draining for restart"),
+    });
+
+    const secondRun = createMinimalRun({});
+    const second = await secondRun.run();
+    expect(second).toMatchObject({ text: SILENT_REPLY_TOKEN });
   });
 
   it("still replies even if session reset fails to persist", async () => {
