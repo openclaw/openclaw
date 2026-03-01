@@ -12,7 +12,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 743ad7da60c78b6f0554f1c6ab09a10a5f4771a124d2636d732cab377013a440
-  source_path: gateway/trusted-proxy-auth.md
+  source_path: docs/gateway/trusted-proxy-auth.md
   workflow: 15
 ---
 
