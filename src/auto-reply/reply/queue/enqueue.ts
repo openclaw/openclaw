@@ -1,4 +1,5 @@
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { wasDeliveredFollowupRun } from "./dedupe.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -29,6 +30,10 @@ export function enqueueFollowupRun(
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
 ): boolean {
+  if (wasDeliveredFollowupRun(key, run)) {
+    return false;
+  }
+
   const queue = getFollowupQueue(key, settings);
   const dedupe =
     dedupeMode === "none"

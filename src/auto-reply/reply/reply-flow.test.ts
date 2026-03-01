@@ -690,6 +690,61 @@ describe("followup queue deduplication", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
+  it("deduplicates message ids that were already delivered in a prior drain", async () => {
+    const key = `test-dedup-delivered-message-id-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "m1",
+        originatingChannel: "discord",
+        originatingTo: "channel:123",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    const duplicateAfterDrain = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "duplicate-after-drain",
+        messageId: "m1",
+        originatingChannel: "discord",
+        originatingTo: "channel:123",
+      }),
+      settings,
+    );
+    expect(duplicateAfterDrain).toBe(false);
+
+    const sameMessageDifferentRoute = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "same-message-different-route",
+        messageId: "m1",
+        originatingChannel: "discord",
+        originatingTo: "channel:999",
+      }),
+      settings,
+    );
+    expect(sameMessageDifferentRoute).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
   it("deduplicates exact prompt when routing matches and no message id", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
     const settings: QueueSettings = {

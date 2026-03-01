@@ -10,6 +10,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { markDeliveredFollowupRun } from "./dedupe.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -72,7 +73,10 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: runFollowup,
+            run: async (item) => {
+              await runFollowup(item);
+              markDeliveredFollowupRun(key, item);
+            },
           });
           if (collectDrainResult === "empty") {
             break;
@@ -102,6 +106,9 @@ export function scheduleFollowupDrain(
             enqueuedAt: Date.now(),
             ...routing,
           });
+          for (const item of items) {
+            markDeliveredFollowupRun(key, item);
+          }
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
@@ -126,6 +133,7 @@ export function scheduleFollowupDrain(
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
               });
+              markDeliveredFollowupRun(key, item);
             }))
           ) {
             break;
@@ -134,7 +142,12 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+        if (
+          !(await drainNextQueueItem(queue.items, async (item) => {
+            await runFollowup(item);
+            markDeliveredFollowupRun(key, item);
+          }))
+        ) {
           break;
         }
       }
