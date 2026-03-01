@@ -153,7 +153,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         continue;
       }
       const cleaned = normalizeRoomEntry(trimmed);
-      if ((cleaned.startsWith("!") || cleaned.startsWith("#")) && cleaned.includes(":")) {
+      if (cleaned.startsWith("!") || (cleaned.startsWith("#") && cleaned.includes(":"))) {
         if (!nextRooms[cleaned]) {
           nextRooms[cleaned] = roomConfig;
         }
@@ -268,7 +268,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
-  const startupGraceMs = 0;
+  const startupGraceMs = 5000; // 5s grace for slow homeservers (e.g. Conduit filter M_NOT_FOUND retry)
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, cfg, runtime });
   const warnedEncryptedRooms = new Set<string>();
