@@ -114,6 +114,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
+  execApprovalHandler,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
@@ -1042,6 +1043,20 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
+
+      // Exec approval button callback (ea:<approvalId>:<decision>)
+      if (data.startsWith("ea:") && execApprovalHandler) {
+        const result = await execApprovalHandler.handleCallbackQuery(
+          data,
+          String(callback.from?.id ?? ""),
+        );
+        if (result.handled) {
+          if (result.text) {
+            await editCallbackMessage(result.text, { parse_mode: "HTML" });
+          }
+          return;
+        }
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,

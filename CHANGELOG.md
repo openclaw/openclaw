@@ -288,6 +288,37 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.2.24
 
+### Added
+
+- Telegram/Exec Approvals: Add native Telegram exec approval support with inline button interface
+  - New `ExecApprovalManager` class handles approval requests via Telegram bot
+  - Inline buttons for allow-once, allow-always, and deny decisions
+  - Automatic message cleanup after resolution (configurable)
+  - Multi-approver support with user ID verification
+  - Gateway client integration for bidirectional approval flow
+  - Affected files: `src/telegram/exec-approvals.ts`, `src/telegram/exec-approvals.test.ts`
+
+### Changed
+
+- Telegram/Bot: Refactor bot lifecycle to support exec approval handler registration
+  - `createTelegramBot()` now returns `{ bot, execApprovalHandler }` instead of just the bot instance
+  - Added `execApprovalHandler.start()` and `execApprovalHandler.stop()` methods for lifecycle management
+  - Updated all test files to handle new return structure
+  - Affected files: `src/telegram/bot.ts`, `src/telegram/webhook.ts`, `src/telegram/monitor.ts`
+- Telegram/Config: Add exec approval configuration to Telegram channel config
+  - New `execApprovals` field with `enabled`, `approvers`, and `cleanupAfterResolve` options
+  - Type definitions in `src/config/types.telegram.ts`
+- Telegram/Handlers: Integrate exec approval callback handling into bot message flow
+  - Callback queries with `ea:` prefix routed to exec approval manager
+  - Automatic answer callback with approval status
+  - Affected file: `src/telegram/bot-handlers.ts`
+- Infra/Exec Approval Forwarder: Add Telegram channel filtering for exec approval requests
+  - Filter approval requests by session key to route to appropriate Telegram chats
+  - Extract chat ID from session keys like `agent:main:telegram:dm:123456789`
+  - Affected file: `src/infra/exec-approval-forwarder.ts`
+
+## 2026.2.22 (Unreleased)
+
 ### Changes
 
 - Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants), accept trailing punctuation (for example `STOP OPENCLAW!!!`), add multilingual stop keywords (including ES/FR/ZH/HI/AR/JP/DE/PT/RU forms), and treat exact `do not do that` as a stop trigger while preserving strict standalone matching. (#25103) Thanks @steipete and @vincentkoc.

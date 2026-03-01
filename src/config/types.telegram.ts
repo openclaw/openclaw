@@ -50,6 +50,19 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
+export type TelegramExecApprovalConfig = {
+  /** Enable exec approval inline buttons on Telegram. Default: false. */
+  enabled?: boolean;
+  /** Telegram user IDs allowed to approve/deny. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Delete approval messages after resolution or timeout. Default: false. */
+  cleanupAfterResolve?: boolean;
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -156,6 +169,8 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Exec approval inline buttons config. */
+  execApprovals?: TelegramExecApprovalConfig;
   /**
    * Per-channel outbound response prefix override.
    *

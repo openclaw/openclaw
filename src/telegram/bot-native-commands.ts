@@ -61,6 +61,7 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import type { TelegramExecApprovalHandler } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -111,6 +112,7 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  execApprovalHandler?: TelegramExecApprovalHandler | null;
 };
 
 type RegisterTelegramNativeCommandsParams = {

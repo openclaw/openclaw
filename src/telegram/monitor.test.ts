@@ -124,12 +124,15 @@ vi.mock("./bot.js", () => ({
       await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
     return {
-      on: vi.fn(),
-      api,
-      me: { username: "mybot" },
-      init: initSpy,
-      stop: vi.fn(),
-      start: vi.fn(),
+      bot: {
+        on: vi.fn(),
+        api,
+        me: { username: "mybot" },
+        init: initSpy,
+        stop: vi.fn(),
+        start: vi.fn(),
+      },
+      execApprovalHandler: null,
     };
   },
   createTelegramWebhookCallback: vi.fn(),
