@@ -32,6 +32,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -463,6 +464,7 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -479,6 +481,7 @@ export function createGatewayHttpServer(opts: {
     handlePluginRequest,
     resolvedAuth,
     rateLimiter,
+    chatAbortControllers,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -555,6 +558,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            chatAbortControllers,
           })
         ) {
           return;
