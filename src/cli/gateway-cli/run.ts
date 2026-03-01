@@ -15,7 +15,7 @@ import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -365,19 +365,28 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
       const errMessage = describeUnknownError(err);
+      // Only treat lock-contention (timeout) as idempotent — not other lock
+      // failures like EACCES or other filesystem errors.  The timeout path
+      // produces messages containing "lock timeout", so we use that as the
+      // discriminant.  See PR #30569 review.
+      const isLockContention = /lock timeout/i.test(errMessage);
+      if (isLockContention) {
+        try {
+          const diagnostics = await inspectPortUsage(port);
+          if (diagnostics.status === "busy") {
+            // Gateway is genuinely running → idempotent success
+            defaultRuntime.log(`Gateway is already running (${errMessage.replace(/;.*$/, "")})`);
+            defaultRuntime.exit(0);
+            return;
+          }
+        } catch {
+          // ignore diagnostics failures — fall through to error path
+        }
+      }
+      // Lock error but gateway is not confirmed running → real failure
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );
-      try {
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
-        }
-      } catch {
-        // ignore diagnostics failures
-      }
       await maybeExplainGatewayServiceStop();
       defaultRuntime.exit(1);
       return;

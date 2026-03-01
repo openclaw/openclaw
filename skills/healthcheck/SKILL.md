@@ -70,7 +70,7 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
    - Linux: `ss -ltnup` (or `ss -ltnp` if `-u` unsupported).
    - macOS: `lsof -nP -iTCP -sTCP:LISTEN`.
 3. Firewall status:
-   - Linux: `ufw status`, `firewall-cmd --state`, `nft list ruleset` (pick what is installed).
+   - Linux: try `ufw status` first; if not found, try `/usr/sbin/ufw status` or `/sbin/ufw status` (ufw often lives outside `$PATH` for non-root users). Also try `firewall-cmd --state`, `nft list ruleset` (pick what is installed). Check `/etc/ufw/ufw.conf` for ENABLED state if ufw binary is found but status requires sudo.
    - macOS: `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate` and `pfctl -s info`.
 4. Backups (macOS): `tmutil status` (if Time Machine is used).
 
