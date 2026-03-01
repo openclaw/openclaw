@@ -5,6 +5,7 @@ import {
   RelationType,
   type MatrixFormattedContent,
   type MatrixMediaMsgType,
+  type MatrixMentions,
   type MatrixRelation,
   type MatrixReplyRelation,
   type MatrixTextContent,
@@ -13,7 +14,11 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
+export function buildTextContent(
+  body: string,
+  relation?: MatrixRelation,
+  mentions?: MatrixMentions,
+): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
         msgtype: MsgType.Text,
@@ -24,6 +29,9 @@ export function buildTextContent(body: string, relation?: MatrixRelation): Matri
         msgtype: MsgType.Text,
         body,
       };
+  if (mentions && (mentions.user_ids?.length || mentions.room)) {
+    (content as unknown as Record<string, unknown>)["m.mentions"] = mentions;
+  }
   applyMatrixFormatting(content, body);
   return content;
 }
