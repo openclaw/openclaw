@@ -108,6 +108,43 @@ describe("normalizeReplyPayload", () => {
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
   });
+
+  it("strips echoed queued metadata blocks from collect-mode output", () => {
+    const payload = {
+      text: `---\nQueued #1\nConversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"123"}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{"name":"alice"}
+\`\`\`
+
+---
+Queued #2
+Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"456"}
+\`\`\`
+
+Final answer for the user.`,
+    };
+
+    const normalized = normalizeReplyPayload(payload);
+
+    expect(normalized?.text).toBe("Final answer for the user.");
+  });
+
+  it("keeps regular user-facing text that mentions queued items inline", () => {
+    const payload = {
+      text: "I already handled queued #1 and queued #2 tasks.",
+    };
+
+    const normalized = normalizeReplyPayload(payload);
+
+    expect(normalized?.text).toBe("I already handled queued #1 and queued #2 tasks.");
+  });
 });
 
 describe("typing controller", () => {

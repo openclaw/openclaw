@@ -7,6 +7,7 @@ import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
+import { stripInboundMetadata } from "./strip-inbound-meta.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
@@ -19,6 +20,20 @@ export type NormalizeReplyOptions = {
   silentToken?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
+
+const QUEUED_COLLECT_MARKER_RE = /(?:^|\n)(?:---\s*\n)?Queued #\d+\s*(?=\n|$)/g;
+
+function stripEchoedQueuedMetadata(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const withoutInboundMeta = stripInboundMetadata(text);
+  const withoutQueuedMarkers = withoutInboundMeta.replace(QUEUED_COLLECT_MARKER_RE, "\n");
+  return withoutQueuedMarkers
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
+}
 
 export function normalizeReplyPayload(
   payload: ReplyPayload,
@@ -63,6 +78,7 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    text = stripEchoedQueuedMetadata(text);
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
