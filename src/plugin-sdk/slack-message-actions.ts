@@ -176,5 +176,10 @@ export async function handleSlackMessageAction(params: {
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
   }
 
+  if (action === "download-file") {
+    const fileId = readStringParam(actionParams, "fileId", { required: true });
+    return await invoke({ action: "downloadFile", fileId, accountId }, cfg);
+  }
+
   throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
 }

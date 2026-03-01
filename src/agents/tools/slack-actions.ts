@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
   deleteSlackMessage,
+  downloadSlackFile,
   editSlackMessage,
   getSlackMemberInfo,
   listSlackEmojis,
@@ -22,13 +23,20 @@ import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js"
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
   createActionGate,
+  imageResultFromFile,
   jsonResult,
   readNumberParam,
   readReactionParams,
   readStringParam,
 } from "./common.js";
 
-const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
+const messagingActions = new Set([
+  "sendMessage",
+  "editMessage",
+  "deleteMessage",
+  "readMessages",
+  "downloadFile",
+]);
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
@@ -279,6 +287,28 @@ export async function handleSlackAction(
           ),
         );
         return jsonResult({ ok: true, messages, hasMore: result.hasMore });
+      }
+      case "downloadFile": {
+        const fileId = readStringParam(params, "fileId", { required: true });
+        const maxBytes = account.config?.mediaMaxMb
+          ? account.config.mediaMaxMb * 1024 * 1024
+          : 20 * 1024 * 1024;
+        const downloaded = await downloadSlackFile(fileId, {
+          ...readOpts,
+          maxBytes,
+        });
+        if (!downloaded) {
+          return jsonResult({
+            ok: false,
+            error: "File could not be downloaded (not found, too large, or inaccessible).",
+          });
+        }
+        return await imageResultFromFile({
+          label: "slack-file",
+          path: downloaded.path,
+          extraText: downloaded.placeholder,
+          details: { fileId, path: downloaded.path },
+        });
       }
       default:
         break;
