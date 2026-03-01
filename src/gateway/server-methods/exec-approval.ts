@@ -267,21 +267,32 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      // Get resolvedBy first (needed for both exact and slug resolution)
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      // Try exact ID match first, then try slug (prefix) match
+      let resolvedId = p.id;
+      const snapshot = manager.getSnapshot(p.id);
+      let ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      if (!ok && p.id.length >= 4) {
+        // Try slug lookup for shorter IDs that might be truncated slugs
+        const slugMatch = manager.findBySlug(p.id);
+        if (slugMatch) {
+          resolvedId = slugMatch;
+          ok = manager.resolve(slugMatch, decision, resolvedBy ?? null);
+        }
+      }
       if (!ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: resolvedId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: resolvedId,
           decision,
           resolvedBy,
           ts: Date.now(),

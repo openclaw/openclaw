@@ -170,4 +170,23 @@ export class ExecApprovalManager {
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
   }
+
+  /**
+   * Find a pending approval by ID prefix (slug).
+   * Returns the full ID if exactly one match is found, null otherwise.
+   * This allows users to use short slugs (e.g., 8-char) when approving.
+   */
+  findBySlug(slug: string): string | null {
+    const matches: string[] = [];
+    for (const id of this.pending.keys()) {
+      if (id.startsWith(slug)) {
+        matches.push(id);
+      }
+    }
+    // Return null if no matches or multiple matches (ambiguous)
+    if (matches.length !== 1) {
+      return null;
+    }
+    return matches[0];
+  }
 }
