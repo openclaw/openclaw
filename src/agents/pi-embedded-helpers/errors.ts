@@ -527,11 +527,19 @@ export function formatAssistantErrorText(
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
-    return transientCopy;
+    const providerModel =
+      opts?.provider && (opts?.model ?? msg.model)
+        ? ` Provider: ${opts.provider}/${opts.model ?? msg.model}.`
+        : "";
+    return `${transientCopy}${providerModel}`;
   }
 
   if (isTimeoutErrorMessage(raw)) {
-    return "LLM request timed out.";
+    const providerModel =
+      opts?.provider && (opts?.model ?? msg.model)
+        ? ` (${opts.provider}/${opts.model ?? msg.model})`
+        : "";
+    return `LLM request timed out${providerModel}. Try again or switch to a different model.`;
   }
 
   if (isBillingErrorMessage(raw)) {
@@ -591,7 +599,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
         return prefixedCopy;
       }
       if (isTimeoutErrorMessage(trimmed)) {
-        return "LLM request timed out.";
+        return "LLM request timed out. Try again or switch to a different model.";
       }
       return formatRawAssistantErrorForUi(trimmed);
     }

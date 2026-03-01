@@ -115,7 +115,7 @@ describe("formatAssistantErrorText", () => {
 
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
-    expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request timed out. Try again or switch to a different model.");
   });
 });
 
