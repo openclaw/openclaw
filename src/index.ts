@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { applyTemplate } from "./auto-reply/templating.js";
 import { monitorWebChannel } from "./channel-web.js";
+import { getPrimaryCommand } from "./cli/argv.js";
 import { createDefaultDeps } from "./cli/deps.js";
+import { buildProgram } from "./cli/program.js";
 import { promptYesNo } from "./cli/prompt.js";
+import { shouldSkipPluginCommandRegistration, rewriteUpdateFlagArgv } from "./cli/run-main.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
 import {
@@ -42,8 +45,6 @@ enableConsoleCapture();
 
 // Enforce the minimum supported runtime before doing any work.
 assertSupportedRuntime();
-
-import { buildProgram } from "./cli/program.js";
 
 const program = buildProgram();
 
@@ -86,7 +87,35 @@ if (isMain) {
     process.exit(1);
   });
 
-  void program.parseAsync(process.argv).catch((err) => {
+  const parseArgv = rewriteUpdateFlagArgv(process.argv);
+  const primary = getPrimaryCommand(parseArgv);
+
+  // Register the primary command (builtin or subcli) so help and command parsing
+  // are correct even with lazy command registration.
+  if (primary) {
+    const { getProgramContext } = await import("./cli/program/program-context.js");
+    const ctx = getProgramContext(program);
+    if (ctx) {
+      const { registerCoreCliByName } = await import("./cli/program/command-registry.js");
+      await registerCoreCliByName(program, ctx, primary, parseArgv);
+    }
+    const { registerSubCliByName } = await import("./cli/program/register.subclis.js");
+    await registerSubCliByName(program, primary);
+  }
+
+  const hasBuiltinPrimary =
+    primary !== null && program.commands.some((command) => command.name() === primary);
+  const shouldSkipPluginRegistration = shouldSkipPluginCommandRegistration({
+    argv: parseArgv,
+    primary,
+    hasBuiltinPrimary,
+  });
+  if (!shouldSkipPluginRegistration) {
+    const { registerPluginCliCommands } = await import("./plugins/cli.js");
+    registerPluginCliCommands(program, loadConfig());
+  }
+
+  void program.parseAsync(parseArgv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
     process.exit(1);
   });
