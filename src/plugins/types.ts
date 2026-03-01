@@ -280,6 +280,7 @@ export type OpenClawPluginApi = {
     handler: PluginHookHandlerMap[K],
     opts?: { priority?: number },
   ) => void;
+  resetSession?: (sessionKey: string, reason?: "new" | "reset") => Promise<unknown> | unknown;
 };
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
