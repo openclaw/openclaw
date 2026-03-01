@@ -139,17 +139,6 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  if (params.cfg.hooks?.internal?.enabled) {
-    setTimeout(() => {
-      const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
-        cfg: params.cfg,
-        deps: params.deps,
-        workspaceDir: params.defaultWorkspaceDir,
-      });
-      void triggerInternalHook(hookEvent);
-    }, 250);
-  }
-
   let pluginServices: PluginServicesHandle | null = null;
   try {
     pluginServices = await startPluginServices({
@@ -159,6 +148,17 @@ export async function startGatewaySidecars(params: {
     });
   } catch (err) {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
+  }
+
+  // Emit the gateway:startup hook event AFTER plugin services (which load hooks)
+  // have started, so that hooks like boot-md are already registered (#30257).
+  if (params.cfg.hooks?.internal?.enabled) {
+    const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+      cfg: params.cfg,
+      deps: params.deps,
+      workspaceDir: params.defaultWorkspaceDir,
+    });
+    void triggerInternalHook(hookEvent);
   }
 
   if (params.cfg.acp?.enabled) {
