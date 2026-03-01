@@ -541,6 +541,74 @@ export async function runEmbeddedPiAgent(
                   throw promptError;
                 }
 
+                // Detect context overflow via assistant error message (some providers
+                // return error as response rather than thrown exception).
+                if (
+                  !aborted &&
+                  lastAssistant?.stopReason === "error" &&
+                  lastAssistant.errorMessage &&
+                  isContextOverflowError(lastAssistant.errorMessage)
+                ) {
+                  const isCompactionFailure = isCompactionFailureError(lastAssistant.errorMessage);
+                  if (!isCompactionFailure && !overflowCompactionAttempted) {
+                    log.warn(
+                      `context overflow detected (assistant error); attempting auto-compaction for ${provider}/${modelId}`,
+                    );
+                    overflowCompactionAttempted = true;
+                    const compactResult = await compactEmbeddedPiSessionDirect({
+                      sessionId: params.sessionId,
+                      sessionKey: params.sessionKey,
+                      messageChannel: params.messageChannel,
+                      messageProvider: params.messageProvider,
+                      agentAccountId: params.agentAccountId,
+                      authProfileId: lastProfileId,
+                      sessionFile: params.sessionFile,
+                      workspaceDir: params.workspaceDir,
+                      agentDir,
+                      config: params.config,
+                      skillsSnapshot: params.skillsSnapshot,
+                      senderIsOwner: params.senderIsOwner,
+                      provider,
+                      model: modelId,
+                      thinkLevel,
+                      reasoningLevel: params.reasoningLevel,
+                      bashElevated: params.bashElevated,
+                      extraSystemPrompt: params.extraSystemPrompt,
+                      ownerNumbers: params.ownerNumbers,
+                    });
+                    if (compactResult.compacted) {
+                      log.info(
+                        `auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`,
+                      );
+                      continue;
+                    }
+                    log.warn(
+                      `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
+                    );
+                  }
+                  const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+                  return {
+                    payloads: [
+                      {
+                        text:
+                          "Context overflow: prompt too large for the model. " +
+                          "Try again with less input or a larger-context model.",
+                        isError: true,
+                      },
+                    ],
+                    meta: {
+                      durationMs: Date.now() - started,
+                      agentMeta: {
+                        sessionId: sessionIdUsed,
+                        provider,
+                        model: model.id,
+                      },
+                      systemPromptReport: attempt.systemPromptReport,
+                      error: { kind, message: lastAssistant.errorMessage },
+                    },
+                  };
+                }
+
                 const fallbackThinking = pickFallbackThinkingLevel({
                   message: lastAssistant?.errorMessage,
                   attempted: attemptedThinking,
@@ -559,6 +627,24 @@ export async function runEmbeddedPiAgent(
                 const assistantFailoverReason = classifyFailoverReason(
                   lastAssistant?.errorMessage ?? "",
                 );
+                // Detect empty response — model returned no content and no error message.
+                // This happens with openai-codex (ChatGPT OAuth) when the account runs out of
+                // credits: the API returns a "successful" empty stream instead of a billing error.
+                // Treat as a failover trigger so the fallback chain can take over.
+                const emptyResponse =
+                  !aborted &&
+                  !timedOut &&
+                  !failoverFailure &&
+                  lastAssistant != null &&
+                  !lastAssistant.errorMessage &&
+                  lastAssistant.stopReason !== "error" &&
+                  Array.isArray(lastAssistant.content) &&
+                  lastAssistant.content.every((block) => {
+                    if (!block || typeof block !== "object") return true;
+                    const b = block as { type?: unknown; text?: unknown };
+                    if (b.type !== "text") return false;
+                    return typeof b.text !== "string" || b.text.trim().length === 0;
+                  });
                 const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
                 const imageDimensionError = parseImageDimensionError(
                   lastAssistant?.errorMessage ?? "",
@@ -583,8 +669,12 @@ export async function runEmbeddedPiAgent(
                   );
                 }
 
-                // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-                const shouldRotate = (!aborted && failoverFailure) || timedOut;
+                // Treat timeout as potential rate limit (Antigravity hangs on rate limit).
+                // Also rotate on empty response when fallbacks are configured (billing/quota).
+                const shouldRotate =
+                  (!aborted && failoverFailure) ||
+                  timedOut ||
+                  (fallbackConfigured && emptyResponse);
 
                 if (shouldRotate) {
                   if (lastProfileId) {
@@ -632,7 +722,9 @@ export async function runEmbeddedPiAgent(
                           ? "LLM request rate limited."
                           : authFailure
                             ? "LLM request unauthorized."
-                            : "LLM request failed.");
+                            : emptyResponse
+                              ? "LLM returned empty response (possible billing or quota issue)."
+                              : "LLM request failed.");
                     const status =
                       resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                       (isTimeoutErrorMessage(message) ? 408 : undefined);
