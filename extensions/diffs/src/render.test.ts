@@ -24,6 +24,9 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
     expect(rendered.imageHtml).not.toContain("/plugins/diffs/assets/viewer.js");
     expect(rendered.imageHtml).toContain('data-openclaw-diffs-ready="true"');
+    expect(rendered.imageHtml).toContain("max-width: 960px;");
+    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
   });
 

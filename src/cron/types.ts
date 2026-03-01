@@ -63,6 +63,8 @@ export type CronPayload =
       message: string;
       /** Optional model override (provider/model or alias). */
       model?: string;
+      /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
+      fallbacks?: string[];
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
@@ -78,6 +80,7 @@ export type CronPayloadPatch =
       kind: "agentTurn";
       message?: string;
       model?: string;
+      fallbacks?: string[];
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
