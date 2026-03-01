@@ -43,6 +43,7 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const MIN_SEGMENT_SECONDS = 0.35;
 const SILENCE_DURATION_MS = 1_000;
+const DEFAULT_INTERRUPT_THRESHOLD_MS = 400;
 const PLAYBACK_READY_TIMEOUT_MS = 15_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
@@ -559,8 +560,34 @@ export class DiscordVoiceManager {
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
+
+    const interruptThresholdMs =
+      this.params.discordConfig.voice?.interruptThresholdMs ?? DEFAULT_INTERRUPT_THRESHOLD_MS;
     if (entry.player.state.status === AudioPlayerStatus.Playing) {
-      entry.player.stop(true);
+      if (interruptThresholdMs <= 0) {
+        // Immediate interrupt — original behaviour
+        entry.player.stop(true);
+      } else {
+        // Defer interrupt: only stop playback if the user is still speaking after threshold
+        logVoiceVerbose(
+          `interrupt deferred ${interruptThresholdMs}ms: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        setTimeout(() => {
+          if (
+            entry.activeSpeakers.has(userId) &&
+            entry.player.state.status === AudioPlayerStatus.Playing
+          ) {
+            logVoiceVerbose(
+              `interrupt confirmed: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+            );
+            entry.player.stop(true);
+          } else {
+            logVoiceVerbose(
+              `interrupt cancelled (noise/short): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+            );
+          }
+        }, interruptThresholdMs);
+      }
     }
 
     const stream = entry.connection.receiver.subscribe(userId, {

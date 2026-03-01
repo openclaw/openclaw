@@ -1,5 +1,5 @@
 import { ChannelType } from "@buape/carbon";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   createConnectionMock,
@@ -270,5 +270,91 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("interruptThresholdMs", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function makeManagerWithSpeakingHandler(discordConfig: Record<string, unknown> = {}) {
+      const connection = createConnectionMock();
+      joinVoiceChannelMock.mockReturnValueOnce(connection);
+      const manager = new managerModule.DiscordVoiceManager({
+        client: createClient() as never,
+        cfg: {},
+        discordConfig,
+        accountId: "default",
+        runtime: createRuntime(),
+      });
+      await manager.join({ guildId: "g1", channelId: "c1" });
+      const player = createAudioPlayerMock.mock.results[
+        createAudioPlayerMock.mock.results.length - 1
+      ]?.value as { stop: ReturnType<typeof vi.fn>; state: { status: string } };
+      const speakingOn = connection.receiver.speaking.on as ReturnType<typeof vi.fn>;
+      const speakingHandler = speakingOn.mock.calls[0]?.[1] as
+        | ((userId: string) => void)
+        | undefined;
+      return { manager, player, speakingHandler, connection };
+    }
+
+    it("stops playback immediately when interruptThresholdMs is 0", async () => {
+      const { player, speakingHandler } = await makeManagerWithSpeakingHandler({
+        voice: { interruptThresholdMs: 0 },
+      });
+      player.state.status = "playing";
+      speakingHandler?.("user-1");
+      expect(player.stop).toHaveBeenCalledWith(true);
+    });
+
+    it("defers stop when interruptThresholdMs > 0 and user stops quickly", async () => {
+      const { player, speakingHandler } = await makeManagerWithSpeakingHandler({
+        voice: { interruptThresholdMs: 400 },
+      });
+      player.state.status = "playing";
+      speakingHandler?.("user-1");
+      // Before threshold fires, user is no longer in activeSpeakers (stream ended quickly)
+      // activeSpeakers is cleared after the stream ends — simulate by advancing time
+      expect(player.stop).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(400);
+      // activeSpeakers would be empty (stream ended), so stop should NOT be called
+      expect(player.stop).not.toHaveBeenCalled();
+    });
+
+    it("stops playback after threshold if user is still speaking", async () => {
+      const { player, speakingHandler, connection } = await makeManagerWithSpeakingHandler({
+        voice: { interruptThresholdMs: 400 },
+      });
+      // Simulate a never-ending stream so activeSpeakers stays populated
+      const neverEndingStream = {
+        on: vi.fn(),
+        [Symbol.asyncIterator]: async function* () {
+          // never yields
+          await new Promise(() => {});
+        },
+      };
+      (connection.receiver.subscribe as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+        neverEndingStream,
+      );
+      player.state.status = "playing";
+      speakingHandler?.("user-2");
+      expect(player.stop).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(400);
+      // user-2 is still in activeSpeakers (stream never ended), so playback should stop
+      expect(player.stop).toHaveBeenCalledWith(true);
+    });
+
+    it("uses default threshold of 400ms when not configured", async () => {
+      const { player, speakingHandler } = await makeManagerWithSpeakingHandler({});
+      player.state.status = "playing";
+      speakingHandler?.("user-1");
+      expect(player.stop).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(399);
+      expect(player.stop).not.toHaveBeenCalled();
+    });
   });
 });
