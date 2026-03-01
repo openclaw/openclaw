@@ -224,6 +224,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+    expect(prompt).toContain(
+      "If a relevant tool is available, do not claim you cannot perform the action; call the tool and only ask for missing parameters.",
+    );
   });
 
   it("lists available tools when provided", () => {

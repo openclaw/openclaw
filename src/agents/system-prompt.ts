@@ -459,6 +459,7 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "If a relevant tool is available, do not claim you cannot perform the action; call the tool and only ask for missing parameters.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
