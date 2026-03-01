@@ -49,6 +49,15 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   });
 }
 
+async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await run(stateDir);
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
@@ -174,8 +183,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-mkdirp-"));
-    try {
+    await withTempDir("openclaw-fs-bridge-mkdirp-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const nestedDir = path.join(workspaceDir, "memory", "kemik");
       await fs.mkdir(nestedDir, { recursive: true });
@@ -193,14 +201,11 @@ describe("sandbox fs bridge shell compatibility", () => {
       expect(mkdirCall).toBeDefined();
       const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
       expect(mkdirPath).toBe("/workspace/memory/kemik");
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects mkdirp when target exists as a file", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-mkdirp-file-"));
-    try {
+    await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const filePath = path.join(workspaceDir, "memory", "kemik");
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -217,46 +222,43 @@ describe("sandbox fs bridge shell compatibility", () => {
         /cannot create directories/i,
       );
       expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideFile = path.join(outsideDir, "secret.txt");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(outsideFile, "classified");
-    await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+    await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "classified");
+      await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
-    const bridge = createSandboxFsBridge({
-      sandbox: createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-      }),
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
     });
-
-    await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
-    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("rejects pre-existing host hardlink escapes before docker exec", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-hardlink-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideFile = path.join(outsideDir, "secret.txt");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(outsideFile, "classified");
-    const hardlinkPath = path.join(workspaceDir, "link.txt");
-    try {
+    await withTempDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "classified");
+      const hardlinkPath = path.join(workspaceDir, "link.txt");
       try {
         await fs.link(outsideFile, hardlinkPath);
       } catch (err) {
@@ -275,9 +277,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
       await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
       expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
