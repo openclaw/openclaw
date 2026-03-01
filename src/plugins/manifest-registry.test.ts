@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning when two plugins from the same origin share an id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -73,7 +73,7 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
@@ -83,6 +83,57 @@ describe("loadPluginManifestRegistry", () => {
     ];
 
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when a globally-installed plugin supersedes the bundled copy (feishu scenario)", () => {
+    // This is the regression scenario from #30908: a user installs feishu
+    // globally (~/.openclaw/extensions/feishu/) and the bundled copy also
+    // exists in the package (extensions/feishu/). Discovery processes global
+    // before bundled, so global is seen first. The bundled copy showing up
+    // second should not produce a spurious warning.
+    const globalDir = makeTempDir();
+    const bundledDir = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(globalDir, manifest);
+    writeManifest(bundledDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: globalDir,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("suppresses duplicate warning when a config-path plugin supersedes the bundled copy", () => {
+    const configDir = makeTempDir();
+    const bundledDir = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(configDir, manifest);
+    writeManifest(bundledDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: configDir,
+        origin: "config",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

@@ -216,12 +216,20 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // Suppress the warning when the incoming candidate has strictly lower
+      // precedence than the already-registered entry. A bundled plugin being
+      // superseded by an explicitly-installed (global/workspace/config) copy
+      // is expected behavior and should not surface a confusing warning.
+      const incomingHasLowerPrecedence =
+        PLUGIN_ORIGIN_RANK[candidate.origin] > PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+      if (!incomingHasLowerPrecedence) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }
