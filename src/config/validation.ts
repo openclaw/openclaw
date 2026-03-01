@@ -2,6 +2,10 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
+  resolveNodeCommandAllowlist,
+} from "../gateway/node-command-policy.js";
+import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
@@ -78,6 +82,159 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     }
   }
   return issues;
+}
+
+function normalizeNodeCommand(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
+  // resolveNodeCommandAllowlist() subtracts denyCommands, but for "known command"
+  // suggestions we want the full baseline allowlists plus any extra allowCommands.
+  const baseCfg: OpenClawConfig = {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      nodes: {
+        ...cfg.gateway?.nodes,
+        denyCommands: [],
+      },
+    },
+  };
+
+  const out = new Set<string>(DEFAULT_DANGEROUS_NODE_COMMANDS);
+  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
+    const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
+    for (const cmd of allow) {
+      const normalized = normalizeNodeCommand(cmd);
+      if (normalized) {
+        out.add(normalized);
+      }
+    }
+  }
+  return out;
+}
+
+function looksLikeNodeCommandPattern(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (/[?*[\]{}(),|]/.test(value)) {
+    return true;
+  }
+  if (
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.startsWith("^") ||
+    value.endsWith("$")
+  ) {
+    return true;
+  }
+  return /\s/.test(value) || value.includes("group:");
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (!a) {
+    return b.length;
+  }
+  if (!b) {
+    return a.length;
+  }
+
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
+
+  for (let i = 1; i <= a.length; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const temp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = temp;
+    }
+  }
+
+  return dp[b.length];
+}
+
+function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
+  const needle = unknown.trim();
+  if (!needle) {
+    return [];
+  }
+
+  const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
+  const prefixHits = Array.from(known)
+    .filter((cmd) => cmd.startsWith(prefix))
+    .slice(0, 3);
+  if (prefixHits.length > 0) {
+    return prefixHits;
+  }
+
+  const ranked = Array.from(known)
+    .map((cmd) => ({ cmd, d: editDistance(needle, cmd) }))
+    .toSorted((a, b) => a.d - b.d || a.cmd.localeCompare(b.cmd));
+
+  const best = ranked[0]?.d ?? Infinity;
+  const threshold = Math.max(2, Math.min(4, best));
+  return ranked
+    .filter((r) => r.d <= threshold)
+    .slice(0, 3)
+    .map((r) => r.cmd);
+}
+
+function validateGatewayNodeDenyCommands(cfg: OpenClawConfig): ConfigValidationIssue[] {
+  const raw = cfg.gateway?.nodes?.denyCommands;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [];
+  }
+
+  const denyList = raw.map(normalizeNodeCommand).filter(Boolean);
+  if (denyList.length === 0) {
+    return [];
+  }
+
+  const knownCommands = listKnownNodeCommands(cfg);
+  const patternLike = denyList.filter((entry) => looksLikeNodeCommandPattern(entry));
+  const unknownExact = denyList.filter(
+    (entry) => !looksLikeNodeCommandPattern(entry) && !knownCommands.has(entry),
+  );
+
+  if (patternLike.length === 0 && unknownExact.length === 0) {
+    return [];
+  }
+
+  const detailParts: string[] = [];
+  if (patternLike.length > 0) {
+    detailParts.push(
+      `Pattern-like entries are ignored (denyCommands is exact-match only): ${patternLike.join(", ")}`,
+    );
+  }
+  if (unknownExact.length > 0) {
+    const unknownDetails = unknownExact
+      .map((entry) => {
+        const suggestions = suggestKnownNodeCommands(entry, knownCommands);
+        if (suggestions.length === 0) {
+          return entry;
+        }
+        return `${entry} (did you mean: ${suggestions.join(", ")})`;
+      })
+      .join(", ");
+    detailParts.push(`Unknown command names: ${unknownDetails}`);
+  }
+
+  return [
+    {
+      path: "gateway.nodes.denyCommands",
+      message:
+        "Some gateway.nodes.denyCommands entries may be ineffective. " +
+        "denyCommands blocks exact node command names only (e.g. system.run); it does not filter shell text. " +
+        detailParts.join(" "),
+    },
+  ];
 }
 
 /**
@@ -306,6 +463,8 @@ function validateConfigObjectWithPluginsBase(
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
     }
   }
+
+  warnings.push(...validateGatewayNodeDenyCommands(config));
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
