@@ -422,7 +422,19 @@ export const dispatchTelegramMessage = async ({
     stopDraftLane: async (lane) => {
       await lane.stream?.stop();
     },
-    editPreview: async ({ messageId, text, previewButtons }) => {
+    editPreview: async ({ laneName, messageId, text, previewButtons, context }) => {
+      // Skip no-op final edits: if the preview already shows the rendered final text
+      // and no markup mutation is needed, avoid the edit call (which can error on
+      // identical content and trigger spurious fallback resend/duplicate output).
+      if (
+        context === "final" &&
+        laneName === "answer" &&
+        !previewButtons &&
+        telegramCfg.linkPreview === undefined &&
+        renderTelegramHtmlText(text, { tableMode }) === answerLane.stream?.lastSentText?.()
+      ) {
+        return;
+      }
       await editMessageTelegram(chatId, messageId, text, {
         api: bot.api,
         cfg,

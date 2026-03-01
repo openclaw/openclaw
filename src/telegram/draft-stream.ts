@@ -9,6 +9,7 @@ export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
+  lastSentText: () => string | undefined;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
@@ -97,8 +98,6 @@ export function createTelegramDraftStream(params: {
       }
     }
 
-    lastSentText = renderedText;
-    lastSentParseMode = renderedParseMode;
     try {
       if (typeof streamMessageId === "number") {
         if (renderedParseMode) {
@@ -108,6 +107,8 @@ export function createTelegramDraftStream(params: {
         } else {
           await params.api.editMessageText(chatId, streamMessageId, renderedText);
         }
+        lastSentText = renderedText;
+        lastSentParseMode = renderedParseMode;
         return true;
       }
       const sendParams = renderedParseMode
@@ -133,6 +134,8 @@ export function createTelegramDraftStream(params: {
         return true;
       }
       streamMessageId = normalizedMessageId;
+      lastSentText = renderedText;
+      lastSentParseMode = renderedParseMode;
       return true;
     } catch (err) {
       streamState.stopped = true;
@@ -178,6 +181,7 @@ export function createTelegramDraftStream(params: {
     update,
     flush: loop.flush,
     messageId: () => streamMessageId,
+    lastSentText: () => lastSentText,
     clear,
     stop,
     forceNewMessage,
