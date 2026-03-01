@@ -17,7 +17,7 @@ async function withPresenceModule<T>(
 }
 
 describe("system-presence version fallback", () => {
-  it("uses OPENCLAW_SERVICE_VERSION when OPENCLAW_VERSION is not set", async () => {
+  it("prefers npm_package_version over OPENCLAW_SERVICE_VERSION when OPENCLAW_VERSION is not set", async () => {
     await withPresenceModule(
       {
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
@@ -25,15 +25,16 @@ describe("system-presence version fallback", () => {
       },
       ({ listSystemPresence }) => {
         const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
-        expect(selfEntry?.version).toBe("2.4.6-service");
+        expect(selfEntry?.version).toBe("1.0.0-package");
       },
     );
   });
 
-  it("prefers OPENCLAW_VERSION over OPENCLAW_SERVICE_VERSION", async () => {
+  it("prefers OPENCLAW_VERSION over OPENCLAW_BUNDLED_VERSION and OPENCLAW_SERVICE_VERSION", async () => {
     await withPresenceModule(
       {
         OPENCLAW_VERSION: "9.9.9-cli",
+        OPENCLAW_BUNDLED_VERSION: "8.8.8-bundled",
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
@@ -44,10 +45,26 @@ describe("system-presence version fallback", () => {
     );
   });
 
+  it("prefers OPENCLAW_BUNDLED_VERSION over OPENCLAW_SERVICE_VERSION when runtime version env is missing", async () => {
+    await withPresenceModule(
+      {
+        OPENCLAW_VERSION: " ",
+        OPENCLAW_BUNDLED_VERSION: "3.3.3-bundled",
+        OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+        npm_package_version: "\t",
+      },
+      ({ listSystemPresence }) => {
+        const selfEntry = listSystemPresence().find((entry) => entry.reason === "self");
+        expect(selfEntry?.version).toBe("3.3.3-bundled");
+      },
+    );
+  });
+
   it("uses npm_package_version when OPENCLAW_VERSION and OPENCLAW_SERVICE_VERSION are blank", async () => {
     await withPresenceModule(
       {
         OPENCLAW_VERSION: " ",
+        OPENCLAW_BUNDLED_VERSION: " ",
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: "1.0.0-package",
       },

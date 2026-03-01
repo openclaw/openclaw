@@ -71,6 +71,8 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   );
 }
 
+const RUNTIME_MODULE_VERSION = resolveVersionFromModuleUrl(import.meta.url) ?? undefined;
+
 export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
@@ -82,8 +84,10 @@ export function resolveRuntimeServiceVersion(
   return (
     firstNonEmpty(
       env["OPENCLAW_VERSION"],
-      env["OPENCLAW_SERVICE_VERSION"],
+      env["OPENCLAW_BUNDLED_VERSION"],
       env["npm_package_version"],
+      RUNTIME_MODULE_VERSION,
+      env["OPENCLAW_SERVICE_VERSION"],
     ) ?? fallback
   );
 }

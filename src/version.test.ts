@@ -94,42 +94,54 @@ describe("version resolution", () => {
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
   });
 
-  it("prefers OPENCLAW_VERSION over service and package versions", () => {
+  it("prefers OPENCLAW_VERSION over bundled, package, and service versions", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "9.9.9",
+        OPENCLAW_BUNDLED_VERSION: "8.8.8",
         OPENCLAW_SERVICE_VERSION: "2.2.2",
         npm_package_version: "1.1.1",
       }),
     ).toBe("9.9.9");
   });
 
-  it("uses service and package fallbacks and ignores blank env values", () => {
+  it("prefers bundled/package/runtime versions over service env and ignores blank values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
+        OPENCLAW_BUNDLED_VERSION: " ",
         OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
-    ).toBe("2.0.0");
+    ).toBe("1.0.0");
 
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: " ",
+        OPENCLAW_BUNDLED_VERSION: " 3.3.3 ",
+        OPENCLAW_SERVICE_VERSION: "\t",
+        npm_package_version: " 1.0.0-package ",
+      }),
+    ).toBe("3.3.3");
+
+    const runtimeVersion = resolveVersionFromModuleUrl(import.meta.url);
+    expect(runtimeVersion).toBeTruthy();
+    expect(
+      resolveRuntimeServiceVersion({
+        OPENCLAW_VERSION: "",
+        OPENCLAW_BUNDLED_VERSION: "",
+        OPENCLAW_SERVICE_VERSION: "2.0.0-service",
+        npm_package_version: " ",
+      }),
+    ).toBe(runtimeVersion);
+
+    expect(
+      resolveRuntimeServiceVersion({
+        OPENCLAW_VERSION: " ",
+        OPENCLAW_BUNDLED_VERSION: "\t",
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
     ).toBe("1.0.0-package");
-
-    expect(
-      resolveRuntimeServiceVersion(
-        {
-          OPENCLAW_VERSION: "",
-          OPENCLAW_SERVICE_VERSION: " ",
-          npm_package_version: "",
-        },
-        "fallback",
-      ),
-    ).toBe("fallback");
   });
 });
