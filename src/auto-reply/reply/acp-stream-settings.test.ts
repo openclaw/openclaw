@@ -54,6 +54,7 @@ describe("acp stream settings", () => {
       }),
     );
     expect(settings.deliveryMode).toBe("live");
+    expect(settings.hiddenBoundarySeparator).toBe("space");
   });
 
   it("uses default tag visibility when no override is provided", () => {

@@ -51,15 +51,15 @@ describe("createAcpReplyProjector", () => {
       });
 
       await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
-      await vi.advanceTimersByTimeAsync(60);
+      await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
       await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
-      await vi.advanceTimersByTimeAsync(60);
+      await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
       await projector.onEvent({ type: "text_delta", text: "C", tag: "agent_message_chunk" });
-      await vi.advanceTimersByTimeAsync(60);
+      await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
       expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
@@ -101,6 +101,55 @@ describe("createAcpReplyProjector", () => {
       { kind: "block", text: "b".repeat(50) },
       { kind: "block", text: "c".repeat(20) },
     ]);
+  });
+
+  it("does not flush short live fragments mid-phrase on idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Array<{ kind: string; text?: string }> = [];
+      const projector = createAcpReplyProjector({
+        cfg: createCfg({
+          acp: {
+            enabled: true,
+            stream: {
+              deliveryMode: "live",
+              coalesceIdleMs: 100,
+              maxChunkChars: 256,
+            },
+          },
+        }),
+        shouldSendToolSummaries: true,
+        deliver: async (kind, payload) => {
+          deliveries.push({ kind, text: payload.text });
+          return true;
+        },
+      });
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "Yes. Send me the term(s), and I’ll run ",
+        tag: "agent_message_chunk",
+      });
+
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(deliveries).toEqual([]);
+
+      await projector.onEvent({
+        type: "text_delta",
+        text: "`wd-cli` searches right away. ",
+        tag: "agent_message_chunk",
+      });
+      await projector.flush(false);
+
+      expect(deliveries).toEqual([
+        {
+          kind: "block",
+          text: "Yes. Send me the term(s), and I’ll run `wd-cli` searches right away. ",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
@@ -649,7 +698,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]?.text).toContain("Tool Call");
   });
 
-  it("inserts a paragraph boundary before visible text after hidden tool updates by default", async () => {
+  it("inserts a space boundary before visible text after hidden tool updates by default", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -685,7 +734,7 @@ describe("createAcpReplyProjector", () => {
       .filter((entry) => entry.kind === "block")
       .map((entry) => entry.text ?? "")
       .join("");
-    expect(combinedText).toBe("fallback.\n\nI don't");
+    expect(combinedText).toBe("fallback. I don't");
   });
 
   it("supports hiddenBoundarySeparator=space", async () => {
