@@ -177,6 +177,20 @@ describe("buildModelsKeyboard", () => {
     }
   });
 
+  it("falls back to provider-matching default model when current model points to another provider", () => {
+    const result = buildModelsKeyboard({
+      provider: "google",
+      models: ["gemini-3-flash-preview", "gemini-2.5-pro"],
+      currentModel: "anthropic/claude-sonnet-4",
+      defaultModel: "google/gemini-3-flash-preview",
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    expect(result[0]?.[0]?.text).toBe("gemini-3-flash-preview ✓");
+    expect(result[1]?.[0]?.text).toBe("gemini-2.5-pro");
+  });
+
   it("keeps short display IDs untouched and truncates overly long IDs", () => {
     const cases = [
       {

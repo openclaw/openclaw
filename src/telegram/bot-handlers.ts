@@ -1201,6 +1201,7 @@ export const registerTelegramHandlers = ({
             provider,
             models,
             currentModel,
+            defaultModel: `${modelData.resolvedDefault.provider}/${modelData.resolvedDefault.model}`,
             currentPage: safePage,
             totalPages,
             pageSize,
