@@ -156,6 +156,12 @@ export function resolveFailureDestination(
   }
 
   const resolvedMode = mode ?? "announce";
+
+  // Webhook mode requires a URL
+  if (resolvedMode === "webhook" && !to) {
+    return null;
+  }
+
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
     channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
