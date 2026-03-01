@@ -111,8 +111,10 @@ describe("listSessionFilesForAgent", () => {
       "abc.jsonl",
       "abc.jsonl.reset.2026-02-16T22-26-33.000Z",
       "abc.jsonl.deleted.2026-02-16T22-26-33.000Z",
+      "abc.jsonl.bak.2026-02-16T22-26-33.000Z",
       "abc.jsonl.lock",
       "sessions.json",
+      "sessions.json.bak.123456",
       "notes.txt",
     ];
     for (const f of files) {
@@ -125,8 +127,10 @@ describe("listSessionFilesForAgent", () => {
     expect(names).toContain("abc.jsonl");
     expect(names).toContain("abc.jsonl.reset.2026-02-16T22-26-33.000Z");
     expect(names).toContain("abc.jsonl.deleted.2026-02-16T22-26-33.000Z");
+    expect(names).toContain("abc.jsonl.bak.2026-02-16T22-26-33.000Z");
     expect(names).not.toContain("abc.jsonl.lock");
     expect(names).not.toContain("sessions.json");
+    expect(names).not.toContain("sessions.json.bak.123456");
     expect(names).not.toContain("notes.txt");
   });
 });

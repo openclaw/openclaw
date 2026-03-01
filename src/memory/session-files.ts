@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  isSessionArchiveArtifactName,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,6 +19,13 @@ export type SessionFileEntry = {
   lineMap: number[];
 };
 
+/** Matches JSONL transcript archives only (e.g. foo.jsonl.reset.*, foo.jsonl.deleted.*). */
+const JSONL_ARCHIVE_RE = /\.jsonl\.(reset|deleted|bak)\.\d{4}-\d{2}-\d{2}T/;
+
+function isJsonlArchiveTranscript(name: string): boolean {
+  return JSONL_ARCHIVE_RE.test(name);
+}
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -29,9 +33,7 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter(
-        (name) => isPrimarySessionTranscriptFileName(name) || isSessionArchiveArtifactName(name),
-      )
+      .filter((name) => isPrimarySessionTranscriptFileName(name) || isJsonlArchiveTranscript(name))
       .map((name) => path.join(dir, name));
   } catch {
     return [];
