@@ -138,4 +138,25 @@ describe("resolveProviderAuthOverview — Bedrock AWS SDK auth", () => {
       }
     }
   });
+
+  it("does not show AWS SDK auth when Bedrock provider has auth override", () => {
+    const original = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    process.env.AWS_BEARER_TOKEN_BEDROCK = "test-token-value";
+    try {
+      const overview = resolveProviderAuthOverview({
+        provider: "amazon-bedrock",
+        cfg: { models: { providers: { "amazon-bedrock": { auth: "api-key" } } } },
+        store: { version: 1, profiles: {} } as never,
+        modelsPath: "/tmp/models.json",
+      });
+      expect(overview.effective.kind).toBe("missing");
+      expect(overview.env).toBeUndefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+      } else {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = original;
+      }
+    }
+  });
 });
