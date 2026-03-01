@@ -10,6 +10,12 @@ const AgentCtor = vi.hoisted(() =>
     this.options = options;
   }),
 );
+const EnvProxyAgentCtor = vi.hoisted(() =>
+  vi.fn(function MockEnvProxyAgent(this: { options?: unknown }, options?: unknown) {
+    this.options = options;
+  }),
+);
+const undiciFetch = vi.hoisted(() => vi.fn(async () => ({}) as Response));
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -29,6 +35,8 @@ vi.mock("node:dns", async () => {
 
 vi.mock("undici", () => ({
   Agent: AgentCtor,
+  EnvHttpProxyAgent: EnvProxyAgentCtor,
+  fetch: undiciFetch,
   setGlobalDispatcher,
 }));
 
@@ -186,5 +194,27 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+  });
+
+  it("uses EnvHttpProxyAgent-based fetch when HTTP_PROXY is configured and no explicit proxy fetch", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    // Ensure we don't rely on global fetch path when env proxy is set.
+    delete (globalThis as { fetch?: typeof fetch }).fetch;
+
+    const resolved = resolveTelegramFetch();
+    expect(resolved).toBeTypeOf("function");
+
+    if (!resolved) {
+      throw new Error("expected resolved env proxy fetch");
+    }
+
+    await resolved("https://api.telegram.org/bot123/getMe");
+
+    expect(EnvProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    const call = undiciFetch.mock.calls[0] as unknown[];
+    expect(call[0]).toBe("https://api.telegram.org/bot123/getMe");
+    const init = call[1] as { dispatcher?: unknown } | undefined;
+    expect(init?.dispatcher).toBeInstanceOf(EnvProxyAgentCtor);
   });
 });

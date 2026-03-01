@@ -1,6 +1,6 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,10 +9,46 @@ import {
   resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
 
+const ENV_PROXY_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
+let envProxyFetch: typeof fetch | null = null;
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
+
+function hasEnvProxyConfigured(): boolean {
+  for (const key of ENV_PROXY_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveEnvProxyFetch(): typeof fetch | undefined {
+  if (!hasEnvProxyConfigured()) {
+    return undefined;
+  }
+  if (!envProxyFetch) {
+    const agent = new EnvHttpProxyAgent();
+    const fetcher = ((input: RequestInfo | URL, init?: RequestInit) =>
+      undiciFetch(input as string | URL, {
+        ...(init as Record<string, unknown>),
+        dispatcher: agent,
+      }) as unknown as Promise<Response>) as typeof fetch;
+    envProxyFetch = fetcher;
+  }
+  return envProxyFetch;
+}
 
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
@@ -84,8 +120,9 @@ export function resolveTelegramFetch(
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
   applyTelegramNetworkWorkarounds(options?.network);
-  if (proxyFetch) {
-    return resolveFetch(proxyFetch);
+  const baseFetch = proxyFetch ?? resolveEnvProxyFetch();
+  if (baseFetch) {
+    return resolveFetch(baseFetch);
   }
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
@@ -95,6 +132,7 @@ export function resolveTelegramFetch(
 }
 
 export function resetTelegramFetchStateForTests(): void {
+  envProxyFetch = null;
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
