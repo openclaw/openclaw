@@ -43,6 +43,17 @@ describe("stream-wrapper integration", () => {
       expect(filterText(text, ctx)).toBe(text);
     });
 
+    it("does not replace high-entropy or bare-password heuristic matches in stream filter", () => {
+      const ctx = createPrivacyFilterContext("test-session");
+      // mkdtemp-style path with random suffix — should NOT be replaced.
+      const text =
+        'Call the read tool on "/tmp/openclaw-gw-mock-home-5OPWk6/openclaw/' +
+        '.openclaw-tool-probe.7f283e86-a8ff-45fa-80d5-d0326264b8dd.txt"';
+      const filtered = filterText(text, ctx);
+      expect(filtered).toContain("7f283e86-a8ff-45fa-80d5-d0326264b8dd");
+      expect(filtered).not.toContain("pf_ent_");
+    });
+
     it("handles empty text", () => {
       const ctx = createPrivacyFilterContext("test-session");
       expect(filterText("", ctx)).toBe("");

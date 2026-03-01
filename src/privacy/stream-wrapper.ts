@@ -14,8 +14,16 @@ import type {
 import { PrivacyDetector } from "./detector.js";
 import { PrivacyMappingStore } from "./mapping-store.js";
 import { PrivacyReplacer } from "./replacer.js";
-import type { PrivacyConfig } from "./types.js";
+import type { DetectionMatch, PrivacyConfig } from "./types.js";
 import { DEFAULT_PRIVACY_CONFIG } from "./types.js";
+
+/**
+ * Heuristic-only detector types that are too prone to false positives for
+ * LLM stream filtering (where a false positive corrupts actual data).
+ * These are still active in log/tool-display redaction where false positives
+ * are cosmetic-only.
+ */
+const STREAM_FILTER_SKIP_TYPES = new Set(["bare_password", "high_entropy_string"]);
 
 export interface PrivacyFilterContext {
   sessionId: string;
@@ -78,7 +86,15 @@ export function filterText(text: string, ctx: PrivacyFilterContext): string {
     return text;
   }
 
-  const { replaced, newMappings } = ctx.replacer.replaceAll(text, result.matches);
+  // Skip heuristic-only detectors that are too noisy for LLM stream filtering.
+  const safeMatches = result.matches.filter(
+    (m: DetectionMatch) => !STREAM_FILTER_SKIP_TYPES.has(m.type),
+  );
+  if (safeMatches.length === 0) {
+    return text;
+  }
+
+  const { replaced, newMappings } = ctx.replacer.replaceAll(text, safeMatches);
 
   // Persist new mappings.
   if (newMappings.length > 0) {
