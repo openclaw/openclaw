@@ -251,7 +251,7 @@ actor GatewayWizardClient {
         let clientMode = "ui"
         let role = "operator"
         // Explicit scopes; gateway no longer defaults empty scopes to admin.
-        let scopes: [String] = ["operator.admin", "operator.approvals", "operator.pairing"]
+        let scopes = defaultOperatorConnectScopes
         let client: [String: ProtoAnyCodable] = [
             "id": ProtoAnyCodable(clientId),
             "displayName": ProtoAnyCodable(Host.current().localizedName ?? "OpenClaw macOS Wizard CLI"),
@@ -280,33 +280,27 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let scopesValue = scopes.joined(separator: ",")
-        var payloadParts = [
-            connectNonce == nil ? "v1" : "v2",
-            identity.deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            self.token ?? "",
-        ]
-        if let connectNonce {
-            payloadParts.append(connectNonce)
-        }
-        let payload = payloadParts.joined(separator: "|")
+        let payload = GatewayDeviceAuthPayload.buildV3(
+            deviceId: identity.deviceId,
+            clientId: clientId,
+            clientMode: clientMode,
+            role: role,
+            scopes: scopes,
+            signedAtMs: signedAtMs,
+            token: self.token,
+            nonce: connectNonce,
+            platform: platform,
+            deviceFamily: "Mac")
         if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
            let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
         {
-            var device: [String: ProtoAnyCodable] = [
+            let device: [String: ProtoAnyCodable] = [
                 "id": ProtoAnyCodable(identity.deviceId),
                 "publicKey": ProtoAnyCodable(publicKey),
                 "signature": ProtoAnyCodable(signature),
                 "signedAt": ProtoAnyCodable(signedAtMs),
+                "nonce": ProtoAnyCodable(connectNonce),
             ]
-            if let connectNonce {
-                device["nonce"] = ProtoAnyCodable(connectNonce)
-            }
             params["device"] = ProtoAnyCodable(device)
         }
 
@@ -333,29 +327,24 @@ actor GatewayWizardClient {
         }
     }
 
-    private func waitForConnectChallenge() async throws -> String? {
-        guard let task = self.task else { return nil }
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: self.connectChallengeTimeoutSeconds,
-                onTimeout: { ConnectChallengeError.timeout },
-                operation: {
-                    while true {
-                        let message = try await task.receive()
-                        let frame = try await self.decodeFrame(message)
-                        if case let .event(evt) = frame, evt.event == "connect.challenge" {
-                            if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                               let nonce = payload["nonce"]?.value as? String
-                            {
-                                return nonce
-                            }
-                        }
+    private func waitForConnectChallenge() async throws -> String {
+        guard let task = self.task else { throw ConnectChallengeError.timeout }
+        return try await AsyncTimeout.withTimeout(
+            seconds: self.connectChallengeTimeoutSeconds,
+            onTimeout: { ConnectChallengeError.timeout },
+            operation: {
+                while true {
+                    let message = try await task.receive()
+                    let frame = try await self.decodeFrame(message)
+                    if case let .event(evt) = frame, evt.event == "connect.challenge",
+                       let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                       let nonce = payload["nonce"]?.value as? String,
+                       nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    {
+                        return nonce
                     }
-                })
-        } catch {
-            if error is ConnectChallengeError { return nil }
-            throw error
-        }
+                }
+            })
     }
 }
 

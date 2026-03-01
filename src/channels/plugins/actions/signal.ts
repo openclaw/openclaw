@@ -38,6 +38,34 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
   return { recipient: normalizeSignalReactionRecipient(withoutSignal) };
 }
 
+async function mutateSignalReaction(params: {
+  accountId?: string;
+  target: { recipient?: string; groupId?: string };
+  timestamp: number;
+  emoji: string;
+  remove?: boolean;
+  targetAuthor?: string;
+  targetAuthorUuid?: string;
+}) {
+  const options = {
+    accountId: params.accountId,
+    groupId: params.target.groupId,
+    targetAuthor: params.targetAuthor,
+    targetAuthorUuid: params.targetAuthorUuid,
+  };
+  if (params.remove) {
+    await removeReactionSignal(
+      params.target.recipient ?? "",
+      params.timestamp,
+      params.emoji,
+      options,
+    );
+    return jsonResult({ ok: true, removed: params.emoji });
+  }
+  await sendReactionSignal(params.target.recipient ?? "", params.timestamp, params.emoji, options);
+  return jsonResult({ ok: true, added: params.emoji });
+}
+
 export const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const accounts = listEnabledSignalAccounts(cfg);
@@ -120,25 +148,29 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         if (!emoji) {
           throw new Error("Emoji required to remove reaction.");
         }
-        await removeReactionSignal(target.recipient ?? "", timestamp, emoji, {
+        return await mutateSignalReaction({
           accountId: accountId ?? undefined,
-          groupId: target.groupId,
+          target,
+          timestamp,
+          emoji,
+          remove: true,
           targetAuthor,
           targetAuthorUuid,
         });
-        return jsonResult({ ok: true, removed: emoji });
       }
 
       if (!emoji) {
         throw new Error("Emoji required to add reaction.");
       }
-      await sendReactionSignal(target.recipient ?? "", timestamp, emoji, {
+      return await mutateSignalReaction({
         accountId: accountId ?? undefined,
-        groupId: target.groupId,
+        target,
+        timestamp,
+        emoji,
+        remove: false,
         targetAuthor,
         targetAuthorUuid,
       });
-      return jsonResult({ ok: true, added: emoji });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

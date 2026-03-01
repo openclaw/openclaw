@@ -244,6 +244,14 @@ actor VoicePushToTalk {
         }
         guard let audioEngine = self.audioEngine else { return }
 
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            throw NSError(
+                domain: "VoicePushToTalk",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
+
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         if self.tapInstalled {

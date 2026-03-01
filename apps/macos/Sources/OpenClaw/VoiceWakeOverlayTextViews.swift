@@ -185,6 +185,11 @@ private final class TranscriptNSTextView: NSTextView {
             self.onEscape?()
             return
         }
+        // Keep IME candidate confirmation behavior: Return should commit marked text first.
+        if isReturn, self.hasMarkedText() {
+            super.keyDown(with: event)
+            return
+        }
         if isReturn, event.modifierFlags.contains(.command) {
             self.onSend?()
             return

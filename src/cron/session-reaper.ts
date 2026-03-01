@@ -6,9 +6,14 @@
  * run records. The base session (`...:cron:<jobId>`) is kept as-is.
  */
 
+import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { updateSessionStore } from "../config/sessions.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import type { CronConfig } from "../config/types.cron.js";
+import {
+  archiveSessionTranscripts,
+  cleanupArchivedSessionTranscripts,
+} from "../gateway/session-utils.fs.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
@@ -74,6 +79,7 @@ export async function sweepCronRunSessions(params: {
   }
 
   let pruned = 0;
+  const prunedSessions = new Map<string, string | undefined>();
   try {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
@@ -87,6 +93,9 @@ export async function sweepCronRunSessions(params: {
         }
         const updatedAt = entry.updatedAt ?? 0;
         if (updatedAt < cutoff) {
+          if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
+            prunedSessions.set(entry.sessionId, entry.sessionFile);
+          }
           delete store[key];
           pruned++;
         }
@@ -98,6 +107,43 @@ export async function sweepCronRunSessions(params: {
   }
 
   lastSweepAtMsByStore.set(storePath, now);
+
+  if (prunedSessions.size > 0) {
+    try {
+      const store = loadSessionStore(storePath, { skipCache: true });
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const archivedDirs = new Set<string>();
+      for (const [sessionId, sessionFile] of prunedSessions) {
+        if (referencedSessionIds.has(sessionId)) {
+          continue;
+        }
+        const archived = archiveSessionTranscripts({
+          sessionId,
+          storePath,
+          sessionFile,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
+        for (const archivedPath of archived) {
+          archivedDirs.add(path.dirname(archivedPath));
+        }
+      }
+      if (archivedDirs.size > 0) {
+        await cleanupArchivedSessionTranscripts({
+          directories: [...archivedDirs],
+          olderThanMs: retentionMs,
+          reason: "deleted",
+          nowMs: now,
+        });
+      }
+    } catch (err) {
+      params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
+    }
+  }
 
   if (pruned > 0) {
     params.log.info(

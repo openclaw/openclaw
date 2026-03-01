@@ -7,6 +7,8 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  ResetScope,
+  SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { onboardCommand } from "../../commands/onboard.js";
@@ -54,7 +56,11 @@ export function registerOnboardCommand(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
-    .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running wizard (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
     .option(
       "--accept-risk",
@@ -74,6 +80,10 @@ export function registerOnboardCommand(program: Command) {
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--secret-input-mode <mode>",
+      "API key persistence mode: plaintext|ref (default: plaintext)",
+    )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
@@ -129,9 +139,12 @@ export function registerOnboardCommand(program: Command) {
           token: opts.token as string | undefined,
           tokenProfileId: opts.tokenProfileId as string | undefined,
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
+          mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
+          kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
@@ -150,6 +163,8 @@ export function registerOnboardCommand(program: Command) {
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
+          volcengineApiKey: opts.volcengineApiKey as string | undefined,
+          byteplusApiKey: opts.byteplusApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
@@ -168,6 +183,7 @@ export function registerOnboardCommand(program: Command) {
           tailscale: opts.tailscale as TailscaleMode | undefined,
           tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
           reset: Boolean(opts.reset),
+          resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,
           daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
           skipChannels: Boolean(opts.skipChannels),

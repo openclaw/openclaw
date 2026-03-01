@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  isResolvedSessionVisibleToRequester,
   looksLikeSessionId,
   looksLikeSessionKey,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  shouldVerifyRequesterSpawnedSessionVisibility,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 
@@ -73,5 +75,61 @@ describe("session reference shape detection", () => {
     expect(shouldResolveSessionIdInput("agent:main:main")).toBe(false);
     expect(shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
     expect(shouldResolveSessionIdInput("random-slug")).toBe(true);
+  });
+});
+
+describe("resolved session visibility checks", () => {
+  it("requires spawned-session verification only for sandboxed key-based cross-session access", () => {
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:worker",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:worker",
+        restrictToSpawned: false,
+        resolvedViaSessionId: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:worker",
+        restrictToSpawned: true,
+        resolvedViaSessionId: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldVerifyRequesterSpawnedSessionVisibility({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:main",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true immediately when spawned-session verification is not required", async () => {
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:main",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:other",
+        restrictToSpawned: false,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
   });
 });

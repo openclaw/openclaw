@@ -33,6 +33,28 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
 /**
+ * Process-level cache for skill snapshots to avoid redundant scans on every turn.
+ * Items expire after a short duration (e.g. 5s) to allow for skill development.
+ */
+const skillSnapshotCache = new Map<string, { snapshot: SkillSnapshot; expiresAt: number }>();
+const SKILL_SNAPSHOT_CACHE_MS = 5000;
+
+function getCachedSkillSnapshot(key: string): SkillSnapshot | null {
+  const cached = skillSnapshotCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.snapshot;
+  }
+  return null;
+}
+
+function setCachedSkillSnapshot(key: string, snapshot: SkillSnapshot) {
+  skillSnapshotCache.set(key, {
+    snapshot,
+    expiresAt: Date.now() + SKILL_SNAPSHOT_CACHE_MS,
+  });
+}
+
+/**
  * Replace the user's home directory prefix with `~` in skill file paths
  * to reduce system prompt token usage. Models understand `~` expansion,
  * and the read tool resolves `~` to the home directory.
@@ -445,47 +467,24 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
 
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-    snapshotVersion?: number;
-  },
+  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-    opts?.eligibility,
-  );
-  const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
-  );
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
-    skills: resolvedSkills,
-    config: opts?.config,
+  const cacheKey = JSON.stringify({
+    workspaceDir,
+    skillFilter: opts?.skillFilter,
+    eligibility: opts?.eligibility,
   });
+  const cached = getCachedSkillSnapshot(cacheKey);
+  if (cached) {
+    return {
+      ...cached,
+      version: opts?.snapshotVersion ?? cached.version,
+    };
+  }
 
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
-    : "";
-
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
-  return {
+  const snapshot: SkillSnapshot = {
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
@@ -496,20 +495,36 @@ export function buildWorkspaceSkillSnapshot(
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
+
+  setCachedSkillSnapshot(cacheKey, snapshot);
+  return snapshot;
 }
 
 export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-  },
+  opts?: WorkspaceSkillBuildOptions,
 ): string {
+  return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
+}
+
+type WorkspaceSkillBuildOptions = {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  entries?: SkillEntry[];
+  /** If provided, only include skills with these names */
+  skillFilter?: string[];
+  eligibility?: SkillEligibilityContext;
+};
+
+function resolveWorkspaceSkillPromptState(
+  workspaceDir: string,
+  opts?: WorkspaceSkillBuildOptions,
+): {
+  eligible: SkillEntry[];
+  prompt: string;
+  resolvedSkills: Skill[];
+} {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
@@ -529,9 +544,14 @@ export function buildWorkspaceSkillsPrompt(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  return [remoteNote, truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+  ]
     .filter(Boolean)
     .join("\n");
+  return { eligible, prompt, resolvedSkills };
 }
 
 export function resolveSkillsPromptForRun(params: {
@@ -640,14 +660,12 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(
-          `[skills] Failed to resolve safe destination for ${entry.skill.name}: ${message}`,
-        );
+        skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
         continue;
       }
       if (!dest) {
-        console.warn(
-          `[skills] Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
+        skillsLogger.warn(
+          `Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
         );
         continue;
       }
@@ -658,7 +676,7 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(`[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
   });

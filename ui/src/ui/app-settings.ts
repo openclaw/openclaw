@@ -9,10 +9,15 @@ import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import type { OpenClawApp } from "./app.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import {
+  loadCronJobs,
+  loadCronModelSuggestions,
+  loadCronRuns,
+  loadCronStatus,
+} from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
@@ -199,6 +204,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "agents") {
     await loadAgents(host as unknown as OpenClawApp);
+    await loadToolsCatalog(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
@@ -421,9 +427,18 @@ export async function loadChannelsTab(host: SettingsHost) {
 }
 
 export async function loadCron(host: SettingsHost) {
+  const cronHost = host as unknown as OpenClawApp;
   await Promise.all([
     loadChannels(host as unknown as OpenClawApp, false),
-    loadCronStatus(host as unknown as OpenClawApp),
-    loadCronJobs(host as unknown as OpenClawApp),
+    loadCronStatus(cronHost),
+    loadCronJobs(cronHost),
+    loadCronModelSuggestions(cronHost),
   ]);
+  if (cronHost.cronRunsScope === "all") {
+    await loadCronRuns(cronHost, null);
+    return;
+  }
+  if (cronHost.cronRunsJobId) {
+    await loadCronRuns(cronHost, cronHost.cronRunsJobId);
+  }
 }

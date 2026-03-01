@@ -1,19 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
   estimateTokens,
   SessionManager,
-  SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -25,7 +24,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveAgentNarrativeDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -34,12 +33,13 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
   ensureSessionHeader,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
-import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
+import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -79,6 +79,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
@@ -132,7 +133,7 @@ type CompactionMessageMetrics = {
 };
 
 function createCompactionDiagId(): string {
-  return `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -389,6 +390,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const allowedToolNames = collectAllowedToolNames({ tools });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -484,17 +486,15 @@ export async function compactEmbeddedPiSessionDirect(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
-      ownerDisplay: params.config?.commands?.ownerDisplay,
-      ownerDisplaySecret:
-        params.config?.commands?.ownerDisplaySecret ??
-        params.config?.gateway?.auth?.token ??
-        params.config?.gateway?.remote?.token,
+      ownerDisplay: ownerDisplay.ownerDisplay,
+      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
@@ -503,6 +503,7 @@ export async function compactEmbeddedPiSessionDirect(
       docsPath: docsPath ?? undefined,
       ttsHint,
       promptMode,
+      acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       reactionGuidance,
       messageToolHints,
@@ -538,11 +539,12 @@ export async function compactEmbeddedPiSessionDirect(
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
-      const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      applyPiCompactionSettingsFromConfig({
-        settingsManager,
+      const settingsManager = createPreparedEmbeddedPiSettingsManager({
+        cwd: effectiveWorkspace,
+        agentDir,
         cfg: params.config,
       });
       // Sets compaction/pruning runtime state and returns extension factories
@@ -593,6 +595,7 @@ export async function compactEmbeddedPiSessionDirect(
           modelApi: model.api,
           modelId,
           provider,
+          allowedToolNames,
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
@@ -618,145 +621,6 @@ export async function compactEmbeddedPiSessionDirect(
           : truncated;
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
-        }
-
-        // [MIND] Consolidate memory before compaction
-        type MindMemoryConfig = {
-          enabled?: boolean;
-          config?: {
-            debug?: boolean;
-            graphiti?: {
-              baseUrl?: string;
-              model?: string;
-              thinking?: string;
-            };
-            narrative?: {
-              enabled?: boolean;
-              autoBootstrapHistory?: boolean;
-              model?: string;
-              thinking?: string;
-            };
-          };
-        };
-        const mindConfig = params.config?.plugins?.entries?.["mind-memory"] as
-          | MindMemoryConfig
-          | undefined;
-        const mindDebug = !!mindConfig?.config?.debug;
-        const isMindEnabled =
-          mindConfig?.enabled && (mindConfig?.config?.narrative?.enabled ?? true);
-
-        if (isMindEnabled) {
-          try {
-            const { createSubconsciousAgent } = await import("./subconscious-agent.js");
-
-            // Resolve narrative model from config or fallback to chat model
-            let narrativeLLM = model;
-            const narrativeModelStr = mindConfig?.config?.narrative?.model;
-            if (narrativeModelStr) {
-              const [nProvider, nModel] = narrativeModelStr.includes("/")
-                ? narrativeModelStr.split("/")
-                : [provider, narrativeModelStr];
-              const { resolveModel } = await import("./model.js");
-              const { resolveOpenClawAgentDir } = await import("../agent-paths.js");
-              const resolved = resolveModel(
-                nProvider ?? provider,
-                nModel ?? modelId,
-                resolveOpenClawAgentDir(),
-                params.config,
-              );
-              if (resolved.model) {
-                narrativeLLM = resolved.model;
-                if (mindDebug) {
-                  process.stderr.write(
-                    `🎨 [MIND] Compact uses narrative model: ${nProvider}/${nModel}\n`,
-                  );
-                }
-              } else if (mindDebug) {
-                process.stderr.write(
-                  `⚠️ [MIND] Could not resolve narrative model for compact: ${resolved.error}. Using chat model.\n`,
-                );
-              }
-            }
-
-            const subconsciousAgent = createSubconsciousAgent({
-              model: narrativeLLM,
-              authStorage,
-              modelRegistry,
-              debug: mindDebug,
-              autoBootstrapHistory: mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
-              reasoning: (mindConfig?.config?.narrative?.thinking ??
-                "low") as import("@mariozechner/pi-ai").ThinkingLevel,
-            });
-            const { GraphService } = await import("../../services/memory/GraphService.js");
-            const { ConsolidationService } =
-              await import("../../services/memory/ConsolidationService.js");
-
-            const gUrl = mindConfig?.config?.graphiti?.baseUrl || "http://localhost:8001";
-            const gs = new GraphService(gUrl, mindDebug);
-            const cons = new ConsolidationService(gs, mindDebug);
-            const narrativeDir = resolveAgentNarrativeDir(params.config ?? {}, sessionAgentId);
-            await fs.mkdir(narrativeDir, { recursive: true });
-            const storyPath = path.join(narrativeDir, "STORY.md");
-            const quickPath = path.join(narrativeDir, "QUICK.md");
-
-            const { resolveContextWindowInfo } = await import("../context-window-guard.js");
-            const ctxInfo = resolveContextWindowInfo({
-              cfg: params.config,
-              provider,
-              modelId,
-              modelContextWindow: model.contextWindow,
-              defaultTokens: 50000,
-            });
-            const safeTokenLimit = Math.floor((ctxInfo.tokens || 50000) * 0.5);
-
-            if (mindDebug) {
-              process.stderr.write(
-                `📖 [MIND] Syncing ${session.messages.length} messages to ${storyPath} (limit: ${safeTokenLimit})\n`,
-              );
-            }
-            const { retryAsync } = await import("../../infra/retry.js");
-            await retryAsync(
-              () =>
-                cons.syncStoryWithSession(
-                  session.messages,
-                  storyPath,
-                  subconsciousAgent,
-                  undefined,
-                  safeTokenLimit,
-                ),
-              {
-                attempts: 2,
-                minDelayMs: 1000,
-                maxDelayMs: 10_000,
-                jitter: 0.2,
-                label: "pre-compaction-story-sync",
-                onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
-                  process.stderr.write(
-                    `⚠️ [MIND] Pre-compaction story sync retry ${attempt}/${maxAttempts}: ${(err as Error).message}. Next in ${delayMs}ms...\n`,
-                  );
-                },
-              },
-            );
-            if (mindDebug) {
-              process.stderr.write(`📖 [MIND] Story sync completed\n`);
-            }
-
-            // Fire-and-forget: regenerate QUICK.md from updated story
-            void cons
-              .generateQuickProfile(storyPath, quickPath, effectiveWorkspace, subconsciousAgent)
-              .catch((e: unknown) => {
-                if (mindDebug) {
-                  process.stderr.write(
-                    `⚠️ [MIND] QUICK.md regen after compaction failed: ${e instanceof Error ? e.message : String(e)}\n`,
-                  );
-                }
-              });
-          } catch (e: unknown) {
-            const message = e instanceof Error ? e.message : String(e);
-            process.stderr.write(
-              `❌ [MIND] Mind consolidation failed during compaction: ${message}\n`,
-            );
-          }
         }
 
         // Run before_compaction hooks (fire-and-forget).

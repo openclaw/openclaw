@@ -238,11 +238,12 @@ function resolveModelOverridePolicy(
       allowSeed: false,
     };
   }
-  const allow = (value?: boolean) => value ?? true;
+  const allow = (value: boolean | undefined, defaultValue = true) => value ?? defaultValue;
   return {
     enabled: true,
     allowText: allow(overrides?.allowText),
-    allowProvider: allow(overrides?.allowProvider),
+    // Provider switching is higher-impact than voice/style tweaks; keep opt-in.
+    allowProvider: allow(overrides?.allowProvider, false),
     allowVoice: allow(overrides?.allowVoice),
     allowModelId: allow(overrides?.allowModelId),
     allowVoiceSettings: allow(overrides?.allowVoiceSettings),
@@ -479,8 +480,11 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
+/** Channels that require opus audio and support voice-bubble playback */
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId === "telegram") {
+  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
   }
   return DEFAULT_OUTPUT;
@@ -910,7 +914,8 @@ export async function maybeApplyTtsToPayload(params: {
     };
 
     const channelId = resolveChannelId(params.channel);
-    const shouldVoice = channelId === "telegram" && result.voiceCompatible === true;
+    const shouldVoice =
+      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,

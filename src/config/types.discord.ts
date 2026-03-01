@@ -13,7 +13,7 @@ import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "partial" | "block" | "off";
+export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -107,6 +107,10 @@ export type DiscordVoiceConfig = {
   enabled?: boolean;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -142,6 +146,35 @@ export type DiscordUiConfig = {
   components?: DiscordUiComponentsConfig;
 };
 
+export type DiscordThreadBindingsConfig = {
+  /**
+   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
+   * when set.
+   */
+  enabled?: boolean;
+  /**
+   * Inactivity window for thread-bound sessions in hours.
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   */
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions in hours.
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
+   * threads for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
+};
+
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
@@ -166,6 +199,11 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
+  /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
    * - "disabled": block all guild channel messages
@@ -179,14 +217,20 @@ export type DiscordAccountConfig = {
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**
-   * Live preview streaming mode (edit-based, like Telegram).
-   * - "partial": send a message and continuously edit it with new content as tokens arrive.
-   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
-   * - "off": no preview streaming (default).
-   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   * Live stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in chunked preview updates
+   * - "progress": alias that maps to "partial" on Discord
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streamMode?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  streaming?: DiscordStreamMode | boolean;
+  /**
+   * @deprecated Legacy key; migrated automatically to `streaming`.
+   */
+  streamMode?: "partial" | "block" | "off";
+  /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
@@ -233,6 +277,8 @@ export type DiscordAccountConfig = {
   ui?: DiscordUiConfig;
   /** Slash command configuration. */
   slashCommand?: DiscordSlashCommandConfig;
+  /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+  threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
   /** Voice channel conversation settings. */

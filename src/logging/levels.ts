@@ -10,9 +10,16 @@ export const ALLOWED_LOG_LEVELS = [
 
 export type LogLevel = (typeof ALLOWED_LOG_LEVELS)[number];
 
+export function tryParseLogLevel(level?: string): LogLevel | undefined {
+  if (typeof level !== "string") {
+    return undefined;
+  }
+  const candidate = level.trim();
+  return ALLOWED_LOG_LEVELS.includes(candidate as LogLevel) ? (candidate as LogLevel) : undefined;
+}
+
 export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
-  const candidate = (level ?? fallback).trim();
-  return ALLOWED_LOG_LEVELS.includes(candidate as LogLevel) ? (candidate as LogLevel) : fallback;
+  return tryParseLogLevel(level) ?? fallback;
 }
 
 export function levelToMinLevel(level: LogLevel): number {

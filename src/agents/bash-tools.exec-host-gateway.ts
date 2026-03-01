@@ -4,17 +4,23 @@ import {
   addAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
-  buildSafeBinsShellCommand,
-  buildSafeShellCommand,
+  buildEnforcedShellCommand,
   evaluateShellAllowlist,
   maxAsk,
   minSecurity,
   recordAllowlistUse,
   requiresExecApproval,
+  resolveAllowAlwaysPatterns,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
+import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
+import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
-import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
+import {
+  registerExecApprovalRequestForHost,
+  waitForExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -35,8 +41,13 @@ export type ProcessGatewayAllowlistParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   safeBins: Set<string>;
+  safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   agentId?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   scopeKey?: string;
   warnings: string[];
   notifySessionKey?: string;
@@ -68,6 +79,7 @@ export async function processGatewayAllowlist(
     command: params.command,
     allowlist: approvals.allowlist,
     safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
     cwd: params.workdir,
     env: params.env,
     platform: process.platform,
@@ -77,38 +89,99 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-  const requiresAsk = requiresExecApproval({
-    ask: hostAsk,
-    security: hostSecurity,
-    analysisOk,
-    allowlistSatisfied,
-  });
+  let enforcedCommand: string | undefined;
+  if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
+    const enforced = buildEnforcedShellCommand({
+      command: params.command,
+      segments: allowlistEval.segments,
+      platform: process.platform,
+    });
+    if (!enforced.ok || !enforced.command) {
+      throw new Error(`exec denied: allowlist execution plan unavailable (${enforced.reason})`);
+    }
+    enforcedCommand = enforced.command;
+  }
+  const obfuscation = detectCommandObfuscation(params.command);
+  if (obfuscation.detected) {
+    logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
+    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
+  }
+  const recordMatchedAllowlistUse = (resolvedPath?: string) => {
+    if (allowlistMatches.length === 0) {
+      return;
+    }
+    const seen = new Set<string>();
+    for (const match of allowlistMatches) {
+      if (seen.has(match.pattern)) {
+        continue;
+      }
+      seen.add(match.pattern);
+      recordAllowlistUse(approvals.file, params.agentId, match, params.command, resolvedPath);
+    }
+  };
+  const hasHeredocSegment = allowlistEval.segments.some((segment) =>
+    segment.argv.some((token) => token.startsWith("<<")),
+  );
+  const requiresHeredocApproval =
+    hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+  const requiresAsk =
+    requiresExecApproval({
+      ask: hostAsk,
+      security: hostSecurity,
+      analysisOk,
+      allowlistSatisfied,
+    }) ||
+    requiresHeredocApproval ||
+    obfuscation.detected;
+  if (requiresHeredocApproval) {
+    params.warnings.push(
+      "Warning: heredoc execution requires explicit approval in allowlist mode.",
+    );
+  }
 
   if (requiresAsk) {
     const approvalId = crypto.randomUUID();
     const approvalSlug = createApprovalSlug(approvalId);
-    const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     const contextKey = `exec:${approvalId}`;
     const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
     const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+    let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    let preResolvedDecision: string | null | undefined;
+
+    try {
+      // Register first so the returned approval ID is actionable immediately.
+      const registration = await registerExecApprovalRequestForHost({
+        approvalId,
+        command: params.command,
+        workdir: params.workdir,
+        host: "gateway",
+        security: hostSecurity,
+        ask: hostAsk,
+        agentId: params.agentId,
+        resolvedPath,
+        sessionKey: params.sessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+      });
+      expiresAtMs = registration.expiresAtMs;
+      preResolvedDecision = registration.finalDecision;
+    } catch (err) {
+      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
+    }
 
     void (async () => {
-      let decision: string | null = null;
+      let decision: string | null = preResolvedDecision ?? null;
       try {
-        decision = await requestExecApprovalDecision({
-          id: approvalId,
-          command: params.command,
-          cwd: params.workdir,
-          host: "gateway",
-          security: hostSecurity,
-          ask: hostAsk,
-          agentId: params.agentId,
-          resolvedPath,
-          sessionKey: params.sessionKey,
-        });
+        // Some gateways may return a final decision inline during registration.
+        // Only call waitDecision when registration did not already carry one.
+        if (preResolvedDecision === undefined) {
+          decision = await waitForExecApprovalDecision(approvalId);
+        }
       } catch {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
@@ -126,7 +199,9 @@ export async function processGatewayAllowlist(
       if (decision === "deny") {
         deniedReason = "user-denied";
       } else if (!decision) {
-        if (askFallback === "full") {
+        if (obfuscation.detected) {
+          deniedReason = "approval-timeout (obfuscation-detected)";
+        } else if (askFallback === "full") {
           approvedByAsk = true;
         } else if (askFallback === "allowlist") {
           if (!analysisOk || !allowlistSatisfied) {
@@ -142,8 +217,13 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (hostSecurity === "allowlist") {
-          for (const segment of allowlistEval.segments) {
-            const pattern = segment.resolution?.resolvedPath ?? "";
+          const patterns = resolveAllowAlwaysPatterns({
+            segments: allowlistEval.segments,
+            cwd: params.workdir,
+            env: params.env,
+            platform: process.platform,
+          });
+          for (const pattern of patterns) {
             if (pattern) {
               addAllowlistEntry(approvals.file, params.agentId, pattern);
             }
@@ -166,27 +246,13 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      if (allowlistMatches.length > 0) {
-        const seen = new Set<string>();
-        for (const match of allowlistMatches) {
-          if (seen.has(match.pattern)) {
-            continue;
-          }
-          seen.add(match.pattern);
-          recordAllowlistUse(
-            approvals.file,
-            params.agentId,
-            match,
-            params.command,
-            resolvedPath ?? undefined,
-          );
-        }
-      }
+      recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
         run = await runExecProcess({
           command: params.command,
+          execCommand: enforcedCommand,
           workdir: params.workdir,
           env: params.env,
           sandbox: undefined,
@@ -265,58 +331,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  let execCommandOverride: string | undefined;
-  // If allowlist uses safeBins, sanitize only those stdin-only segments:
-  // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
-  if (
-    hostSecurity === "allowlist" &&
-    analysisOk &&
-    allowlistSatisfied &&
-    allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
-  ) {
-    const safe = buildSafeBinsShellCommand({
-      command: params.command,
-      segments: allowlistEval.segments,
-      segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-      platform: process.platform,
-    });
-    if (!safe.ok || !safe.command) {
-      // Fallback: quote everything (safe, but may change glob behavior).
-      const fallback = buildSafeShellCommand({
-        command: params.command,
-        platform: process.platform,
-      });
-      if (!fallback.ok || !fallback.command) {
-        throw new Error(`exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`);
-      }
-      params.warnings.push(
-        "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
-      );
-      execCommandOverride = fallback.command;
-    } else {
-      params.warnings.push(
-        "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
-      );
-      execCommandOverride = safe.command;
-    }
-  }
+  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
-  if (allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of allowlistMatches) {
-      if (seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        approvals.file,
-        params.agentId,
-        match,
-        params.command,
-        allowlistEval.segments[0]?.resolution?.resolvedPath,
-      );
-    }
-  }
-
-  return { execCommandOverride };
+  return { execCommandOverride: enforcedCommand };
 }
