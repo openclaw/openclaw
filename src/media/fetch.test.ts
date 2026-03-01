@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchRemoteMedia } from "./fetch.js";
+import { MediaFetchError, fetchRemoteMedia } from "./fetch.js";
 
 function makeStream(chunks: Uint8Array[]) {
   return new ReadableStream<Uint8Array>({
@@ -52,6 +52,32 @@ describe("fetchRemoteMedia", () => {
         lookupFn,
       }),
     ).rejects.toThrow("exceeds maxBytes");
+  });
+
+  it("normalizes body-read failures as MediaFetchError(fetch_failed)", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = async () => {
+      const res = new Response("ok", { status: 200 });
+      vi.spyOn(res, "arrayBuffer").mockRejectedValueOnce(new Error("AbortError: timed out"));
+      return res;
+    };
+
+    let captured: unknown;
+    try {
+      await fetchRemoteMedia({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn,
+      });
+    } catch (err) {
+      captured = err;
+    }
+
+    expect(captured).toBeInstanceOf(MediaFetchError);
+    expect((captured as MediaFetchError).code).toBe("fetch_failed");
+    expect(String(captured)).toContain("AbortError");
   });
 
   it("blocks private IP literals before fetching", async () => {
