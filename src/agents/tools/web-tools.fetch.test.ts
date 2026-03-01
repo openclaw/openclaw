@@ -118,6 +118,23 @@ function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   });
 }
 
+function readTimeoutFromRequestBody(body: unknown): number | undefined {
+  if (typeof body !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const timeout = (parsed as Record<string, unknown>).timeout;
+  return typeof timeout === "number" ? timeout : undefined;
+}
+
 async function captureToolErrorMessage(params: {
   tool: ReturnType<typeof createWebFetchTool>;
   url: string;
@@ -401,9 +418,8 @@ describe("web_fetch extraction fallbacks", () => {
       requestUrl(call[0]).includes("/v2/scrape"),
     );
     expect(firecrawlCall).toBeTruthy();
-    const init = firecrawlCall?.[1] as RequestInit | undefined;
-    const body = JSON.parse(String(init?.body ?? "{}")) as { timeout?: number };
-    expect(body.timeout).toBe(7_000);
+    const init = firecrawlCall?.[1];
+    expect(readTimeoutFromRequestBody(init?.body)).toBe(7_000);
   });
 
   it("uses configured firecrawl timeout when per-call timeoutSeconds is omitted", async () => {
@@ -433,9 +449,8 @@ describe("web_fetch extraction fallbacks", () => {
       requestUrl(call[0]).includes("/v2/scrape"),
     );
     expect(firecrawlCall).toBeTruthy();
-    const init = firecrawlCall?.[1] as RequestInit | undefined;
-    const body = JSON.parse(String(init?.body ?? "{}")) as { timeout?: number };
-    expect(body.timeout).toBe(45_000);
+    const init = firecrawlCall?.[1];
+    expect(readTimeoutFromRequestBody(init?.body)).toBe(45_000);
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
