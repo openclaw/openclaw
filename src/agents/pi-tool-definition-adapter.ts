@@ -48,11 +48,22 @@ function compactToolParametersSchema(
     "definitions",
     "dependentSchemas",
   ]);
+  const schemaNodeKeywords = new Set([
+    "items",
+    "additionalItems",
+    "contains",
+    "not",
+    "if",
+    "then",
+    "else",
+    "propertyNames",
+    "additionalProperties",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+  ]);
+  const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
   const seen = new WeakMap<object, unknown>();
-  const compact = (value: unknown, depth: number, inSchemaKeyMap = false): unknown => {
-    if (Array.isArray(value)) {
-      return value.map((entry) => compact(entry, depth + 1, false));
-    }
+  const compactSchema = (value: unknown, depth: number): unknown => {
     if (!value || typeof value !== "object") {
       return value;
     }
@@ -63,17 +74,47 @@ function compactToolParametersSchema(
     const output: Record<string, unknown> = {};
     seen.set(value, output);
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      if (!inSchemaKeyMap && key === "title") {
+      if (key === "title") {
         continue;
       }
-      if (!inSchemaKeyMap && key === "description" && depth > 0) {
+      if (key === "description" && depth > 0) {
         continue;
       }
-      output[key] = compact(entry, depth + 1, schemaKeyMapKeywords.has(key));
+      if (schemaKeyMapKeywords.has(key)) {
+        output[key] = compactSchemaKeyMap(entry, depth + 1);
+        continue;
+      }
+      if (schemaArrayKeywords.has(key)) {
+        output[key] = Array.isArray(entry)
+          ? entry.map((child) => compactSchema(child, depth + 1))
+          : entry;
+        continue;
+      }
+      if (schemaNodeKeywords.has(key)) {
+        output[key] = compactSchema(entry, depth + 1);
+        continue;
+      }
+      // Preserve non-schema payload values as-is (e.g. default/examples objects).
+      output[key] = entry;
     }
     return output;
   };
-  return compact(schema, 0, false) as ToolDefinition["parameters"];
+  const compactSchemaKeyMap = (value: unknown, depth: number): unknown => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+    const cached = seen.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const output: Record<string, unknown> = {};
+    seen.set(value, output);
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      output[key] = compactSchema(entry, depth + 1);
+    }
+    return output;
+  };
+  return compactSchema(schema, 0) as ToolDefinition["parameters"];
 }
 
 function isAbortSignal(value: unknown): value is AbortSignal {

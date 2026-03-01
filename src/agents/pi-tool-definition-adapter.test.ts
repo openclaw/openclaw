@@ -200,6 +200,21 @@ describe("pi tool definition adapter", () => {
                 title: "Client description field title",
                 description: "Client description field description",
               },
+              payload: {
+                type: "object",
+                title: "Payload title",
+                description: "Payload description",
+                default: {
+                  title: "Keep default title",
+                  description: "Keep default description",
+                },
+                examples: [
+                  {
+                    title: "Keep example title",
+                    description: "Keep example description",
+                  },
+                ],
+              },
             },
             required: ["query"],
           },
@@ -221,6 +236,19 @@ describe("pi tool definition adapter", () => {
         },
         description: {
           type: "string",
+        },
+        payload: {
+          type: "object",
+          default: {
+            title: "Keep default title",
+            description: "Keep default description",
+          },
+          examples: [
+            {
+              title: "Keep example title",
+              description: "Keep example description",
+            },
+          ],
         },
       },
       required: ["query"],
