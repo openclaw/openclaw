@@ -118,5 +118,6 @@ dist/protocol.schema.json
 **/.settings/
 **/.gradle/
 
-# Synthing
+# Syncthing
 **/.stfolder/
+*.sync-conflict-*
