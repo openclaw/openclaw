@@ -131,7 +131,7 @@ export function renderDebug(props: DebugProps) {
               ${props.eventLog.map(
                 (evt) => html`
                   <div class="list-item debug-event-log__item">
-                    <div class="list-main debug-event-log__main">
+                    <div class="list-main">
                       <div class="list-title">${evt.event}</div>
                       <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
                     </div>
