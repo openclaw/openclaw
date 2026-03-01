@@ -602,9 +602,15 @@ export async function collectChannelSecurityFindings(params: {
         }),
       );
 
+      const defaultGroupAllowFrom = Array.isArray(
+        params.cfg.channels?.defaults?.groupAllowFrom,
+      )
+        ? params.cfg.channels!.defaults!.groupAllowFrom!
+        : [];
       const hasAnySenderAllowlist =
         storeAllowFrom.length > 0 ||
         groupAllowFrom.length > 0 ||
+        defaultGroupAllowFrom.length > 0 ||
         anyGroupOverride ||
         // For "members" policy, per-account allowFrom is a valid runtime fallback
         // (bot.ts uses allowFrom when groupAllowFrom is not set). Count it here to
