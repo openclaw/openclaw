@@ -88,9 +88,12 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
     .option("--parentId <id>", "Category/parent id")
     .option("--clearParent", "Clear parent/category")
     .option("--nsfw", "Mark as NSFW")
+    .option("--no-nsfw", "Unmark as NSFW")
     .option("--rateLimitPerUser <n>", "Slowmode in seconds")
     .option("--archived", "Archive thread")
+    .option("--no-archived", "Unarchive thread")
     .option("--locked", "Lock thread")
+    .option("--no-locked", "Unlock thread")
     .option("--auto-archive-duration <n>", "Auto-archive duration (60, 1440, 4320, 10080)")
     .option(
       "--default-auto-archive-duration <n>",

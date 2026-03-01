@@ -160,7 +160,7 @@ Name lookup:
 - `channel info` (Discord): `--target`
 - `channel list` (Discord): `--guild-id`
 - `channel create` (Discord): `--guild-id`, `--name` (+ optional `--type`, `--parentId`, `--topic`, `--position`, `--nsfw`, `--default-auto-archive-duration`)
-- `channel edit` (Discord): `--target` (+ optional `--name`, `--topic`, `--position`, `--parentId`, `--clearParent`, `--nsfw`, `--rateLimitPerUser`, `--archived`, `--locked`, `--auto-archive-duration`, `--default-auto-archive-duration`)
+- `channel edit` (Discord): `--target` (+ optional `--name`, `--topic`, `--position`, `--parentId`, `--clearParent`, `--nsfw`, `--no-nsfw`, `--rateLimitPerUser`, `--archived`, `--no-archived`, `--locked`, `--no-locked`, `--auto-archive-duration`, `--default-auto-archive-duration`)
 - `channel delete` (Discord): `--target`
 - `channel move` (Discord): `--target`, `--guild-id` (+ optional `--parentId`, `--clearParent`, `--position`)
 - `category create` (Discord): `--guild-id`, `--name` (+ optional `--position`)
