@@ -31,6 +31,7 @@ function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
     groupDmChannels: [],
     defaultRequireMention: false,
     groupPolicy: "open",
+    allowNameMatching: false,
     useAccessGroups: false,
     reactionMode: "off",
     reactionAllowlist: [],
@@ -55,6 +56,7 @@ const account: ResolvedSlackAccount = {
   enabled: true,
   botTokenSource: "config",
   appTokenSource: "config",
+  userTokenSource: "none",
   config: {},
 };
 
