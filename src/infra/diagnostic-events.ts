@@ -147,6 +147,28 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticLaneTaskCompleteEvent = DiagnosticBaseEvent & {
+  type: "queue.lane.task.complete";
+  lane: string;
+  taskId: number;
+  durationMs: number;
+};
+
+export type DiagnosticLaneTaskErrorEvent = DiagnosticBaseEvent & {
+  type: "queue.lane.task.error";
+  lane: string;
+  taskId: number;
+  durationMs: number;
+  error: string;
+};
+
+export type DiagnosticLaneConcurrencyChangeEvent = DiagnosticBaseEvent & {
+  type: "queue.lane.concurrency.change";
+  lane: string;
+  oldMax: number;
+  newMax: number;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -160,7 +182,10 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticLaneTaskCompleteEvent
+  | DiagnosticLaneTaskErrorEvent
+  | DiagnosticLaneConcurrencyChangeEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

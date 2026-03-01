@@ -1,0 +1,84 @@
+name: multi-conversation-burst
+description: >
+  Multiple conversations receive burst traffic simultaneously.
+  Tests cross-conversation lane isolation.
+
+seed: 7
+
+agents:
+  - id: agent-1
+    provider: fake
+    model: fake-fast
+
+channels:
+  - type: telegram
+    accounts:
+      - id: bot1
+
+conversations:
+  - id: conv-group-a
+    channel: telegram
+    account: bot1
+    peer: group-a
+    chatType: group
+  - id: conv-group-b
+    channel: telegram
+    account: bot1
+    peer: group-b
+    chatType: group
+  - id: conv-dm-1
+    channel: telegram
+    account: bot1
+    peer: user-bob
+    chatType: direct
+
+providers:
+  fake:
+    models:
+      fake-fast:
+        latencyMs: 500
+        response: "Quick reply from {agentId}"
+
+traffic:
+  - conversation: conv-group-a
+    pattern: burst
+    count: 5
+    intervalMs: 100
+    startAtMs: 0
+    senderIds:
+      - user-1
+      - user-2
+  - conversation: conv-group-b
+    pattern: burst
+    count: 5
+    intervalMs: 100
+    startAtMs: 0
+    senderIds:
+      - user-3
+      - user-4
+  - conversation: conv-dm-1
+    pattern: steady
+    count: 3
+    intervalMs: 500
+    startAtMs: 200
+    senderIds:
+      - user-bob
+
+config:
+  agents:
+    defaults:
+      maxConcurrent: 2
+
+monitor:
+  sampleIntervalMs: 100
+
+symptoms:
+  reply_explosion:
+    maxRatio: 2.0
+    windowMs: 10000
+  out_of_sync:
+    enabled: true
+
+assertions:
+  - type: no_reply_explosion
+    maxRepliesPerMessage: 2

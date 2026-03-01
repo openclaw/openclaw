@@ -1,0 +1,64 @@
+name: reply-explosion-under-burst
+description: >
+  10 messages hit the same group conversation in 500ms.
+  Model takes 2s to respond. What happens?
+
+seed: 42
+
+agents:
+  - id: agent-1
+    provider: fake
+    model: fake-slow
+
+channels:
+  - type: telegram
+    accounts:
+      - id: bot1
+
+conversations:
+  - id: conv-1
+    channel: telegram
+    account: bot1
+    peer: group-42
+    chatType: group
+
+providers:
+  fake:
+    models:
+      fake-slow:
+        latencyMs: 2000
+        response: "I'm agent {agentId} responding"
+
+traffic:
+  - conversation: conv-1
+    pattern: burst
+    count: 10
+    intervalMs: 50
+    startAtMs: 0
+    senderIds:
+      - user-1
+      - user-2
+      - user-3
+
+config:
+  agents:
+    defaults:
+      maxConcurrent: 3
+
+monitor:
+  sampleIntervalMs: 100
+
+symptoms:
+  reply_explosion:
+    maxRatio: 1.5
+    windowMs: 10000
+  queue_backlog:
+    maxDepth: 5
+    sustainedGrowthSamples: 3
+
+assertions:
+  - type: max_queue_depth
+    lane: "session:*"
+    threshold: 5
+  - type: no_reply_explosion
+    maxRepliesPerMessage: 2

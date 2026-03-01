@@ -867,8 +867,9 @@ export async function runEmbeddedAttempt(
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
       } else {
-        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        // Use streamFnOverride when provided (simulation harness / custom test harnesses),
+        // otherwise default to streamSimple.
+        activeSession.agent.streamFn = params.streamFnOverride ?? streamSimple;
       }
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.

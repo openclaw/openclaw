@@ -2,7 +2,7 @@
 title: "Gateway Simulation Harness"
 type: feat
 date: 2026-02-26
-deepened: 2026-02-26
+deepened: 2026-03-01
 ---
 
 # Gateway Simulation Harness
@@ -15,7 +15,7 @@ deepened: 2026-02-26
 
 ### Critical Fixes (Must Address Before Implementation)
 
-1. **`streamFnOverride` injection point** — Plan says "No changes to run.ts" but the fake provider CANNOT be injected without Vitest module mocking. Add `streamFnOverride?: typeof streamSimple` to `RunEmbeddedPiAgentParams` and use it in `attempt.ts:701`.
+1. **`streamFnOverride` injection point** — Plan says "No changes to run.ts" but the fake provider CANNOT be injected without Vitest module mocking. Add `streamFnOverride?: StreamFn` to `RunEmbeddedPiAgentParams` and use it in `attempt.ts:871`.
 2. **`resetAllLanes()` is destructive** — Using it in abort path would destroy ALL lane state. Use `sim:{runId}:` lane prefixes and a new `resetLanesByPrefix(prefix)` function instead.
 3. **YAML package** — Plan references `js-yaml` but codebase uses the `yaml` (eemeli) package v2.8.2. `js-yaml` has CVE-2025-64718 (prototype pollution via merge key). Use `import YAML from "yaml"` with `{ schema: "core", strict: true, uniqueKeys: true }`.
 4. **Fake channel incomplete** — Plan's fake channel omits required `ChannelMeta` fields (`selectionLabel`, `blurb`, `id`). Use `createChannelTestPluginBase()` from `src/test-utils/channel-plugins.ts` as composition base.
@@ -98,9 +98,9 @@ Production issues like reply explosions and lag drift are difficult to reproduce
 
 - The `streamFnOverride` parameter is the lynchpin. Without it, the fake provider cannot be injected without Vitest module-level mocking. Add to `RunEmbeddedPiAgentParams`:
   ```typescript
-  streamFnOverride?: typeof streamSimple;
+  streamFnOverride?: StreamFn;
   ```
-  And in `src/agents/pi-embedded-runner/run/attempt.ts:701`:
+  And in `src/agents/pi-embedded-runner/run/attempt.ts:871`:
   ```typescript
   activeSession.agent.streamFn = params.streamFnOverride ?? streamSimple;
   ```
@@ -505,12 +505,12 @@ export function createFakeStreamFn(params: {
 
 **Architecture Strategist — `streamFnOverride` Injection:**
 
-- This is the **critical missing piece** in the original plan. `src/agents/pi-embedded-runner/run/attempt.ts:701` hardcodes `streamSimple`. Without Vitest module mocking, the fake provider has no way in.
+- This is the **critical missing piece** in the original plan. `src/agents/pi-embedded-runner/run/attempt.ts:871` hardcodes `streamSimple`. Without Vitest module mocking, the fake provider has no way in.
 - **Required change** to `RunEmbeddedPiAgentParams`:
   ```typescript
-  streamFnOverride?: typeof streamSimple;
+  streamFnOverride?: StreamFn;
   ```
-- **Required change** to `attempt.ts:701`:
+- **Required change** to `attempt.ts:871`:
   ```typescript
   activeSession.agent.streamFn = params.streamFnOverride ?? streamSimple;
   ```
@@ -927,8 +927,8 @@ The fake provider replaces `streamSimple` from `@mariozechner/pi-ai` via a new `
 
 **Required changes:**
 
-- Add `streamFnOverride?: typeof streamSimple` to `RunEmbeddedPiAgentParams` (`src/agents/pi-embedded-runner/run/params.ts`)
-- Use `params.streamFnOverride ?? streamSimple` at `src/agents/pi-embedded-runner/run/attempt.ts:701`
+- Add `streamFnOverride?: StreamFn` to `RunEmbeddedPiAgentParams` (`src/agents/pi-embedded-runner/run/params.ts`)
+- Use `params.streamFnOverride ?? streamSimple` at `src/agents/pi-embedded-runner/run/attempt.ts:871`
 
 **Rationale**: Maximum fidelity. The failover/retry loop is exactly where pathological behavior can emerge (e.g., auth cooldown cascading into queue backlog). Bypassing it would miss real bugs. The `streamFnOverride` approach is independently useful for non-Vitest test harnesses.
 
@@ -1059,7 +1059,7 @@ scenarios/
 
 3. **`src/infra/diagnostic-events.ts`**: Add three new event types to the `DiagnosticEventPayload` union: `DiagnosticLaneTaskCompleteEvent`, `DiagnosticLaneTaskErrorEvent`, `DiagnosticLaneConcurrencyChangeEvent`.
 
-4. **`src/agents/pi-embedded-runner/run/params.ts`**: Add `streamFnOverride?: typeof streamSimple` to `RunEmbeddedPiAgentParams`.
+4. **`src/agents/pi-embedded-runner/run/params.ts`**: Add `streamFnOverride?: StreamFn` to `RunEmbeddedPiAgentParams`.
 
 5. **`src/agents/pi-embedded-runner/run/attempt.ts`**: Line 701 — use `params.streamFnOverride ?? streamSimple` instead of hardcoded `streamSimple`.
 
@@ -1203,7 +1203,7 @@ scenarios/
 - Channel test helpers: `src/test-utils/channel-plugins.ts` (`createChannelTestPluginBase`)
 - Agent runner: `src/agents/pi-embedded-runner/run.ts`
 - Agent run params: `src/agents/pi-embedded-runner/run/params.ts`
-- Agent run attempt (streamFn assignment): `src/agents/pi-embedded-runner/run/attempt.ts:701`
+- Agent run attempt (streamFn assignment): `src/agents/pi-embedded-runner/run/attempt.ts:871`
 - CLI deps: `src/cli/deps.ts`
 - Lane constants: `src/process/lanes.ts`
 - Terminal utilities: `src/terminal/table.ts`, `src/terminal/palette.ts`

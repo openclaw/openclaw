@@ -1,3 +1,4 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
@@ -98,6 +99,8 @@ export type RunEmbeddedPiAgentParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;
+  /** Override the default `streamSimple` function (e.g. for simulation harness). */
+  streamFnOverride?: StreamFn;
   extraSystemPrompt?: string;
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;

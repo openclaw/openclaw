@@ -240,6 +240,26 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number) 
   markActivity();
 }
 
+export function logLaneTaskComplete(lane: string, taskId: number, durationMs: number) {
+  diag.debug(`lane task complete: lane=${lane} taskId=${taskId} durationMs=${durationMs}`);
+  emitDiagnosticEvent({ type: "queue.lane.task.complete", lane, taskId, durationMs });
+  markActivity();
+}
+
+export function logLaneTaskError(lane: string, taskId: number, durationMs: number, error: string) {
+  diag.debug(
+    `lane task error: lane=${lane} taskId=${taskId} durationMs=${durationMs} error="${error}"`,
+  );
+  emitDiagnosticEvent({ type: "queue.lane.task.error", lane, taskId, durationMs, error });
+  markActivity();
+}
+
+export function logLaneConcurrencyChange(lane: string, oldMax: number, newMax: number) {
+  diag.debug(`lane concurrency change: lane=${lane} oldMax=${oldMax} newMax=${newMax}`);
+  emitDiagnosticEvent({ type: "queue.lane.concurrency.change", lane, oldMax, newMax });
+  markActivity();
+}
+
 export function logRunAttempt(params: SessionRef & { runId: string; attempt: number }) {
   diag.debug(
     `run attempt: sessionId=${params.sessionId ?? "unknown"} sessionKey=${

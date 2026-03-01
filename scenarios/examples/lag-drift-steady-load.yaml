@@ -1,0 +1,55 @@
+name: lag-drift-steady-load
+description: >
+  Steady stream of messages with a slow model.
+  Does queue wait time increase monotonically?
+
+seed: 123
+
+agents:
+  - id: agent-1
+    provider: fake
+    model: fake-medium
+
+channels:
+  - type: telegram
+    accounts:
+      - id: bot1
+
+conversations:
+  - id: conv-1
+    channel: telegram
+    account: bot1
+    peer: user-alice
+    chatType: direct
+
+providers:
+  fake:
+    models:
+      fake-medium:
+        latencyMs: 1000
+        response: "Reply from {agentId}"
+
+traffic:
+  - conversation: conv-1
+    pattern: steady
+    count: 20
+    intervalMs: 200
+    startAtMs: 0
+    senderIds:
+      - alice
+
+config:
+  agents:
+    defaults:
+      maxConcurrent: 1
+
+monitor:
+  sampleIntervalMs: 200
+
+symptoms:
+  lag_drift:
+    maxSlopeMs: 100
+    windowMessages: 5
+  queue_backlog:
+    maxDepth: 10
+    sustainedGrowthSamples: 3

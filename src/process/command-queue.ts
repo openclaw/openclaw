@@ -1,4 +1,11 @@
-import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
+import {
+  diagnosticLogger as diag,
+  logLaneConcurrencyChange,
+  logLaneDequeue,
+  logLaneEnqueue,
+  logLaneTaskComplete,
+  logLaneTaskError,
+} from "../logging/diagnostic.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -112,22 +119,26 @@ function drainLane(lane: string) {
           const startTime = Date.now();
           try {
             const result = await entry.task();
+            const durationMs = Date.now() - startTime;
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
-                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+                `lane task done: lane=${lane} durationMs=${durationMs} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
+              logLaneTaskComplete(lane, taskId, durationMs);
               pump();
             }
             entry.resolve(result);
           } catch (err) {
+            const durationMs = Date.now() - startTime;
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (!isProbeLane) {
               diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+                `lane task error: lane=${lane} durationMs=${durationMs} error="${String(err)}"`,
               );
             }
+            logLaneTaskError(lane, taskId, durationMs, String(err));
             if (completedCurrentGeneration) {
               pump();
             }
@@ -154,7 +165,11 @@ export function markGatewayDraining(): void {
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = getLaneState(cleaned);
+  const oldMax = state.maxConcurrent;
   state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+  if (oldMax !== state.maxConcurrent) {
+    logLaneConcurrencyChange(cleaned, oldMax, state.maxConcurrent);
+  }
   drainLane(cleaned);
 }
 
@@ -321,4 +336,57 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
     };
     check();
   });
+}
+
+// ── Simulation / observability helpers ──────────────────────────────
+
+/** Read-only snapshot of a single lane's state. */
+export interface LaneInfo {
+  lane: string;
+  queued: number;
+  active: number;
+  maxConcurrent: number;
+  generation: number;
+}
+
+/**
+ * Returns a snapshot of all (or prefix-filtered) lane states.
+ * O(n) in the number of lanes; intended for monitoring / simulation.
+ */
+export function getAllLaneInfo(prefix?: string): LaneInfo[] {
+  const result: LaneInfo[] = [];
+  for (const [name, state] of lanes) {
+    if (prefix && !name.startsWith(prefix)) {
+      continue;
+    }
+    result.push({
+      lane: name,
+      queued: state.queue.length,
+      active: state.activeTaskIds.size,
+      maxConcurrent: state.maxConcurrent,
+      generation: state.generation,
+    });
+  }
+  return result;
+}
+
+/**
+ * Reset and remove all lanes matching the given prefix.
+ * Queued entries are rejected with `CommandLaneClearedError`.
+ * Used by the simulation harness for cleanup (`sim:{runId}:` prefix).
+ */
+export function resetLanesByPrefix(prefix: string): void {
+  for (const [name, state] of lanes) {
+    if (!name.startsWith(prefix)) {
+      continue;
+    }
+    state.generation += 1;
+    state.activeTaskIds.clear();
+    state.draining = false;
+    const pending = state.queue.splice(0);
+    for (const entry of pending) {
+      entry.reject(new CommandLaneClearedError(name));
+    }
+    lanes.delete(name);
+  }
 }
