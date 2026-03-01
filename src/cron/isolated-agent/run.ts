@@ -1,7 +1,7 @@
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import type { BotConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -518,6 +518,7 @@ export async function runCronIsolatedAgentTurn(params: {
     const contextTokens =
       agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
+    let telemetry: CronRunTelemetry | undefined;
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
@@ -537,15 +538,31 @@ export async function runCronIsolatedAgentTurn(params: {
       });
       cronSession.sessionEntry.inputTokens = input;
       cronSession.sessionEntry.outputTokens = output;
+      const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+        input_tokens: input,
+        output_tokens: output,
+      };
       if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
         cronSession.sessionEntry.totalTokens = totalTokens;
         cronSession.sessionEntry.totalTokensFresh = true;
+        telemetryUsage.total_tokens = totalTokens;
       } else {
         cronSession.sessionEntry.totalTokens = undefined;
         cronSession.sessionEntry.totalTokensFresh = false;
       }
       cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
       cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+        usage: telemetryUsage,
+      };
+    } else {
+      telemetry = {
+        model: modelUsed,
+        provider: providerUsed,
+      };
     }
     await persistSessionEntry();
   }
