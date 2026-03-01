@@ -27,15 +27,17 @@ const RECOVERABLE_ERROR_NAMES = new Set([
   "BodyTimeoutError",
 ]);
 
+const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
+
 const RECOVERABLE_MESSAGE_SNIPPETS = [
-  "fetch failed",
-  "typeerror: fetch failed",
   "undici",
   "network error",
   "network request",
   "client network socket disconnected",
   "socket hang up",
   "getaddrinfo",
+  "timeout", // catch timeout messages not covered by error codes/names
+  "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
 ];
 
 function normalizeCode(code?: string): string {
@@ -97,6 +99,14 @@ function collectErrorCandidates(err: unknown): unknown[] {
           }
         }
       }
+      // Grammy's HttpError wraps the underlying error in .error (not .cause)
+      // Only follow .error for HttpError to avoid widening the search graph
+      if (getErrorName(current) === "HttpError") {
+        const wrappedError = (current as { error?: unknown }).error;
+        if (wrappedError && !seen.has(wrappedError)) {
+          queue.push(wrappedError);
+        }
+      }
     }
   }
 
@@ -128,9 +138,12 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
 
-    if (allowMessageMatch) {
-      const message = formatErrorMessage(candidate).toLowerCase();
-      if (message && RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+      return true;
+    }
+    if (allowMessageMatch && message) {
+      if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
         return true;
       }
     }

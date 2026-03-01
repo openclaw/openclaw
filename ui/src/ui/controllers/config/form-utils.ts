@@ -14,19 +14,25 @@ export function setPathValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  if (path.length === 0) return;
+  if (path.length === 0) {
+    return;
+  }
   let current: Record<string, unknown> | unknown[] = obj;
   for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i];
     const nextKey = path[i + 1];
     if (typeof key === "number") {
-      if (!Array.isArray(current)) return;
+      if (!Array.isArray(current)) {
+        return;
+      }
       if (current[key] == null) {
         current[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
       }
       current = current[key] as Record<string, unknown> | unknown[];
     } else {
-      if (typeof current !== "object" || current == null) return;
+      if (typeof current !== "object" || current == null) {
+        return;
+      }
       const record = current as Record<string, unknown>;
       if (record[key] == null) {
         record[key] = typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
@@ -36,7 +42,9 @@ export function setPathValue(
   }
   const lastKey = path[path.length - 1];
   if (typeof lastKey === "number") {
-    if (Array.isArray(current)) current[lastKey] = value;
+    if (Array.isArray(current)) {
+      current[lastKey] = value;
+    }
     return;
   }
   if (typeof current === "object" && current != null) {
@@ -48,22 +56,32 @@ export function removePathValue(
   obj: Record<string, unknown> | unknown[],
   path: Array<string | number>,
 ) {
-  if (path.length === 0) return;
+  if (path.length === 0) {
+    return;
+  }
   let current: Record<string, unknown> | unknown[] = obj;
   for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i];
     if (typeof key === "number") {
-      if (!Array.isArray(current)) return;
+      if (!Array.isArray(current)) {
+        return;
+      }
       current = current[key] as Record<string, unknown> | unknown[];
     } else {
-      if (typeof current !== "object" || current == null) return;
+      if (typeof current !== "object" || current == null) {
+        return;
+      }
       current = (current as Record<string, unknown>)[key] as Record<string, unknown> | unknown[];
     }
-    if (current == null) return;
+    if (current == null) {
+      return;
+    }
   }
   const lastKey = path[path.length - 1];
   if (typeof lastKey === "number") {
-    if (Array.isArray(current)) current.splice(lastKey, 1);
+    if (Array.isArray(current)) {
+      current.splice(lastKey, 1);
+    }
     return;
   }
   if (typeof current === "object" && current != null) {

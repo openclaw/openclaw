@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderConfig } from "./config";
+import { renderConfig } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -60,7 +60,7 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
   });
@@ -80,7 +80,7 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
   });
@@ -99,10 +99,10 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
-    ) as HTMLButtonElement | undefined;
+    );
     const applyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Apply",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
@@ -123,10 +123,10 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
-    ) as HTMLButtonElement | undefined;
+    );
     const applyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Apply",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
@@ -146,7 +146,7 @@ describe("config view", () => {
 
     const btn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Raw",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(btn).toBeTruthy();
     btn?.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
@@ -172,7 +172,7 @@ describe("config view", () => {
 
     const btn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Gateway",
-    ) as HTMLButtonElement | undefined;
+    );
     expect(btn).toBeTruthy();
     btn?.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
@@ -189,11 +189,44 @@ describe("config view", () => {
       container,
     );
 
-    const input = container.querySelector(".config-search__input") as HTMLInputElement | null;
+    const input = container.querySelector(".config-search__input");
     expect(input).not.toBeNull();
-    if (!input) return;
-    input.value = "gateway";
+    if (!input) {
+      return;
+    }
+    (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("shows all tag options in compact tag picker", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
+      (option) => option.textContent?.trim(),
+    );
+    expect(options).toContain("tag:security");
+    expect(options).toContain("tag:advanced");
+    expect(options).toHaveLength(15);
+  });
+
+  it("updates search query when toggling a tag option", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        onSearchChange,
+      }),
+      container,
+    );
+
+    const option = container.querySelector<HTMLButtonElement>(
+      '.config-search__tag-option[data-tag="security"]',
+    );
+    expect(option).toBeTruthy();
+    option?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
   });
 });

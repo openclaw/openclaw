@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { WizardPrompter } from "../../wizard/prompts.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
-import { recordPluginInstall } from "../../plugins/installs.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { createPluginLoaderLogger } from "../../plugins/logger.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
@@ -174,6 +175,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: entry.install.npmSpec,
       installPath: result.targetDir,
       version: result.version,
+      ...buildNpmResolutionInstallFields(result.npmResolution),
     });
     return { cfg: next, installed: true };
   }
@@ -211,11 +213,6 @@ export function reloadOnboardingPluginRegistry(params: {
     config: params.cfg,
     workspaceDir,
     cache: false,
-    logger: {
-      info: (msg) => log.info(msg),
-      warn: (msg) => log.warn(msg),
-      error: (msg) => log.error(msg),
-      debug: (msg) => log.debug(msg),
-    },
+    logger: createPluginLoaderLogger(log),
   });
 }

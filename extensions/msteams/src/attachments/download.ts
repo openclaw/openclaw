@@ -1,9 +1,6 @@
-import type {
-  MSTeamsAccessTokenProvider,
-  MSTeamsAttachmentLike,
-  MSTeamsInboundMedia,
-} from "./types.js";
+import { fetchWithBearerAuthScopeFallback } from "openclaw/plugin-sdk";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   extractInlineImageCandidates,
   inferPlaceholder,
@@ -11,8 +8,16 @@ import {
   isRecord,
   isUrlAllowed,
   normalizeContentType,
+  resolveMediaSsrfPolicy,
+  resolveRequestUrl,
+  resolveAuthAllowedHosts,
   resolveAllowedHosts,
 } from "./shared.js";
+import type {
+  MSTeamsAccessTokenProvider,
+  MSTeamsAttachmentLike,
+  MSTeamsInboundMedia,
+} from "./types.js";
 
 type DownloadCandidate = {
   url: string;
@@ -85,35 +90,18 @@ async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  requestInit?: RequestInit;
+  authAllowHosts: string[];
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url);
-  if (firstAttempt.ok) {
-    return firstAttempt;
-  }
-  if (!params.tokenProvider) {
-    return firstAttempt;
-  }
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
-    return firstAttempt;
-  }
-
-  const scopes = scopeCandidatesForUrl(params.url);
-  for (const scope of scopes) {
-    try {
-      const token = await params.tokenProvider.getAccessToken(scope);
-      const res = await fetchFn(params.url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        return res;
-      }
-    } catch {
-      // Try the next scope.
-    }
-  }
-
-  return firstAttempt;
+  return await fetchWithBearerAuthScopeFallback({
+    url: params.url,
+    scopes: scopeCandidatesForUrl(params.url),
+    tokenProvider: params.tokenProvider,
+    fetchFn: params.fetchFn,
+    requestInit: params.requestInit,
+    requireHttps: true,
+    shouldAttachAuth: (url) => isUrlAllowed(url, params.authAllowHosts),
+  });
 }
 
 /**
@@ -125,6 +113,7 @@ export async function downloadMSTeamsAttachments(params: {
   maxBytes: number;
   tokenProvider?: MSTeamsAccessTokenProvider;
   allowHosts?: string[];
+  authAllowHosts?: string[];
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
@@ -134,6 +123,8 @@ export async function downloadMSTeamsAttachments(params: {
     return [];
   }
   const allowHosts = resolveAllowedHosts(params.allowHosts);
+  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -195,36 +186,24 @@ export async function downloadMSTeamsAttachments(params: {
       continue;
     }
     try {
-      const res = await fetchWithAuthFallback({
+      const media = await downloadAndStoreMSTeamsRemoteMedia({
         url: candidate.url,
-        tokenProvider: params.tokenProvider,
-        fetchFn: params.fetchFn,
-      });
-      if (!res.ok) {
-        continue;
-      }
-      const buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.byteLength > params.maxBytes) {
-        continue;
-      }
-      const mime = await getMSTeamsRuntime().media.detectMime({
-        buffer,
-        headerMime: res.headers.get("content-type"),
-        filePath: candidate.fileHint ?? candidate.url,
-      });
-      const originalFilename = params.preserveFilenames ? candidate.fileHint : undefined;
-      const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-        buffer,
-        mime ?? candidate.contentTypeHint,
-        "inbound",
-        params.maxBytes,
-        originalFilename,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
+        filePathHint: candidate.fileHint ?? candidate.url,
+        maxBytes: params.maxBytes,
+        contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
+        preserveFilenames: params.preserveFilenames,
+        ssrfPolicy,
+        fetchImpl: (input, init) =>
+          fetchWithAuthFallback({
+            url: resolveRequestUrl(input),
+            tokenProvider: params.tokenProvider,
+            fetchFn: params.fetchFn,
+            requestInit: init,
+            authAllowHosts,
+          }),
       });
+      out.push(media);
     } catch {
       // Ignore download failures and continue with next candidate.
     }

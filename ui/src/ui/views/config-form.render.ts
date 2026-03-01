@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import type { ConfigUiHints } from "../types";
-import { icons } from "../icons";
-import { renderNode } from "./config-form.node";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
+import { icons } from "../icons.ts";
+import type { ConfigUiHints } from "../types.ts";
+import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -278,54 +278,42 @@ function getSectionIcon(key: string) {
   return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
 }
 
-function matchesSearch(key: string, schema: JsonSchema, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  const meta = SECTION_META[key];
+function matchesSearch(params: {
+  key: string;
+  schema: JsonSchema;
+  sectionValue: unknown;
+  uiHints: ConfigUiHints;
+  query: string;
+}): boolean {
+  if (!params.query) {
+    return true;
+  }
+  const criteria = parseConfigSearchQuery(params.query);
+  const q = criteria.text;
+  const meta = SECTION_META[params.key];
 
   // Check key name
-  if (key.toLowerCase().includes(q)) return true;
+  if (q && params.key.toLowerCase().includes(q)) {
+    return true;
+  }
 
   // Check label and description
-  if (meta) {
-    if (meta.label.toLowerCase().includes(q)) return true;
-    if (meta.description.toLowerCase().includes(q)) return true;
-  }
-
-  return schemaMatches(schema, q);
-}
-
-function schemaMatches(schema: JsonSchema, query: string): boolean {
-  if (schema.title?.toLowerCase().includes(query)) return true;
-  if (schema.description?.toLowerCase().includes(query)) return true;
-  if (schema.enum?.some((value) => String(value).toLowerCase().includes(query))) return true;
-
-  if (schema.properties) {
-    for (const [propKey, propSchema] of Object.entries(schema.properties)) {
-      if (propKey.toLowerCase().includes(query)) return true;
-      if (schemaMatches(propSchema, query)) return true;
+  if (q && meta) {
+    if (meta.label.toLowerCase().includes(q)) {
+      return true;
+    }
+    if (meta.description.toLowerCase().includes(q)) {
+      return true;
     }
   }
 
-  if (schema.items) {
-    const items = Array.isArray(schema.items) ? schema.items : [schema.items];
-    for (const item of items) {
-      if (item && schemaMatches(item, query)) return true;
-    }
-  }
-
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    if (schemaMatches(schema.additionalProperties, query)) return true;
-  }
-
-  const unions = schema.anyOf ?? schema.oneOf ?? schema.allOf;
-  if (unions) {
-    for (const entry of unions) {
-      if (entry && schemaMatches(entry, query)) return true;
-    }
-  }
-
-  return false;
+  return matchesNodeSearch({
+    schema: params.schema,
+    value: params.sectionValue,
+    path: [params.key],
+    hints: params.uiHints,
+    criteria,
+  });
 }
 
 export function renderConfigForm(props: ConfigFormProps) {
@@ -344,19 +332,35 @@ export function renderConfigForm(props: ConfigFormProps) {
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
   const searchQuery = props.searchQuery ?? "";
+  const searchCriteria = parseConfigSearchQuery(searchQuery);
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
-  const entries = Object.entries(properties).sort((a, b) => {
+  const entries = Object.entries(properties).toSorted((a, b) => {
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
     const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
-    if (orderA !== orderB) return orderA - orderB;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
     return a[0].localeCompare(b[0]);
   });
 
   const filteredEntries = entries.filter(([key, node]) => {
-    if (activeSection && key !== activeSection) return false;
-    if (searchQuery && !matchesSearch(key, node, searchQuery)) return false;
+    if (activeSection && key !== activeSection) {
+      return false;
+    }
+    if (
+      searchQuery &&
+      !matchesSearch({
+        key,
+        schema: node,
+        sectionValue: value[key],
+        uiHints: props.uiHints,
+        query: searchQuery,
+      })
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -398,7 +402,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
               const label = hint?.label ?? node.title ?? humanize(subsectionKey);
               const description = hint?.help ?? node.description ?? "";
-              const sectionValue = (value as Record<string, unknown>)[sectionKey];
+              const sectionValue = value[sectionKey];
               const scopedValue =
                 sectionValue && typeof sectionValue === "object"
                   ? (sectionValue as Record<string, unknown>)[subsectionKey]
@@ -426,6 +430,7 @@ export function renderConfigForm(props: ConfigFormProps) {
                     unsupported,
                     disabled: props.disabled ?? false,
                     showLabel: false,
+                    searchCriteria,
                     onPatch: props.onPatch,
                   })}
                 </div>
@@ -454,12 +459,13 @@ export function renderConfigForm(props: ConfigFormProps) {
                 <div class="config-section-card__content">
                   ${renderNode({
                     schema: node,
-                    value: (value as Record<string, unknown>)[key],
+                    value: value[key],
                     path: [key],
                     hints: props.uiHints,
                     unsupported,
                     disabled: props.disabled ?? false,
                     showLabel: false,
+                    searchCriteria,
                     onPatch: props.onPatch,
                   })}
                 </div>

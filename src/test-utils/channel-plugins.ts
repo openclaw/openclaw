@@ -5,15 +5,19 @@ import type {
   ChannelPlugin,
 } from "../channels/plugins/types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { imessageOutbound } from "../channels/plugins/outbound/imessage.js";
-import { normalizeIMessageHandle } from "../imessage/targets.js";
 
-export const createTestRegistry = (channels: PluginRegistry["channels"] = []): PluginRegistry => ({
+type TestChannelRegistration = {
+  pluginId: string;
+  plugin: unknown;
+  source: string;
+};
+
+export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
   typedHooks: [],
-  channels,
+  channels: channels as unknown as PluginRegistry["channels"],
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
@@ -24,69 +28,13 @@ export const createTestRegistry = (channels: PluginRegistry["channels"] = []): P
   diagnostics: [],
 });
 
-export const createIMessageTestPlugin = (params?: {
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  id: "imessage",
-  meta: {
-    id: "imessage",
-    label: "iMessage",
-    selectionLabel: "iMessage (imsg)",
-    docsPath: "/channels/imessage",
-    blurb: "iMessage test stub.",
-    aliases: ["imsg"],
-  },
-  capabilities: { chatTypes: ["direct", "group"], media: true },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  status: {
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) {
-          return [];
-        }
-        return [
-          {
-            channel: "imessage",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
-  },
-  outbound: params?.outbound ?? imessageOutbound,
-  messaging: {
-    targetResolver: {
-      looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          return false;
-        }
-        if (/^(imessage:|sms:|auto:|chat_id:|chat_guid:|chat_identifier:)/i.test(trimmed)) {
-          return true;
-        }
-        if (trimmed.includes("@")) {
-          return true;
-        }
-        return /^\+?\d{3,}$/.test(trimmed);
-      },
-      hint: "<handle|chat_id:ID>",
-    },
-    normalizeTarget: (raw) => normalizeIMessageHandle(raw),
-  },
-});
-
-export const createOutboundTestPlugin = (params: {
+export const createChannelTestPluginBase = (params: {
   id: ChannelId;
-  outbound: ChannelOutboundAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
-}): ChannelPlugin => ({
+  config?: Partial<ChannelPlugin["config"]>;
+}): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> => ({
   id: params.id,
   meta: {
     id: params.id,
@@ -97,8 +45,61 @@ export const createOutboundTestPlugin = (params: {
   },
   capabilities: params.capabilities ?? { chatTypes: ["direct"] },
   config: {
-    listAccountIds: () => [],
+    listAccountIds: () => ["default"],
     resolveAccount: () => ({}),
+    ...params.config,
   },
+});
+
+export const createMSTeamsTestPluginBase = (): Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> => {
+  const base = createChannelTestPluginBase({
+    id: "msteams",
+    label: "Microsoft Teams",
+    docsPath: "/channels/msteams",
+    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+  });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      selectionLabel: "Microsoft Teams (Bot Framework)",
+      blurb: "Bot Framework; enterprise support.",
+      aliases: ["teams"],
+    },
+  };
+};
+
+export const createMSTeamsTestPlugin = (params?: {
+  aliases?: string[];
+  outbound?: ChannelOutboundAdapter;
+}): ChannelPlugin => {
+  const base = createMSTeamsTestPluginBase();
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(params?.aliases ? { aliases: params.aliases } : {}),
+    },
+    ...(params?.outbound ? { outbound: params.outbound } : {}),
+  };
+};
+
+export const createOutboundTestPlugin = (params: {
+  id: ChannelId;
+  outbound: ChannelOutboundAdapter;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+}): ChannelPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: { listAccountIds: () => [] },
+  }),
   outbound: params.outbound,
 });

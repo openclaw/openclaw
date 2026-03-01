@@ -1,29 +1,44 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
+  supportsChannelMessageButtonsForChannel,
   supportsChannelMessageCards,
+  supportsChannelMessageCardsForChannel,
 } from "../../channels/plugins/message-actions.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
-import { assertSandboxPath } from "../sandbox-paths.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
+  "send",
+  "sendWithEffect",
+  "sendAttachment",
+  "reply",
+  "thread-reply",
+  "broadcast",
+]);
+
+function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
+  return EXPLICIT_TARGET_ACTIONS.has(action);
+}
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -34,7 +49,121 @@ function buildRoutingSchema() {
   };
 }
 
-function buildSendSchema(options: { includeButtons: boolean; includeCards: boolean }) {
+const discordComponentEmojiSchema = Type.Object({
+  name: Type.String(),
+  id: Type.Optional(Type.String()),
+  animated: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentOptionSchema = Type.Object({
+  label: Type.String(),
+  value: Type.String(),
+  description: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  default: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentButtonSchema = Type.Object({
+  label: Type.String(),
+  style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  url: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  disabled: Type.Optional(Type.Boolean()),
+  allowedUsers: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "Discord user ids or names allowed to interact with this button.",
+      }),
+    ),
+  ),
+});
+
+const discordComponentSelectSchema = Type.Object({
+  type: Type.Optional(stringEnum(["string", "user", "role", "mentionable", "channel"])),
+  placeholder: Type.Optional(Type.String()),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+});
+
+const discordComponentBlockSchema = Type.Object({
+  type: Type.String(),
+  text: Type.Optional(Type.String()),
+  texts: Type.Optional(Type.Array(Type.String())),
+  accessory: Type.Optional(
+    Type.Object({
+      type: Type.String(),
+      url: Type.Optional(Type.String()),
+      button: Type.Optional(discordComponentButtonSchema),
+    }),
+  ),
+  spacing: Type.Optional(stringEnum(["small", "large"])),
+  divider: Type.Optional(Type.Boolean()),
+  buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
+  select: Type.Optional(discordComponentSelectSchema),
+  items: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String(),
+        description: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+  ),
+  file: Type.Optional(Type.String()),
+  spoiler: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentModalFieldSchema = Type.Object({
+  type: Type.String(),
+  name: Type.Optional(Type.String()),
+  label: Type.String(),
+  description: Type.Optional(Type.String()),
+  placeholder: Type.Optional(Type.String()),
+  required: Type.Optional(Type.Boolean()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  minLength: Type.Optional(Type.Number()),
+  maxLength: Type.Optional(Type.Number()),
+  style: Type.Optional(stringEnum(["short", "paragraph"])),
+});
+
+const discordComponentModalSchema = Type.Object({
+  title: Type.String(),
+  triggerLabel: Type.Optional(Type.String()),
+  triggerStyle: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  fields: Type.Array(discordComponentModalFieldSchema),
+});
+
+const discordComponentMessageSchema = Type.Object(
+  {
+    text: Type.Optional(Type.String()),
+    reusable: Type.Optional(
+      Type.Boolean({
+        description: "Allow components to be used multiple times until they expire.",
+      }),
+    ),
+    container: Type.Optional(
+      Type.Object({
+        accentColor: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+    blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+    modal: Type.Optional(discordComponentModalSchema),
+  },
+  {
+    description:
+      "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
+  },
+);
+
+function buildSendSchema(options: {
+  includeButtons: boolean;
+  includeCards: boolean;
+  includeComponents: boolean;
+}) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -45,7 +174,11 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     effect: Type.Optional(
       Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
     ),
-    media: Type.Optional(Type.String()),
+    media: Type.Optional(
+      Type.String({
+        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+      }),
+    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
@@ -72,6 +205,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
           Type.Object({
             text: Type.String(),
             callback_data: Type.String(),
+            style: Type.Optional(stringEnum(["danger", "success", "primary"])),
           }),
         ),
         {
@@ -88,6 +222,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
         },
       ),
     ),
+    components: Type.Optional(discordComponentMessageSchema),
   };
   if (!options.includeButtons) {
     delete props.buttons;
@@ -95,12 +230,27 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
   if (!options.includeCards) {
     delete props.card;
   }
+  if (!options.includeComponents) {
+    delete props.components;
+  }
   return props;
 }
 
 function buildReactionSchema() {
   return {
-    messageId: Type.Optional(Type.String()),
+    messageId: Type.Optional(
+      Type.String({
+        description:
+          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+      }),
+    ),
+    message_id: Type.Optional(
+      Type.String({
+        // Intentional duplicate alias for tool-schema discoverability in LLMs.
+        description:
+          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+      }),
+    ),
     emoji: Type.Optional(Type.String()),
     remove: Type.Optional(Type.Boolean()),
     targetAuthor: Type.Optional(Type.String()),
@@ -193,6 +343,36 @@ function buildGatewaySchema() {
   };
 }
 
+function buildPresenceSchema() {
+  return {
+    activityType: Type.Optional(
+      Type.String({
+        description: "Activity type: playing, streaming, listening, watching, competing, custom.",
+      }),
+    ),
+    activityName: Type.Optional(
+      Type.String({
+        description: "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
+      }),
+    ),
+    activityUrl: Type.Optional(
+      Type.String({
+        description:
+          "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
+      }),
+    ),
+    activityState: Type.Optional(
+      Type.String({
+        description:
+          "State text. For custom type this is the status text; for others it shows in the flyout.",
+      }),
+    ),
+    status: Type.Optional(
+      Type.String({ description: "Bot status: online, dnd, idle, invisible." }),
+    ),
+  };
+}
+
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
@@ -211,7 +391,11 @@ function buildChannelManagementSchema() {
   };
 }
 
-function buildMessageToolSchemaProps(options: { includeButtons: boolean; includeCards: boolean }) {
+function buildMessageToolSchemaProps(options: {
+  includeButtons: boolean;
+  includeCards: boolean;
+  includeComponents: boolean;
+}) {
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
@@ -225,12 +409,13 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
     ...buildModerationSchema(),
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
+    ...buildPresenceSchema(),
   };
 }
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean; includeCards: boolean },
+  options: { includeButtons: boolean; includeCards: boolean; includeComponents: boolean },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -242,6 +427,7 @@ function buildMessageToolSchemaFromActions(
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
+  includeComponents: true,
 });
 
 type MessageToolOptions = {
@@ -251,18 +437,66 @@ type MessageToolOptions = {
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
+  currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
+  requireExplicitTarget?: boolean;
+  requesterSenderId?: string;
 };
 
-function buildMessageToolSchema(cfg: OpenClawConfig) {
-  const actions = listChannelMessageActions(cfg);
-  const includeButtons = supportsChannelMessageButtons(cfg);
-  const includeCards = supportsChannelMessageCards(cfg);
+function resolveMessageToolSchemaActions(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}): string[] {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    const scopedActions = filterActionsForContext({
+      actions: listChannelSupportedActions({
+        cfg: params.cfg,
+        channel: currentChannel,
+      }),
+      channel: currentChannel,
+      currentChannelId: params.currentChannelId,
+    });
+    const withSend = new Set<string>(["send", ...scopedActions]);
+    return Array.from(withSend);
+  }
+  const actions = listChannelMessageActions(params.cfg);
+  return actions.length > 0 ? actions : ["send"];
+}
+
+function resolveIncludeComponents(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    return currentChannel === "discord";
+  }
+  // Components are currently Discord-specific.
+  return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
+}
+
+function buildMessageToolSchema(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}) {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  const actions = resolveMessageToolSchemaActions(params);
+  const includeButtons = currentChannel
+    ? supportsChannelMessageButtonsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageButtons(params.cfg);
+  const includeCards = currentChannel
+    ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageCards(params.cfg);
+  const includeComponents = resolveIncludeComponents(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
+    includeComponents,
   });
 }
 
@@ -339,7 +573,13 @@ function buildMessageToolDescription(options?: {
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
-  const schema = options?.config ? buildMessageToolSchema(options.config) : MessageToolSchema;
+  const schema = options?.config
+    ? buildMessageToolSchema({
+        cfg: options.config,
+        currentChannelProvider: options.currentChannelProvider,
+        currentChannelId: options.currentChannelId,
+      })
+    : MessageToolSchema;
   const description = buildMessageToolDescription({
     config: options?.config,
     currentChannel: options?.currentChannelProvider,
@@ -358,20 +598,33 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         err.name = "AbortError";
         throw err;
       }
-      const params = args as Record<string, unknown>;
+      // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
+      const params = { ...(args as Record<string, unknown>) };
+
+      // Strip reasoning tags from text fields — models may include <think>…</think>
+      // in tool arguments, and the messaging tool send path has no other tag filtering.
+      for (const field of ["text", "content", "message", "caption"]) {
+        if (typeof params[field] === "string") {
+          params[field] = stripReasoningTagsFromText(params[field]);
+        }
+      }
+
       const cfg = options?.config ?? loadConfig();
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-
-      // Validate file paths against sandbox root to prevent host file access.
-      const sandboxRoot = options?.sandboxRoot;
-      if (sandboxRoot) {
-        for (const key of ["filePath", "path"] as const) {
-          const raw = readStringParam(params, key, { trim: false });
-          if (raw) {
-            await assertSandboxPath({ filePath: raw, cwd: sandboxRoot, root: sandboxRoot });
-          }
+      const requireExplicitTarget = options?.requireExplicitTarget === true;
+      if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
+        const explicitTarget =
+          (typeof params.target === "string" && params.target.trim().length > 0) ||
+          (typeof params.to === "string" && params.to.trim().length > 0) ||
+          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+          (Array.isArray(params.targets) &&
+            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
+        if (!explicitTarget) {
+          throw new Error(
+            "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+          );
         }
       }
 
@@ -380,25 +633,36 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gateway = {
-        url: readStringParam(params, "gatewayUrl", { trim: false }),
-        token: readStringParam(params, "gatewayToken", { trim: false }),
+      const gatewayResolved = resolveGatewayOptions({
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: readNumberParam(params, "timeoutMs"),
+      });
+      const gateway = {
+        url: gatewayResolved.url,
+        token: gatewayResolved.token,
+        timeoutMs: gatewayResolved.timeoutMs,
         clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         clientDisplayName: "agent",
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       };
+      const hasCurrentMessageId =
+        typeof options?.currentMessageId === "number" ||
+        (typeof options?.currentMessageId === "string" &&
+          options.currentMessageId.trim().length > 0);
 
       const toolContext =
         options?.currentChannelId ||
         options?.currentChannelProvider ||
         options?.currentThreadTs ||
+        hasCurrentMessageId ||
         options?.replyToMode ||
         options?.hasRepliedRef
           ? {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
               currentThreadTs: options?.currentThreadTs,
+              currentMessageId: options?.currentMessageId,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
               // Direct tool invocations should not add cross-context decoration.
@@ -412,11 +676,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action,
         params,
         defaultAccountId: accountId ?? undefined,
+        requesterSenderId: options?.requesterSenderId,
         gateway,
         toolContext,
+        sessionKey: options?.agentSessionKey,
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
+        sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
 

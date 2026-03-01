@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  formatSandboxToolPolicyBlockedMessage,
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "./sandbox.js";
+import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
+import { formatSandboxToolPolicyBlockedMessage } from "./sandbox/runtime-status.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 
 describe("sandbox explain helpers", () => {
   it("prefers agent overrides > global > defaults (sandbox tool policy)", () => {

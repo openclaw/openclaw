@@ -2,7 +2,8 @@
  * Message normalization utilities for chat rendering.
  */
 
-import type { NormalizedMessage, MessageContentItem } from "../types/chat-types";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
  * Normalize a raw message object into a consistent structure.
@@ -21,13 +22,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     Array.isArray(contentItems) &&
     contentItems.some((item) => {
       const x = item as Record<string, unknown>;
-      const t = String(x.type ?? "").toLowerCase();
+      const t = (typeof x.type === "string" ? x.type : "").toLowerCase();
       return t === "toolresult" || t === "tool_result";
     });
 
-  const hasToolName =
-    typeof (m as Record<string, unknown>).toolName === "string" ||
-    typeof (m as Record<string, unknown>).tool_name === "string";
+  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
@@ -52,6 +51,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
 
+  // Strip AI-injected metadata prefix blocks from user messages before display.
+  if (role === "user" || role === "User") {
+    content = content.map((item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        return { ...item, text: stripInboundMetadata(item.text) };
+      }
+      return item;
+    });
+  }
+
   return { role, content, timestamp, id };
 }
 
@@ -61,9 +70,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   // Preserve original casing when it's already a core role.
-  if (role === "user" || role === "User") return role;
-  if (role === "assistant") return "assistant";
-  if (role === "system") return "system";
+  if (role === "user" || role === "User") {
+    return role;
+  }
+  if (role === "assistant") {
+    return "assistant";
+  }
+  if (role === "system") {
+    return "system";
+  }
   // Keep tool-related roles distinct so the UI can style/toggle them.
   if (
     lower === "toolresult" ||

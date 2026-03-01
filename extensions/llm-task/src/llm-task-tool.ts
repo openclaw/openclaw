@@ -1,8 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
 // NOTE: This extension is intended to be bundled with OpenClaw.
 // When running from source (tests/dev), OpenClaw internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
@@ -15,7 +15,9 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
   try {
     const mod = await import("../../../src/agents/pi-embedded-runner.js");
+    // oxlint-disable-next-line typescript/no-explicit-any
     if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+      // oxlint-disable-next-line typescript/no-explicit-any
       return (mod as any).runEmbeddedPiAgent;
     }
   } catch {
@@ -23,11 +25,11 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built)
-  const mod = await import("../../../agents/pi-embedded-runner.js");
+  const mod = await import("../../../src/agents/pi-embedded-runner.js");
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
   }
-  return mod.runEmbeddedPiAgent;
+  return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
 }
 
 function stripCodeFences(s: string): string {
@@ -67,6 +69,7 @@ type PluginCfg = {
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
     name: "llm-task",
+    label: "LLM Task",
     description:
       "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
     parameters: Type.Object({
@@ -93,7 +96,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const primary = api.config?.agents?.defaults?.model?.primary;
+      const defaultsModel = api.config?.agents?.defaults?.model;
+      const primary =
+        typeof defaultsModel === "string"
+          ? defaultsModel.trim()
+          : (defaultsModel?.primary?.trim() ?? undefined);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -111,7 +118,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         undefined;
 
       const authProfileId =
+        // oxlint-disable-next-line typescript/no-explicit-any
         (typeof (params as any).authProfileId === "string" &&
+          // oxlint-disable-next-line typescript/no-explicit-any
           (params as any).authProfileId.trim()) ||
         (typeof pluginCfg.defaultAuthProfileId === "string" &&
           pluginCfg.defaultAuthProfileId.trim()) ||
@@ -150,6 +159,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
               : undefined,
       };
 
+      // oxlint-disable-next-line typescript/no-explicit-any
       const input = (params as any).input as unknown;
       let inputJson: string;
       try {
@@ -170,7 +180,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-task-"));
+        tmpDir = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
+        );
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 
@@ -192,6 +204,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           disableTools: true,
         });
 
+        // oxlint-disable-next-line typescript/no-explicit-any
         const text = collectText((result as any).payloads);
         if (!text) {
           throw new Error("LLM returned empty output");
@@ -205,15 +218,20 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           throw new Error("LLM returned invalid JSON");
         }
 
+        // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv({ allErrors: true, strict: false });
+          const ajv = new Ajv.default({ allErrors: true, strict: false });
+          // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);
           if (!ok) {
             const msg =
               validate.errors
-                ?.map((e) => `${e.instancePath || "<root>"} ${e.message || "invalid"}`)
+                ?.map(
+                  (e: { instancePath?: string; message?: string }) =>
+                    `${e.instancePath || "<root>"} ${e.message || "invalid"}`,
+                )
                 .join("; ") ?? "invalid";
             throw new Error(`LLM JSON did not match schema: ${msg}`);
           }

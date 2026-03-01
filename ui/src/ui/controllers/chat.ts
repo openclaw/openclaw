@@ -1,7 +1,7 @@
-import type { GatewayBrowserClient } from "../gateway";
-import type { ChatAttachment } from "../ui-types";
-import { extractText } from "../chat/message-extract";
-import { generateUUID } from "../uuid";
+import { extractText } from "../chat/message-extract.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ChatAttachment } from "../ui-types.ts";
+import { generateUUID } from "../uuid.ts";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
@@ -28,14 +28,19 @@ export type ChatEventPayload = {
 };
 
 export async function loadChatHistory(state: ChatState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = (await state.client.request("chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 200,
-    })) as { messages?: unknown[]; thinkingLevel?: string | null };
+    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+      "chat.history",
+      {
+        sessionKey: state.sessionKey,
+        limit: 200,
+      },
+    );
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
@@ -47,8 +52,59 @@ export async function loadChatHistory(state: ChatState) {
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return { mimeType: match[1], content: match[2] };
+}
+
+type AssistantMessageNormalizationOptions = {
+  roleRequirement: "required" | "optional";
+  roleCaseSensitive?: boolean;
+  requireContentArray?: boolean;
+  allowTextField?: boolean;
+};
+
+function normalizeAssistantMessage(
+  message: unknown,
+  options: AssistantMessageNormalizationOptions,
+): Record<string, unknown> | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const candidate = message as Record<string, unknown>;
+  const roleValue = candidate.role;
+  if (typeof roleValue === "string") {
+    const role = options.roleCaseSensitive ? roleValue : roleValue.toLowerCase();
+    if (role !== "assistant") {
+      return null;
+    }
+  } else if (options.roleRequirement === "required") {
+    return null;
+  }
+
+  if (options.requireContentArray) {
+    return Array.isArray(candidate.content) ? candidate : null;
+  }
+  if (!("content" in candidate) && !(options.allowTextField && "text" in candidate)) {
+    return null;
+  }
+  return candidate;
+}
+
+function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
+  return normalizeAssistantMessage(message, {
+    roleRequirement: "required",
+    roleCaseSensitive: true,
+    requireContentArray: true,
+  });
+}
+
+function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
+  return normalizeAssistantMessage(message, {
+    roleRequirement: "optional",
+    allowTextField: true,
+  });
 }
 
 export async function sendChatMessage(
@@ -56,10 +112,14 @@ export async function sendChatMessage(
   message: string,
   attachments?: ChatAttachment[],
 ): Promise<string | null> {
-  if (!state.client || !state.connected) return null;
+  if (!state.client || !state.connected) {
+    return null;
+  }
   const msg = message.trim();
   const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) return null;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
 
   const now = Date.now();
 
@@ -99,7 +159,9 @@ export async function sendChatMessage(
     ? attachments
         .map((att) => {
           const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) return null;
+          if (!parsed) {
+            return null;
+          }
           return {
             type: "image",
             mimeType: parsed.mimeType,
@@ -139,7 +201,9 @@ export async function sendChatMessage(
 }
 
 export async function abortChatRun(state: ChatState): Promise<boolean> {
-  if (!state.client || !state.connected) return false;
+  if (!state.client || !state.connected) {
+    return false;
+  }
   const runId = state.chatRunId;
   try {
     await state.client.request(
@@ -154,13 +218,24 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
 }
 
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) return null;
-  if (payload.sessionKey !== state.sessionKey) return null;
+  if (!payload) {
+    return null;
+  }
+  if (payload.sessionKey !== state.sessionKey) {
+    return null;
+  }
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
-    if (payload.state === "final") return "final";
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage) {
+        state.chatMessages = [...state.chatMessages, finalMessage];
+        return null;
+      }
+      return "final";
+    }
     return null;
   }
 
@@ -173,10 +248,30 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    const finalMessage = normalizeFinalAssistantMessage(payload.message);
+    if (finalMessage) {
+      state.chatMessages = [...state.chatMessages, finalMessage];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+    if (normalizedMessage) {
+      state.chatMessages = [...state.chatMessages, normalizedMessage];
+    } else {
+      const streamedText = state.chatStream ?? "";
+      if (streamedText.trim()) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: streamedText }],
+            timestamp: Date.now(),
+          },
+        ];
+      }
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

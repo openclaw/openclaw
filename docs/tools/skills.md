@@ -44,13 +44,13 @@ Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
 when the plugin is enabled and participate in the normal skill precedence rules.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
-entry. See [Plugins](/plugin) for discovery/config and [Tools](/tools) for the
+entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
 
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-https://clawhub.com. Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
@@ -195,7 +195,7 @@ Bundled/managed skills can be toggled and supplied with env values:
     entries: {
       "nano-banana-pro": {
         enabled: true,
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE",
         },
@@ -221,6 +221,7 @@ Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.openclaw.primaryEnv`.
+  Supports plaintext string or SecretRef object (`{ source, provider, id }`).
 - `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
@@ -295,6 +296,6 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse https://clawhub.com.
+Browse [https://clawhub.com](https://clawhub.com).
 
 ---

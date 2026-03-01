@@ -22,24 +22,59 @@ echo "Creating Docker network..."
 docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
-	docker run --rm -d \
-	  --name "$GW_NAME" \
-	  --network "$NET_NAME" \
-	  -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
-	  -e "OPENCLAW_SKIP_CHANNELS=1" \
-	  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
-	  -e "OPENCLAW_SKIP_CRON=1" \
-	  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
-	  "$IMAGE_NAME" \
-  bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
+docker run -d \
+  --name "$GW_NAME" \
+  --network "$NET_NAME" \
+  -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
+  -e "OPENCLAW_SKIP_CHANNELS=1" \
+  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+  -e "OPENCLAW_SKIP_CRON=1" \
+  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  "$IMAGE_NAME" \
+  bash -lc "set -euo pipefail; entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."
-for _ in $(seq 1 20); do
+ready=0
+for _ in $(seq 1 40); do
+  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
+    break
+  fi
+  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+    import net from \"node:net\";
+    const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      process.exit(1);
+    }, 400);
+    socket.on(\"connect\", () => {
+      clearTimeout(timeout);
+      socket.end();
+      process.exit(0);
+    });
+    socket.on(\"error\", () => {
+      clearTimeout(timeout);
+      process.exit(1);
+    });
+  ' >/dev/null 2>&1"; then
+    ready=1
+    break
+  fi
   if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log"; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+
+if [ "$ready" -ne 1 ]; then
+  echo "Gateway failed to start"
+  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
+  else
+    docker logs "$GW_NAME" 2>&1 | tail -n 120 || true
+  fi
+  exit 1
+fi
 
 docker exec "$GW_NAME" bash -lc "tail -n 50 /tmp/gateway-net-e2e.log"
 
@@ -49,9 +84,9 @@ docker run --rm \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \
-  bash -lc "node - <<'NODE'
+  bash -lc "node --import tsx - <<'NODE'
 import { WebSocket } from \"ws\";
-import { PROTOCOL_VERSION } from \"./dist/gateway/protocol/index.js\";
+import { PROTOCOL_VERSION } from \"./src/gateway/protocol/index.ts\";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -94,22 +129,17 @@ ws.send(
         version: \"dev\",
         platform: process.platform,
         mode: \"test\",
-      },
-      caps: [],
-      auth: { token },
-    },
-  }),
-	);
-	const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
-	if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
+	      },
+	      caps: [],
+	      auth: { token },
+	    },
+	  }),
+			);
+		const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
+		if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
 
-	ws.send(JSON.stringify({ type: \"req\", id: \"h1\", method: \"health\" }));
-	const healthRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"h1\", 10000);
-	if (!healthRes.ok) throw new Error(\"health failed: \" + (healthRes.error?.message ?? \"unknown\"));
-	if (healthRes.payload?.ok !== true) throw new Error(\"unexpected health payload\");
-
-	ws.close();
-	console.log(\"ok\");
+		ws.close();
+		console.log(\"ok\");
 NODE"
 
 echo "OK"

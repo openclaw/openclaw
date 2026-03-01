@@ -1,26 +1,12 @@
 import path from "node:path";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
-  DEFAULT_INPUT_FILE_MAX_BYTES,
-  DEFAULT_INPUT_FILE_MAX_CHARS,
-  DEFAULT_INPUT_FILE_MIMES,
-  DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_PDF_MAX_PAGES,
-  DEFAULT_INPUT_PDF_MAX_PIXELS,
-  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-  DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
-  normalizeMimeList,
   normalizeMimeType,
+  resolveInputFileLimits,
 } from "../media/input-files.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
@@ -35,8 +21,15 @@ import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
+  resolveMediaAttachmentLocalRoots,
   runCapability,
 } from "./runner.js";
+import type {
+  MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+  MediaUnderstandingProvider,
+} from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
@@ -107,20 +100,10 @@ function sanitizeMimeType(value?: string): string | undefined {
 
 function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
-  const allowedMimesConfigured = Boolean(files?.allowedMimes && files.allowedMimes.length > 0);
+  const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
   return {
-    allowUrl: files?.allowUrl ?? true,
-    allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    ...resolveInputFileLimits(files),
     allowedMimesConfigured,
-    maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
-    maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
-    maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-    timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-    pdf: {
-      maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
-      maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-      minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-    },
   };
 }
 
@@ -317,6 +300,37 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
+function isBinaryMediaMime(mime?: string): boolean {
+  if (!mime) {
+    return false;
+  }
+  if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/")) {
+    return true;
+  }
+  if (mime === "application/octet-stream") {
+    return true;
+  }
+  if (
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed" ||
+    mime === "application/gzip" ||
+    mime === "application/x-gzip" ||
+    mime === "application/x-rar-compressed" ||
+    mime === "application/x-7z-compressed"
+  ) {
+    return true;
+  }
+  if (mime.startsWith("application/vnd.")) {
+    // Keep vendor +json/+xml payloads eligible for text extraction while
+    // treating the common binary vendor family (Office, archives, etc.) as binary.
+    if (mime.endsWith("+json") || mime.endsWith("+xml")) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 async function extractFileBlocks(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
@@ -337,7 +351,7 @@ async function extractFileBlocks(params: {
     }
     const forcedTextMime = resolveTextMimeFromName(attachment.path ?? attachment.url ?? "");
     const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-    if (!forcedTextMime && (kind === "image" || kind === "video")) {
+    if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
       continue;
     }
     if (!limits.allowUrl && attachment.url && !attachment.path) {
@@ -361,16 +375,21 @@ async function extractFileBlocks(params: {
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
-    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
-    const textSample = decodeTextSample(bufferResult?.buffer);
-    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
+    const rawMime = bufferResult?.mime ?? attachment.mime;
+    const normalizedRawMime = normalizeMimeType(rawMime);
+    if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
       continue;
     }
+    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
+    const textSample = decodeTextSample(bufferResult?.buffer);
+    // Do not coerce real PDFs into text/plain via printable-byte heuristics.
+    // PDFs have a dedicated extraction path in extractFileContentFromSource.
+    const allowTextHeuristic = normalizedRawMime !== "application/pdf";
+    const textLike =
+      allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-    const rawMime = bufferResult?.mime ?? attachment.mime;
     const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
@@ -459,7 +478,9 @@ export async function applyMediaUnderstanding(params: {
 
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers);
-  const cache = createMediaAttachmentCache(attachments);
+  const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+  });
 
   try {
     const tasks = CAPABILITY_ORDER.map((capability) => async () => {

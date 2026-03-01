@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -9,13 +9,40 @@ import {
   saveSessionStore,
 } from "./sessions.js";
 
+function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "id-1",
+    updatedAt: Date.now(),
+    displayName: "Test Session 1",
+    ...overrides,
+  };
+}
+
+function createSingleSessionStore(
+  entry: SessionEntry = createSessionEntry(),
+  key = "session:1",
+): Record<string, SessionEntry> {
+  return { [key]: entry };
+}
+
 describe("Session Store Cache", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
   let testDir: string;
   let storePath: string;
 
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-cache-test-"));
+  });
+
+  afterAll(() => {
+    if (fixtureRoot) {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
-    // Create a temporary directory for test
-    testDir = path.join(os.tmpdir(), `session-cache-test-${Date.now()}`);
+    testDir = path.join(fixtureRoot, `case-${caseId++}`);
     fs.mkdirSync(testDir, { recursive: true });
     storePath = path.join(testDir, "sessions.json");
 
@@ -27,22 +54,12 @@ describe("Session Store Cache", () => {
   });
 
   afterEach(() => {
-    // Clean up test directory
-    if (fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true, force: true });
-    }
     clearSessionStoreCacheForTest();
     delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
   });
 
   it("should load session store from disk on first call", async () => {
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
-        displayName: "Test Session 1",
-      },
-    };
+    const testStore = createSingleSessionStore();
 
     // Write test data
     await saveSessionStore(storePath, testStore);
@@ -53,13 +70,7 @@ describe("Session Store Cache", () => {
   });
 
   it("should cache session store on first load when file is unchanged", async () => {
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
-        displayName: "Test Session 1",
-      },
-    };
+    const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
 
@@ -77,17 +88,15 @@ describe("Session Store Cache", () => {
   });
 
   it("should not allow cached session mutations to leak across loads", async () => {
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
         cliSessionIds: { openai: "sess-1" },
         skillsSnapshot: {
           prompt: "skills",
           skills: [{ name: "alpha" }],
         },
-      },
-    };
+      }),
+    );
 
     await saveSessionStore(storePath, testStore);
 
@@ -103,13 +112,7 @@ describe("Session Store Cache", () => {
   });
 
   it("should refresh cache when store file changes on disk", async () => {
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
-        displayName: "Test Session 1",
-      },
-    };
+    const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
 
@@ -131,13 +134,7 @@ describe("Session Store Cache", () => {
   });
 
   it("should invalidate cache on write", async () => {
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
-        displayName: "Test Session 1",
-      },
-    };
+    const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
 
@@ -165,13 +162,7 @@ describe("Session Store Cache", () => {
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
 
-    const testStore: Record<string, SessionEntry> = {
-      "session:1": {
-        sessionId: "id-1",
-        updatedAt: Date.now(),
-        displayName: "Test Session 1",
-      },
-    };
+    const testStore = createSingleSessionStore();
 
     await saveSessionStore(storePath, testStore);
 
@@ -180,13 +171,10 @@ describe("Session Store Cache", () => {
     expect(loaded1).toEqual(testStore);
 
     // Modify file on disk
-    const modifiedStore: Record<string, SessionEntry> = {
-      "session:2": {
-        sessionId: "id-2",
-        updatedAt: Date.now(),
-        displayName: "Test Session 2",
-      },
-    };
+    const modifiedStore = createSingleSessionStore(
+      createSessionEntry({ sessionId: "id-2", displayName: "Test Session 2" }),
+      "session:2",
+    );
     fs.writeFileSync(storePath, JSON.stringify(modifiedStore, null, 2));
 
     // Second load - should read from disk (cache disabled)

@@ -1,3 +1,4 @@
+import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel, ReasoningEffortLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
@@ -17,8 +18,6 @@ type ExtractedLevel<T> = {
   rawLevel?: string;
   hasDirective: boolean;
 };
-
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const matchLevelDirective = (
   body: string,
@@ -210,7 +209,11 @@ export function extractReasoningEffortDirective(body?: string): {
       cleaned: extracted.cleaned,
       reasoningEffort: extracted.level,
       rawLevel: extracted.rawLevel,
-      hasDirective: extracted.hasDirective,
+      // Only signal hasDirective when we have a valid normalized level, OR when no
+      // rawLevel was provided at all (query mode: `/effort` with no argument).
+      // An invalid level like "/effort ultra" normalizes to undefined -- don't treat
+      // that as a recognized directive so the message isn't silently dropped.
+      hasDirective: extracted.level !== undefined || extracted.rawLevel === undefined,
     };
   }
   // Plain-English forms: "reasoning high", "high reasoning", "reasoning effort high"

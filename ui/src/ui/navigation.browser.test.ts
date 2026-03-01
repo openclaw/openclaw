@@ -1,14 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OpenClawApp } from "./app";
+import { describe, expect, it } from "vitest";
 import "../styles.css";
+import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-const originalConnect = OpenClawApp.prototype.connect;
+registerAppMountHooks();
 
 function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
-  document.body.append(app);
-  return app;
+  return mountTestApp(pathname);
 }
 
 function nextFrame() {
@@ -16,22 +13,6 @@ function nextFrame() {
     requestAnimationFrame(() => resolve());
   });
 }
-
-beforeEach(() => {
-  OpenClawApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  OpenClawApp.prototype.connect = originalConnect;
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
 
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
@@ -83,19 +64,34 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("resets to the main session when opening chat from sidebar navigation", async () => {
+    const app = mountApp("/sessions?session=agent:main:subagent:task-123");
+    await app.updateComplete;
+
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
+    expect(link).not.toBeNull();
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    await app.updateComplete;
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("main");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=main");
+  });
+
   it("keeps chat and nav usable on narrow viewports", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
-    const split = app.querySelector(".chat-split-container") as HTMLElement | null;
+    const split = app.querySelector(".chat-split-container");
     expect(split).not.toBeNull();
     if (split) {
       expect(getComputedStyle(split).position).not.toBe("fixed");
     }
 
-    const chatMain = app.querySelector(".chat-main") as HTMLElement | null;
+    const chatMain = app.querySelector(".chat-main");
     expect(chatMain).not.toBeNull();
     if (chatMain) {
       expect(getComputedStyle(chatMain).display).not.toBe("none");
@@ -115,9 +111,11 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const initialContainer = app.querySelector(".chat-thread") as HTMLElement | null;
+    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
     expect(initialContainer).not.toBeNull();
-    if (!initialContainer) return;
+    if (!initialContainer) {
+      return;
+    }
     initialContainer.style.maxHeight = "180px";
     initialContainer.style.overflow = "auto";
 
@@ -132,13 +130,17 @@ describe("control UI routing", () => {
       await nextFrame();
     }
 
-    const container = app.querySelector(".chat-thread") as HTMLElement | null;
+    const container = app.querySelector(".chat-thread");
     expect(container).not.toBeNull();
-    if (!container) return;
+    if (!container) {
+      return;
+    }
     const maxScroll = container.scrollHeight - container.clientHeight;
     expect(maxScroll).toBeGreaterThan(0);
     for (let i = 0; i < 10; i++) {
-      if (container.scrollTop === maxScroll) break;
+      if (container.scrollTop === maxScroll) {
+        break;
+      }
       await nextFrame();
     }
     expect(container.scrollTop).toBe(maxScroll);
@@ -153,11 +155,11 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates password from URL params and strips it", async () => {
+  it("strips password URL params without importing them", async () => {
     const app = mountApp("/ui/overview?password=sekret");
     await app.updateComplete;
 
-    expect(app.password).toBe("sekret");
+    expect(app.password).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
@@ -173,5 +175,14 @@ describe("control UI routing", () => {
     expect(app.settings.token).toBe("abc123");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
+  });
+
+  it("hydrates token from URL hash and strips it", async () => {
+    const app = mountApp("/ui/overview#token=abc123");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("abc123");
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.hash).toBe("");
   });
 });

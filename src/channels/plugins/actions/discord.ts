@@ -1,73 +1,80 @@
+import type { DiscordActionConfig } from "../../../config/types.discord.js";
+import { createDiscordActionGate, listEnabledDiscordAccounts } from "../../../discord/accounts.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
-import { createActionGate } from "../../../agents/tools/common.js";
-import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
 import { handleDiscordMessageAction } from "./discord/handle-action.js";
+import { createUnionActionGate, listTokenSourcedAccounts } from "./shared.js";
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listEnabledDiscordAccounts(cfg).filter(
-      (account) => account.tokenSource !== "none",
-    );
+    const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
     if (accounts.length === 0) {
       return [];
     }
-    const gate = createActionGate(cfg.channels?.discord?.actions);
+    // Union of all accounts' action gates (any account enabling an action makes it available)
+    const gate = createUnionActionGate(accounts, (account) =>
+      createDiscordActionGate({
+        cfg,
+        accountId: account.accountId,
+      }),
+    );
+    const isEnabled = (key: keyof DiscordActionConfig, defaultValue = true) =>
+      gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (gate("polls")) {
+    if (isEnabled("polls")) {
       actions.add("poll");
     }
-    if (gate("reactions")) {
+    if (isEnabled("reactions")) {
       actions.add("react");
       actions.add("reactions");
     }
-    if (gate("messages")) {
+    if (isEnabled("messages")) {
       actions.add("read");
       actions.add("edit");
       actions.add("delete");
     }
-    if (gate("pins")) {
+    if (isEnabled("pins")) {
       actions.add("pin");
       actions.add("unpin");
       actions.add("list-pins");
     }
-    if (gate("permissions")) {
+    if (isEnabled("permissions")) {
       actions.add("permissions");
     }
-    if (gate("threads")) {
+    if (isEnabled("threads")) {
       actions.add("thread-create");
       actions.add("thread-list");
       actions.add("thread-reply");
     }
-    if (gate("search")) {
+    if (isEnabled("search")) {
       actions.add("search");
     }
-    if (gate("stickers")) {
+    if (isEnabled("stickers")) {
       actions.add("sticker");
     }
-    if (gate("memberInfo")) {
+    if (isEnabled("memberInfo")) {
       actions.add("member-info");
     }
-    if (gate("roleInfo")) {
+    if (isEnabled("roleInfo")) {
       actions.add("role-info");
     }
-    if (gate("reactions")) {
+    if (isEnabled("reactions")) {
       actions.add("emoji-list");
     }
-    if (gate("emojiUploads")) {
+    if (isEnabled("emojiUploads")) {
       actions.add("emoji-upload");
     }
-    if (gate("stickerUploads")) {
+    if (isEnabled("stickerUploads")) {
       actions.add("sticker-upload");
     }
-    if (gate("roles", false)) {
+    if (isEnabled("roles", false)) {
       actions.add("role-add");
       actions.add("role-remove");
     }
-    if (gate("channelInfo")) {
+    if (isEnabled("channelInfo")) {
       actions.add("channel-info");
       actions.add("channel-list");
     }
-    if (gate("channels")) {
+    if (isEnabled("channels")) {
       actions.add("channel-create");
       actions.add("channel-edit");
       actions.add("channel-delete");
@@ -76,17 +83,20 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("category-edit");
       actions.add("category-delete");
     }
-    if (gate("voiceStatus")) {
+    if (isEnabled("voiceStatus")) {
       actions.add("voice-status");
     }
-    if (gate("events")) {
+    if (isEnabled("events")) {
       actions.add("event-list");
       actions.add("event-create");
     }
-    if (gate("moderation", false)) {
+    if (isEnabled("moderation", false)) {
       actions.add("timeout");
       actions.add("kick");
       actions.add("ban");
+    }
+    if (isEnabled("presence", false)) {
+      actions.add("set-presence");
     }
     return Array.from(actions);
   },
@@ -102,7 +112,23 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return null;
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
-    return await handleDiscordMessageAction({ action, params, cfg, accountId });
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    requesterSenderId,
+    toolContext,
+    mediaLocalRoots,
+  }) => {
+    return await handleDiscordMessageAction({
+      action,
+      params,
+      cfg,
+      accountId,
+      requesterSenderId,
+      toolContext,
+      mediaLocalRoots,
+    });
   },
 };

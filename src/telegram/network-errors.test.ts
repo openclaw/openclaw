@@ -30,13 +30,70 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(new Error("Undici: socket failure"))).toBe(true);
   });
 
-  it("skips message matches for send context", () => {
+  it("treats undici fetch failed errors as recoverable in send context", () => {
     const err = new TypeError("fetch failed");
-    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(true);
+    expect(
+      isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"), { context: "send" }),
+    ).toBe(true);
     expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+  });
+
+  it("skips broad message matches for send context", () => {
+    const networkRequestErr = new Error("Network request for 'sendMessage' failed!");
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "polling" })).toBe(true);
+
+    const undiciSnippetErr = new Error("Undici: socket failure");
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
   it("returns false for unrelated errors", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
+  });
+
+  it("detects grammY 'timed out' long-poll errors (#7239)", () => {
+    const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
+    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
+  });
+
+  // Grammy HttpError tests (issue #3815)
+  // Grammy wraps fetch errors in .error property, not .cause
+  describe("Grammy HttpError", () => {
+    class MockHttpError extends Error {
+      constructor(
+        message: string,
+        public readonly error: unknown,
+      ) {
+        super(message);
+        this.name = "HttpError";
+      }
+    }
+
+    it("detects network error wrapped in HttpError", () => {
+      const fetchError = new TypeError("fetch failed");
+      const httpError = new MockHttpError(
+        "Network request for 'setMyCommands' failed!",
+        fetchError,
+      );
+
+      expect(isRecoverableTelegramNetworkError(httpError)).toBe(true);
+    });
+
+    it("detects network error with cause wrapped in HttpError", () => {
+      const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
+      const httpError = new MockHttpError("Network request for 'getUpdates' failed!", fetchError);
+
+      expect(isRecoverableTelegramNetworkError(httpError)).toBe(true);
+    });
+
+    it("returns false for non-network errors wrapped in HttpError", () => {
+      const authError = new Error("Unauthorized: bot token is invalid");
+      const httpError = new MockHttpError("Bad Request: invalid token", authError);
+
+      expect(isRecoverableTelegramNetworkError(httpError)).toBe(false);
+    });
   });
 });

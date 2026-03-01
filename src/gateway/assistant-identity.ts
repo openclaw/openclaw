@@ -1,11 +1,17 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  isAvatarHttpUrl,
+  isAvatarImageDataUrl,
+  looksLikeAvatarPath,
+} from "../shared/avatar-policy.js";
 
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
+const MAX_ASSISTANT_EMOJI = 16;
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
@@ -17,6 +23,7 @@ export type AssistantIdentity = {
   agentId: string;
   name: string;
   avatar: string;
+  emoji?: string;
 };
 
 function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
@@ -34,14 +41,7 @@ function coerceIdentityValue(value: string | undefined, maxLength: number): stri
 }
 
 function isAvatarUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value) || /^data:image\//i.test(value);
-}
-
-function looksLikeAvatarPath(value: string): boolean {
-  if (/[\\/]/.test(value)) {
-    return true;
-  }
-  return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
+  return isAvatarHttpUrl(value) || isAvatarImageDataUrl(value);
 }
 
 function normalizeAvatarValue(value: string | undefined): string | undefined {
@@ -62,6 +62,33 @@ function normalizeAvatarValue(value: string | undefined): string | undefined {
     return trimmed;
   }
   return undefined;
+}
+
+function normalizeEmojiValue(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length > MAX_ASSISTANT_EMOJI) {
+    return undefined;
+  }
+  let hasNonAscii = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    if (trimmed.charCodeAt(i) > 127) {
+      hasNonAscii = true;
+      break;
+    }
+  }
+  if (!hasNonAscii) {
+    return undefined;
+  }
+  if (isAvatarUrl(trimmed) || looksLikeAvatarPath(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function resolveAssistantIdentity(params: {
@@ -92,5 +119,13 @@ export function resolveAssistantIdentity(params: {
     avatarCandidates.map((candidate) => normalizeAvatarValue(candidate)).find(Boolean) ??
     DEFAULT_ASSISTANT_IDENTITY.avatar;
 
-  return { agentId, name, avatar };
+  const emojiCandidates = [
+    coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_EMOJI),
+  ];
+  const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
+
+  return { agentId, name, avatar, emoji };
 }

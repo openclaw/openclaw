@@ -8,98 +8,66 @@ Input
   - If missing: use the most recent PR mentioned in the conversation.
   - If ambiguous: ask.
 
-Do (review-only)
-Goal: produce a thorough review and a clear recommendation (READY for /landpr vs NEEDS WORK). Do NOT merge, do NOT push, do NOT make changes in the repo as part of this command.
+Do (end-to-end)
+Goal: PR must end in GitHub state = MERGED (never CLOSED). Use `gh pr merge` with `--rebase` or `--squash`.
 
-1. Identify PR meta + context
-
-   ```sh
-   gh pr view <PR> --json number,title,state,isDraft,author,baseRefName,headRefName,headRepository,url,body,labels,assignees,reviewRequests,files,additions,deletions --jq '{number,title,url,state,isDraft,author:.author.login,base:.baseRefName,head:.headRefName,headRepo:.headRepository.nameWithOwner,additions,deletions,files:.files|length}'
-   ```
-
-2. Read the PR description carefully
-   - Summarize the stated goal, scope, and any “why now?” rationale.
-   - Call out any missing context: motivation, alternatives considered, rollout/compat notes, risk.
-
-3. Read the diff thoroughly (prefer full diff)
+1. Assign PR to self:
+   - `gh pr edit <PR> --add-assignee @me`
+2. Repo clean: `git status`.
+3. Identify PR meta (author + head branch):
 
    ```sh
-   gh pr diff <PR>
-   # If you need more surrounding context for files:
-   gh pr checkout <PR>   # optional; still review-only
-   git show --stat
+   gh pr view <PR> --json number,title,author,headRefName,baseRefName,headRepository --jq '{number,title,author:.author.login,head:.headRefName,base:.baseRefName,headRepo:.headRepository.nameWithOwner}'
+   contrib=$(gh pr view <PR> --json author --jq .author.login)
+   head=$(gh pr view <PR> --json headRefName --jq .headRefName)
+   head_repo_url=$(gh pr view <PR> --json headRepository --jq .headRepository.url)
    ```
 
-4. Validate the change is needed / valuable
-   - What user/customer/dev pain does this solve?
-   - Is this change the smallest reasonable fix?
-   - Are we introducing complexity for marginal benefit?
-   - Are we changing behavior/contract in a way that needs docs or a release note?
+4. Fast-forward base:
+   - `git checkout main`
+   - `git pull --ff-only`
+5. Create temp base branch from main:
+   - `git checkout -b temp/landpr-<ts-or-pr>`
+6. Check out PR branch locally:
+   - `gh pr checkout <PR>`
+7. Rebase PR branch onto temp base:
+   - `git rebase temp/landpr-<ts-or-pr>`
+   - Fix conflicts; keep history tidy.
+8. Fix + tests + changelog:
+   - Implement fixes + add/adjust tests
+   - Update `CHANGELOG.md` and mention `#<PR>` + `@$contrib`
+9. Decide merge strategy:
+   - Rebase if we want to preserve commit history
+   - Squash if we want a single clean commit
+   - If unclear, ask
+10. Full gate (BEFORE commit):
+    - `pnpm lint && pnpm build && pnpm test`
+11. Commit via committer (final merge commit only includes PR # + thanks):
+    - For the final merge-ready commit: `committer "fix: <summary> (#<PR>) (thanks @$contrib)" CHANGELOG.md <changed files>`
+    - If you need intermediate fix commits before the final merge commit, keep those messages concise and **omit** PR number/thanks.
+    - `land_sha=$(git rev-parse HEAD)`
+12. Push updated PR branch (rebase => usually needs force):
 
-5. Evaluate implementation quality + optimality
-   - Correctness: edge cases, error handling, null/undefined, concurrency, ordering.
-   - Design: is the abstraction/architecture appropriate or over/under-engineered?
-   - Performance: hot paths, allocations, queries, network, N+1s, caching.
-   - Security/privacy: authz/authn, input validation, secrets, logging PII.
-   - Backwards compatibility: public APIs, config, migrations.
-   - Style consistency: formatting, naming, patterns used elsewhere.
+    ```sh
+    git remote add prhead "$head_repo_url.git" 2>/dev/null || git remote set-url prhead "$head_repo_url.git"
+    git push --force-with-lease prhead HEAD:$head
+    ```
 
-6. Tests & verification
-   - Identify what’s covered by tests (unit/integration/e2e).
-   - Are there regression tests for the bug fixed / scenario added?
-   - Missing tests? Call out exact cases that should be added.
-   - If tests are present, do they actually assert the important behavior (not just snapshots / happy path)?
+13. Merge PR (must show MERGED on GitHub):
+    - Rebase: `gh pr merge <PR> --rebase`
+    - Squash: `gh pr merge <PR> --squash`
+    - Never `gh pr close` (closing is wrong)
+14. Sync main:
+    - `git checkout main`
+    - `git pull --ff-only`
+15. Comment on PR with what we did + SHAs + thanks:
 
-7. Follow-up refactors / cleanup suggestions
-   - Any code that should be simplified before merge?
-   - Any TODOs that should be tickets vs addressed now?
-   - Any deprecations, docs, types, or lint rules we should adjust?
+    ```sh
+    merge_sha=$(gh pr view <PR> --json mergeCommit --jq '.mergeCommit.oid')
+    gh pr comment <PR> --body "Landed via temp rebase onto main.\n\n- Gate: pnpm lint && pnpm build && pnpm test\n- Land commit: $land_sha\n- Merge commit: $merge_sha\n\nThanks @$contrib!"
+    ```
 
-8. Key questions to answer explicitly
-   - Can we fix everything ourselves in a follow-up, or does the contributor need to update this PR?
-   - Any blocking concerns (must-fix before merge)?
-   - Is this PR ready to land, or does it need work?
-
-9. Output (structured)
-   Produce a review with these sections:
-
-A) TL;DR recommendation
-
-- One of: READY FOR /landpr | NEEDS WORK | NEEDS DISCUSSION
-- 1–3 sentence rationale.
-
-B) What changed
-
-- Brief bullet summary of the diff/behavioral changes.
-
-C) What’s good
-
-- Bullets: correctness, simplicity, tests, docs, ergonomics, etc.
-
-D) Concerns / questions (actionable)
-
-- Numbered list.
-- Mark each item as:
-  - BLOCKER (must fix before merge)
-  - IMPORTANT (should fix before merge)
-  - NIT (optional)
-- For each: point to the file/area and propose a concrete fix or alternative.
-
-E) Tests
-
-- What exists.
-- What’s missing (specific scenarios).
-
-F) Follow-ups (optional)
-
-- Non-blocking refactors/tickets to open later.
-
-G) Suggested PR comment (optional)
-
-- Offer: “Want me to draft a PR comment to the author?”
-- If yes, provide a ready-to-paste comment summarizing the above, with clear asks.
-
-Rules / Guardrails
-
-- Review only: do not merge (`gh pr merge`), do not push branches, do not edit code.
-- If you need clarification, ask questions rather than guessing.
+16. Verify PR state == MERGED:
+    - `gh pr view <PR> --json state --jq .state`
+17. Delete temp branch:
+    - `git branch -D temp/landpr-<ts-or-pr>`

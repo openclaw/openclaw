@@ -1,20 +1,24 @@
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, NostrStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { formatAgo } from "../format";
-import { renderChannelConfigSection } from "./channels.config";
+import { formatRelativeTimestamp } from "../format.ts";
+import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
-} from "./channels.nostr-profile-form";
+} from "./channels.nostr-profile-form.ts";
+import type { ChannelsProps } from "./channels.types.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
-  if (!pubkey) return "n/a";
-  if (pubkey.length <= 20) return pubkey;
+  if (!pubkey) {
+    return "n/a";
+  }
+  if (pubkey.length <= 20) {
+    return pubkey;
+  }
   return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 
@@ -75,7 +79,7 @@ export function renderNostrCard(params: {
           </div>
           <div>
             <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+            <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
           </div>
           ${
             account.lastError
@@ -209,7 +213,7 @@ export function renderNostrCard(params: {
               </div>
               <div>
                 <span class="label">Last start</span>
-                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : "n/a"}</span>
+                <span>${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span>
               </div>
             </div>
           `

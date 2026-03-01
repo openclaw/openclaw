@@ -13,15 +13,15 @@ deployments work at a high level.
 
 ## Pick a provider
 
-- **Railway** (one‑click + browser setup): [Railway](/railway)
-- **Northflank** (one‑click + browser setup): [Northflank](/northflank)
+- **Railway** (one‑click + browser setup): [Railway](/install/railway)
+- **Northflank** (one‑click + browser setup): [Northflank](/install/northflank)
 - **Oracle Cloud (Always Free)**: [Oracle](/platforms/oracle) — $0/month (Always Free, ARM; capacity/signup can be finicky)
-- **Fly.io**: [Fly.io](/platforms/fly)
-- **Hetzner (Docker)**: [Hetzner](/platforms/hetzner)
-- **GCP (Compute Engine)**: [GCP](/platforms/gcp)
-- **exe.dev** (VM + HTTPS proxy): [exe.dev](/platforms/exe-dev)
+- **Fly.io**: [Fly.io](/install/fly)
+- **Hetzner (Docker)**: [Hetzner](/install/hetzner)
+- **GCP (Compute Engine)**: [GCP](/install/gcp)
+- **exe.dev** (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
 - **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
-  https://x.com/techfrenAJ/status/2014934471095812547
+  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
 ## How cloud setups work
 
@@ -33,6 +33,16 @@ deployments work at a high level.
 
 Remote access: [Gateway remote](/gateway/remote)  
 Platforms hub: [Platforms](/platforms)
+
+## Shared company agent on a VPS
+
+This is a valid setup when the users are in one trust boundary (for example one company team), and the agent is business-only.
+
+- Keep it on a dedicated runtime (VPS/VM/container + dedicated OS user/accounts).
+- Do not sign that runtime into personal Apple/Google accounts or personal browser/password-manager profiles.
+- If users are adversarial to each other, split by gateway/host/OS user.
+
+Security model details: [Security](/gateway/security)
 
 ## Using nodes with a VPS
 

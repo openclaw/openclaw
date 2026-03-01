@@ -17,10 +17,16 @@ export type ZaloAccountConfig = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   /** Allowlist for DM senders (Zalo user IDs). */
   allowFrom?: Array<string | number>;
+  /** Group-message access policy. */
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  /** Allowlist for group senders (falls back to allowFrom when unset). */
+  groupAllowFrom?: Array<string | number>;
   /** Max inbound media size in MB. */
   mediaMaxMb?: number;
   /** Proxy URL for API requests. */
   proxy?: string;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type ZaloConfig = {
