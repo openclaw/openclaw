@@ -24,6 +24,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (originalEnv === undefined) {
       delete process.env.OPENCLAW_LOG_LEVEL;
     } else {
@@ -77,5 +78,15 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       .filter((line) => line.includes("OPENCLAW_LOG_LEVEL"));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
+  });
+
+  it("expands tilde-prefixed logging file paths from effective home", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    setLoggerOverride({
+      level: "info",
+      file: "~/.openclaw/logs/gateway.log",
+    });
+
+    expect(getResolvedLoggerSettings().file).toBe("/srv/openclaw-home/.openclaw/logs/gateway.log");
   });
 });
