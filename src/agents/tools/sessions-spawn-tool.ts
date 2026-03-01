@@ -1,12 +1,13 @@
 import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, spawnAcpDirect } from "../acp-spawn.js";
+import { spawnClaudeCodeDirect } from "../claude-code-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 
-const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp", "claude-code"] as const;
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -41,13 +42,18 @@ export function createSessionsSpawnTool(opts?: {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound.',
+      'Spawn an isolated session (runtime="subagent", runtime="acp", or runtime="claude-code"). mode="run" is one-shot and mode="session" is persistent/thread-bound. runtime="claude-code" launches Claude Code CLI directly.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
-      const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      const runtime =
+        params.runtime === "acp"
+          ? "acp"
+          : params.runtime === "claude-code"
+            ? "claude-code"
+            : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
@@ -69,36 +75,12 @@ export function createSessionsSpawnTool(opts?: {
       const thread = params.thread === true;
 
       const result =
-        runtime === "acp"
-          ? await spawnAcpDirect(
+        runtime === "claude-code"
+          ? await spawnClaudeCodeDirect(
               {
                 task,
                 label: label || undefined,
-                agentId: requestedAgentId,
                 cwd,
-                mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
-                thread,
-              },
-              {
-                agentSessionKey: opts?.agentSessionKey,
-                agentChannel: opts?.agentChannel,
-                agentAccountId: opts?.agentAccountId,
-                agentTo: opts?.agentTo,
-                agentThreadId: opts?.agentThreadId,
-              },
-            )
-          : await spawnSubagentDirect(
-              {
-                task,
-                label: label || undefined,
-                agentId: requestedAgentId,
-                model: modelOverride,
-                thinking: thinkingOverrideRaw,
-                runTimeoutSeconds,
-                thread,
-                mode,
-                cleanup,
-                expectsCompletionMessage: true,
               },
               {
                 agentSessionKey: opts?.agentSessionKey,
@@ -109,9 +91,51 @@ export function createSessionsSpawnTool(opts?: {
                 agentGroupId: opts?.agentGroupId,
                 agentGroupChannel: opts?.agentGroupChannel,
                 agentGroupSpace: opts?.agentGroupSpace,
-                requesterAgentIdOverride: opts?.requesterAgentIdOverride,
               },
-            );
+            )
+          : runtime === "acp"
+            ? await spawnAcpDirect(
+                {
+                  task,
+                  label: label || undefined,
+                  agentId: requestedAgentId,
+                  cwd,
+                  mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+                  thread,
+                },
+                {
+                  agentSessionKey: opts?.agentSessionKey,
+                  agentChannel: opts?.agentChannel,
+                  agentAccountId: opts?.agentAccountId,
+                  agentTo: opts?.agentTo,
+                  agentThreadId: opts?.agentThreadId,
+                },
+              )
+            : await spawnSubagentDirect(
+                {
+                  task,
+                  label: label || undefined,
+                  agentId: requestedAgentId,
+                  model: modelOverride,
+                  thinking: thinkingOverrideRaw,
+                  runTimeoutSeconds,
+                  thread,
+                  mode,
+                  cleanup,
+                  expectsCompletionMessage: true,
+                },
+                {
+                  agentSessionKey: opts?.agentSessionKey,
+                  agentChannel: opts?.agentChannel,
+                  agentAccountId: opts?.agentAccountId,
+                  agentTo: opts?.agentTo,
+                  agentThreadId: opts?.agentThreadId,
+                  agentGroupId: opts?.agentGroupId,
+                  agentGroupChannel: opts?.agentGroupChannel,
+                  agentGroupSpace: opts?.agentGroupSpace,
+                  requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+                },
+              );
 
       return jsonResult(result);
     },
