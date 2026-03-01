@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -764,11 +765,11 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandHomePrefix(dir));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
@@ -803,17 +804,17 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath));
         return await fs.readFile(resolved);
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath));
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
       },
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandHomePrefix(absolutePath));
         await fs.access(resolved);
       },
     } as const;
