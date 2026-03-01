@@ -32,6 +32,10 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+<<<<<<< HEAD
+=======
+import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
+>>>>>>> 9ae94390b (fix(slack): resolve replyToMode per-message using chat type (#24717))
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -175,7 +179,9 @@ export async function prepareSlackMessage(params: {
   });
 
   const baseSessionKey = route.sessionKey;
-  const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
+  const chatType = isDirectMessage ? "direct" : isGroupDm ? "group" : "channel";
+  const replyToMode = resolveSlackReplyToMode(account, chatType);
+  const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
   const threadKeys = resolveThreadSessionKeys({
@@ -666,6 +672,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    replyToMode,
     isDirectMessage,
     isRoomish,
     historyKey,
