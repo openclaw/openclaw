@@ -575,9 +575,10 @@ export async function dispatchReplyFromConfig(params: {
     // This fires regardless of whether the channel plugin uses the standard
     // deliverOutboundPayloads path (which has its own emitMessageSent) or a
     // custom deliver callback (e.g., Feishu's streaming card sender).
-    // Channels using deliverOutboundPayloads will fire message:sent twice
-    // (once per-payload in deliver, once here); hooks should be idempotent.
-    if (sessionKey && (queuedFinal || routedFinalCount > 0)) {
+    // Channels using deliverOutboundPayloads may fire message:sent more than once;
+    // hooks should be idempotent.
+    const deliveredCount = counts.tool + counts.block + counts.final;
+    if (sessionKey && deliveredCount > 0) {
       void triggerInternalHook(
         createInternalHookEvent("message", "sent", sessionKey, {
           to: ctx.To ?? ctx.From ?? "",
