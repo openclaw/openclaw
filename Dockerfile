@@ -51,8 +51,16 @@ RUN pnpm build
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
-# Expose the CLI binary without requiring npm global writes as non-root.
+# Harden file permissions for plugin/extension directories.
+# Some build environments produce world-writable (777) paths, which
+# causes OpenClaw to block plugins at runtime with "world-writable path".
 USER root
+RUN find /app/extensions /app/.agent /app/.agents -type d -exec chmod 755 {} + 2>/dev/null; \
+    find /app/extensions /app/.agent /app/.agents -type f -exec chmod 644 {} + 2>/dev/null; \
+    chown -R node:node /app/extensions /app/.agent /app/.agents 2>/dev/null; \
+    true
+
+# Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
