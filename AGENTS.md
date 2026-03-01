@@ -1,4 +1,26 @@
-# Repository Guidelines
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Architecture Overview
+
+OpenClaw is a **gateway-centric personal AI assistant** that bridges multiple messaging channels to AI agents. The core architecture:
+
+- **Gateway** (`src/gateway/`) — WebSocket control plane. Manages sessions, channels, routing, media, cron, and agent lifecycle. Entry: `src/gateway/server.impl.ts`. Exposes 60+ RPC methods organized in `src/gateway/server-methods/`.
+- **Channels** (`src/channels/`, `extensions/`) — Pluggable messaging adapters (WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Matrix, Teams, etc). Each channel implements `ChannelPlugin` with adapters for auth, messaging, outbound, security, pairing, config, status.
+- **Routing** (`src/routing/`) — Multi-dimensional message routing: channel + account + peer + guild + roles → agent. `resolve-route.ts` determines which agent handles a message. Session keys encode `{agentId}:{accountId}:{chatType}:{peerId}`.
+- **ACP** (`src/acp/`) — Agent Control Protocol bridge. Agents (Pi runtime) run as separate RPC processes. `translator.ts` converts gateway events to ACP messages. `control-plane/manager.ts` manages spawning/lifecycle.
+- **Plugin SDK** (`src/plugin-sdk/`) — Public API for extensions. Exports types and helpers. Extensions live in `extensions/*` as pnpm workspace packages.
+- **Plugin System** (`src/plugins/`) — Runtime plugin loading, hook execution, tool/command registration. Hook entry points: `before-agent-start`, `after-tool-call`, message/session phase hooks.
+- **CLI** (`src/cli/`) — Commander.js-based. Entry: `src/cli/program.ts`. DI via `createDefaultDeps()`. Key commands: `gateway`, `agent`, `send`, `config`, `channels`, `onboard`, `doctor`.
+- **Config** (`src/config/`) — JSON5-based (`~/.openclaw/config.json`). Zod validation. Live-reloadable. Schema types in `src/config/types/`.
+- **Native Apps** — macOS (`apps/macos/`, Swift/SwiftUI menubar app managing gateway), iOS (`apps/ios/`), Android (`apps/android/`). Shared Swift code in `apps/shared/OpenClawKit/`.
+- **Media** (`src/media/`) — Express HTTP routes for image/audio/video serving with TTL cleanup.
+- **UI** (`ui/`) — Lit-based web components (separate workspace).
+
+**Message flow:** Channel adapter → route resolution → agent queue → agent RPC response → outbound adapter → channel delivery.
+
+## Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
@@ -69,6 +91,12 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Run a single test file: `pnpm exec vitest run src/path/to/file.test.ts`
+- Run a single test by name: `pnpm exec vitest run -t "test name pattern"`
+- Watch mode: `pnpm test:watch`
+- Extension tests: use `vitest.extensions.config.ts` — `pnpm exec vitest run --config vitest.extensions.config.ts extensions/foo/src/bar.test.ts`
+- Gateway tests only: `pnpm exec vitest run --config vitest.gateway.config.ts`
+- E2E tests: `pnpm test:e2e` (uses `vitest.e2e.config.ts`, pool `vmForks`, 1 worker)
 
 ## Coding Style & Naming Conventions
 
