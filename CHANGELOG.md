@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docker: add optional `OPENCLAW_DOCKER_OFFICIAL_REPO` build arg to configure Docker's official APT repository with GPG key verification, so packages like `docker-ce-cli` can be installed via `OPENCLAW_DOCKER_APT_PACKAGES`. (#5866) Thanks @codearranger.
 - Web UI/i18n: add German (`de`) locale support and auto-render language options from supported locale constants in Overview settings. (#28495) thanks @dsantoreis.
 - Discord/Thread bindings: replace fixed TTL lifecycle with inactivity (`idleHours`, default 24h) plus optional hard `maxAgeHours` lifecycle controls, and add `/session idle` + `/session max-age` commands for focused thread-bound sessions. (#27845) Thanks @osolmaz.
 - Android/Nodes: add `camera.list`, `device.permissions`, `device.health`, and `notifications.actions` (`open`/`dismiss`/`reply`) on Android nodes, plus first-class node-tool actions for the new device/notification commands. (#28260) Thanks @obviyus.
