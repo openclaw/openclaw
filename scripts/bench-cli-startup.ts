@@ -11,6 +11,8 @@ type Sample = {
   signal: NodeJS.Signals | null;
 };
 
+type CaseSummary = ReturnType<typeof summarize>;
+
 const DEFAULT_RUNS = 8;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
@@ -124,29 +126,74 @@ function collectExitSummary(samples: Sample[]): string {
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
 }
 
+function printSuite(params: {
+  title: string;
+  entry: string;
+  runs: number;
+  timeoutMs: number;
+}): Map<string, CaseSummary> {
+  console.log(params.title);
+  console.log(`Entry: ${params.entry}`);
+  const suite = new Map<string, CaseSummary>();
+  for (const commandCase of DEFAULT_CASES) {
+    const samples = runCase({
+      entry: params.entry,
+      runCase: commandCase,
+      runs: params.runs,
+      timeoutMs: params.timeoutMs,
+    });
+    const stats = summarize(samples);
+    const exitSummary = collectExitSummary(samples);
+    suite.set(commandCase.name, stats);
+    console.log(
+      `${commandCase.name.padEnd(13)} avg=${formatMs(stats.avg)} p50=${formatMs(stats.p50)} p95=${formatMs(stats.p95)} min=${formatMs(stats.min)} max=${formatMs(stats.max)} exits=[${exitSummary}]`,
+    );
+  }
+  console.log("");
+  return suite;
+}
+
 async function main(): Promise<void> {
-  const entry = parseFlagValue("--entry") ?? DEFAULT_ENTRY;
+  const entryPrimary =
+    parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY;
+  const entrySecondary = parseFlagValue("--entry-secondary");
   const runs = parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS);
   const timeoutMs = parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS);
 
   console.log(`Node: ${process.version}`);
-  console.log(`Entry: ${entry}`);
   console.log(`Runs per command: ${runs}`);
   console.log(`Timeout: ${timeoutMs}ms`);
   console.log("");
 
-  for (const commandCase of DEFAULT_CASES) {
-    const samples = runCase({
-      entry,
-      runCase: commandCase,
+  const primaryResults = printSuite({
+    title: "Primary entry",
+    entry: entryPrimary,
+    runs,
+    timeoutMs,
+  });
+
+  if (entrySecondary) {
+    const secondaryResults = printSuite({
+      title: "Secondary entry",
+      entry: entrySecondary,
       runs,
       timeoutMs,
     });
-    const stats = summarize(samples);
-    const exitSummary = collectExitSummary(samples);
-    console.log(
-      `${commandCase.name.padEnd(13)} avg=${formatMs(stats.avg)} p50=${formatMs(stats.p50)} p95=${formatMs(stats.p95)} min=${formatMs(stats.min)} max=${formatMs(stats.max)} exits=[${exitSummary}]`,
-    );
+
+    console.log("Delta (secondary - primary, avg)");
+    for (const commandCase of DEFAULT_CASES) {
+      const primary = primaryResults.get(commandCase.name);
+      const secondary = secondaryResults.get(commandCase.name);
+      if (!primary || !secondary) {
+        continue;
+      }
+      const delta = secondary.avg - primary.avg;
+      const pct = primary.avg > 0 ? (delta / primary.avg) * 100 : 0;
+      const sign = delta > 0 ? "+" : "";
+      console.log(
+        `${commandCase.name.padEnd(13)} ${sign}${formatMs(delta)} (${sign}${pct.toFixed(1)}%)`,
+      );
+    }
   }
 }
 

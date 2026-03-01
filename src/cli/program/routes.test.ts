@@ -18,9 +18,9 @@ describe("program routes", () => {
     expect(route?.loadPlugins).toBe(true);
   });
 
-  it("matches health route without eager plugin loading", () => {
+  it("matches health route and preloads plugins for channel diagnostics", () => {
     const route = expectRoute(["health"]);
-    expect(route?.loadPlugins).toBeUndefined();
+    expect(route?.loadPlugins).toBe(true);
   });
 
   it("returns false when status timeout flag value is missing", async () => {
