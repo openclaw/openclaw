@@ -53,6 +53,22 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
   return name ? name : null;
 }
 
+function resolveSkillModelOverride(params: {
+  cfg: OpenClawConfig;
+  command: SkillCommandSpec;
+}): string | undefined {
+  const key = params.command.skillKey?.trim() || params.command.skillName.trim();
+  if (!key) {
+    return undefined;
+  }
+  const override = params.cfg.skills?.entries?.[key]?.model;
+  if (typeof override !== "string") {
+    return undefined;
+  }
+  const trimmed = override.trim();
+  return trimmed || undefined;
+}
+
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -246,6 +262,19 @@ export async function handleInlineActions(params: {
     sessionCtx.BodyForAgent = rewrittenBody;
     sessionCtx.BodyStripped = rewrittenBody;
     cleanedBody = rewrittenBody;
+    if (!directives.hasModelDirective) {
+      const skillModelOverride = resolveSkillModelOverride({
+        cfg,
+        command: skillInvocation.command,
+      });
+      if (skillModelOverride) {
+        directives = {
+          ...directives,
+          hasModelDirective: true,
+          rawModelDirective: skillModelOverride,
+        };
+      }
+    }
   }
 
   const sendInlineReply = async (reply?: ReplyPayload) => {

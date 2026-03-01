@@ -16,6 +16,7 @@ import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
   resolveOpenClawMetadata,
+  resolveSkillKey,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
@@ -679,6 +680,7 @@ export function buildWorkspaceSkillCommandSpecs(
   const specs: SkillCommandSpec[] = [];
   for (const entry of userInvocable) {
     const rawName = entry.skill.name;
+    const skillKey = resolveSkillKey(entry.skill, entry);
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
       debugSkillCommandOnce(
@@ -752,6 +754,7 @@ export function buildWorkspaceSkillCommandSpecs(
     specs.push({
       name: unique,
       skillName: rawName,
+      skillKey,
       description,
       ...(dispatch ? { dispatch } : {}),
     });

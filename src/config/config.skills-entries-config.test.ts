@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("skills entries config schema", () => {
+  it("accepts per-skill model overrides", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        entries: {
+          "custom-skill": {
+            enabled: true,
+            model: "google/gemini-3-flash-preview",
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("accepts custom fields under config", () => {
     const res = OpenClawSchema.safeParse({
       skills: {

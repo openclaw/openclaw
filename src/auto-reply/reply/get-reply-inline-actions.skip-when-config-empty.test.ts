@@ -221,4 +221,110 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
   });
+
+  it("applies per-skill model override when invoking a skill command", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+
+    const ctx = buildTestCtx({
+      Body: "/demo summarize this",
+      CommandBody: "/demo summarize this",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/demo summarize this",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          abortKey: "sender-1",
+        },
+        overrides: {
+          cfg: {
+            skills: {
+              entries: {
+                "demo-skill": {
+                  model: "google/gemini-3-flash-preview",
+                },
+              },
+            },
+          },
+          allowTextCommands: true,
+          skillCommands: [
+            {
+              name: "demo",
+              skillName: "demo-skill",
+              skillKey: "demo-skill",
+              description: "Demo skill",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.directives.hasModelDirective).toBe(true);
+      expect(result.directives.rawModelDirective).toBe("google/gemini-3-flash-preview");
+    }
+    expect(ctx.Body).toContain('Use the "demo-skill" skill for this request.');
+  });
+
+  it("does not override explicit /model directives when a skill has model config", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
+
+    const ctx = buildTestCtx({
+      Body: "/demo summarize this",
+      CommandBody: "/demo summarize this",
+    });
+
+    const explicitDirectives = {
+      ...clearInlineDirectives("/demo summarize this"),
+      hasModelDirective: true,
+      rawModelDirective: "openai/gpt-4o",
+    };
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/demo summarize this",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          abortKey: "sender-1",
+        },
+        overrides: {
+          cfg: {
+            skills: {
+              entries: {
+                "demo-skill": {
+                  model: "google/gemini-3-flash-preview",
+                },
+              },
+            },
+          },
+          allowTextCommands: true,
+          directives: explicitDirectives,
+          skillCommands: [
+            {
+              name: "demo",
+              skillName: "demo-skill",
+              skillKey: "demo-skill",
+              description: "Demo skill",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("continue");
+    if (result.kind === "continue") {
+      expect(result.directives.hasModelDirective).toBe(true);
+      expect(result.directives.rawModelDirective).toBe("openai/gpt-4o");
+    }
+  });
 });

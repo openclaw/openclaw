@@ -727,6 +727,7 @@ export const OpenClawSchema = z
             z
               .object({
                 enabled: z.boolean().optional(),
+                model: z.string().optional(),
                 apiKey: SecretInputSchema.optional().register(sensitive),
                 env: z.record(z.string(), z.string()).optional(),
                 config: z.record(z.string(), z.unknown()).optional(),

@@ -51,6 +51,8 @@ export type SkillCommandDispatchSpec = {
 export type SkillCommandSpec = {
   name: string;
   skillName: string;
+  /** Resolved config key for skills.entries (frontmatter skillKey or skill name). */
+  skillKey?: string;
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
