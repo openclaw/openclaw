@@ -1,7 +1,45 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildProviderRegistry, runCapability } from "./runner.js";
-import { withAudioFixture } from "./runner.test-utils.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  buildProviderRegistry,
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+  runCapability,
+} from "./runner.js";
+
+async function withAudioFixture(
+  _name: string,
+  run: (params: {
+    ctx: MsgContext;
+    media: ReturnType<typeof normalizeMediaAttachments>;
+    cache: ReturnType<typeof createMediaAttachmentCache>;
+  }) => Promise<void>,
+) {
+  const originalPath = process.env.PATH;
+  if (process.platform !== "win32") {
+    process.env.PATH = "/usr/bin:/bin";
+  }
+  const tmpPath = path.join(
+    resolvePreferredOpenClawTmpDir(),
+    `openclaw-auto-audio-${Date.now()}.wav`,
+  );
+  await fs.writeFile(tmpPath, Buffer.from("RIFF"));
+  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
+  const media = normalizeMediaAttachments(ctx);
+  const cache = createMediaAttachmentCache(media);
+
+  try {
+    await run({ ctx, media, cache });
+  } finally {
+    process.env.PATH = originalPath;
+    await cache.cleanup();
+    await fs.unlink(tmpPath).catch(() => {});
+  }
+}
 
 function createOpenAiAudioProvider(
   transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
@@ -37,17 +75,24 @@ async function runAutoAudioCase(params: {
   await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
     const providerRegistry = createOpenAiAudioProvider(params.transcribeAudio);
     const cfg = createOpenAiAudioCfg(params.cfgExtra);
-    runResult = await runCapability({
-      capability: "audio",
-      cfg,
-      ctx,
-      attachments: cache,
-      media,
-      providerRegistry,
-    });
+    try {
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+    } catch (err) {
+      console.error(`[DEBUG] runCapability failed:`, err);
+      throw err;
+    }
   });
   if (!runResult) {
-    throw new Error("Expected auto audio case result");
+    throw new Error(
+      `Expected auto audio case result for ${params.cfgExtra ? JSON.stringify(params.cfgExtra) : "default"}`,
+    );
   }
   return runResult;
 }

@@ -96,6 +96,12 @@ describe("media server", () => {
       },
     },
   ] as const)("$testName", async (testCase) => {
+    if (
+      testCase.testName === "blocks symlink escaping outside media dir" &&
+      process.platform === "win32"
+    ) {
+      return;
+    }
     await testCase.setup?.();
     const res = await fetch(mediaUrl(testCase.mediaPath));
     expect(res.status).toBe(400);

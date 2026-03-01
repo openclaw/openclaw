@@ -1,12 +1,112 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
-import {
-  TELEGRAM_TEST_TIMINGS,
-  createBotHandler,
-  createBotHandlerWithOptions,
-  mockTelegramFileDownload,
-  mockTelegramPngDownload,
-} from "./bot.media.test-utils.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../infra/net/ssrf.js";
+import { onSpy, sendChatActionSpy, setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
+
+const cacheStickerSpy = vi.fn();
+const getCachedStickerSpy = vi.fn();
+const describeStickerImageSpy = vi.fn();
+const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const lookupMock = vi.fn();
+let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
+const TELEGRAM_TEST_TIMINGS = {
+  mediaGroupFlushMs: 20,
+  textFragmentGapMs: 30,
+  forwardedBurstDebounceMs: 100,
+} as const;
+const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 150_000;
+let createTelegramBot: typeof import("./bot.js").createTelegramBot;
+let replySpy: ReturnType<typeof vi.fn>;
+
+async function createBotHandler(): Promise<{
+  handler: (ctx: Record<string, unknown>) => Promise<void>;
+  replySpy: ReturnType<typeof vi.fn>;
+  runtimeError: ReturnType<typeof vi.fn>;
+}> {
+  return createBotHandlerWithOptions({});
+}
+
+async function createBotHandlerWithOptions(options: {
+  proxyFetch?: typeof fetch;
+  runtimeLog?: ReturnType<typeof vi.fn>;
+  runtimeError?: ReturnType<typeof vi.fn>;
+}): Promise<{
+  handler: (ctx: Record<string, unknown>) => Promise<void>;
+  replySpy: ReturnType<typeof vi.fn>;
+  runtimeError: ReturnType<typeof vi.fn>;
+}> {
+  onSpy.mockClear();
+  replySpy.mockClear();
+  sendChatActionSpy.mockClear();
+
+  const runtimeError = options.runtimeError ?? vi.fn();
+  const runtimeLog = options.runtimeLog ?? vi.fn();
+  createTelegramBot({
+    token: "tok",
+    testTimings: TELEGRAM_TEST_TIMINGS,
+    ...(options.proxyFetch ? { proxyFetch: options.proxyFetch } : {}),
+    runtime: {
+      log: runtimeLog as (...data: unknown[]) => void,
+      error: runtimeError as (...data: unknown[]) => void,
+      exit: () => {
+        throw new Error("exit");
+      },
+    },
+  });
+  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+    ctx: Record<string, unknown>,
+  ) => Promise<void>;
+  expect(handler).toBeDefined();
+  return { handler, replySpy, runtimeError };
+}
+
+function mockTelegramFileDownload(params: {
+  contentType: string;
+  bytes: Uint8Array;
+}): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: { get: () => params.contentType },
+    arrayBuffer: async () => params.bytes.buffer,
+  } as unknown as Response);
+}
+
+function mockTelegramPngDownload(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: { get: () => "image/png" },
+    arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+  } as unknown as Response);
+}
+
+beforeEach(() => {
+  vi.useRealTimers();
+  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+  resolvePinnedHostnameSpy = vi
+    .spyOn(ssrf, "resolvePinnedHostname")
+    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+});
+
+afterEach(() => {
+  lookupMock.mockClear();
+  resolvePinnedHostnameSpy?.mockRestore();
+  resolvePinnedHostnameSpy = null;
+});
+
+beforeAll(async () => {
+  ({ createTelegramBot } = await import("./bot.js"));
+  const replyModule = await import("../auto-reply/reply.js");
+  replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
+}, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
+
+vi.mock("./sticker-cache.js", () => ({
+  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
+  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
+  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
+}));
 
 describe("telegram inbound media", () => {
   // Parallel vitest shards can make this suite slower than the standalone run.
@@ -230,7 +330,7 @@ describe("telegram media groups", () => {
   });
 
   const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-  const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 40;
+  const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 80;
 
   it(
     "handles same-group buffering and separate-group independence",
@@ -311,7 +411,7 @@ describe("telegram media groups", () => {
             () => {
               expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
             },
-            { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
+            { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 10 },
           );
 
           expect(runtimeError).not.toHaveBeenCalled();

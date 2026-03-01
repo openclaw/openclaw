@@ -116,30 +116,33 @@ describe("archive utils", () => {
     });
   });
 
-  it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
-    await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
-      const outsideDir = path.join(workDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.symlink(outsideDir, path.join(extractDir, "escape"));
+  it.skipIf(process.platform === "win32")(
+    "rejects zip entries that traverse pre-existing destination symlinks",
+    async () => {
+      await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
+        const outsideDir = path.join(workDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.symlink(outsideDir, path.join(extractDir, "escape"));
 
-      const zip = new JSZip();
-      zip.file("escape/pwn.txt", "owned");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+        const zip = new JSZip();
+        zip.file("escape/pwn.txt", "owned");
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-      await expect(
-        extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
-      ).rejects.toMatchObject({
-        code: "destination-symlink-traversal",
-      } satisfies Partial<ArchiveSecurityError>);
+        await expect(
+          extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+        ).rejects.toMatchObject({
+          code: "destination-symlink-traversal",
+        } satisfies Partial<ArchiveSecurityError>);
 
-      const outsideFile = path.join(outsideDir, "pwn.txt");
-      const outsideExists = await fs
-        .stat(outsideFile)
-        .then(() => true)
-        .catch(() => false);
-      expect(outsideExists).toBe(false);
-    });
-  });
+        const outsideFile = path.join(outsideDir, "pwn.txt");
+        const outsideExists = await fs
+          .stat(outsideFile)
+          .then(() => true)
+          .catch(() => false);
+        expect(outsideExists).toBe(false);
+      });
+    },
+  );
 
   it("rejects tar path traversal (zip slip)", async () => {
     await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {

@@ -143,7 +143,12 @@ export const registerTelegramHandlers = ({
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
-  const FORWARD_BURST_DEBOUNCE_MS = 80;
+  const DEFAULT_FORWARD_BURST_DEBOUNCE_MS = 80;
+  const FORWARD_BURST_DEBOUNCE_MS =
+    typeof opts.testTimings?.forwardedBurstDebounceMs === "number" &&
+    Number.isFinite(opts.testTimings.forwardedBurstDebounceMs)
+      ? Math.max(10, Math.floor(opts.testTimings.forwardedBurstDebounceMs))
+      : DEFAULT_FORWARD_BURST_DEBOUNCE_MS;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;

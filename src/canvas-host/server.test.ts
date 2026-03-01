@@ -262,62 +262,65 @@ describe("canvas host", () => {
     CANVAS_RELOAD_TEST_TIMEOUT_MS,
   );
 
-  it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const dir = await createCaseDir();
-    const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
-    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
-    const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
-    const linkPath = path.join(a2uiRoot, linkName);
-    let createdBundle = false;
-    let createdLink = false;
+  it.skipIf(process.platform === "win32")(
+    "serves A2UI scaffold and blocks traversal/symlink escapes",
+    async () => {
+      const dir = await createCaseDir();
+      const a2uiRoot = path.resolve(process.cwd(), "src/canvas-host/a2ui");
+      const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+      const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+      const linkPath = path.join(a2uiRoot, linkName);
+      let createdBundle = false;
+      let createdLink = false;
 
-    try {
-      await fs.stat(bundlePath);
-    } catch {
-      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
-      createdBundle = true;
-    }
-
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
-
-    const server = await startCanvasHost({
-      runtime: quietRuntime,
-      rootDir: dir,
-      port: 0,
-      listenHost: "127.0.0.1",
-      allowInTests: true,
-    });
-
-    try {
-      const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
-      const html = await res.text();
-      expect(res.status).toBe(200);
-      expect(html).toContain("openclaw-a2ui-host");
-      expect(html).toContain("openclawCanvasA2UIAction");
-
-      const bundleRes = await fetch(
-        `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
-      );
-      const js = await bundleRes.text();
-      expect(bundleRes.status).toBe(200);
-      expect(js).toContain("openclawA2UI");
-      const traversalRes = await fetch(
-        `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
-      );
-      expect(traversalRes.status).toBe(404);
-      expect(await traversalRes.text()).toBe("not found");
-      const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
-      expect(symlinkRes.status).toBe(404);
-      expect(await symlinkRes.text()).toBe("not found");
-    } finally {
-      await server.close();
-      if (createdLink) {
-        await fs.rm(linkPath, { force: true });
+      try {
+        await fs.stat(bundlePath);
+      } catch {
+        await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+        createdBundle = true;
       }
-      if (createdBundle) {
-        await fs.rm(bundlePath, { force: true });
+
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+      createdLink = true;
+
+      const server = await startCanvasHost({
+        runtime: quietRuntime,
+        rootDir: dir,
+        port: 0,
+        listenHost: "127.0.0.1",
+        allowInTests: true,
+      });
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${server.port}/__openclaw__/a2ui/`);
+        const html = await res.text();
+        expect(res.status).toBe(200);
+        expect(html).toContain("openclaw-a2ui-host");
+        expect(html).toContain("openclawCanvasA2UIAction");
+
+        const bundleRes = await fetch(
+          `http://127.0.0.1:${server.port}/__openclaw__/a2ui/a2ui.bundle.js`,
+        );
+        const js = await bundleRes.text();
+        expect(bundleRes.status).toBe(200);
+        expect(js).toContain("openclawA2UI");
+        const traversalRes = await fetch(
+          `http://127.0.0.1:${server.port}${A2UI_PATH}/%2e%2e%2fpackage.json`,
+        );
+        expect(traversalRes.status).toBe(404);
+        expect(await traversalRes.text()).toBe("not found");
+        const symlinkRes = await fetch(`http://127.0.0.1:${server.port}${A2UI_PATH}/${linkName}`);
+        expect(symlinkRes.status).toBe(404);
+        expect(await symlinkRes.text()).toBe("not found");
+      } finally {
+        await server.close();
+        if (createdLink) {
+          await fs.rm(linkPath, { force: true });
+        }
+        if (createdBundle) {
+          await fs.rm(bundlePath, { force: true });
+        }
       }
-    }
-  });
+    },
+  );
 });

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -118,7 +117,7 @@ describe("web media loading", () => {
     // Also keep it outside the OpenClaw temp root so default localRoots doesn't accidentally make all state readable.
     stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = path.join(
-      path.parse(os.tmpdir()).root,
+      path.parse(fixtureRoot).root,
       "var",
       "lib",
       "openclaw-media-state-test",

@@ -29,16 +29,21 @@ function splitPathSegments(value: string): string[] {
 }
 
 function matchesRootPattern(params: { candidatePath: string; rootPattern: string }): boolean {
+  const isWin = process.platform === "win32";
   const candidateSegments = splitPathSegments(params.candidatePath);
   const rootSegments = splitPathSegments(params.rootPattern);
   if (candidateSegments.length < rootSegments.length) {
     return false;
   }
   for (let idx = 0; idx < rootSegments.length; idx += 1) {
-    const expected = rootSegments[idx];
-    const actual = candidateSegments[idx];
+    let expected = rootSegments[idx];
+    let actual = candidateSegments[idx];
     if (expected === WILDCARD_SEGMENT) {
       continue;
+    }
+    if (isWin) {
+      expected = expected.toLowerCase();
+      actual = actual.toLowerCase();
     }
     if (expected !== actual) {
       return false;

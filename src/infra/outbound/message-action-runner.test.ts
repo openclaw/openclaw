@@ -11,9 +11,19 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { loadWebMedia } from "../../web/media.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
+
+vi.mock("../../media/local-roots.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../media/local-roots.js")>();
+  return {
+    ...actual,
+    getAgentScopedMediaLocalRoots: vi.fn(actual.getAgentScopedMediaLocalRoots),
+  };
+});
 
 vi.mock("../../web/media.js", async () => {
   const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
@@ -497,6 +507,9 @@ describe("runMessageAction sendAttachment hydration", () => {
     tempPrefix: string;
   }) {
     await restoreRealMediaLoader();
+
+    // Empty localRoots so loadWebMedia rejects any local path when sandboxRoot is missing.
+    vi.mocked(getAgentScopedMediaLocalRoots).mockImplementationOnce(() => []);
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
     try {

@@ -76,7 +76,8 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(lstatSync).toHaveBeenCalledTimes(1);
     expect(accessSync).toHaveBeenCalledTimes(1);
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    const expected = path.resolve(POSIX_OPENCLAW_TMP_DIR).replaceAll("\\", "/");
+    expect(resolved).toBe(expected);
     expect(tmpdir).not.toHaveBeenCalled();
   });
 
@@ -92,7 +93,8 @@ describe("resolvePreferredOpenClawTmpDir", () => {
       lstatSync: lstatSyncMock,
     });
 
-    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    const expected = path.resolve(POSIX_OPENCLAW_TMP_DIR).replaceAll("\\", "/");
+    expect(resolved).toBe(expected);
     expect(accessSync).toHaveBeenCalledWith("/tmp", expect.any(Number));
     expect(mkdirSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, expect.any(Object));
     expect(tmpdir).not.toHaveBeenCalled();

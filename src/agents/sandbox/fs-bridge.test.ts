@@ -173,27 +173,30 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
-  it("rejects pre-existing host symlink escapes before docker exec", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const outsideDir = path.join(stateDir, "outside");
-    const outsideFile = path.join(outsideDir, "secret.txt");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(outsideDir, { recursive: true });
-    await fs.writeFile(outsideFile, "classified");
-    await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+  it.skipIf(process.platform === "win32")(
+    "rejects pre-existing host symlink escapes before docker exec",
+    async () => {
+      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
+      const workspaceDir = path.join(stateDir, "workspace");
+      const outsideDir = path.join(stateDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.txt");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "classified");
+      await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
-    const bridge = createSandboxFsBridge({
-      sandbox: createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-      }),
-    });
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
 
-    await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
-    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  });
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    },
+  );
 
   it("rejects pre-existing host hardlink escapes before docker exec", async () => {
     if (process.platform === "win32") {

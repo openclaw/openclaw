@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-"""
-Regression tests for quick skill validation.
-"""
-
+import shutil
+import sys
 import tempfile
 from pathlib import Path
 from unittest import TestCase, main
@@ -15,8 +12,6 @@ class TestQuickValidate(TestCase):
         self.temp_dir = Path(tempfile.mkdtemp(prefix="test_quick_validate_"))
 
     def tearDown(self):
-        import shutil
-
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
 

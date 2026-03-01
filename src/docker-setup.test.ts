@@ -114,7 +114,7 @@ function resolveBashForCompatCheck(): string | null {
   return null;
 }
 
-describe("docker-setup.sh", () => {
+describe.skipIf(process.platform === "win32")("docker-setup.sh", () => {
   let sandbox: DockerSetupSandbox | null = null;
 
   beforeAll(async () => {

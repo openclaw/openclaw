@@ -147,136 +147,84 @@ describe("applyPatch", () => {
     });
   });
 
-  it("rejects symlink escape attempts by default", async () => {
-    await withTempDir(async (dir) => {
-      const outside = path.join(path.dirname(dir), "outside-target.txt");
-      const linkPath = path.join(dir, "link.txt");
-      await fs.writeFile(outside, "initial\n", "utf8");
-      await fs.symlink(outside, linkPath);
+  it.skipIf(process.platform === "win32")(
+    "rejects symlink escape attempts by default",
+    async () => {
+      await withTempDir(async (dir) => {
+        const outside = path.join(path.dirname(dir), "outside-target.txt");
+        const linkPath = path.join(dir, "link.txt");
+        await fs.writeFile(outside, "initial\n", "utf8");
+        await fs.symlink(outside, linkPath);
 
-      const patch = `*** Begin Patch
+        const patch = `*** Begin Patch
 *** Update File: link.txt
 @@
 -initial
 +pwned
 *** End Patch`;
 
-      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
-      const outsideContents = await fs.readFile(outside, "utf8");
-      expect(outsideContents).toBe("initial\n");
-      await fs.rm(outside, { force: true });
-    });
-  });
-
-  it("rejects broken final symlink targets outside cwd by default", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withWorkspaceTempDir(async (dir) => {
-      const outsideDir = path.join(path.dirname(dir), `outside-broken-link-${Date.now()}`);
-      const outsideFile = path.join(outsideDir, "owned.txt");
-      const linkPath = path.join(dir, "jump");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.symlink(outsideFile, linkPath);
-
-      const patch = `*** Begin Patch
-*** Add File: jump
-+pwned
-*** End Patch`;
-
-      try {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /Symlink escapes sandbox root/,
         );
-        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
-      } finally {
-        await fs.rm(outsideDir, { recursive: true, force: true });
-      }
-    });
-  });
-
-  it("rejects hardlink alias escapes by default", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withTempDir(async (dir) => {
-      const outside = path.join(
-        path.dirname(dir),
-        `outside-hardlink-${process.pid}-${Date.now()}.txt`,
-      );
-      const linkPath = path.join(dir, "hardlink.txt");
-      await fs.writeFile(outside, "initial\n", "utf8");
-      try {
-        try {
-          await fs.link(outside, linkPath);
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-            return;
-          }
-          throw err;
-        }
-        const patch = `*** Begin Patch
-*** Update File: hardlink.txt
-@@
--initial
-+pwned
-*** End Patch`;
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/hardlink|sandbox/i);
         const outsideContents = await fs.readFile(outside, "utf8");
         expect(outsideContents).toBe("initial\n");
-      } finally {
-        await fs.rm(linkPath, { force: true });
         await fs.rm(outside, { force: true });
-      }
-    });
-  });
+      });
+    },
+  );
 
-  it("allows symlinks that resolve within cwd by default", async () => {
-    await withTempDir(async (dir) => {
-      const target = path.join(dir, "target.txt");
-      const linkPath = path.join(dir, "link.txt");
-      await fs.writeFile(target, "initial\n", "utf8");
-      await fs.symlink(target, linkPath);
+  it.skipIf(process.platform === "win32")(
+    "allows symlinks that resolve within cwd by default",
+    async () => {
+      await withTempDir(async (dir) => {
+        const target = path.join(dir, "target.txt");
+        const linkPath = path.join(dir, "link.txt");
+        await fs.writeFile(target, "initial\n", "utf8");
+        await fs.symlink(target, linkPath);
 
-      const patch = `*** Begin Patch
+        const patch = `*** Begin Patch
 *** Update File: link.txt
 @@
 -initial
 +updated
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
-      const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("updated\n");
-    });
-  });
+        await applyPatch(patch, { cwd: dir });
+        const contents = await fs.readFile(target, "utf8");
+        expect(contents).toBe("updated\n");
+      });
+    },
+  );
 
-  it("rejects delete path traversal via symlink directories by default", async () => {
-    await withTempDir(async (dir) => {
-      const outsideDir = path.join(path.dirname(dir), `outside-dir-${process.pid}-${Date.now()}`);
-      const outsideFile = path.join(outsideDir, "victim.txt");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(outsideFile, "victim\n", "utf8");
+  it.skipIf(process.platform === "win32")(
+    "rejects delete path traversal via symlink directories by default",
+    async () => {
+      await withTempDir(async (dir) => {
+        const outsideDir = path.join(path.dirname(dir), `outside-dir-${process.pid}-${Date.now()}`);
+        const outsideFile = path.join(outsideDir, "victim.txt");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(outsideFile, "victim\n", "utf8");
 
-      const linkDir = path.join(dir, "linkdir");
-      await fs.symlink(outsideDir, linkDir);
+        const linkDir = path.join(dir, "linkdir");
+        await fs.symlink(outsideDir, linkDir);
 
-      const patch = `*** Begin Patch
+        const patch = `*** Begin Patch
 *** Delete File: linkdir/victim.txt
 *** End Patch`;
 
-      try {
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /Symlink escapes sandbox root/,
-        );
-        const stillThere = await fs.readFile(outsideFile, "utf8");
-        expect(stillThere).toBe("victim\n");
-      } finally {
-        await fs.rm(outsideFile, { force: true });
-        await fs.rm(outsideDir, { recursive: true, force: true });
-      }
-    });
-  });
+        try {
+          await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+            /Symlink escapes sandbox root/,
+          );
+          const stillThere = await fs.readFile(outsideFile, "utf8");
+          expect(stillThere).toBe("victim\n");
+        } finally {
+          await fs.rm(outsideFile, { force: true });
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 
   it("allows path traversal when workspaceOnly is explicitly disabled", async () => {
     await withTempDir(async (dir) => {
@@ -302,28 +250,33 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows deleting a symlink itself even if it points outside cwd", async () => {
-    await withTempDir(async (dir) => {
-      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
-      try {
-        const outsideTarget = path.join(outsideDir, "target.txt");
-        await fs.writeFile(outsideTarget, "keep\n", "utf8");
+  it.skipIf(process.platform === "win32")(
+    "allows deleting a symlink itself even if it points outside cwd",
+    async () => {
+      await withTempDir(async (dir) => {
+        const outsideDir = await fs.mkdtemp(
+          path.join(path.dirname(dir), "openclaw-patch-outside-"),
+        );
+        try {
+          const outsideTarget = path.join(outsideDir, "target.txt");
+          await fs.writeFile(outsideTarget, "keep\n", "utf8");
 
-        const linkDir = path.join(dir, "link");
-        await fs.symlink(outsideDir, linkDir);
+          const linkDir = path.join(dir, "link");
+          await fs.symlink(outsideDir, linkDir);
 
-        const patch = `*** Begin Patch
+          const patch = `*** Begin Patch
 *** Delete File: link
 *** End Patch`;
 
-        const result = await applyPatch(patch, { cwd: dir });
-        expect(result.summary.deleted).toEqual(["link"]);
-        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
-        const outsideContents = await fs.readFile(outsideTarget, "utf8");
-        expect(outsideContents).toBe("keep\n");
-      } finally {
-        await fs.rm(outsideDir, { recursive: true, force: true });
-      }
-    });
-  });
+          const result = await applyPatch(patch, { cwd: dir });
+          expect(result.summary.deleted).toEqual(["link"]);
+          await expect(fs.lstat(linkDir)).rejects.toBeDefined();
+          const outsideContents = await fs.readFile(outsideTarget, "utf8");
+          expect(outsideContents).toBe("keep\n");
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 });

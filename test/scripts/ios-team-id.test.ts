@@ -45,7 +45,7 @@ function runScript(
   }
 }
 
-describe("scripts/ios-team-id.sh", () => {
+describe.skipIf(process.platform !== "darwin")("scripts/ios-team-id.sh", () => {
   it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");

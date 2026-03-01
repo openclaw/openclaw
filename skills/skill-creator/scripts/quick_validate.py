@@ -17,12 +17,9 @@ MAX_SKILL_NAME_LENGTH = 64
 
 
 def _extract_frontmatter(content: str) -> Optional[str]:
-    lines = content.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            return "\n".join(lines[1:i])
+    match = re.search(r"^---\s*\r?\n(.*?)\r?\n---\s*(\r?\n|$)", content, re.DOTALL)
+    if match:
+        return match.group(1)
     return None
 
 

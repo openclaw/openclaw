@@ -114,12 +114,16 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock("../../config/sessions.js", () => ({
-  resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
-  resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
-  setSessionRuntimeModel: vi.fn(),
-  updateSessionStore: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveAgentMainSessionKey: vi.fn().mockReturnValue("main:default"),
+    resolveSessionTranscriptPath: vi.fn().mockReturnValue("/tmp/transcript.jsonl"),
+    updateSessionStore: vi.fn().mockResolvedValue(undefined),
+    setSessionRuntimeModel: vi.fn(),
+  };
+});
 
 vi.mock("../../routing/session-key.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../routing/session-key.js")>();

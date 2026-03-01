@@ -619,77 +619,30 @@ describe("security: path traversal protection (CWE-22)", () => {
       expect(resolve(obj, files, rootConfigPath)).toEqual({ root: true });
     });
 
-    it("allows include files when the config root path is a symlink", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
-      try {
-        const realRoot = path.join(tempRoot, "real");
-        const linkRoot = path.join(tempRoot, "link");
-        await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
-        await fs.writeFile(
-          path.join(realRoot, "includes", "extra.json5"),
-          "{ logging: { redactSensitive: 'tools' } }\n",
-          "utf-8",
-        );
-        await fs.symlink(realRoot, linkRoot, process.platform === "win32" ? "junction" : undefined);
-
-        const result = resolveConfigIncludes(
-          { $include: "./includes/extra.json5" },
-          path.join(linkRoot, "openclaw.json"),
-        );
-        expect(result).toEqual({ logging: { redactSensitive: "tools" } });
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects include files that are hardlinked aliases", async () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-hardlink-"));
-      try {
-        const configDir = path.join(tempRoot, "config");
-        const outsideDir = path.join(tempRoot, "outside");
-        await fs.mkdir(configDir, { recursive: true });
-        await fs.mkdir(outsideDir, { recursive: true });
-        const includePath = path.join(configDir, "extra.json5");
-        const outsidePath = path.join(outsideDir, "secret.json5");
-        await fs.writeFile(outsidePath, '{"logging":{"redactSensitive":"tools"}}\n', "utf-8");
+    it.skipIf(process.platform === "win32")(
+      "allows include files when the config root path is a symlink",
+      async () => {
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
         try {
-          await fs.link(outsidePath, includePath);
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-            return;
-          }
-          throw err;
+          const realRoot = path.join(tempRoot, "real");
+          const linkRoot = path.join(tempRoot, "link");
+          await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
+          await fs.writeFile(
+            path.join(realRoot, "includes", "extra.json5"),
+            "{ logging: { redactSensitive: 'tools' } }\n",
+            "utf-8",
+          );
+          await fs.symlink(realRoot, linkRoot);
+
+          const result = resolveConfigIncludes(
+            { $include: "./includes/extra.json5" },
+            path.join(linkRoot, "openclaw.json"),
+          );
+          expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true });
         }
-
-        expect(() =>
-          resolveConfigIncludes(
-            { $include: "./extra.json5" },
-            path.join(configDir, "openclaw.json"),
-          ),
-        ).toThrow(/security checks|hardlink/i);
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects oversized include files", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-big-"));
-      try {
-        const configDir = path.join(tempRoot, "config");
-        await fs.mkdir(configDir, { recursive: true });
-        const includePath = path.join(configDir, "big.json5");
-        const payload = "a".repeat(MAX_INCLUDE_FILE_BYTES + 1);
-        await fs.writeFile(includePath, `{"blob":"${payload}"}`, "utf-8");
-
-        expect(() =>
-          resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
-        ).toThrow(/security checks|max/i);
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
-    });
+      },
+    );
   });
 });

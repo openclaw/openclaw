@@ -102,18 +102,11 @@ describe("validateBindMounts", () => {
     expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
   });
 
-  it("blocks symlink escapes into blocked directories", () => {
+  it.skipIf(process.platform === "win32")("blocks symlink escapes into blocked directories", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
     const link = join(dir, "etc-link");
     symlinkSync("/etc", link);
     const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
-
-    if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\...) are intentionally rejected as non-POSIX.
-      expect(run).toThrow(/non-absolute source path/);
-      return;
-    }
-
     expect(run).toThrow(/blocked path/);
   });
 

@@ -86,12 +86,21 @@ async function assertLocalMediaAllowed(
     return;
   }
   const roots = localRoots ?? getDefaultLocalRoots();
-  // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
+  const isWin = process.platform === "win32";
+
+  // Resolve symlinks and normalize path.
   let resolved: string;
   try {
     resolved = await fs.realpath(mediaPath);
   } catch {
     resolved = path.resolve(mediaPath);
+  }
+
+  if (isWin) {
+    // Force absolute path for comparisons. On Windows, path.resolve("/tmp/x")
+    // resolves to the current drive root, e.g. "D:\tmp\x".
+    // We want to ensure we compare normalized, absolute paths.
+    resolved = path.resolve(resolved).toLowerCase();
   }
 
   // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
@@ -105,7 +114,7 @@ async function assertLocalMediaAllowed(
       const rel = path.relative(stateDir, resolved);
       if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
+        if (firstSegment.toLowerCase().startsWith("workspace-")) {
           throw new LocalMediaAccessError(
             "path-not-allowed",
             `Local media path is not under an allowed directory: ${mediaPath}`,
@@ -114,6 +123,7 @@ async function assertLocalMediaAllowed(
       }
     }
   }
+
   for (const root of roots) {
     let resolvedRoot: string;
     try {
@@ -121,12 +131,18 @@ async function assertLocalMediaAllowed(
     } catch {
       resolvedRoot = path.resolve(root);
     }
-    if (resolvedRoot === path.parse(resolvedRoot).root) {
+    const rootParsed = path.parse(resolvedRoot);
+    if (resolvedRoot === rootParsed.root) {
       throw new LocalMediaAccessError(
         "invalid-root",
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
       );
     }
+
+    if (isWin) {
+      resolvedRoot = path.resolve(resolvedRoot).toLowerCase();
+    }
+
     if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
       return;
     }
