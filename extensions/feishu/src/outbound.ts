@@ -11,11 +11,25 @@ import { sendMessageFeishu } from "./send.js";
  */
 const AUTO_SEND_EXTENSIONS = new Set([
   // Images
-  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff",
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+  ".bmp",
+  ".ico",
+  ".tiff",
   // Documents
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
   // Audio/Video
-  ".opus", ".mp4",
+  ".opus",
+  ".mp4",
 ]);
 
 function normalizePossibleLocalFilePath(text: string | undefined): string | null {
