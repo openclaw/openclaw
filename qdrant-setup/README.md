@@ -36,6 +36,12 @@ cp qdrant-setup/projects.example.json qdrant-setup/projects.json
 ```
 - Edit `qdrant-setup/projects.json` with your project paths.
 
+Auto-discover projects (recommended first pass):
+```bash
+pnpm qdrant:memory:projects:scan
+```
+This writes `qdrant-setup/projects.json` with discovered project folders (all disabled by default).
+
 ## Manual operations
 ### Index now
 ```bash

@@ -113,6 +113,7 @@
     "qdrant:memory:context": "bash scripts/qdrant-memory-context.sh",
     "qdrant:memory:index": "node scripts/qdrant-memory-index.mjs",
     "qdrant:memory:index:due": "bash scripts/qdrant-memory-index-if-due.sh",
+    "qdrant:memory:projects:scan": "node scripts/qdrant-projects-scan.mjs",
     "qdrant:memory:query": "node scripts/qdrant-memory-query.mjs",
     "qdrant:memory:run": "bash scripts/qdrant-memory-run-from-env.sh",
     "prepack": "pnpm build && pnpm ui:build",
