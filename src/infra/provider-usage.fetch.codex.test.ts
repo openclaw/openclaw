@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
 
 describe("fetchCodexUsage", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("returns token expired for auth failures", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(401, { error: "unauthorized" }),
@@ -78,5 +81,31 @@ describe("fetchCodexUsage", () => {
       { label: "3h", usedPercent: 7, resetAt: 1_700_000_000_000 },
       { label: "Week", usedPercent: 10, resetAt: 1_700_500_000_000 },
     ]);
+  });
+
+  it("labels secondary window as Week when reset horizon is multi-day", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-01T00:00:00Z"));
+
+    const resetAtSec = Math.floor((Date.now() + (3 * 24 + 8) * 60 * 60 * 1000) / 1000);
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 45,
+            reset_at: Math.floor((Date.now() + 2 * 60 * 60 * 1000) / 1000),
+          },
+          secondary_window: {
+            limit_window_seconds: 86_400,
+            used_percent: 85,
+            reset_at: resetAtSec,
+          },
+        },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.windows?.[1]?.label).toBe("Week");
   });
 });

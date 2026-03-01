@@ -65,11 +65,15 @@ export async function fetchCodexUsage(
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
     const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = windowHours >= 168 ? "Week" : windowHours >= 24 ? "Day" : `${windowHours}h`;
+    const resetAt = sw.reset_at ? sw.reset_at * 1000 : undefined;
+    const resetHours = resetAt ? (resetAt - Date.now()) / (60 * 60 * 1000) : undefined;
+    const weekLikeWindow =
+      windowHours >= 168 || (windowHours >= 24 && resetHours !== undefined && resetHours > 48);
+    const label = weekLikeWindow ? "Week" : windowHours >= 24 ? "Day" : `${windowHours}h`;
     windows.push({
       label,
       usedPercent: clampPercent(sw.used_percent || 0),
-      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
+      resetAt,
     });
   }
 
