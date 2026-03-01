@@ -103,6 +103,29 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
   });
 
+  it("allows mkdirp when target directory already exists inside workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-existing-"));
+    await fs.mkdir(path.join(workspaceDir, "memory", "kemik"), { recursive: true });
+
+    try {
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "memory/kemik" })).resolves.toBeUndefined();
+
+      const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+      expect(mkdirCall).toBeDefined();
+      const mkdirPath = mkdirCall ? getDockerPathArg(mkdirCall[0]) : "";
+      expect(mkdirPath).toBe("/workspace/memory/kemik");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 

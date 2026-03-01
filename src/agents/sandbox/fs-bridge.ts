@@ -23,6 +23,7 @@ type PathSafetyOptions = {
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowMissingTarget?: boolean;
+  allowNonFileTarget?: boolean;
 };
 
 export type SandboxResolvedPath = {
@@ -132,7 +133,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowNonFileTarget: true,
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -260,7 +265,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       aliasPolicy: options.aliasPolicy,
     });
     if (!guarded.ok) {
-      if (guarded.reason !== "path" || options.allowMissingTarget === false) {
+      const allowMissingTarget = guarded.reason === "path" && options.allowMissingTarget !== false;
+      const allowNonFileTarget =
+        guarded.reason === "validation" && options.allowNonFileTarget === true;
+      if (!allowMissingTarget && !allowNonFileTarget) {
         throw guarded.error instanceof Error
           ? guarded.error
           : new Error(
