@@ -158,6 +158,7 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
     const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
+    expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );

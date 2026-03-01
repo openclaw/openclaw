@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -79,6 +80,7 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -92,6 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  resetSystemEventsForTest();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -328,6 +331,8 @@ describe("runReplyAgent auto-compaction token update", () => {
     storePath: string;
     sessionEntry: Record<string, unknown>;
     config?: Record<string, unknown>;
+    sessionFile?: string;
+    workspaceDir?: string;
   }) {
     const typing = createMockTypingController();
     const sessionCtx = {
@@ -347,8 +352,8 @@ describe("runReplyAgent auto-compaction token update", () => {
         sessionId: "session",
         sessionKey: "main",
         messageProvider: "whatsapp",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
+        sessionFile: params.sessionFile ?? "/tmp/session.jsonl",
+        workspaceDir: params.workspaceDir ?? "/tmp",
         config: params.config ?? {},
         skillsSnapshot: {},
         provider: "anthropic",
@@ -494,6 +499,84 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("does not enqueue legacy post-compaction audit warnings", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-audit-warning-"));
+    const workspaceDir = path.join(tmp, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sessionFile = path.join(tmp, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ type: "message", message: { role: "assistant", content: [] } })}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10_000,
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", willRetry: false } });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 11_000, output: 500, total: 11_500 },
+            lastCallUsage: { input: 10_500, output: 500, total: 11_000 },
+            compactionCount: 1,
+          },
+        },
+      };
+    });
+
+    const config = {
+      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
+    };
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config,
+      sessionFile,
+      workspaceDir,
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const queuedSystemEvents = peekSystemEvents(sessionKey);
+    expect(queuedSystemEvents.some((event) => event.includes("Post-Compaction Audit"))).toBe(false);
+    expect(queuedSystemEvents.some((event) => event.includes("WORKFLOW_AUTO.md"))).toBe(false);
   });
 });
 

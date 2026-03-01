@@ -630,7 +630,7 @@ export const FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
-    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing.',
+    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing; matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
   "models.providers":
     "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
   "models.providers.*.baseUrl":
@@ -641,6 +641,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+  "models.providers.*.injectNumCtxForOpenAICompat":
+    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
@@ -920,6 +922,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
+  "agents.defaults.compaction.identifierPolicy":
+    'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
+  "agents.defaults.compaction.identifierInstructions":
+    'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
@@ -1029,8 +1035,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
     "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
-  "session.threadBindings.ttlHours":
-    "Default auto-unfocus TTL in hours for thread-bound sessions across providers/channels (0 disables). Keep 24h-like values for practical focus windows unless your team needs longer-lived thread binding.",
+  "session.threadBindings.idleHours":
+    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
+  "session.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
@@ -1386,8 +1394,10 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
   "channels.discord.threadBindings.enabled":
     "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
-  "channels.discord.threadBindings.ttlHours":
-    "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
+  "channels.discord.threadBindings.idleHours":
+    "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+  "channels.discord.threadBindings.maxAgeHours":
+    "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   "channels.discord.threadBindings.spawnSubagentSessions":
     "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
   "channels.discord.threadBindings.spawnAcpSessions":

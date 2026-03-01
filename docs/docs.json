@@ -137,7 +137,7 @@
     },
     {
       "source": "/providers/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/providers/imessage",
@@ -365,7 +365,11 @@
     },
     {
       "source": "/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
     },
     {
       "source": "/group-messages",
@@ -983,6 +987,7 @@
                 "pages": [
                   "tools/lobster",
                   "tools/llm-task",
+                  "tools/diffs",
                   "tools/exec",
                   "tools/web",
                   "tools/apply-patch",
@@ -1271,12 +1276,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": [
-                  "reference/wizard",
-                  "reference/token-use",
-                  "reference/prompt-caching",
-                  "channels/grammy"
-                ]
+                "pages": ["reference/wizard", "reference/token-use", "reference/prompt-caching"]
               },
               {
                 "group": "Concept internals",

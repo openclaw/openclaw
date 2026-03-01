@@ -10,9 +10,9 @@ vi.mock("./gateway.js", () => ({
 import type { NodeListNode } from "./nodes-utils.js";
 import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
 
-function node(overrides: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
+function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
-    nodeId: overrides.nodeId,
+    nodeId,
     caps: ["canvas"],
     connected: true,
     ...overrides,
