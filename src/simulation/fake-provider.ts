@@ -26,7 +26,10 @@ export function createFakeStreamFn(params: {
   const streamFn: StreamFn = (_model, context, _options) => {
     const modelId =
       typeof _model === "string" ? _model : typeof _model.id === "string" ? _model.id : "unknown";
-    const modelCfg = params.models[modelId] ?? { latencyMs: 100, response: "ok" };
+    const modelCfg = params.models[modelId];
+    if (!modelCfg) {
+      throw new Error(`[sim] Unknown model "${modelId}" — not declared in scenario providers`);
+    }
     const stream = createAssistantMessageEventStream();
 
     // Find the last user message in context for causal tracking
