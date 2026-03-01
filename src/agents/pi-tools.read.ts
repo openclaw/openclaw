@@ -861,7 +861,19 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      let relative: string;
+      try {
+        relative = toRelativePathInRoot(root, absolutePath);
+      } catch (error) {
+        // If toRelativePathInRoot throws (direct outside-workspace path),
+        // do a plain existence check. The workspace enforcement will happen
+        // in readFile() which calls toRelativePathInRoot again.
+        if (error instanceof Error && error.message.startsWith("Path escapes workspace root:")) {
+          await fs.access(absolutePath);
+          return;
+        }
+        throw error;
+      }
       try {
         const opened = await openFileWithinRoot({
           rootDir: root,
