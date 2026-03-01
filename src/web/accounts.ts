@@ -13,6 +13,7 @@ export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
+  announcePresence: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
   authDir: string;
@@ -127,6 +128,7 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
+    announcePresence: accountCfg?.announcePresence ?? rootCfg?.announcePresence ?? false,
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,

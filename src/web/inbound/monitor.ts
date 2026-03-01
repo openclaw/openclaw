@@ -28,6 +28,8 @@ export async function monitorWebInbox(options: {
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
   mediaMaxMb?: number;
+  /** Announce presence as online on connect (default: false). When false, sends unavailable presence to preserve phone push notifications. */
+  announcePresence?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
@@ -57,12 +59,15 @@ export async function monitorWebInbox(options: {
   };
 
   try {
-    await sock.sendPresenceUpdate("available");
+    const presence = options.announcePresence ? "available" : "unavailable";
+    await sock.sendPresenceUpdate(presence);
     if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+      logVerbose(
+        `Sent global '${presence}' presence on connect${presence === "unavailable" ? " — preserves phone push notifications" : ""}`,
+      );
     }
   } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+    logVerbose(`Failed to send presence on connect: ${String(err)}`);
   }
 
   const selfJid = sock.user?.id;
