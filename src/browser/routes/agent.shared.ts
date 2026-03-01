@@ -145,9 +145,10 @@ export async function withRouteTabContext<T>(
         if (record.targetId === undefined) {
           record.targetId = tab.targetId;
         }
-        if (resolvedUrl) {
-          // Always override url with live value — the route may have used a
-          // stale tab.url from the relay cache.
+        if (record.url === undefined && resolvedUrl) {
+          // Only fill in url when the handler didn't already set one.
+          // Handlers like /navigate return the post-navigation URL which
+          // should not be clobbered with the pre-run tab URL.
           record.url = resolvedUrl;
         }
       }
