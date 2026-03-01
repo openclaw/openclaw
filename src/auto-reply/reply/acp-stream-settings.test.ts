@@ -89,4 +89,27 @@ describe("acp stream settings", () => {
     expect(streaming.chunking.maxChars).toBe(64);
     expect(streaming.coalescing.idleMs).toBe(0);
   });
+
+  it("applies live-mode streaming overrides for incremental delivery", () => {
+    const streaming = resolveAcpStreamingConfig({
+      cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 350,
+            maxChunkChars: 256,
+          },
+        },
+      }),
+      provider: "discord",
+      deliveryMode: "live",
+    });
+    expect(streaming.chunking.minChars).toBe(1);
+    expect(streaming.chunking.maxChars).toBe(256);
+    expect(streaming.coalescing.minChars).toBe(1);
+    expect(streaming.coalescing.maxChars).toBe(256);
+    expect(streaming.coalescing.joiner).toBe("");
+    expect(streaming.coalescing.idleMs).toBe(350);
+  });
 });
