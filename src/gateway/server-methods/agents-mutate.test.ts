@@ -510,6 +510,9 @@ describe("agents.files.list", () => {
 });
 
 describe("agents.files.get/set symlink safety", () => {
+  // These tests need to be platform-agnostic (Windows uses backslashes).
+  const norm = (p: string) => p.replace(/\\/g, "/");
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
@@ -520,17 +523,17 @@ describe("agents.files.get/set symlink safety", () => {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      if (norm(p) === norm(workspace)) {
         return workspace;
       }
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return "/outside/secret.txt";
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return makeSymlinkStat();
       }
       throw createEnoentError();
@@ -553,17 +556,17 @@ describe("agents.files.get/set symlink safety", () => {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      if (norm(p) === norm(workspace)) {
         return workspace;
       }
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return "/outside/secret.txt";
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return makeSymlinkStat();
       }
       throw createEnoentError();
@@ -591,27 +594,27 @@ describe("agents.files.get/set symlink safety", () => {
     const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
 
     mocks.fsRealpath.mockImplementation(async (p: string) => {
-      if (p === workspace) {
+      if (norm(p) === norm(workspace)) {
         return workspace;
       }
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return target;
       }
       return p;
     });
     mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === candidate) {
+      if (norm(p) === norm(candidate)) {
         return makeSymlinkStat({ dev: 9, ino: 41 });
       }
-      if (p === target) {
+      if (norm(p) === norm(target)) {
         return targetStat;
       }
       throw createEnoentError();
     });
     mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
       const p = typeof args[0] === "string" ? args[0] : "";
-      if (p === target) {
+      if (norm(p) === norm(target)) {
         return targetStat;
       }
       throw createEnoentError();
