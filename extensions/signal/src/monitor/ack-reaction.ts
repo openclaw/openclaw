@@ -15,6 +15,12 @@ export function maybeSendSignalAckReaction(params: {
   targetTimestamp: number;
   isGroup: boolean;
   groupId?: string;
+  /** Whether the agent was mentioned in the message (for group-mentions scope gating). */
+  wasMentioned?: boolean;
+  /** Whether mention detection is configured (i.e. mention patterns exist). */
+  canDetectMention?: boolean;
+  /** Whether group requires a mention before responding (for group-mentions scope gating). */
+  requireMention?: boolean;
   baseUrl: string;
   account?: string;
   accountId: string;
@@ -33,15 +39,18 @@ export function maybeSendSignalAckReaction(params: {
   }
 
   const scope = params.cfg.messages?.ackReactionScope;
+  const canDetectMention = params.canDetectMention ?? false;
+  const requireMention = params.requireMention ?? false;
+  const wasMentioned = params.wasMentioned ?? false;
   const shouldSend = shouldAckReaction({
     scope,
     isDirect: !params.isGroup,
     isGroup: params.isGroup,
-    isMentionableGroup: false,
-    requireMention: false,
-    canDetectMention: false,
-    effectiveWasMentioned: false,
-    shouldBypassMention: false,
+    isMentionableGroup: params.isGroup && canDetectMention,
+    requireMention,
+    canDetectMention,
+    effectiveWasMentioned: wasMentioned,
+    shouldBypassMention: !requireMention,
   });
   if (!shouldSend) {
     return;
