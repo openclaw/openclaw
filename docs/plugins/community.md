@@ -50,6 +50,6 @@ Use this format when adding entries:
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
 - **Monade Sales** — Security-first outbound calling and campaign operations with user-scoped SIP trunk management tools.
-  npm: `@openclaw/monade-sales`
+  npm: `@amolsoans/monade-sales`
   repo: `https://github.com/monade-ai/livekit_depployment_voice_config/tree/dev/MCP/openclaw-monade-sales`
-  install: `openclaw plugins install @openclaw/monade-sales`
+  install: `openclaw plugins install @amolsoans/monade-sales`
