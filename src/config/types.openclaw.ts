@@ -112,6 +112,30 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  media?: { preserveFilenames?: boolean };
+  limits?: {
+    enabled?: boolean;
+    defaults?: {
+      tpm?: number;
+      rpd?: number;
+      dailyTokenBudget?: number;
+      monthlyTokenBudget?: number;
+    };
+    providers?: Record<
+      string,
+      | {
+          rpm?: number;
+          tpm?: number;
+          rpd?: number;
+          dailyTokenBudget?: number;
+          monthlyTokenBudget?: number;
+        }
+      | undefined
+    >;
+    queue?: { maxSize?: number; timeoutMs?: number };
+    budgets?: { warningThresholds?: number[]; hardBlock?: boolean };
+    retry?: { attempts?: number; minDelayMs?: number; maxDelayMs?: number; jitter?: number };
+  };
 };
 
 export type ConfigValidationIssue = {

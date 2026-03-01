@@ -92,6 +92,8 @@ USER.md
 /memory/
 .agent/*.json
 !.agent/workflows/
+local/
+queue_test_output.txt
 /local/
 package-lock.json
 .claude/settings.local.json
