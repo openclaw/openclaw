@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
-import { BacktestEngine } from "./src/backtest-engine.js";
+import { BacktestEngine, buildIndicatorLib } from "./src/backtest-engine.js";
 import { createBollingerBands } from "./src/builtin-strategies/bollinger-bands.js";
 import { buildCustomStrategy } from "./src/builtin-strategies/custom-rule-engine.js";
 import { createMacdDivergence } from "./src/builtin-strategies/macd-divergence.js";
@@ -12,7 +12,7 @@ import { createSmaCrossover } from "./src/builtin-strategies/sma-crossover.js";
 import { createTrendFollowingMomentum } from "./src/builtin-strategies/trend-following-momentum.js";
 import { createVolatilityMeanReversion } from "./src/builtin-strategies/volatility-mean-reversion.js";
 import { StrategyRegistry } from "./src/strategy-registry.js";
-import type { BacktestConfig, StrategyDefinition } from "./src/types.js";
+import type { BacktestConfig, StrategyContext, StrategyDefinition } from "./src/types.js";
 
 type OhlcvBar = {
   timestamp: number;
@@ -300,8 +300,7 @@ const plugin = {
 
             if (!dataProvider?.getOHLCV) {
               return json({
-                error:
-                  "Data provider (fin-data-bus) not available. Load the fin-data-bus plugin first.",
+                error: "Data provider not available. Load findoo-datahub-plugin first.",
               });
             }
 
@@ -381,6 +380,195 @@ const plugin = {
         },
       },
       { names: ["fin_backtest_result"] },
+    );
+
+    // --- fin_strategy_tick ---
+    // Per-strategy tick memory, persisted across ticks on the record object
+    const tickMemory = new Map<string, Map<string, unknown>>();
+
+    api.registerTool(
+      {
+        name: "fin_strategy_tick",
+        label: "Strategy Tick",
+        description:
+          "Feed the latest market bar to a running strategy. If a signal fires, " +
+          "submit order to paper engine (L2) or live engine (L3) automatically.",
+        parameters: Type.Object({
+          strategyId: Type.String({ description: "Strategy ID to tick" }),
+          symbol: Type.Optional(
+            Type.String({ description: "Override symbol (default: strategy's first symbol)" }),
+          ),
+          timeframe: Type.Optional(
+            Type.String({ description: "Override timeframe (default: strategy's first)" }),
+          ),
+        }),
+        async execute(_id: string, params: Record<string, unknown>) {
+          try {
+            const strategyId = params.strategyId as string;
+            const record = registry.get(strategyId);
+            if (!record) return json({ error: `Strategy ${strategyId} not found` });
+            if (record.level !== "L2_PAPER" && record.level !== "L3_LIVE") {
+              return json({
+                error: `Strategy ${strategyId} is ${record.level}, must be L2_PAPER or L3_LIVE to tick`,
+              });
+            }
+
+            // Get data provider
+            const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
+            const dataProvider = runtime.services?.get?.("fin-data-provider") as
+              | {
+                  getOHLCV?: (
+                    paramsOrSymbol:
+                      | {
+                          symbol: string;
+                          market: string;
+                          timeframe: string;
+                          limit?: number;
+                        }
+                      | string,
+                    timeframe?: string,
+                    limit?: number,
+                  ) => Promise<OhlcvBar[]>;
+                }
+              | undefined;
+
+            if (!dataProvider?.getOHLCV) {
+              return json({ error: "Data provider not available. Load findoo-datahub-plugin." });
+            }
+
+            const symbol = (params.symbol as string) ?? record.definition.symbols[0] ?? "BTC/USDT";
+            const timeframe =
+              (params.timeframe as string) ?? record.definition.timeframes[0] ?? "1h";
+            const market = record.definition.markets[0] ?? "crypto";
+
+            const getOHLCV = dataProvider.getOHLCV;
+            const ohlcv =
+              getOHLCV.length <= 1
+                ? await getOHLCV({ symbol, market, timeframe, limit: 200 })
+                : await getOHLCV(symbol, timeframe, 200);
+
+            if (!ohlcv || ohlcv.length === 0) {
+              return json({ error: `No OHLCV data for ${symbol} ${timeframe}` });
+            }
+
+            const latestBar = ohlcv[ohlcv.length - 1]!;
+            const indicators = buildIndicatorLib(ohlcv);
+
+            // Get paper engine for portfolio state
+            const paperEngine = runtime.services?.get?.("fin-paper-engine") as
+              | {
+                  getAccountState?: (id: string) => {
+                    equity: number;
+                    cash?: number;
+                    orders?: Array<{ strategyId?: string }>;
+                  } | null;
+                  submitOrder?: (accountId: string, order: unknown, price: number) => unknown;
+                  listAccounts?: () => Array<{ id: string; equity: number }>;
+                }
+              | undefined;
+
+            const portfolio = paperEngine?.getAccountState?.("default") ?? {
+              equity: 10000,
+              cash: 10000,
+            };
+
+            // Ensure per-strategy tick memory
+            if (!tickMemory.has(strategyId)) {
+              tickMemory.set(strategyId, new Map());
+            }
+
+            const ctx: StrategyContext = {
+              portfolio: {
+                equity: (portfolio as { equity: number }).equity,
+                cash:
+                  (portfolio as { cash?: number }).cash ?? (portfolio as { equity: number }).equity,
+                positions: [],
+              },
+              history: ohlcv,
+              indicators,
+              regime: "sideways",
+              memory: tickMemory.get(strategyId)!,
+              log: () => {},
+            };
+
+            // Use regime detector if available
+            const regimeDetector = runtime.services?.get?.("fin-regime-detector") as
+              | { detect?: (bars: OhlcvBar[]) => string }
+              | undefined;
+            if (regimeDetector?.detect) {
+              ctx.regime = regimeDetector.detect(ohlcv) as typeof ctx.regime;
+            }
+
+            // Execute strategy onBar
+            const signal = await record.definition.onBar(latestBar, ctx);
+
+            if (!signal) {
+              return json({
+                strategyId,
+                symbol,
+                timeframe,
+                bar: { timestamp: latestBar.timestamp, close: latestBar.close },
+                signal: null,
+                action: "hold",
+              });
+            }
+
+            // Route order based on level
+            let orderResult: unknown = null;
+
+            if (record.level === "L2_PAPER") {
+              if (paperEngine?.submitOrder) {
+                const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
+                orderResult = paperEngine.submitOrder(
+                  "default",
+                  {
+                    symbol: signal.symbol || symbol,
+                    side: signal.action === "buy" ? "buy" : "sell",
+                    type: signal.orderType,
+                    quantity,
+                    strategyId,
+                  },
+                  latestBar.close,
+                );
+              }
+            } else if (record.level === "L3_LIVE") {
+              const finCore = runtime.services?.get?.("fin-exchange-manager") as
+                | { createOrder?: (...args: unknown[]) => Promise<unknown> }
+                | undefined;
+              if (finCore?.createOrder) {
+                const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / latestBar.close;
+                orderResult = await finCore.createOrder(
+                  signal.symbol || symbol,
+                  signal.orderType,
+                  signal.action === "buy" ? "buy" : "sell",
+                  quantity,
+                  signal.limitPrice,
+                );
+              } else {
+                orderResult = { warning: "Live exchange not available, order not submitted" };
+              }
+            }
+
+            return json({
+              strategyId,
+              symbol,
+              timeframe,
+              bar: { timestamp: latestBar.timestamp, close: latestBar.close },
+              signal: {
+                action: signal.action,
+                sizePct: signal.sizePct,
+                reason: signal.reason,
+                confidence: signal.confidence,
+              },
+              level: record.level,
+              orderResult,
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_strategy_tick"] },
     );
   },
 };

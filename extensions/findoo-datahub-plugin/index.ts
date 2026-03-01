@@ -1,5 +1,23 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import { createCryptoAdapter } from "./src/adapters/crypto-adapter.js";
+import type { CcxtExchange } from "./src/adapters/crypto-adapter.js";
+import { createYahooAdapter } from "./src/adapters/yahoo-adapter.js";
+import type { YahooFinanceClient } from "./src/adapters/yahoo-adapter.js";
+import { DataHubClient } from "./src/datahub-client.js";
+import { OHLCVCache } from "./src/ohlcv-cache.js";
+import { RegimeDetector } from "./src/regime-detector.js";
+import {
+  DERIV_MAP,
+  INDEX_MAP,
+  MACRO_MAP,
+  MARKET_MAP,
+  buildTushareParams,
+  detectMarket,
+  resolveStockApi,
+} from "./src/tushare-maps.js";
+import type { MarketType } from "./src/types.js";
+import { UnifiedDataProvider } from "./src/unified-provider.js";
 
 /* ---------- helpers ---------- */
 
@@ -8,15 +26,25 @@ const json = (payload: unknown) => ({
   details: payload,
 });
 
-const DEFAULT_PROXY_URL = "http://43.134.187.48:7088";
+const DEFAULT_TUSHARE_PROXY_URL = "http://43.134.187.48:7088";
+const DEFAULT_DATAHUB_URL = "http://43.134.61.136:8088";
+const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
+const DEFILLAMA_BASE = "https://api.llama.fi";
 
-type DataHubConfig = {
-  mode: "stub" | "live";
+type PluginConfig = {
+  mode: "auto" | "free" | "full";
+  datahubApiUrl: string;
+  datahubApiKey?: string;
   tushareProxyUrl: string;
   tushareApiKey?: string;
   coingeckoApiKey?: string;
   coinglassApiKey?: string;
   requestTimeoutMs: number;
+};
+
+type ExchangeRegistry = {
+  getInstance: (id: string) => Promise<unknown>;
+  listExchanges: () => Array<{ id: string; exchange: string; testnet: boolean }>;
 };
 
 function readEnv(keys: string[]): string | undefined {
@@ -27,28 +55,26 @@ function readEnv(keys: string[]): string | undefined {
   return undefined;
 }
 
-function resolveConfig(api: OpenClawPluginApi): DataHubConfig {
+function resolveConfig(api: OpenClawPluginApi): PluginConfig {
   const raw = api.pluginConfig as Record<string, unknown> | undefined;
 
-  const modeRaw =
-    (typeof raw?.mode === "string" ? raw.mode : undefined) ??
-    readEnv(["OPENFINCLAW_FIN_DATA_HUB_MODE", "FIN_DATA_HUB_MODE"]);
+  const datahubApiKey =
+    (typeof raw?.datahubApiKey === "string" ? raw.datahubApiKey : undefined) ??
+    readEnv(["DATAHUB_API_KEY", "OPENFINCLAW_DATAHUB_API_KEY"]);
 
-  const timeoutRaw =
-    raw?.requestTimeoutMs ??
-    readEnv(["OPENFINCLAW_FIN_DATA_HUB_TIMEOUT_MS", "FIN_DATA_HUB_TIMEOUT_MS"]);
-  const timeout = Number(timeoutRaw);
+  const datahubApiUrl =
+    (typeof raw?.datahubApiUrl === "string" ? raw.datahubApiUrl : undefined) ??
+    readEnv(["DATAHUB_API_URL", "OPENFINCLAW_DATAHUB_API_URL"]) ??
+    DEFAULT_DATAHUB_URL;
 
   const tushareApiKey =
     (typeof raw?.tushareApiKey === "string" ? raw.tushareApiKey : undefined) ??
-    (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ??
     readEnv(["TUSHARE_PROXY_API_KEY", "FIN_DATA_HUB_API_KEY"]);
 
   const tushareProxyUrl =
     (typeof raw?.tushareProxyUrl === "string" ? raw.tushareProxyUrl : undefined) ??
-    (typeof raw?.endpoint === "string" ? raw.endpoint : undefined) ??
     readEnv(["TUSHARE_PROXY_URL", "FIN_DATA_HUB_ENDPOINT"]) ??
-    DEFAULT_PROXY_URL;
+    DEFAULT_TUSHARE_PROXY_URL;
 
   const coingeckoApiKey =
     (typeof raw?.coingeckoApiKey === "string" ? raw.coingeckoApiKey : undefined) ??
@@ -58,28 +84,34 @@ function resolveConfig(api: OpenClawPluginApi): DataHubConfig {
     (typeof raw?.coinglassApiKey === "string" ? raw.coinglassApiKey : undefined) ??
     readEnv(["COINGLASS_API_KEY"]);
 
-  const mode =
-    modeRaw === "stub" ? "stub" : modeRaw === "live" ? "live" : tushareApiKey ? "live" : "stub";
+  const modeRaw =
+    (typeof raw?.mode === "string" ? raw.mode : undefined) ?? readEnv(["OPENFINCLAW_DATAHUB_MODE"]);
+  const mode = modeRaw === "free" ? "free" : modeRaw === "full" ? "full" : "auto";
+
+  const timeoutRaw = raw?.requestTimeoutMs ?? readEnv(["OPENFINCLAW_DATAHUB_TIMEOUT_MS"]);
+  const timeout = Number(timeoutRaw);
 
   return {
     mode,
+    datahubApiUrl: datahubApiUrl.replace(/\/+$/, ""),
+    datahubApiKey,
+    tushareProxyUrl: tushareProxyUrl.replace(/\/+$/, ""),
     tushareApiKey,
     coingeckoApiKey,
     coinglassApiKey,
-    tushareProxyUrl: tushareProxyUrl.replace(/\/+$/, ""),
     requestTimeoutMs: Number.isFinite(timeout) && timeout >= 1000 ? Math.floor(timeout) : 30_000,
   };
 }
 
-/* ---------- Tushare proxy call ---------- */
+/* ---------- Tushare proxy call (legacy fallback) ---------- */
 
 async function tusharePost(
-  config: DataHubConfig,
+  config: PluginConfig,
   apiName: string,
   params: Record<string, unknown>,
   fields?: string,
 ): Promise<{ success: boolean; data: unknown[] }> {
-  if (config.mode === "stub") {
+  if (!config.tushareApiKey) {
     return {
       success: true,
       data: [
@@ -87,7 +119,8 @@ async function tusharePost(
           _stub: true,
           api_name: apiName,
           params,
-          message: "Stub mode. Set TUSHARE_PROXY_API_KEY or configure tushareApiKey for real data.",
+          message:
+            "No Tushare API key. Set TUSHARE_PROXY_API_KEY or DATAHUB_API_KEY for real data.",
         },
       ],
     };
@@ -98,7 +131,7 @@ async function tusharePost(
   if (fields) body.fields = fields;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (config.tushareApiKey) headers["X-Api-Key"] = config.tushareApiKey;
+  headers["X-Api-Key"] = config.tushareApiKey;
 
   const response = await fetch(url, {
     method: "POST",
@@ -127,152 +160,10 @@ async function tusharePost(
   return { success: true, data: payload.data ?? [] };
 }
 
-/* ---------- market detection ---------- */
-
-function detectMarket(symbol: string): "cn" | "hk" | "us" {
-  const upper = symbol.toUpperCase();
-  if (upper.endsWith(".HK")) return "hk";
-  if (upper.endsWith(".SH") || upper.endsWith(".SZ") || upper.endsWith(".BJ")) return "cn";
-  if (/^[A-Z]{1,5}$/.test(upper)) return "us";
-  return "cn"; // default to CN for numeric codes
-}
-
-/* ---------- query_type → Tushare api_name mappings ---------- */
-
-const STOCK_CN_MAP: Record<string, string> = {
-  quote: "daily",
-  historical: "daily",
-  income: "income",
-  balance: "balancesheet",
-  cashflow: "cashflow",
-  ratios: "fina_indicator",
-  moneyflow: "moneyflow",
-  holders: "top10_holders",
-  dividends: "dividend",
-  news: "major_news",
-  pledge: "pledge_stat",
-  margin: "margin_detail",
-  block_trade: "block_trade",
-  factor: "stk_factor",
-};
-
-const STOCK_HK_MAP: Record<string, string> = {
-  quote: "hk_daily",
-  historical: "hk_daily",
-  income: "hk_income",
-  balance: "hk_balancesheet",
-  cashflow: "hk_cashflow",
-  ratios: "hk_fina_indicator",
-};
-
-const STOCK_US_MAP: Record<string, string> = {
-  quote: "us_daily",
-  historical: "us_daily",
-  income: "us_income",
-  balance: "us_balancesheet",
-  cashflow: "us_cashflow",
-  ratios: "us_fina_indicator",
-};
-
-function resolveStockApi(queryType: string, market: string): string {
-  if (market === "hk") return STOCK_HK_MAP[queryType] ?? STOCK_CN_MAP[queryType] ?? queryType;
-  if (market === "us") return STOCK_US_MAP[queryType] ?? STOCK_CN_MAP[queryType] ?? queryType;
-  return STOCK_CN_MAP[queryType] ?? queryType;
-}
-
-const INDEX_MAP: Record<string, string> = {
-  index_historical: "index_daily",
-  index_constituents: "index_weight",
-  index_valuation: "index_dailybasic",
-  etf_historical: "fund_daily",
-  etf_nav: "fund_nav",
-  fund_manager: "fund_manager",
-  fund_portfolio: "fund_portfolio",
-  fund_share: "fund_share",
-  ths_index: "ths_index",
-  ths_daily: "ths_daily",
-  ths_member: "ths_member",
-  sector_classify: "index_classify",
-};
-
-const MACRO_MAP: Record<string, string> = {
-  gdp: "cn_gdp",
-  cpi: "cn_cpi",
-  ppi: "cn_ppi",
-  pmi: "cn_pmi",
-  m2: "cn_m",
-  money_supply: "cn_m",
-  social_financing: "sf",
-  shibor: "shibor",
-  shibor_quote: "shibor_quote",
-  lpr: "shibor_lpr",
-  libor: "libor",
-  hibor: "hibor",
-  treasury_cn: "yc_cb",
-  treasury_us: "us_tycr",
-  wz_index: "wz_index",
-  fx: "fx_daily",
-  calendar: "eco_cal",
-  // World Bank passthrough (api_name used directly when not in map)
-  wb_gdp: "wb_gdp",
-  wb_population: "wb_population",
-  wb_inflation: "wb_inflation",
-  wb_indicator: "wb_indicator",
-};
-
-const DERIV_MAP: Record<string, string> = {
-  futures_historical: "fut_daily",
-  futures_info: "fut_basic",
-  futures_holding: "fut_holding",
-  futures_settle: "fut_settle",
-  futures_warehouse: "fut_wsr",
-  futures_mapping: "fut_mapping",
-  option_basic: "opt_basic",
-  option_daily: "opt_daily",
-  option_chains: "opt_basic", // fallback — real US options need separate provider
-  cb_basic: "cb_basic",
-  cb_daily: "cb_daily",
-};
-
-const MARKET_MAP: Record<string, string> = {
-  top_list: "top_list",
-  top_inst: "top_inst",
-  limit_list: "limit_list_d",
-  block_trade: "block_trade",
-  moneyflow_industry: "moneyflow_ind_dc",
-  concept_list: "ths_index",
-  concept_detail: "ths_daily",
-  margin: "margin",
-  margin_detail: "margin_detail",
-  hsgt_flow: "moneyflow_hsgt",
-  hsgt_top10: "hsgt_top10",
-  index_global: "index_global",
-  market_snapshot: "index_global",
-  calendar_ipo: "new_share",
-  suspend: "suspend_d",
-  trade_calendar: "trade_cal",
-};
-
-/* ---------- build Tushare params ---------- */
-
-function buildTushareParams(params: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (params.symbol) out.ts_code = String(params.symbol);
-  if (params.start_date) out.start_date = String(params.start_date).replace(/-/g, "");
-  if (params.end_date) out.end_date = String(params.end_date).replace(/-/g, "");
-  if (params.trade_date) out.trade_date = String(params.trade_date).replace(/-/g, "");
-  if (params.limit) out.limit = params.limit;
-  if (params.exchange) out.exchange = params.exchange;
-  return out;
-}
-
 /* ---------- CoinGecko + DefiLlama helpers ---------- */
 
-const COINGECKO_BASE = "https://api.coingecko.com/api/v3";
-const DEFILLAMA_BASE = "https://api.llama.fi";
-
 async function coingeckoGet(
-  config: DataHubConfig,
+  config: PluginConfig,
   path: string,
   params?: Record<string, string>,
 ): Promise<unknown> {
@@ -291,7 +182,7 @@ async function coingeckoGet(
   return JSON.parse(text);
 }
 
-async function defillamaGet(config: DataHubConfig, path: string): Promise<unknown> {
+async function defillamaGet(config: PluginConfig, path: string): Promise<unknown> {
   const resp = await fetch(`${DEFILLAMA_BASE}${path}`, {
     signal: AbortSignal.timeout(config.requestTimeoutMs),
   });
@@ -302,7 +193,7 @@ async function defillamaGet(config: DataHubConfig, path: string): Promise<unknow
 
 /** Route crypto query_type to the right API */
 async function executeCryptoQuery(
-  config: DataHubConfig,
+  config: PluginConfig,
   queryType: string,
   params: Record<string, unknown>,
 ): Promise<{ source: string; data: unknown }> {
@@ -310,7 +201,6 @@ async function executeCryptoQuery(
   const limit = params.limit ? String(params.limit) : undefined;
 
   switch (queryType) {
-    // --- CoinGecko market data ---
     case "coin_global":
       return { source: "coingecko", data: await coingeckoGet(config, "/global") };
 
@@ -361,7 +251,6 @@ async function executeCryptoQuery(
       return { source: "coingecko", data: await coingeckoGet(config, "/search", { query }) };
     }
 
-    // --- DefiLlama ---
     case "defi_protocols":
       return { source: "defillama", data: await defillamaGet(config, "/protocols") };
 
@@ -394,21 +283,6 @@ async function executeCryptoQuery(
       };
     }
 
-    // --- CEX data → redirect to fin-data-bus ---
-    case "ohlcv":
-    case "ticker":
-    case "tickers":
-    case "orderbook":
-    case "trades":
-    case "funding_rate":
-      return {
-        source: "redirect",
-        data: {
-          message: `CEX ${queryType} data is served by fin-data-bus. Use tools: fin_data_ohlcv, fin_data_ticker.`,
-          suggestedTool: queryType === "ohlcv" ? "fin_data_ohlcv" : "fin_data_ticker",
-        },
-      };
-
     default:
       throw new Error(`Unknown crypto query_type: ${queryType}`);
   }
@@ -416,18 +290,94 @@ async function executeCryptoQuery(
 
 /* ---------- plugin ---------- */
 
-const finDataHubPlugin = {
-  id: "fin-data-hub",
-  name: "openFinclaw DataHub",
+const findooDatahubPlugin = {
+  id: "findoo-datahub-plugin",
+  name: "Findoo DataHub",
   description:
-    "Financial data bridge to Tushare proxy — A-shares, HK stocks, US equities, Macro, Derivatives. " +
-    "Set TUSHARE_PROXY_API_KEY for real-time data.",
+    "Unified financial data source — free mode (CCXT/CoinGecko/DefiLlama/Yahoo) + full mode (172 DataHub endpoints). " +
+    "Set DATAHUB_API_KEY for full access.",
   kind: "financial" as const,
 
-  register(api: OpenClawPluginApi) {
+  async register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
 
-    // Tool 1: fin_stock — A-share / HK / US equity data
+    // --- Build DataHub client (full mode) ---
+    let datahubClient: DataHubClient | null = null;
+    if (config.mode !== "free" && config.datahubApiKey) {
+      datahubClient = new DataHubClient(
+        config.datahubApiUrl,
+        config.datahubApiKey,
+        config.requestTimeoutMs,
+      );
+    }
+
+    // --- Build free-tier adapters ---
+    const dbPath = api.resolvePath("state/findoo-ohlcv-cache.sqlite");
+    const cache = new OHLCVCache(dbPath);
+    const regimeDetector = new RegimeDetector();
+
+    // Crypto adapter (CCXT via fin-core exchange registry)
+    const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
+    const getExchangeInstance = async (id?: string): Promise<CcxtExchange> => {
+      const registry = runtime.services?.get?.("fin-exchange-registry") as
+        | ExchangeRegistry
+        | undefined;
+      if (!registry) {
+        throw new Error("fin-core plugin not loaded — exchange registry unavailable");
+      }
+      let exchangeId = id;
+      if (!exchangeId || exchangeId === "default") {
+        const exchanges = registry.listExchanges();
+        if (exchanges.length === 0) {
+          throw new Error(
+            "No exchanges configured. Run: openfinclaw exchange add <name> --exchange binance --api-key <key> --secret <secret>",
+          );
+        }
+        exchangeId = exchanges[0]!.id;
+      }
+      return (await registry.getInstance(exchangeId)) as CcxtExchange;
+    };
+    const cryptoAdapter = createCryptoAdapter(cache, getExchangeInstance);
+
+    // Yahoo Finance adapter (free equity fallback)
+    let yahooAdapter = undefined;
+    if (config.mode !== "full") {
+      try {
+        const yf = await import("yahoo-finance2");
+        const yahooClient = (yf.default ?? yf) as unknown as YahooFinanceClient;
+        yahooAdapter = createYahooAdapter(cache, yahooClient);
+      } catch {
+        // yahoo-finance2 not installed; equity stays disabled in free mode
+      }
+    }
+
+    // --- Build unified provider ---
+    const provider = new UnifiedDataProvider(
+      datahubClient,
+      cryptoAdapter,
+      regimeDetector,
+      cache,
+      yahooAdapter,
+    );
+
+    // --- Register services ---
+    api.registerService({
+      id: "fin-data-provider",
+      start: () => {},
+      instance: provider,
+    } as Parameters<typeof api.registerService>[0]);
+
+    api.registerService({
+      id: "fin-regime-detector",
+      start: () => {},
+      instance: regimeDetector,
+    } as Parameters<typeof api.registerService>[0]);
+
+    // ============================================================
+    // AI Tools (10 total)
+    // ============================================================
+
+    // === Tool 1: fin_stock — A-share / HK / US equity data ===
     api.registerTool(
       {
         name: "fin_stock",
@@ -480,7 +430,7 @@ const finDataHubPlugin = {
       { names: ["fin_stock"] },
     );
 
-    // Tool 2: fin_index — Index / ETF / Fund
+    // === Tool 2: fin_index — Index / ETF / Fund ===
     api.registerTool(
       {
         name: "fin_index",
@@ -529,7 +479,7 @@ const finDataHubPlugin = {
       { names: ["fin_index"] },
     );
 
-    // Tool 3: fin_macro — Macro / Rates / FX
+    // === Tool 3: fin_macro — Macro / Rates / FX ===
     api.registerTool(
       {
         name: "fin_macro",
@@ -563,7 +513,7 @@ const finDataHubPlugin = {
       { names: ["fin_macro"] },
     );
 
-    // Tool 4: fin_derivatives — Futures / Options / CB
+    // === Tool 4: fin_derivatives — Futures / Options / CB ===
     api.registerTool(
       {
         name: "fin_derivatives",
@@ -610,25 +560,19 @@ const finDataHubPlugin = {
       { names: ["fin_derivatives"] },
     );
 
-    // Tool 5: fin_crypto — Crypto / DeFi (stub — real data from fin-data-bus CCXT)
+    // === Tool 5: fin_crypto — Crypto & DeFi ===
     api.registerTool(
       {
         name: "fin_crypto",
         label: "Crypto & DeFi",
         description:
-          "Crypto market data — K-lines/OHLCV, tickers, orderbook, trades, funding rates via CEX (fin-data-bus/CCXT). " +
-          "CoinGecko: market cap rankings, trending coins, global stats, coin info/categories. " +
-          "DeFi: TVL protocols, yields, chains, stablecoins, fees, DEX volumes, coin prices.",
+          "Crypto market data via CoinGecko: market cap rankings, trending coins, global stats, coin info/categories, historical prices. " +
+          "DeFi via DefiLlama: TVL protocols, yields, chains, stablecoins, fees, DEX volumes, coin prices. " +
+          "CEX K-lines/OHLCV use fin_data_ohlcv tool instead.",
         parameters: Type.Object({
           query_type: Type.Unsafe<string>({
             type: "string",
             enum: [
-              "ohlcv",
-              "ticker",
-              "tickers",
-              "orderbook",
-              "trades",
-              "funding_rate",
               "search",
               "coin_market",
               "coin_historical",
@@ -647,28 +591,13 @@ const finDataHubPlugin = {
             ],
             description: "Type of crypto/DeFi data",
           }),
-          symbol: Type.Optional(Type.String({ description: "Trading pair or slug" })),
-          exchange: Type.Optional(Type.String({ description: "Exchange name" })),
-          timeframe: Type.Optional(Type.String({ description: "Candle timeframe" })),
-          chain: Type.Optional(Type.String({ description: "Blockchain name" })),
+          symbol: Type.Optional(Type.String({ description: "Coin ID or slug" })),
           limit: Type.Optional(Type.Number()),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           try {
             const queryType = String(params.query_type ?? "").trim();
             if (!queryType) throw new Error("query_type is required");
-
-            if (config.mode === "stub") {
-              return json({
-                success: true,
-                result: {
-                  _stub: true,
-                  query_type: queryType,
-                  message: "Stub mode. Set COINGECKO_API_KEY for CoinGecko data.",
-                },
-              });
-            }
-
             const result = await executeCryptoQuery(config, queryType, params);
             return json({
               success: true,
@@ -684,7 +613,7 @@ const finDataHubPlugin = {
       { names: ["fin_crypto"] },
     );
 
-    // Tool 6: fin_market — Market Radar
+    // === Tool 6: fin_market — Market Radar ===
     api.registerTool(
       {
         name: "fin_market",
@@ -736,7 +665,7 @@ const finDataHubPlugin = {
       { names: ["fin_market"] },
     );
 
-    // Tool 7: fin_query — Raw Tushare query (fallback)
+    // === Tool 7: fin_query — Raw Tushare Query (fallback) ===
     api.registerTool(
       {
         name: "fin_query",
@@ -772,13 +701,123 @@ const finDataHubPlugin = {
       { names: ["fin_query"] },
     );
 
-    // Register gateway service for fin-data-bus consumption
-    api.registerService({
-      id: "fin-datahub-gateway",
-      start: () => {},
-      instance: { tusharePost: tusharePost.bind(null, config), config },
-    });
+    // === Tool 8: fin_data_ohlcv — OHLCV via unified provider ===
+    api.registerTool(
+      {
+        name: "fin_data_ohlcv",
+        label: "OHLCV Data",
+        description:
+          "Fetch OHLCV candle data with local caching. Routes automatically: DataHub (full mode) or CCXT/Yahoo (free mode).",
+        parameters: Type.Object({
+          symbol: Type.String({
+            description: "Trading pair symbol (e.g. BTC/USDT, AAPL, 600519.SH)",
+          }),
+          market: Type.Optional(
+            Type.Unsafe<"crypto" | "equity" | "commodity">({
+              type: "string",
+              enum: ["crypto", "equity", "commodity"],
+              description: "Market type (default: crypto)",
+            }),
+          ),
+          timeframe: Type.Optional(
+            Type.Unsafe<"1m" | "5m" | "1h" | "4h" | "1d">({
+              type: "string",
+              enum: ["1m", "5m", "1h", "4h", "1d"],
+              description: "Candle timeframe (default: 1h)",
+            }),
+          ),
+          since: Type.Optional(Type.Number({ description: "Start timestamp in Unix ms" })),
+          limit: Type.Optional(Type.Number({ description: "Number of candles to return" })),
+        }),
+        async execute(_id: string, params: Record<string, unknown>) {
+          try {
+            const symbol = params.symbol as string;
+            const market = (params.market as MarketType | undefined) ?? "crypto";
+            const timeframe = (params.timeframe as string | undefined) ?? "1h";
+            const since = params.since as number | undefined;
+            const limit = params.limit as number | undefined;
+
+            const ohlcv = await provider.getOHLCV({ symbol, market, timeframe, since, limit });
+
+            return json({
+              symbol,
+              market,
+              timeframe,
+              count: ohlcv.length,
+              candles: ohlcv.map((bar) => ({
+                timestamp: new Date(bar.timestamp).toISOString(),
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+              })),
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_data_ohlcv"] },
+    );
+
+    // === Tool 9: fin_data_regime — Market Regime Detection ===
+    api.registerTool(
+      {
+        name: "fin_data_regime",
+        label: "Market Regime",
+        description:
+          "Detect the current market regime (bull/bear/sideways/volatile/crisis) for a symbol using SMA/ATR analysis.",
+        parameters: Type.Object({
+          symbol: Type.String({ description: "Trading pair symbol (e.g. BTC/USDT)" }),
+          market: Type.Optional(
+            Type.Unsafe<"crypto" | "equity" | "commodity">({
+              type: "string",
+              enum: ["crypto", "equity", "commodity"],
+              description: "Market type (default: crypto)",
+            }),
+          ),
+          timeframe: Type.Optional(
+            Type.Unsafe<"1m" | "5m" | "1h" | "4h" | "1d">({
+              type: "string",
+              enum: ["1m", "5m", "1h", "4h", "1d"],
+              description: "Candle timeframe for analysis (default: 4h)",
+            }),
+          ),
+        }),
+        async execute(_id: string, params: Record<string, unknown>) {
+          try {
+            const symbol = params.symbol as string;
+            const market = (params.market as MarketType | undefined) ?? "crypto";
+            const timeframe = (params.timeframe as string | undefined) ?? "4h";
+
+            const regime = await provider.detectRegime({ symbol, market, timeframe });
+
+            return json({ symbol, market, timeframe, regime });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_data_regime"] },
+    );
+
+    // === Tool 10: fin_data_markets — Supported Markets ===
+    api.registerTool(
+      {
+        name: "fin_data_markets",
+        label: "Supported Markets",
+        description: "List supported market types and their availability",
+        parameters: Type.Object({}),
+        async execute() {
+          const markets = provider.getSupportedMarkets();
+          const mode = datahubClient ? "full" : "free";
+          return json({ mode, markets });
+        },
+      },
+      { names: ["fin_data_markets"] },
+    );
   },
 };
 
-export default finDataHubPlugin;
+export default findooDatahubPlugin;

@@ -1,0 +1,23 @@
+{
+  "name": "@openfinclaw/findoo-datahub-plugin",
+  "version": "2026.3.2",
+  "description": "Unified financial data source — free mode (CCXT/CoinGecko/DefiLlama/Yahoo) + full mode (172 DataHub endpoints)",
+  "keywords": [
+    "crypto",
+    "datahub",
+    "defi",
+    "finance",
+    "macro",
+    "stock"
+  ],
+  "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "dependencies": {
+    "yahoo-finance2": "^3.13.0"
+  },
+  "devDependencies": {
+    "openfinclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openfinclaw": ">=2026.2.23"
+  }
+}

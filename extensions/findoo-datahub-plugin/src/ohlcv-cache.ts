@@ -24,7 +24,6 @@ export class OHLCVCache {
         PRIMARY KEY (symbol, market, timeframe, timestamp)
       )
     `);
-    // Index for range queries
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_ohlcv_lookup
       ON ohlcv (symbol, market, timeframe, timestamp)

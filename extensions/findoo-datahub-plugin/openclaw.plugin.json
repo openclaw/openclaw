@@ -1,0 +1,53 @@
+{
+  "id": "findoo-datahub-plugin",
+  "name": "Findoo DataHub",
+  "description": "Unified financial data source — free mode (CCXT/CoinGecko/DefiLlama/Yahoo) + full mode (172 DataHub endpoints)",
+  "kind": "financial",
+  "version": "2026.3.2",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "datahubApiUrl": {
+        "type": "string",
+        "default": "http://43.134.61.136:8088",
+        "description": "DataHub REST API base URL"
+      },
+      "datahubApiKey": {
+        "type": "string",
+        "description": "DataHub API key — enables full 172 endpoints. Leave empty for free data sources only",
+        "sensitive": true
+      },
+      "tushareProxyUrl": {
+        "type": "string",
+        "default": "http://43.134.187.48:7088",
+        "description": "Tushare proxy URL (legacy, used when DataHub key is absent)",
+        "advanced": true
+      },
+      "tushareApiKey": {
+        "type": "string",
+        "description": "Tushare proxy API key (legacy fallback)",
+        "sensitive": true,
+        "advanced": true
+      },
+      "coingeckoApiKey": {
+        "type": "string",
+        "description": "CoinGecko API key for higher rate limits",
+        "sensitive": true,
+        "advanced": true
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["auto", "free", "full"],
+        "default": "auto",
+        "description": "auto = pick based on apiKey; free = free sources only; full = force DataHub"
+      },
+      "requestTimeoutMs": {
+        "type": "number",
+        "default": 30000,
+        "minimum": 1000,
+        "maximum": 120000
+      }
+    }
+  }
+}

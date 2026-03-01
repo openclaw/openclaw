@@ -457,6 +457,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/findoo-datahub-plugin:
+    dependencies:
+      yahoo-finance2:
+        specifier: ^3.13.0
+        version: 3.13.1
+    devDependencies:
+      openfinclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/google-gemini-cli-auth:
     devDependencies:
       openfinclaw:

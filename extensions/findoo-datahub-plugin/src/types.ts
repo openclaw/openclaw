@@ -1,5 +1,5 @@
 // Canonical definitions live in @openfinclaw/fin-shared-types.
-// Re-exported here for backward compatibility within fin-data-bus.
+// Re-exported here for internal use within findoo-datahub-plugin.
 import type { MarketType } from "../../fin-shared-types/src/types.js";
 
 export type { OHLCV, MarketType, MarketRegime } from "../../fin-shared-types/src/types.js";

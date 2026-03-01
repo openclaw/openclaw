@@ -117,7 +117,7 @@ const finMonitoringPlugin = {
       const provider = runtime.services?.get?.("fin-data-provider") as DataProvider | undefined;
       if (!provider || typeof provider.getTicker !== "function") {
         throw new Error(
-          "fin-data-provider service unavailable. Enable fin-data-bus plugin to auto-evaluate price alerts.",
+          "fin-data-provider service unavailable. Enable findoo-datahub-plugin to auto-evaluate price alerts.",
         );
       }
 
