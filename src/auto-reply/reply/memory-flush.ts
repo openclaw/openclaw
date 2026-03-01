@@ -115,11 +115,27 @@ export function shouldRunMemoryFlush(params: {
     SessionEntry,
     "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
   >;
+  /**
+   * Optional token count override for flush gating. When provided, this value is
+   * treated as a fresh context snapshot and used instead of the cached
+   * SessionEntry.totalTokens (which may be stale/unknown).
+   */
+  tokenCount?: number;
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
 }): boolean {
-  const totalTokens = resolveFreshSessionTotalTokens(params.entry);
+  if (!params.entry) {
+    return false;
+  }
+
+  const override = params.tokenCount;
+  const overrideTokens =
+    typeof override === "number" && Number.isFinite(override) && override > 0
+      ? Math.floor(override)
+      : undefined;
+
+  const totalTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
     return false;
   }
@@ -134,8 +150,8 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
 
-  const compactionCount = params.entry?.compactionCount ?? 0;
-  const lastFlushAt = params.entry?.memoryFlushCompactionCount;
+  const compactionCount = params.entry.compactionCount ?? 0;
+  const lastFlushAt = params.entry.memoryFlushCompactionCount;
   if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {
     return false;
   }
