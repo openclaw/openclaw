@@ -20,7 +20,8 @@ describe("msteams conversation store (fs)", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
 
-    const store = createMSTeamsConversationStoreFs({ env, ttlMs: 1_000 });
+    // Keep TTL comfortably above normal test execution latency to avoid CI timing flakiness.
+    const store = createMSTeamsConversationStoreFs({ env, ttlMs: 30_000 });
 
     const ref: StoredConversationReference = {
       conversation: { id: "19:active@thread.tacv2" },
