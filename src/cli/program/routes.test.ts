@@ -13,9 +13,14 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and preserves plugin loading", () => {
+  it("matches status route and always loads plugins for security parity", () => {
     const route = expectRoute(["status"]);
     expect(route?.loadPlugins).toBe(true);
+  });
+
+  it("matches health route without eager plugin loading", () => {
+    const route = expectRoute(["health"]);
+    expect(route?.loadPlugins).toBeUndefined();
   });
 
   it("returns false when status timeout flag value is missing", async () => {

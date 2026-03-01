@@ -173,3 +173,67 @@ describe("fs-safe", () => {
     });
   });
 });
+
+describe("tilde expansion in file tools", () => {
+  it("expandHomePrefix respects process.env.HOME changes", async () => {
+    const { expandHomePrefix } = await import("./home-dir.js");
+    const originalHome = process.env.HOME;
+    const fakeHome = "/tmp/fake-home-test";
+    process.env.HOME = fakeHome;
+    try {
+      const result = expandHomePrefix("~/file.txt");
+      expect(path.normalize(result)).toBe(path.join(path.resolve(fakeHome), "file.txt"));
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("reads a file via ~/path after HOME override", async () => {
+    const root = await tempDirs.make("openclaw-tilde-test-");
+    const originalHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      await fs.writeFile(path.join(root, "hello.txt"), "tilde-works");
+      const result = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: "~/hello.txt",
+      });
+      const buf = Buffer.alloc(result.stat.size);
+      await result.handle.read(buf, 0, buf.length, 0);
+      await result.handle.close();
+      expect(buf.toString("utf8")).toBe("tilde-works");
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("writes a file via ~/path after HOME override", async () => {
+    const root = await tempDirs.make("openclaw-tilde-test-");
+    const originalHome = process.env.HOME;
+    process.env.HOME = root;
+    try {
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "~/output.txt",
+        data: "tilde-write-works",
+      });
+      const content = await fs.readFile(path.join(root, "output.txt"), "utf8");
+      expect(content).toBe("tilde-write-works");
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("rejects ~/path that resolves outside root", async () => {
+    const root = await tempDirs.make("openclaw-tilde-outside-");
+    // HOME points to real home, ~/file goes to /home/dev/file which is outside root
+    await expect(
+      openFileWithinRoot({
+        rootDir: root,
+        relativePath: "~/escape.txt",
+      }),
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(/outside-workspace|not-found|invalid-path/),
+    });
+  });
+});
