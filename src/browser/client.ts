@@ -1,4 +1,5 @@
 import { fetchBrowserJson } from "./client-fetch.js";
+import { DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS } from "./constants.js";
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -122,7 +123,7 @@ export async function browserStart(baseUrl?: string, opts?: { profile?: string }
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -130,7 +131,7 @@ export async function browserStop(baseUrl?: string, opts?: { profile?: string })
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/stop${q}`), {
     method: "POST",
-    timeoutMs: 15000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -143,7 +144,7 @@ export async function browserResetProfile(
     withBaseUrl(baseUrl, `/reset-profile${q}`),
     {
       method: "POST",
-      timeoutMs: 20000,
+      timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
     },
   );
 }
@@ -196,7 +197,7 @@ export async function browserDeleteProfile(
     withBaseUrl(baseUrl, `/profiles/${encodeURIComponent(profile)}`),
     {
       method: "DELETE",
-      timeoutMs: 20000,
+      timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
     },
   );
 }
@@ -223,7 +224,7 @@ export async function browserOpenTab(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
-    timeoutMs: 15000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -330,7 +331,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs: DEFAULT_BROWSER_CONTROL_REQUEST_TIMEOUT_MS,
   });
 }
 
