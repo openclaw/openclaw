@@ -47,7 +47,11 @@ const tryImport = async (specifier) => {
   }
 };
 
-if (await tryImport("./dist/entry.js")) {
+const shouldPreferBundledEntry = process.env.OPENCLAW_CLI_BUNDLED_ENTRY === "1";
+
+if (shouldPreferBundledEntry && (await tryImport("./dist/entry.bundle.mjs"))) {
+  // OK
+} else if (await tryImport("./dist/entry.js")) {
   // OK
 } else if (await tryImport("./dist/entry.mjs")) {
   // OK
