@@ -1,0 +1,62 @@
+{
+  "name": "@effuzion/openclaw-simplex",
+  "version": "1.0.0",
+  "description": "SimpleX Chat channel plugin for OpenClaw — zero-metadata, decentralized DMs",
+  "keywords": [
+    "encrypted",
+    "messaging",
+    "openclaw",
+    "openclaw-plugin",
+    "privacy",
+    "simplex",
+    "simplex-chat"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/effuzion/openclaw-simplex.git"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*",
+    "zod": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "simplex",
+      "label": "SimpleX",
+      "selectionLabel": "SimpleX Chat (encrypted DMs)",
+      "docsPath": "/channels/simplex",
+      "docsLabel": "simplex",
+      "blurb": "Zero-metadata messaging. No user identifiers. Maximum privacy.",
+      "order": 56,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@effuzion/openclaw-simplex",
+      "localPath": "extensions/simplex",
+      "defaultChoice": "npm"
+    }
+  }
+}

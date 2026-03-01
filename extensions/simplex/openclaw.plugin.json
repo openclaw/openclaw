@@ -1,0 +1,11 @@
+{
+  "id": "simplex",
+  "channels": ["simplex"],
+  "configSchemaPath": "./src/config-schema.ts",
+  "meta": {
+    "label": "SimpleX",
+    "selectionLabel": "SimpleX Chat (encrypted DMs)",
+    "docsPath": "/channels/simplex",
+    "order": 56
+  }
+}
