@@ -263,6 +263,33 @@ describe("gateway bonjour advertiser", () => {
     expect(advertise).toHaveBeenCalledTimes(2);
   });
 
+  it("watchdog skips services in probing state", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, serviceState: "probing" });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    // initial advertise
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    // watchdog fires but should NOT re-advertise because state is "probing"
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    // second watchdog tick — still probing, still no retry
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+  });
+
   it("handles advertise throwing synchronously", async () => {
     enableAdvertiserUnitMode();
 

@@ -221,7 +221,11 @@ export async function startGatewayBonjourAdvertiser(
       if (typeof stateUnknown !== "string") {
         continue;
       }
-      if (stateUnknown === "announced" || stateUnknown === "announcing") {
+      if (
+        stateUnknown === "announced" ||
+        stateUnknown === "announcing" ||
+        stateUnknown === "probing"
+      ) {
         continue;
       }
 
