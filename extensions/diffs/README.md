@@ -54,6 +54,35 @@ Useful options:
 - `ttlSeconds`: artifact lifetime
 - `baseUrl`: override the gateway base URL used in the returned viewer link
 
+## Plugin Defaults
+
+Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      diffs: {
+        enabled: true,
+        config: {
+          defaults: {
+            fontFamily: "Fira Code",
+            fontSize: 15,
+            layout: "unified",
+            wordWrap: true,
+            background: true,
+            theme: "dark",
+            mode: "both",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Explicit tool parameters still win over these defaults.
+
 ## Example Agent Prompts
 
 Open in canvas:

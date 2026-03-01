@@ -281,6 +281,7 @@ async function hydrateViewer(): Promise<void> {
   if (firstPayload) {
     viewerState.theme = firstPayload.options.themeType;
     viewerState.layout = firstPayload.options.diffStyle;
+    viewerState.backgroundEnabled = firstPayload.options.backgroundEnabled;
     viewerState.wrapEnabled = firstPayload.options.overflow === "wrap";
   }
 
