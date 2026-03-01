@@ -395,9 +395,11 @@ export async function readLegacyChannelAllowFromStore(
 export async function readChannelAllowFromStore(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
-  accountId: string,
+  accountId?: string,
 ): Promise<string[]> {
-  const normalizedAccountId = accountId.trim().toLowerCase();
+  const normalizedAccountId = String(accountId ?? "")
+    .trim()
+    .toLowerCase();
   const resolvedAccountId = normalizedAccountId || DEFAULT_ACCOUNT_ID;
 
   if (!shouldIncludeLegacyAllowFromEntries(resolvedAccountId)) {
@@ -427,9 +429,11 @@ export function readLegacyChannelAllowFromStoreSync(
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
-  accountId: string,
+  accountId?: string,
 ): string[] {
-  const normalizedAccountId = accountId.trim().toLowerCase();
+  const normalizedAccountId = String(accountId ?? "")
+    .trim()
+    .toLowerCase();
   const resolvedAccountId = normalizedAccountId || DEFAULT_ACCOUNT_ID;
 
   if (!shouldIncludeLegacyAllowFromEntries(resolvedAccountId)) {
