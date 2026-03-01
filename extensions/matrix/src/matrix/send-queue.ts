@@ -8,6 +8,10 @@ type MatrixSendQueueOptions = {
 // Serialize sends per room to preserve Matrix delivery order.
 const roomQueues = new Map<string, Promise<void>>();
 
+export function resetSendQueueForTest(): void {
+  roomQueues.clear();
+}
+
 export async function enqueueSend<T>(
   roomId: string,
   fn: () => Promise<T>,
@@ -15,12 +19,15 @@ export async function enqueueSend<T>(
 ): Promise<T> {
   const gapMs = options?.gapMs ?? DEFAULT_SEND_GAP_MS;
   const delayFn = options?.delayFn ?? delay;
+  const hasQueuedWork = roomQueues.has(roomId);
   const previous = roomQueues.get(roomId) ?? Promise.resolve();
 
   const next = previous
     .catch(() => {})
     .then(async () => {
-      await delayFn(gapMs);
+      if (hasQueuedWork && gapMs > 0) {
+        await delayFn(gapMs);
+      }
       return await fn();
     });
 
