@@ -14,6 +14,10 @@ export type CreateTypingCallbacksParams = {
   onStopError?: (err: unknown) => void;
   /** Stop after this many consecutive start() failures. Default: 2 */
   maxConsecutiveFailures?: number;
+  /** @deprecated No longer used — the controller owns the keepalive loop. Accepted for backward compatibility. */
+  keepaliveIntervalMs?: number;
+  /** @deprecated No longer used — the controller owns the TTL. Accepted for backward compatibility. */
+  maxDurationMs?: number;
 };
 
 /**
