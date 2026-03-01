@@ -17,10 +17,10 @@ export function registerSlackMemberEvents(params: {
     body: unknown;
   }) => {
     try {
-      trackEvent?.();
       if (ctx.shouldDropMismatchedSlackEvent(params.body)) {
         return;
       }
+      trackEvent?.();
       const payload = params.event;
       const channelId = payload.channel;
       const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};

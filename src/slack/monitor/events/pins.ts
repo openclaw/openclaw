@@ -7,18 +7,20 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 
 async function handleSlackPinEvent(params: {
   ctx: SlackMonitorContext;
+  trackEvent?: () => void;
   body: unknown;
   event: unknown;
   action: "pinned" | "unpinned";
   contextKeySuffix: "added" | "removed";
   errorLabel: string;
 }): Promise<void> {
-  const { ctx, body, event, action, contextKeySuffix, errorLabel } = params;
+  const { ctx, trackEvent, body, event, action, contextKeySuffix, errorLabel } = params;
 
   try {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
+    trackEvent?.();
 
     const payload = event as SlackPinEvent;
     const channelId = payload.channel_id;
@@ -54,9 +56,9 @@ export function registerSlackPinEvents(params: {
   const { ctx, trackEvent } = params;
 
   ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
-    trackEvent?.();
     await handleSlackPinEvent({
       ctx,
+      trackEvent,
       body,
       event,
       action: "pinned",
@@ -66,9 +68,9 @@ export function registerSlackPinEvents(params: {
   });
 
   ctx.app.event("pin_removed", async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
-    trackEvent?.();
     await handleSlackPinEvent({
       ctx,
+      trackEvent,
       body,
       event,
       action: "unpinned",

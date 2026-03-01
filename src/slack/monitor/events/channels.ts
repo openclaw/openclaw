@@ -51,10 +51,10 @@ export function registerSlackChannelEvents(params: {
     "channel_created",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_created">) => {
       try {
-        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
@@ -70,10 +70,10 @@ export function registerSlackChannelEvents(params: {
     "channel_rename",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_rename">) => {
       try {
-        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
@@ -89,10 +89,10 @@ export function registerSlackChannelEvents(params: {
     "channel_id_changed",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_id_changed">) => {
       try {
-        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
+        trackEvent?.();
 
         const payload = event as SlackChannelIdChangedEvent;
         const oldChannelId = payload.old_channel_id;

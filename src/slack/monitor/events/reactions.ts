@@ -12,12 +12,12 @@ export function registerSlackReactionEvents(params: {
   const { ctx, trackEvent } = params;
 
   const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
-    trackEvent?.();
     try {
       const item = event.item;
       if (!item || item.type !== "message") {
         return;
       }
+      trackEvent?.();
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
         ctx,

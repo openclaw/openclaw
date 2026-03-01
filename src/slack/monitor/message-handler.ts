@@ -101,7 +101,6 @@ export function createSlackMessageHandler(params: {
   });
 
   return async (message, opts) => {
-    trackEvent?.();
     if (opts.source === "message" && message.type !== "message") {
       return;
     }
@@ -116,6 +115,7 @@ export function createSlackMessageHandler(params: {
     if (ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
+    trackEvent?.();
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
