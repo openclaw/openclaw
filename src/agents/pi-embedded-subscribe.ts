@@ -45,7 +45,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     reasoningMode,
     includeReasoning: reasoningMode === "on",
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
+    // Enable reasoning streaming when mode is "stream" or "on".
+    // The onReasoningStream callback is optional - emitAgentEvent delivers to WebSocket clients.
+    streamReasoning: reasoningMode === "stream" || reasoningMode === "on",
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -541,7 +543,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
-    if (!state.streamReasoning || !params.onReasoningStream) {
+    // Allow streaming reasoning events to WebSocket clients even without
+    // an onReasoningStream callback (e.g., gateway web chat use case).
+    // The callback is optional - emitAgentEvent is the primary delivery mechanism.
+    const shouldStreamToWs = state.streamReasoning;
+    if (!shouldStreamToWs) {
       return;
     }
     const formatted = formatReasoningMessage(text);
@@ -567,9 +573,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
     });
 
-    void params.onReasoningStream({
-      text: formatted,
-    });
+    // Invoke callback if provided
+    if (typeof params.onReasoningStream === "function") {
+      void params.onReasoningStream({
+        text: formatted,
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {

@@ -37,6 +37,7 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
+  type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -144,6 +145,7 @@ function runAgentAttempt(params: {
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  resolvedReasoningLevel: ReasoningLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
@@ -208,6 +210,7 @@ function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
+    reasoningLevel: params.resolvedReasoningLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,
@@ -272,6 +275,14 @@ export async function agentCommand(
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
+  }
+
+  const reasoningOverride =
+    opts.reasoning === "off" || opts.reasoning === "on" || opts.reasoning === "stream"
+      ? opts.reasoning
+      : undefined;
+  if (opts.reasoning && !reasoningOverride) {
+    throw new Error('Invalid reasoning level. Use "on", "stream", or "off".');
   }
 
   const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
@@ -481,11 +492,16 @@ export async function agentCommand(
       (agentCfg?.thinkingDefault as ThinkLevel | undefined);
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    const resolvedReasoningLevel =
+      reasoningOverride ??
+      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+      (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
 
     if (sessionKey) {
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
+        isHeartbeat: false,
       });
     }
 
@@ -747,6 +763,7 @@ export async function agentCommand(
             messageChannel,
             skillsSnapshot,
             resolvedVerboseLevel,
+            resolvedReasoningLevel,
             agentDir,
             primaryProvider: provider,
             onAgentEvent: (evt) => {
