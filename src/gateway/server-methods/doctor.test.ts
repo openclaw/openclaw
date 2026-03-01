@@ -19,6 +19,31 @@ vi.mock("../../memory/index.js", () => ({
 
 import { doctorHandlers } from "./doctor.js";
 
+const invokeDoctorMemoryStatus = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.status"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    {
+      agentId: "main",
+      embedding: {
+        ok: false,
+        error,
+      },
+    },
+    undefined,
+  );
+};
+
 describe("doctor.memory.status", () => {
   beforeEach(() => {
     loadConfig.mockClear();
@@ -37,14 +62,7 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await doctorHandlers["doctor.memory.status"]({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await invokeDoctorMemoryStatus(respond);
 
     expect(getMemorySearchManager).toHaveBeenCalledWith({
       cfg: expect.any(Object),
@@ -70,26 +88,9 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await doctorHandlers["doctor.memory.status"]({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await invokeDoctorMemoryStatus(respond);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        agentId: "main",
-        embedding: {
-          ok: false,
-          error: "memory search unavailable",
-        },
-      },
-      undefined,
-    );
+    expectEmbeddingErrorResponse(respond, "memory search unavailable");
   });
 
   it("returns probe failure when manager probe throws", async () => {
@@ -103,26 +104,9 @@ describe("doctor.memory.status", () => {
     });
     const respond = vi.fn();
 
-    await doctorHandlers["doctor.memory.status"]({
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await invokeDoctorMemoryStatus(respond);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        agentId: "main",
-        embedding: {
-          ok: false,
-          error: "gateway memory probe failed: timeout",
-        },
-      },
-      undefined,
-    );
+    expectEmbeddingErrorResponse(respond, "gateway memory probe failed: timeout");
     expect(close).toHaveBeenCalled();
   });
 });

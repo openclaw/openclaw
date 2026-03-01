@@ -1,84 +1,37 @@
-import { afterAll, beforeAll, test } from "vitest";
-import WebSocket from "ws";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { getFreePort, onceMessage, startGatewayServer } from "./test-helpers.server.js";
+import { describe, expect, test } from "vitest";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+import { validateConnectParams } from "./protocol/index.js";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-let port = 0;
-let previousToken: string | undefined;
-
-beforeAll(async () => {
-  previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  process.env.OPENCLAW_GATEWAY_TOKEN = "test-gateway-token-1234567890";
-  port = await getFreePort();
-  server = await startGatewayServer(port);
-});
-
-afterAll(async () => {
-  await server?.close();
-  if (previousToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
-  }
-});
-
-function connectReq(
-  ws: WebSocket,
-  params: { clientId: string; platform: string; token?: string; password?: string },
-): Promise<{ ok: boolean; error?: { message?: string } }> {
-  const id = `c-${Math.random().toString(16).slice(2)}`;
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: params.clientId,
-          version: "dev",
-          platform: params.platform,
-          mode: "node",
-        },
-        auth: {
-          token: params.token,
-          password: params.password,
-        },
-        role: "node",
-        scopes: [],
-        caps: ["canvas"],
-        commands: ["system.notify"],
-        permissions: {},
-      },
-    }),
-  );
-
-  return onceMessage(
-    ws,
-    (o) => (o as { type?: string }).type === "res" && (o as { id?: string }).id === id,
-  );
+function makeConnectParams(clientId: string) {
+  return {
+    minProtocol: 1,
+    maxProtocol: 1,
+    client: {
+      id: clientId,
+      version: "dev",
+      platform: "ios",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    },
+    role: "node",
+    scopes: [],
+    caps: ["canvas"],
+    commands: ["system.notify"],
+    permissions: {},
+  };
 }
 
-test.each([
-  { clientId: "openclaw-ios", platform: "ios" },
-  { clientId: "openclaw-android", platform: "android" },
-])("accepts $clientId as a valid gateway client id", async ({ clientId, platform }) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+describe("connect params client id validation", () => {
+  test.each([GATEWAY_CLIENT_IDS.IOS_APP, GATEWAY_CLIENT_IDS.ANDROID_APP])(
+    "accepts %s as a valid gateway client id",
+    (clientId) => {
+      const ok = validateConnectParams(makeConnectParams(clientId));
+      expect(ok).toBe(true);
+      expect(validateConnectParams.errors ?? []).toHaveLength(0);
+    },
+  );
 
-  const res = await connectReq(ws, { clientId, platform });
-  // We don't care if auth fails here; we only care that schema validation accepts the client id.
-  // A schema rejection would close the socket before sending a response.
-  if (!res.ok) {
-    // allow unauthorized error when gateway requires auth
-    // but reject schema validation errors
-    const message = String(res.error?.message ?? "");
-    if (message.includes("invalid connect params")) {
-      throw new Error(message);
-    }
-  }
-
-  ws.close();
+  test("rejects unknown client ids", () => {
+    const ok = validateConnectParams(makeConnectParams("openclaw-mobile"));
+    expect(ok).toBe(false);
+  });
 });

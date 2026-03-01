@@ -19,6 +19,7 @@ import { agentCommand } from "./test-helpers.mocks.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
 
 let ws: WebSocket;
 let port: number;
@@ -28,13 +29,13 @@ installConnectedControlUiServerSuite((started) => {
   port = started.port;
 });
 
-async function waitFor(condition: () => boolean, timeoutMs = 400) {
+async function waitFor(condition: () => boolean, timeoutMs = 250) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (condition()) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 2));
   }
   throw new Error("timeout waiting for condition");
 }
@@ -221,7 +222,11 @@ describe("gateway server chat", () => {
         }),
       );
 
-      const imgRes = await onceMessage(ws, (o) => o.type === "res" && o.id === reqId, 8000);
+      const imgRes = await onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === reqId,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
       const reqIdOnly = "chat-img-only";
@@ -246,7 +251,11 @@ describe("gateway server chat", () => {
         }),
       );
 
-      const imgOnlyRes = await onceMessage(ws, (o) => o.type === "res" && o.id === reqIdOnly, 8000);
+      const imgOnlyRes = await onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === reqIdOnly,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
@@ -405,13 +414,13 @@ describe("gateway server chat", () => {
           timeoutMs: 200,
         });
 
-        setTimeout(() => {
+        queueMicrotask(() => {
           emitAgentEvent({
             runId: "run-wait-1",
             stream: "lifecycle",
             data: { phase: "end", startedAt: 200, endedAt: 210 },
           });
-        }, 5);
+        });
 
         const res = await waitP;
         expect(res.ok).toBe(true);
@@ -450,13 +459,13 @@ describe("gateway server chat", () => {
           timeoutMs: 50,
         });
 
-        setTimeout(() => {
+        queueMicrotask(() => {
           emitAgentEvent({
             runId: "run-wait-err",
             stream: "lifecycle",
             data: { phase: "error", error: "boom" },
           });
-        }, 5);
+        });
 
         const res = await waitP;
         expect(res.ok).toBe(true);
@@ -475,13 +484,13 @@ describe("gateway server chat", () => {
           data: { phase: "start", startedAt: 123 },
         });
 
-        setTimeout(() => {
+        queueMicrotask(() => {
           emitAgentEvent({
             runId: "run-wait-start",
             stream: "lifecycle",
             data: { phase: "end", endedAt: 456 },
           });
-        }, 5);
+        });
 
         const res = await waitP;
         expect(res.ok).toBe(true);

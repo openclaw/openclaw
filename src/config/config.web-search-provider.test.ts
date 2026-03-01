@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateConfigObject } from "./config.js";
+import { buildWebSearchProviderConfig } from "./test-helpers.js";
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
@@ -10,54 +11,42 @@ const { resolveSearchProvider } = __testing;
 
 describe("web search provider config", () => {
   it("accepts perplexity provider and config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "perplexity",
-            perplexity: {
-              apiKey: "test-key",
-              baseUrl: "https://api.perplexity.ai",
-              model: "perplexity/sonar-pro",
-            },
-          },
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "perplexity",
+        providerConfig: {
+          apiKey: "test-key",
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro",
         },
-      },
-    });
+      }),
+    );
 
     expect(res.ok).toBe(true);
   });
 
   it("accepts gemini provider and config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "gemini",
-            gemini: {
-              apiKey: "test-key",
-              model: "gemini-2.5-flash",
-            },
-          },
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "gemini",
+        providerConfig: {
+          apiKey: "test-key",
+          model: "gemini-2.5-flash",
         },
-      },
-    });
+      }),
+    );
 
     expect(res.ok).toBe(true);
   });
 
   it("accepts gemini provider with no extra config", () => {
-    const res = validateConfigObject({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-          },
-        },
-      },
-    });
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "gemini",
+      }),
+    );
 
     expect(res.ok).toBe(true);
   });
@@ -69,6 +58,8 @@ describe("web search provider auto-detection", () => {
   beforeEach(() => {
     delete process.env.BRAVE_API_KEY;
     delete process.env.GEMINI_API_KEY;
+    delete process.env.KIMI_API_KEY;
+    delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
@@ -93,6 +84,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
+    process.env.KIMI_API_KEY = "test-kimi-key";
+    expect(resolveSearchProvider({})).toBe("kimi");
   });
 
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {

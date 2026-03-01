@@ -456,6 +456,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const sendMessage = async (text: string) => {
+    if (!state.isConnected) {
+      chatLog.addSystem("not connected to gateway — message not sent");
+      setActivityStatus("disconnected");
+      tui.requestRender();
+      return;
+    }
     try {
       chatLog.addUser(text);
       tui.requestRender();

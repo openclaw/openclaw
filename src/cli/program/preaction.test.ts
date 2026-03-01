@@ -77,9 +77,13 @@ describe("registerPreActionHooks", () => {
     program.command("status").action(async () => {});
     program.command("doctor").action(async () => {});
     program.command("completion").action(async () => {});
+    program.command("secrets").action(async () => {});
     program.command("update").action(async () => {});
     program.command("channels").action(async () => {});
     program.command("directory").action(async () => {});
+    program.command("agents").action(async () => {});
+    program.command("configure").action(async () => {});
+    program.command("onboard").action(async () => {});
     program
       .command("message")
       .command("send")
@@ -125,7 +129,34 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips config guard for doctor and completion commands", async () => {
+  it("loads plugin registry for configure command", async () => {
+    await runCommand({
+      parseArgv: ["configure"],
+      processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin registry for onboard command", async () => {
+    await runCommand({
+      parseArgv: ["onboard"],
+      processArgv: ["node", "openclaw", "onboard"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin registry for agents command", async () => {
+    await runCommand({
+      parseArgv: ["agents"],
+      processArgv: ["node", "openclaw", "agents"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips config guard for doctor, completion, and secrets commands", async () => {
     await runCommand({
       parseArgv: ["doctor"],
       processArgv: ["node", "openclaw", "doctor"],
@@ -133,6 +164,10 @@ describe("registerPreActionHooks", () => {
     await runCommand({
       parseArgv: ["completion"],
       processArgv: ["node", "openclaw", "completion"],
+    });
+    await runCommand({
+      parseArgv: ["secrets"],
+      processArgv: ["node", "openclaw", "secrets"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

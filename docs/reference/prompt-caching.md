@@ -9,6 +9,10 @@ read_when:
 
 # Prompt caching
 
+Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. The first matching request writes cache tokens (`cacheWrite`), and later matching requests can read them back (`cacheRead`).
+
+Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
+
 This page covers all cache-related knobs that affect prompt reuse and token cost.
 
 For Anthropic pricing details, see:
@@ -130,6 +134,42 @@ agents:
 - Set baseline `cacheRetention: "short"`.
 - Enable `contextPruning.mode: "cache-ttl"`.
 - Keep heartbeat below your TTL only for agents that benefit from warm caches.
+
+## Cache diagnostics
+
+OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
+
+### `diagnostics.cacheTrace` config
+
+```yaml
+diagnostics:
+  cacheTrace:
+    enabled: true
+    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
+    includeMessages: false # default true
+    includePrompt: false # default true
+    includeSystem: false # default true
+```
+
+Defaults:
+
+- `filePath`: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`
+- `includeMessages`: `true`
+- `includePrompt`: `true`
+- `includeSystem`: `true`
+
+### Env toggles (one-off debugging)
+
+- `OPENCLAW_CACHE_TRACE=1` enables cache tracing.
+- `OPENCLAW_CACHE_TRACE_FILE=/path/to/cache-trace.jsonl` overrides output path.
+- `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
+- `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
+- `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+
+### What to inspect
+
+- Cache trace events are JSONL and include staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
+- Per-turn cache token impact is visible in normal usage surfaces via `cacheRead` and `cacheWrite` (for example `/usage full` and session usage summaries).
 
 ## Quick troubleshooting
 

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
@@ -44,20 +43,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Workspace\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
-    });
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: bundledDir,
+      }),
+    );
 
     expect(prompt).toContain("Workspace version");
-    expect(prompt).toContain(path.join(workspaceSkillDir, "SKILL.md"));
-    expect(prompt).not.toContain(path.join(managedSkillDir, "SKILL.md"));
-    expect(prompt).not.toContain(path.join(bundledSkillDir, "SKILL.md"));
+    expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
+    expect(prompt).not.toContain("Managed version");
+    expect(prompt).not.toContain("Bundled version");
   });
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const skillsDir = path.join(workspaceDir, "skills");
-    const binDir = path.join(workspaceDir, "bin");
 
     await writeSkill({
       dir: path.join(skillsDir, "bin-skill"),
@@ -91,9 +91,17 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
-    const defaultPrompt = withEnv({ PATH: "" }, () =>
+    const defaultPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir,
+        eligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: () => false,
+            hasAnyBin: () => false,
+            note: "",
+          },
+        },
       }),
     );
     expect(defaultPrompt).toContain("always-skill");
@@ -102,17 +110,20 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(defaultPrompt).not.toContain("anybin-skill");
     expect(defaultPrompt).not.toContain("env-skill");
 
-    await fs.mkdir(binDir, { recursive: true });
-    const fakebinPath = path.join(binDir, "fakebin");
-    await fs.writeFile(fakebinPath, "#!/bin/sh\nexit 0\n", "utf-8");
-    await fs.chmod(fakebinPath, 0o755);
-
-    const gatedPrompt = withEnv({ PATH: binDir }, () =>
+    const gatedPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir,
         config: {
           browser: { enabled: false },
           skills: { entries: { "env-skill": { apiKey: "ok" } } },
+        },
+        eligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: (bin: string) => bin === "fakebin",
+            hasAnyBin: (bins: string[]) => bins.includes("fakebin"),
+            note: "",
+          },
         },
       }),
     );
@@ -132,10 +143,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
       metadata: '{"openclaw":{"skillKey":"alias"}}',
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      config: { skills: { entries: { alias: { enabled: false } } } },
-    });
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config: { skills: { entries: { alias: { enabled: false } } } },
+      }),
+    );
     expect(prompt).not.toContain("alias-skill");
   });
 });
