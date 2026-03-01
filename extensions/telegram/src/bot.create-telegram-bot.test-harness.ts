@@ -123,7 +123,7 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
 });
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
-  wasSentByBot: vi.fn(() => false),
+  wasSentByBot: vi.fn<() => boolean | null>(() => false),
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
