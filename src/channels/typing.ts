@@ -1,4 +1,3 @@
-import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
 export type TypingCallbacks = {
@@ -13,59 +12,29 @@ export type CreateTypingCallbacksParams = {
   stop?: () => Promise<void>;
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
-  keepaliveIntervalMs?: number;
-  /** Stop keepalive after this many consecutive start() failures. Default: 2 */
+  /** Stop after this many consecutive start() failures. Default: 2 */
   maxConsecutiveFailures?: number;
-  /** Maximum duration for typing indicator before auto-cleanup (safety TTL). Default: 60s */
-  maxDurationMs?: number;
 };
 
+/**
+ * Stateless adapter: wraps channel start/stop with a circuit breaker and
+ * closed-on-stop dedup. The upstream TypingController owns the single
+ * keepalive loop and TTL — this layer just forwards each tick safely.
+ */
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
-  const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
   const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
-  const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
   let stopSent = false;
   let closed = false;
-  let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   const startGuard = createTypingStartGuard({
     isSealed: () => closed,
     onStartError: params.onStartError,
     maxConsecutiveFailures,
-    onTrip: () => {
-      keepaliveLoop.stop();
-    },
   });
 
   const fireStart = async (): Promise<void> => {
     await startGuard.run(() => params.start());
-  };
-
-  const keepaliveLoop = createTypingKeepaliveLoop({
-    intervalMs: keepaliveIntervalMs,
-    onTick: fireStart,
-  });
-
-  // TTL safety: auto-stop typing after maxDurationMs
-  const startTtlTimer = () => {
-    if (maxDurationMs <= 0) {
-      return;
-    }
-    clearTtlTimer();
-    ttlTimer = setTimeout(() => {
-      if (!closed) {
-        console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
-        fireStop();
-      }
-    }, maxDurationMs);
-  };
-
-  const clearTtlTimer = () => {
-    if (ttlTimer) {
-      clearTimeout(ttlTimer);
-      ttlTimer = undefined;
-    }
   };
 
   const onReplyStart = async () => {
@@ -74,25 +43,19 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     }
     stopSent = false;
     startGuard.reset();
-    keepaliveLoop.stop();
-    clearTtlTimer();
     await fireStart();
     if (startGuard.isTripped()) {
       return;
     }
     // Re-check closed after the async fireStart() — a concurrent fireStop() may have
-    // set closed=true and cleared the interval while we awaited.
+    // set closed=true while we awaited.
     if (closed) {
       return;
     }
-    keepaliveLoop.start();
-    startTtlTimer(); // Start TTL safety timer
   };
 
   const fireStop = () => {
     closed = true;
-    keepaliveLoop.stop();
-    clearTtlTimer(); // Clear TTL timer on normal stop
     if (!stop || stopSent) {
       return;
     }

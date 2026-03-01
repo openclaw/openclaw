@@ -24,7 +24,7 @@ export function createTypingController(params: {
   const {
     onReplyStart,
     onCleanup,
-    typingIntervalSeconds = 6,
+    typingIntervalSeconds = 4,
     typingTtlMs = 2 * 60_000,
     silentToken = SILENT_REPLY_TOKEN,
     log,
@@ -162,6 +162,12 @@ export function createTypingController(params: {
       return;
     }
     await ensureStart();
+    // Re-check sealed after the async ensureStart() — cleanup() may have
+    // sealed the controller while we awaited, clearing the TTL timer.
+    // Starting the loop here would leak an interval with no safety net.
+    if (sealed) {
+      return;
+    }
     typingLoop.start();
   };
 
