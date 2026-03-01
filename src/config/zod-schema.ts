@@ -339,10 +339,7 @@ export const OpenClawSchema = z
           .object({
             coalesceIdleMs: z.number().int().nonnegative().optional(),
             maxChunkChars: z.number().int().positive().optional(),
-            metaMode: z
-              .union([z.literal("off"), z.literal("minimal"), z.literal("verbose")])
-              .optional(),
-            showUsage: z.boolean().optional(),
+            repeatSuppression: z.boolean().optional(),
             deliveryMode: z.union([z.literal("live"), z.literal("final_only")]).optional(),
             maxTurnChars: z.number().int().positive().optional(),
             maxToolSummaryChars: z.number().int().positive().optional(),
