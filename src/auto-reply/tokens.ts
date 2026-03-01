@@ -17,6 +17,21 @@ export function isSilentReplyText(
   return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
 }
 
+export function stripTrailingSilentReplyToken(
+  text: string,
+  token: string = SILENT_REPLY_TOKEN,
+): { text: string; didStrip: boolean } {
+  const escaped = escapeRegExp(token);
+  const trailingPattern = new RegExp(`\\s*\\n\\s*${escaped}\\s*$`);
+  if (trailingPattern.test(text)) {
+    return {
+      text: text.replace(trailingPattern, "").trimEnd(),
+      didStrip: true,
+    };
+  }
+  return { text, didStrip: false };
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
