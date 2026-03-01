@@ -65,6 +65,7 @@ function createContext(overrides?: {
   allowFrom?: string[];
   allowNameMatching?: boolean;
   channelsConfig?: Record<string, { users?: string[] }>;
+  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   isChannelAllowed?: (params: {
     channelId?: string;
     channelName?: string;
@@ -128,6 +129,8 @@ function createContext(overrides?: {
     allowNameMatching: overrides?.allowNameMatching ?? false,
     channelsConfig: overrides?.channelsConfig ?? {},
     defaultRequireMention: true,
+    shouldDropMismatchedSlackEvent: (body: unknown) =>
+      overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
@@ -222,6 +225,88 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
     });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops block actions when mismatch guard triggers", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, app, getHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("drops modal lifecycle payloads when mismatch guard triggers", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getViewHandler, getViewClosedHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const viewHandler = getViewHandler();
+    const viewClosedHandler = getViewClosedHandler();
+    expect(viewHandler).toBeTruthy();
+    expect(viewClosedHandler).toBeTruthy();
+
+    const ackSubmit = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack: ackSubmit,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: {
+          id: "V123",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ userId: "U123" }),
+        },
+      },
+    });
+    expect(ackSubmit).toHaveBeenCalledTimes(1);
+
+    const ackClosed = vi.fn().mockResolvedValue(undefined);
+    await viewClosedHandler!({
+      ack: ackClosed,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: {
+          id: "V123",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ userId: "U123" }),
+        },
+      },
+    });
+    expect(ackClosed).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("captures select values and updates action rows for non-button actions", async () => {
