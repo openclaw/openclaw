@@ -114,14 +114,17 @@ function detectLagDrift(
       continue;
     }
     const detector = new EWMADetector(0.3);
-    let prevEwma = 0;
+    let prevEwma: number | undefined;
     let drifting = false;
     for (const msg of outMsgs) {
       // Safe: only messages with defined queueWaitMs were collected above
       const ewma = detector.update(msg.queueWaitMs ?? 0);
-      const slope = ewma - prevEwma;
-      if (slope > cfg.maxSlopeMs) {
-        drifting = true;
+      // Skip the first sample — prevEwma=0 would produce a false-positive slope
+      if (prevEwma !== undefined) {
+        const slope = ewma - prevEwma;
+        if (slope > cfg.maxSlopeMs) {
+          drifting = true;
+        }
       }
       prevEwma = ewma;
     }

@@ -1,5 +1,6 @@
 import {
   enqueueCommandInLane,
+  getAllLaneInfo,
   resetLanesByPrefix,
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
@@ -8,7 +9,7 @@ import { MessageTracker } from "./message-tracker.js";
 import { QueueMonitor } from "./queue-monitor.js";
 import { buildReport } from "./report.js";
 import { detectSymptoms } from "./symptom-detector.js";
-import type { ScenarioConfig, SimInboundMessage, SimReport } from "./types.js";
+import type { ScenarioConfig, SimInboundMessage, SimOutboundMessage, SimReport } from "./types.js";
 import { mulberry32 } from "./types.js";
 import { uuidv7 } from "./uuidv7.js";
 
@@ -74,7 +75,7 @@ export async function runSimulation(
 
   log(`[sim] monitor started, sampleIntervalMs=${sampleIntervalMs}`);
 
-  // Generate traffic and wait for drain
+  // Generate traffic — all traffic groups start concurrently
   await generateTraffic(scenario, {
     tracker,
     controller,
@@ -86,22 +87,12 @@ export async function runSimulation(
     verbose: opts?.verbose,
   });
 
-  // Wait for processing to complete (with timeout)
+  // Wait for all lanes to drain (poll until no queued or active tasks remain)
   if (!controller.signal.aborted) {
     const maxLatency = Math.max(...Object.values(allModels).map((m) => m.latencyMs), 1000);
-    const drainTimeout = maxLatency * 3 + 2000;
-    log(`[sim] waiting for drain, timeout=${drainTimeout}ms`);
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, drainTimeout);
-      controller.signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
-    });
+    const drainDeadline = Date.now() + maxLatency * 5 + 5000;
+    log(`[sim] waiting for lane drain`);
+    await waitForLaneDrain(lanePrefix, drainDeadline, controller.signal);
   }
 
   // Stop monitor and clean up simulation lanes
@@ -129,6 +120,25 @@ export async function runSimulation(
   });
 }
 
+// ── Lane drain polling ───────────────────────────────────────────────
+
+const DRAIN_POLL_MS = 50;
+
+async function waitForLaneDrain(
+  lanePrefix: string,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<void> {
+  while (Date.now() < deadline && !signal.aborted) {
+    const lanes = getAllLaneInfo(lanePrefix);
+    const busy = lanes.some((l) => l.queued > 0 || l.active > 0);
+    if (!busy) {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+  }
+}
+
 // ── Traffic generation ───────────────────────────────────────────────
 
 type TrafficContext = {
@@ -143,6 +153,9 @@ type TrafficContext = {
 };
 
 async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): Promise<void> {
+  // Launch all traffic groups concurrently so startAtMs is relative to sim start
+  const groupPromises: Promise<void>[] = [];
+
   for (const traffic of scenario.traffic) {
     const conv = scenario.conversations.find((c) => c.id === traffic.conversation);
     if (!conv) {
@@ -154,14 +167,16 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
 
     const messagePromises: Promise<void>[] = [];
 
+    // Pre-compute cumulative delays for random pattern (proper Poisson process)
+    const delays = computeDelays(traffic.pattern, traffic.count, traffic.intervalMs, ctx.rng);
+
     for (let i = 0; i < traffic.count; i++) {
       if (ctx.controller.signal.aborted) {
         break;
       }
 
       const senderId = traffic.senderIds[i % traffic.senderIds.length];
-      const delayMs = computeDelay(traffic.pattern, i, traffic.intervalMs, ctx.rng);
-      const startAtMs = traffic.startAtMs + delayMs;
+      const startAtMs = traffic.startAtMs + delays[i];
 
       const p = new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
@@ -185,8 +200,14 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
             ctx.log(`[sim] inbound: conv=${conv.id} sender=${senderId} id=${recorded.id}`);
           }
 
-          // Enqueue a simulated agent run
+          // Enqueue a simulated agent run.
+          // NOTE: This calls fakeStreamFn directly instead of runEmbeddedPiAgent,
+          // so it exercises queue/lane concurrency but not the full agent pipeline
+          // (model resolution, auth profiles, failover/retry, rate limiting).
+          const enqueueTs = Date.now();
           void enqueueCommandInLane(laneName, async () => {
+            const queueWaitMs = Date.now() - enqueueTs;
+            const runStart = Date.now();
             const model = scenario.agents[0];
             const streamOrPromise = ctx.fakeStreamFn(
               { id: model.model, contextWindow: 8192 } as never,
@@ -199,10 +220,39 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
               streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
             // Consume the async iterable to drive the stream to completion
+            let responseText = "";
             for await (const evt of stream) {
-              if (ctx.controller.signal.aborted || evt.type === "done" || evt.type === "error") {
+              if (evt.type === "done") {
+                responseText = evt.message.content
+                  .filter((c): c is { type: "text"; text: string } => c.type === "text")
+                  .map((c) => c.text)
+                  .join("");
                 break;
               }
+              if (ctx.controller.signal.aborted || evt.type === "error") {
+                break;
+              }
+            }
+
+            // Record the outbound message so symptom detectors have reply data
+            const outbound: Omit<SimOutboundMessage, "seq"> = {
+              id: uuidv7(),
+              ts: Date.now(),
+              direction: "outbound",
+              conversationId: conv.id,
+              text: responseText,
+              agentId: model.id,
+              causalParentId: recorded.id,
+              causalParentTs: recorded.ts,
+              queueWaitMs,
+              runDurationMs: Date.now() - runStart,
+            };
+            ctx.tracker.record(outbound);
+
+            if (ctx.verbose) {
+              ctx.log(
+                `[sim] outbound: conv=${conv.id} agent=${model.id} wait=${queueWaitMs}ms id=${outbound.id}`,
+              );
             }
           }).catch(() => {
             // Lane cleared errors are expected on abort
@@ -224,29 +274,58 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
       messagePromises.push(p);
     }
 
-    await Promise.all(messagePromises);
+    groupPromises.push(Promise.all(messagePromises).then(() => {}));
   }
+
+  await Promise.all(groupPromises);
 }
 
 // ── Traffic pattern delay computation ────────────────────────────────
 
-function computeDelay(
+/**
+ * Pre-compute delays for all messages in a traffic group.
+ * Returns an array of absolute delays (ms) from group start.
+ *
+ * - burst: all at time 0
+ * - steady: evenly spaced by intervalMs
+ * - random: cumulative Poisson inter-arrivals (proper arrival process)
+ */
+function computeDelays(
   pattern: string,
-  index: number,
+  count: number,
   intervalMs: number,
   rng?: () => number,
-): number {
+): number[] {
+  const delays: number[] = [];
   switch (pattern) {
-    case "burst":
-      return 0;
-    case "steady":
-      return index * intervalMs;
-    case "random": {
-      // Poisson inter-arrival: -ln(U) * mean
-      const u = rng ? rng() : Math.random();
-      return Math.floor(-Math.log(1 - u) * intervalMs);
+    case "burst": {
+      for (let i = 0; i < count; i++) {
+        delays.push(0);
+      }
+      break;
     }
-    default:
-      return index * intervalMs;
+    case "steady": {
+      for (let i = 0; i < count; i++) {
+        delays.push(i * intervalMs);
+      }
+      break;
+    }
+    case "random": {
+      // Cumulative Poisson inter-arrivals: each gap is -ln(1-U) * mean
+      let cumulative = 0;
+      for (let i = 0; i < count; i++) {
+        const u = rng ? rng() : Math.random();
+        cumulative += Math.floor(-Math.log(1 - u) * intervalMs);
+        delays.push(cumulative);
+      }
+      break;
+    }
+    default: {
+      for (let i = 0; i < count; i++) {
+        delays.push(i * intervalMs);
+      }
+      break;
+    }
   }
+  return delays;
 }
