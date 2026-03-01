@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 
 describe("renderDiffDocument", () => {
@@ -11,9 +12,8 @@ describe("renderDiffDocument", () => {
         path: "src/example.ts",
       },
       {
-        layout: "unified",
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
         expandUnchanged: false,
-        theme: "light",
       },
     );
 
@@ -48,9 +48,12 @@ describe("renderDiffDocument", () => {
         title: "Workspace patch",
       },
       {
-        layout: "split",
+        presentation: {
+          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+          layout: "split",
+          theme: "dark",
+        },
         expandUnchanged: true,
-        theme: "dark",
       },
     );
 
