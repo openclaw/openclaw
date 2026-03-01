@@ -51,6 +51,18 @@ function getTokenForOperation(
   return botToken ?? userToken;
 }
 
+function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
+  const mode = account.config.mode ?? "socket";
+  const hasBotToken = Boolean(account.botToken?.trim());
+  if (!hasBotToken) {
+    return false;
+  }
+  if (mode === "http") {
+    return Boolean(account.config.signingSecret?.trim());
+  }
+  return Boolean(account.appToken?.trim());
+}
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
@@ -116,12 +128,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         accountId,
         clearBaseFields: ["botToken", "appToken", "name"],
       }),
-    isConfigured: (account) => Boolean(account.botToken && account.appToken),
+    isConfigured: (account) => isSlackAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.botToken && account.appToken),
+      configured: isSlackAccountConfigured(account),
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
@@ -382,7 +394,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.botToken && account.appToken);
+      const configured = isSlackAccountConfigured(account);
       return {
         accountId: account.accountId,
         name: account.name,
@@ -415,6 +427,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         abortSignal: ctx.abortSignal,
         mediaMaxMb: account.config.mediaMaxMb,
         slashCommand: account.config.slashCommand,
+        setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
+        getStatus: ctx.getStatus as () => Record<string, unknown>,
       });
     },
   },

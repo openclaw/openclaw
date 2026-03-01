@@ -334,7 +334,7 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   });
 
-  it("includes Android notifications.list by default", () => {
+  it("includes Android notifications and device diagnostics commands by default", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
@@ -344,7 +344,10 @@ describe("resolveNodeCommandAllowlist", () => {
     );
 
     expect(allow.has("notifications.list")).toBe(true);
-    expect(allow.has("system.notify")).toBe(false);
+    expect(allow.has("notifications.actions")).toBe(true);
+    expect(allow.has("device.permissions")).toBe(true);
+    expect(allow.has("device.health")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

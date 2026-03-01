@@ -121,9 +121,9 @@ export function resolveSlackStreamingMode(
   if (legacyStreamMode) {
     return mapSlackLegacyDraftStreamModeToStreaming(legacyStreamMode);
   }
-  // Legacy `streaming` was a Slack native-streaming toggle; preview mode stayed replace.
+  // Legacy boolean `streaming` values map to the unified enum.
   if (typeof params.streaming === "boolean") {
-    return "partial";
+    return params.streaming ? "partial" : "off";
   }
   return "partial";
 }

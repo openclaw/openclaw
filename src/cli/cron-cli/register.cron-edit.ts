@@ -59,8 +59,18 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
+      .option("--failure-alert", "Enable failure alerts for this job")
+      .option("--no-failure-alert", "Disable failure alerts for this job")
+      .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
+      .option(
+        "--failure-alert-channel <channel>",
+        `Failure alert channel (${getCronChannelOptions()})`,
+      )
+      .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -209,6 +219,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
@@ -217,6 +228,7 @@ export function registerCronEditCommand(cron: Command) {
             hasTimeoutSeconds ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
+            hasDeliveryAccount ||
             hasBestEffort;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
@@ -235,14 +247,14 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
-            const deliveryMode =
-              opts.announce || opts.deliver === true
-                ? "announce"
-                : opts.deliver === false
-                  ? "none"
-                  : "announce";
-            const delivery: Record<string, unknown> = { mode: deliveryMode };
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+            const delivery: Record<string, unknown> = {};
+            if (hasDeliveryModeFlag) {
+              delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
+            } else if (hasBestEffort) {
+              // Back-compat: toggling best-effort alone has historically implied announce mode.
+              delivery.mode = "announce";
+            }
             if (typeof opts.channel === "string") {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
@@ -251,10 +263,57 @@ export function registerCronEditCommand(cron: Command) {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
             }
+            if (typeof opts.account === "string") {
+              const account = opts.account.trim();
+              delivery.accountId = account ? account : undefined;
+            }
             if (typeof opts.bestEffortDeliver === "boolean") {
               delivery.bestEffort = opts.bestEffortDeliver;
             }
             patch.delivery = delivery;
+          }
+
+          const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
+          const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
+          const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
+          const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
+          const hasFailureAlertFields =
+            hasFailureAlertAfter ||
+            hasFailureAlertChannel ||
+            hasFailureAlertTo ||
+            hasFailureAlertCooldown;
+          const failureAlertFlag =
+            typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
+          if (failureAlertFlag === false && hasFailureAlertFields) {
+            throw new Error("Use --no-failure-alert alone (without failure-alert-* options).");
+          }
+          if (failureAlertFlag === false) {
+            patch.failureAlert = false;
+          } else if (failureAlertFlag === true || hasFailureAlertFields) {
+            const failureAlert: Record<string, unknown> = {};
+            if (hasFailureAlertAfter) {
+              const after = Number.parseInt(String(opts.failureAlertAfter), 10);
+              if (!Number.isFinite(after) || after <= 0) {
+                throw new Error("Invalid --failure-alert-after (must be a positive integer).");
+              }
+              failureAlert.after = after;
+            }
+            if (hasFailureAlertChannel) {
+              const channel = String(opts.failureAlertChannel).trim().toLowerCase();
+              failureAlert.channel = channel ? channel : undefined;
+            }
+            if (hasFailureAlertTo) {
+              const to = String(opts.failureAlertTo).trim();
+              failureAlert.to = to ? to : undefined;
+            }
+            if (hasFailureAlertCooldown) {
+              const cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
+              if (!cooldownMs && cooldownMs !== 0) {
+                throw new Error("Invalid --failure-alert-cooldown.");
+              }
+              failureAlert.cooldownMs = cooldownMs;
+            }
+            patch.failureAlert = failureAlert;
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {
