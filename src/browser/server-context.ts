@@ -165,6 +165,12 @@ function createProfileContext(
     }
   };
 
+  const triggerManagedTabLimit = (keepTargetId: string): void => {
+    void enforceManagedTabLimit(keepTargetId).catch(() => {
+      // best-effort cleanup only
+    });
+  };
+
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
@@ -181,7 +187,7 @@ function createProfileContext(
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
-        await enforceManagedTabLimit(page.targetId);
+        triggerManagedTabLimit(page.targetId);
         return {
           targetId: page.targetId,
           title: page.title,
@@ -208,12 +214,12 @@ function createProfileContext(
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-          await enforceManagedTabLimit(found.targetId);
+          triggerManagedTabLimit(found.targetId);
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
       }
-      await enforceManagedTabLimit(createdViaCdp);
+      triggerManagedTabLimit(createdViaCdp);
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
 
@@ -250,7 +256,7 @@ function createProfileContext(
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
-    await enforceManagedTabLimit(created.id);
+    triggerManagedTabLimit(created.id);
     return {
       targetId: created.id,
       title: created.title ?? "",
