@@ -19,13 +19,13 @@ export function chunkTextByBreakResolver(
         ? candidateBreak
         : limit;
     const rawChunk = remaining.slice(0, breakIdx);
-    const chunk = rawChunk.trimEnd();
-    if (chunk.length > 0) {
-      chunks.push(chunk);
+    // const chunk = rawChunk.trimEnd();
+    if (rawChunk.length > 0) {
+      chunks.push(rawChunk);
     }
     const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
     const nextStart = Math.min(remaining.length, breakIdx + (brokeOnSeparator ? 1 : 0));
-    remaining = remaining.slice(nextStart).trimStart();
+    remaining = remaining.slice(nextStart);
   }
   if (remaining.length) {
     chunks.push(remaining);
