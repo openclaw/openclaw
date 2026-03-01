@@ -16,6 +16,7 @@ import {
   extractThinkingFromTaggedText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
+  stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
 const stripTrailingDirective = (text: string): string => {
@@ -41,6 +42,21 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
+const INTERNAL_TOOL_TRACE_RE = /\bassistant\s+to=functions\.[\w.-]+/i;
+
+function sanitizeSilentReplyFallbackText(text: string): string {
+  const withoutDowngradedMarkers = stripDowngradedToolCallText(text);
+  const withoutLeadingSilentToken = withoutDowngradedMarkers.replace(
+    /^\s*NO_REPLY\b(?:[:\s-]+)?/i,
+    "",
+  );
+  const traceStart = withoutLeadingSilentToken.search(INTERNAL_TOOL_TRACE_RE);
+  const candidate =
+    traceStart >= 0 ? withoutLeadingSilentToken.slice(0, traceStart) : withoutLeadingSilentToken;
+  const cleaned = candidate.trim();
+  return /[\p{L}\p{N}]/u.test(cleaned) ? cleaned : "";
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -53,7 +69,11 @@ export function resolveSilentReplyFallbackText(params: {
   if (!fallback) {
     return params.text;
   }
-  return fallback;
+  const sanitizedFallback = sanitizeSilentReplyFallbackText(fallback);
+  if (!sanitizedFallback) {
+    return params.text;
+  }
+  return sanitizedFallback;
 }
 
 export function handleMessageStart(

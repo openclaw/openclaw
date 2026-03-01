@@ -28,4 +28,26 @@ describe("resolveSilentReplyFallbackText", () => {
       }),
     ).toBe("NO_REPLY");
   });
+
+  it("keeps NO_REPLY when fallback text is only leaked internal tool trace", () => {
+    expect(
+      resolveSilentReplyFallbackText({
+        text: "NO_REPLY",
+        messagingToolSentTexts: [
+          'NO_REPLY +#+#+#+#+#+assistant to=functions.olvid_list_groups recipient_name=functions.olvid_list_groups json {"olvidChannelAccountId":""}',
+        ],
+      }),
+    ).toBe("NO_REPLY");
+  });
+
+  it("keeps user-facing prefix and strips leaked internal tool trace suffix", () => {
+    expect(
+      resolveSilentReplyFallbackText({
+        text: "NO_REPLY",
+        messagingToolSentTexts: [
+          'Sent to group successfully. assistant to=functions.olvid_list_groups recipient_name=functions.olvid_list_groups json {"olvidChannelAccountId":""}',
+        ],
+      }),
+    ).toBe("Sent to group successfully.");
+  });
 });
