@@ -65,6 +65,23 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "service",
+    description: "Gateway service (Windows SCM/macOS launchd/Linux systemd)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../daemon-cli.js");
+      mod.registerServiceCli(program);
+    },
+  },
+    name: "daemon",
+    description: "Gateway service (legacy alias)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../daemon-cli.js");
+      mod.registerDaemonCli(program);
+    },
+  },
+  {
     name: "logs",
     description: "Tail gateway file logs via RPC",
     hasSubcommands: false,
