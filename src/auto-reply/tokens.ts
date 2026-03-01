@@ -60,22 +60,28 @@ export function isSilentReplyPrefixText(
   if (!trimmed) {
     return false;
   }
-  // Accept all-uppercase OR all-lowercase token-like strings (letters +
-  // underscores only). Reject mixed-case natural language like "No" or "Not"
-  // which are common real words, not sentinel prefixes.
-  const isAllUpper = /^[A-Z_]+$/.test(trimmed);
-  const isAllLower = /^[a-z_]+$/.test(trimmed);
-  if (!isAllUpper && !isAllLower) {
+  const normalized = trimmed.toUpperCase();
+  // Only allow letters and underscores — reject anything that contains
+  // spaces, punctuation, or digits (i.e. natural language, not a token).
+  if (/[^A-Z_]/.test(normalized)) {
     return false;
   }
-  const normalized = trimmed.toUpperCase();
   const upperToken = token.toUpperCase();
   if (!upperToken.startsWith(normalized)) {
     return false;
   }
-  // Require at least the first word of the token (up to the first underscore)
-  // to avoid false-positives on single-letter prefixes like "N" while still
-  // catching "NO" (the first word of "NO_REPLY") which leaks into Slack streams.
+  // When the text already contains an underscore it's unambiguously token-like
+  // (natural language doesn't use underscores), so any casing is fine.
+  if (trimmed.includes("_")) {
+    return true;
+  }
+  // Without an underscore the text could be a natural language word (e.g. "No",
+  // "Not"). Require all-uppercase to distinguish the sentinel prefix "NO" from
+  // the English word "No", and require at least the first word of the token to
+  // reject single-letter prefixes like "N".
+  if (/[^A-Z]/.test(trimmed)) {
+    return false;
+  }
   const firstWordEnd = upperToken.indexOf("_");
   const minLen = firstWordEnd > 0 ? firstWordEnd : upperToken.length;
   return normalized.length >= minLen;

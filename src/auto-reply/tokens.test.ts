@@ -89,15 +89,20 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(true);
   });
 
-  it("matches all-lowercase token prefixes (case-insensitive)", () => {
-    // Models may emit lowercase variants; these should still be caught.
+  it("matches any-case token prefixes that contain an underscore", () => {
+    // Once an underscore is present the text is unambiguously token-like,
+    // so any casing should be caught.
     expect(isSilentReplyPrefixText("no_reply")).toBe(true);
     expect(isSilentReplyPrefixText("no_re")).toBe(true);
-    expect(isSilentReplyPrefixText("no")).toBe(true);
+    expect(isSilentReplyPrefixText("No_Re")).toBe(true);
+    expect(isSilentReplyPrefixText("No_Reply")).toBe(true);
     expect(isSilentReplyPrefixText("heartbeat_", "HEARTBEAT_OK")).toBe(true);
+    expect(isSilentReplyPrefixText("heartbeat_ok", "HEARTBEAT_OK")).toBe(true);
   });
 
-  it("rejects ambiguous natural-language prefixes", () => {
+  it("rejects ambiguous natural-language prefixes without underscore", () => {
+    // Without an underscore, only all-uppercase is accepted (to distinguish
+    // "NO" the sentinel from "No" the English word).
     expect(isSilentReplyPrefixText("N")).toBe(false);
     expect(isSilentReplyPrefixText("n")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
