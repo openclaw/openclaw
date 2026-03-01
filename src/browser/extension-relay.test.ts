@@ -392,6 +392,53 @@ describe("chrome extension relay server", () => {
     ext2.close();
   });
 
+  it("keeps /json/version websocket endpoint during short extension disconnects", async () => {
+    const { port, ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-disconnect",
+            targetInfo: {
+              targetId: "t-disconnect",
+              type: "page",
+              title: "Disconnect test",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((entry) => entry.id === "t-disconnect"),
+    );
+
+    const extClosed = waitForClose(ext, 2_000);
+    ext.close();
+    await extClosed;
+
+    const version = (await fetch(`${cdpUrl}/json/version`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as {
+      webSocketDebuggerUrl?: string;
+    };
+    expect(String(version.webSocketDebuggerUrl ?? "")).toContain("/cdp");
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    cdp.close();
+  });
+
   it("waits briefly for extension reconnect before failing CDP commands", async () => {
     const { port, ext: ext1 } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
