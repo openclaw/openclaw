@@ -107,6 +107,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
           "host",
           "port",
           "tls",
+          "tlsInsecure",
+          "tlsFingerprints",
           "nick",
           "username",
           "realname",
