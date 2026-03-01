@@ -1162,10 +1162,11 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (code === 0) {
           resolve({ stdout, stderr });
         } else {
-          // Error messages include sanitized stderr (for error classification by
-          // callers like isCollectionMissingError) but omit raw args which may
-          // contain user queries with control characters (CWE-209).
-          const detail = (stderr || stdout).replace(/[\r\n]+/g, " ").slice(0, 500);
+          // Error messages include stderr (for error classification by callers
+          // like isCollectionMissingError / shouldRepairNullByteCollectionError)
+          // but omit raw args which may contain user queries with control
+          // characters (CWE-209). Newlines are collapsed to prevent log injection.
+          const detail = (stderr || stdout).replace(/[\r\n]+/g, " ");
           reject(new Error(`${label} failed (code ${code}): ${detail}`));
         }
       });
