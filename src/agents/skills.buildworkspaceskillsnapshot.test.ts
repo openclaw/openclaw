@@ -60,6 +60,25 @@ describe("buildWorkspaceSkillSnapshot", () => {
     ]);
   });
 
+  it("loads skills when description contains an unquoted colon", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "colon-skill"),
+      name: "colon-skill",
+      description: "Generate images with Cogview. IMPORTANT: Must use anime style only",
+    });
+
+    const snapshot = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillSnapshot(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      }),
+    );
+
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("colon-skill");
+    expect(snapshot.prompt).toContain("colon-skill");
+  });
+
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
     const workspaceDir = await tempDirs.make("openclaw-");
     await writeSkill({

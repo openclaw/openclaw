@@ -218,6 +218,52 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
+function loadSkillsWithFrontmatterFallback(params: { dir: string; source: string }): Skill[] {
+  const loaded = unwrapLoadedSkills(loadSkillsFromDir({ dir: params.dir, source: params.source }));
+  if (loaded.length > 0) {
+    return loaded;
+  }
+
+  const skillFilePath = path.join(params.dir, "SKILL.md");
+  if (!fs.existsSync(skillFilePath)) {
+    return loaded;
+  }
+
+  try {
+    const raw = fs.readFileSync(skillFilePath, "utf-8");
+    const frontmatter = parseFrontmatter(raw);
+    const description =
+      typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
+    if (!description) {
+      return loaded;
+    }
+
+    const nameRaw = typeof frontmatter.name === "string" ? frontmatter.name.trim() : "";
+    const name = nameRaw || path.basename(path.dirname(skillFilePath));
+    if (!name) {
+      return loaded;
+    }
+
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
+    const recovered: Skill = {
+      name,
+      description,
+      filePath: skillFilePath,
+      baseDir: path.dirname(skillFilePath),
+      source: params.source,
+      disableModelInvocation: invocation.disableModelInvocation,
+    };
+    skillsLogger.debug("Recovered skill via OpenClaw frontmatter fallback.", {
+      skill: name,
+      filePath: skillFilePath,
+      source: params.source,
+    });
+    return [recovered];
+  } catch {
+    return loaded;
+  }
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -252,8 +298,7 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      return loadSkillsWithFrontmatterFallback({ dir: baseDir, source: params.source });
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -303,8 +348,9 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      loadedSkills.push(
+        ...loadSkillsWithFrontmatterFallback({ dir: skillDir, source: params.source }),
+      );
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
