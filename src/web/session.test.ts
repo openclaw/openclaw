@@ -21,6 +21,33 @@ async function emitCredsUpdateAndReadSaveCreds() {
   return saveCreds;
 }
 
+const proxyEnvKeys = [
+  "OPENCLAW_WHATSAPP_PROXY",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+] as const;
+
+function snapshotProxyEnv() {
+  return Object.fromEntries(proxyEnvKeys.map((k) => [k, process.env[k]]));
+}
+
+function restoreProxyEnv(snapshot: Record<string, string | undefined>) {
+  for (const key of proxyEnvKeys) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 function mockCredsJsonSpies(readContents: string) {
   const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
@@ -86,7 +113,7 @@ describe("web session", () => {
   });
 
   it("passes proxy agent when OPENCLAW_WHATSAPP_PROXY is set", async () => {
-    const prev = process.env.OPENCLAW_WHATSAPP_PROXY;
+    const prev = snapshotProxyEnv();
     process.env.OPENCLAW_WHATSAPP_PROXY = "http://127.0.0.1:7899";
     try {
       await createWaSocket(false, false);
@@ -94,26 +121,13 @@ describe("web session", () => {
       const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
       expect(passed?.agent).toBeTruthy();
     } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_WHATSAPP_PROXY;
-      } else {
-        process.env.OPENCLAW_WHATSAPP_PROXY = prev;
-      }
+      restoreProxyEnv(prev);
     }
   });
 
   it("passes proxy agent when lowercase proxy env is set", async () => {
-    const keys = [
-      "OPENCLAW_WHATSAPP_PROXY",
-      "HTTPS_PROXY",
-      "HTTP_PROXY",
-      "ALL_PROXY",
-      "https_proxy",
-      "http_proxy",
-      "all_proxy",
-    ] as const;
-    const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const key of keys) {
+    const prev = snapshotProxyEnv();
+    for (const key of proxyEnvKeys) {
       delete process.env[key];
     }
     process.env.https_proxy = "http://127.0.0.1:7899";
@@ -123,14 +137,40 @@ describe("web session", () => {
       const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
       expect(passed?.agent).toBeTruthy();
     } finally {
-      for (const key of keys) {
-        const value = prev[key];
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
+      restoreProxyEnv(prev);
+    }
+  });
+
+  it("does not pass proxy agent when NO_PROXY excludes web.whatsapp.com", async () => {
+    const prev = snapshotProxyEnv();
+    for (const key of proxyEnvKeys) {
+      delete process.env[key];
+    }
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7899";
+    process.env.NO_PROXY = "localhost,web.whatsapp.com";
+    try {
+      await createWaSocket(false, false);
+      const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+      const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
+      expect(passed?.agent).toBeFalsy();
+    } finally {
+      restoreProxyEnv(prev);
+    }
+  });
+
+  it("ignores invalid proxy env without throwing", async () => {
+    const prev = snapshotProxyEnv();
+    for (const key of proxyEnvKeys) {
+      delete process.env[key];
+    }
+    process.env.OPENCLAW_WHATSAPP_PROXY = "bad-proxy";
+    try {
+      await expect(createWaSocket(false, false)).resolves.toBeTruthy();
+      const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+      const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
+      expect(passed?.agent).toBeFalsy();
+    } finally {
+      restoreProxyEnv(prev);
     }
   });
 
