@@ -1932,6 +1932,7 @@ extension TalkModeManager {
 
     func reloadConfig() async {
         guard let gateway else { return }
+        self.pcmFormatUnavailable = false
         do {
             let res = try await gateway.request(method: "talk.config", paramsJSON: "{\"includeSecrets\":true}", timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
@@ -2003,7 +2004,6 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
-            self.pcmFormatUnavailable = false
         }
     }
 
