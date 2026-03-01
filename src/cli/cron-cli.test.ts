@@ -551,4 +551,53 @@ describe("cron cli", () => {
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
   });
+
+  it("patches failure alert settings on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--failure-alert-after",
+        "3",
+        "--failure-alert-cooldown",
+        "1h",
+        "--failure-alert-channel",
+        "telegram",
+        "--failure-alert-to",
+        "19098680",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: { after?: number; cooldownMs?: number; channel?: string; to?: string };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.after).toBe(3);
+    expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
+    expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
+    expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+  });
+
+  it("supports --no-failure-alert on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(["cron", "edit", "job-1", "--no-failure-alert"], {
+      from: "user",
+    });
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
+    expect(patch?.patch?.failureAlert).toBe(false);
+  });
 });
