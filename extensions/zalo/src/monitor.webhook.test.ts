@@ -336,7 +336,12 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    expect(readAllowFromStore).toHaveBeenCalledWith("zalo", undefined, "work");
+    expect(readAllowFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalo",
+        accountId: "work",
+      }),
+    );
     expect(upsertPairingRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "zalo",
