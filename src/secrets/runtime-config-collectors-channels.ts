@@ -133,16 +133,53 @@ function collectTelegramAssignments(params: {
     return;
   }
   const surface = resolveChannelAccountSurface(telegram);
-  collectSimpleChannelFieldAssignments({
-    channelKey: "telegram",
-    field: "botToken",
-    channel: telegram,
-    surface,
+  const baseTokenFile = typeof telegram.tokenFile === "string" ? telegram.tokenFile.trim() : "";
+  const topLevelBotTokenActive = !surface.channelEnabled
+    ? false
+    : !surface.hasExplicitAccounts
+      ? baseTokenFile.length === 0
+      : surface.accounts.some(
+          ({ account, enabled }) =>
+            enabled &&
+            !hasOwnProperty(account, "botToken") &&
+            (!hasOwnProperty(account, "tokenFile") ||
+              !(typeof account.tokenFile === "string" && account.tokenFile.trim().length > 0)) &&
+            baseTokenFile.length === 0,
+        );
+  collectSecretInputAssignment({
+    value: telegram.botToken,
+    path: "channels.telegram.botToken",
+    expected: "string",
     defaults: params.defaults,
     context: params.context,
-    topInactiveReason: "no enabled account inherits this top-level Telegram botToken.",
-    accountInactiveReason: "Telegram account is disabled.",
+    active: topLevelBotTokenActive,
+    inactiveReason:
+      "no enabled Telegram surface inherits this top-level botToken (tokenFile is configured).",
+    apply: (value) => {
+      telegram.botToken = value;
+    },
   });
+  if (surface.hasExplicitAccounts) {
+    for (const { accountId, account, enabled } of surface.accounts) {
+      if (!hasOwnProperty(account, "botToken")) {
+        continue;
+      }
+      const accountTokenFile =
+        typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
+      collectSecretInputAssignment({
+        value: account.botToken,
+        path: `channels.telegram.accounts.${accountId}.botToken`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled && accountTokenFile.length === 0,
+        inactiveReason: "Telegram account is disabled or tokenFile is configured.",
+        apply: (value) => {
+          account.botToken = value;
+        },
+      });
+    }
+  }
   const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
   const topLevelWebhookSecretActive = !surface.channelEnabled
     ? false

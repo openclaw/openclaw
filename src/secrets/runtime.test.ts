@@ -680,6 +680,69 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats Telegram top-level botToken refs as inactive when tokenFile is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          telegram: {
+            tokenFile: "/tmp/telegram-bot-token",
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_TELEGRAM_BOT_TOKEN",
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_TELEGRAM_BOT_TOKEN",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.telegram.botToken",
+    );
+  });
+
+  it("treats Telegram account botToken refs as inactive when account tokenFile is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          telegram: {
+            accounts: {
+              work: {
+                enabled: true,
+                tokenFile: "/tmp/telegram-work-bot-token",
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_TELEGRAM_WORK_BOT_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_TELEGRAM_WORK_BOT_TOKEN",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.telegram.accounts.work.botToken",
+    );
+  });
+
   it("treats Slack signingSecret refs as inactive when mode is socket", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
