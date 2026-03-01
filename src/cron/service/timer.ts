@@ -5,6 +5,17 @@ import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+<<<<<<< HEAD
+=======
+import type {
+  CronDeliveryStatus,
+  CronJob,
+  CronMessageChannel,
+  CronRunOutcome,
+  CronRunStatus,
+  CronRunTelemetry,
+} from "../types.js";
+>>>>>>> 4637b90c0 (feat(cron): configurable failure alerts for repeated job errors (openclaw#24789) thanks @0xbrak)
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -20,6 +31,74 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
+<<<<<<< HEAD
+=======
+ * Minimum gap between consecutive fires of the same cron job.  This is a
+ * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
+ * a value within the same second as the just-completed run.  The guard
+ * is intentionally generous (2 s) so it never masks a legitimate schedule
+ * but always breaks an infinite re-trigger cycle.  (See #17821)
+ */
+const MIN_REFIRE_GAP_MS = 2_000;
+const DEFAULT_FAILURE_ALERT_AFTER = 2;
+const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
+
+type TimedCronRunOutcome = CronRunOutcome &
+  CronRunTelemetry & {
+    jobId: string;
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+    startedAt: number;
+    endedAt: number;
+  };
+
+export async function executeJobCoreWithTimeout(
+  state: CronServiceState,
+  job: CronJob,
+): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+  if (typeof jobTimeoutMs !== "number") {
+    return await executeJobCore(state, job);
+  }
+
+  const runAbortController = new AbortController();
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      executeJobCore(state, job, runAbortController.signal),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          runAbortController.abort(timeoutErrorMessage());
+          reject(new Error(timeoutErrorMessage()));
+        }, jobTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+function resolveRunConcurrency(state: CronServiceState): number {
+  const raw = state.deps.cronConfig?.maxConcurrentRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(raw));
+}
+function timeoutErrorMessage(): string {
+  return "cron: job execution timed out";
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.name === "AbortError" || err.message === timeoutErrorMessage();
+}
+/**
+>>>>>>> 4637b90c0 (feat(cron): configurable failure alerts for repeated job errors (openclaw#24789) thanks @0xbrak)
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
  */
@@ -82,6 +161,106 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
 >>>>>>> ea3955cd7 (fix(cron): add retry policy for one-shot jobs on transient errors (#24355) (openclaw#24435) thanks @hugenshen)
 }
 
+function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const channel = input.trim().toLowerCase();
+  return channel ? (channel as CronMessageChannel) : undefined;
+}
+
+function normalizeTo(input: unknown): string | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const to = input.trim();
+  return to ? to : undefined;
+}
+
+function clampPositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  return floored >= 1 ? floored : fallback;
+}
+
+function clampNonNegativeInt(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const floored = Math.floor(value);
+  return floored >= 0 ? floored : fallback;
+}
+
+function resolveFailureAlert(
+  state: CronServiceState,
+  job: CronJob,
+): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
+  const globalConfig = state.deps.cronConfig?.failureAlert;
+  const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
+
+  if (job.failureAlert === false) {
+    return null;
+  }
+  if (!jobConfig && globalConfig?.enabled !== true) {
+    return null;
+  }
+
+  return {
+    after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
+    cooldownMs: clampNonNegativeInt(
+      jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
+      DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
+    ),
+    channel:
+      normalizeCronMessageChannel(jobConfig?.channel) ??
+      normalizeCronMessageChannel(job.delivery?.channel) ??
+      "last",
+    to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
+  };
+}
+
+function emitFailureAlert(
+  state: CronServiceState,
+  params: {
+    job: CronJob;
+    error?: string;
+    consecutiveErrors: number;
+    channel: CronMessageChannel;
+    to?: string;
+  },
+) {
+  const safeJobName = params.job.name || params.job.id;
+  const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const text = [
+    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
+    `Last error: ${truncatedError}`,
+  ].join("\n");
+
+  if (state.deps.sendCronFailureAlert) {
+    void state.deps
+      .sendCronFailureAlert({
+        job: params.job,
+        text,
+        channel: params.channel,
+        to: params.to,
+      })
+      .catch((err) => {
+        state.deps.log.warn(
+          { jobId: params.job.id, err: String(err) },
+          "cron: failure alert delivery failed",
+        );
+      });
+    return;
+  }
+
+  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
+  if (params.job.wakeMode === "now") {
+    state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
+  }
+}
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
@@ -126,8 +305,26 @@ export function applyJobResult(
   // Track consecutive errors for backoff / auto-disable.
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    const alertConfig = resolveFailureAlert(state, job);
+    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
+      const now = state.deps.nowMs();
+      const lastAlert = job.state.lastFailureAlertAtMs;
+      const inCooldown =
+        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.error,
+          consecutiveErrors: job.state.consecutiveErrors,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+        });
+        job.state.lastFailureAlertAtMs = now;
+      }
+    }
   } else {
     job.state.consecutiveErrors = 0;
+    job.state.lastFailureAlertAtMs = undefined;
   }
 
   const shouldDelete =

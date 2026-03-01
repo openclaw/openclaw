@@ -1,6 +1,20 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+<<<<<<< HEAD
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
+=======
+import type {
+  CronDeliveryStatus,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronMessageChannel,
+  CronRunOutcome,
+  CronRunStatus,
+  CronRunTelemetry,
+  CronStoreFile,
+} from "../types.js";
+>>>>>>> 4637b90c0 (feat(cron): configurable failure alerts for repeated job errors (openclaw#24789) thanks @0xbrak)
 
 export type CronEvent = {
   jobId: string;
@@ -71,6 +85,7 @@ export type CronServiceDeps = {
     job: CronJob;
     message: string;
     abortSignal?: AbortSignal;
+<<<<<<< HEAD
   }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
@@ -90,6 +105,33 @@ export type CronServiceDeps = {
     /** Whether an outbound delivery attempt was made. */
     deliveryAttempted?: boolean;
   }>;
+=======
+  }) => Promise<
+    {
+      summary?: string;
+      /** Last non-empty agent text output (not truncated). */
+      outputText?: string;
+      /**
+       * `true` when the isolated run already delivered its output to the target
+       * channel (including matching messaging-tool sends). See:
+       * https://github.com/openclaw/openclaw/issues/15692
+       */
+      delivered?: boolean;
+      /**
+       * `true` when announce/direct delivery was attempted for this run, even
+       * if the final per-message ack status is uncertain.
+       */
+      deliveryAttempted?: boolean;
+    } & CronRunOutcome &
+      CronRunTelemetry
+  >;
+  sendCronFailureAlert?: (params: {
+    job: CronJob;
+    text: string;
+    channel: CronMessageChannel;
+    to?: string;
+  }) => Promise<void>;
+>>>>>>> 4637b90c0 (feat(cron): configurable failure alerts for repeated job errors (openclaw#24789) thanks @0xbrak)
   onEvent?: (evt: CronEvent) => void;
 };
 

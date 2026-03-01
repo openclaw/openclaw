@@ -317,6 +317,24 @@ export const BotSchema = z
         webhook: HttpUrlSchema.optional(),
         webhookToken: z.string().optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
+<<<<<<< HEAD
+=======
+        runLog: z
+          .object({
+            maxBytes: z.union([z.string(), z.number()]).optional(),
+            keepLines: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        failureAlert: z
+          .object({
+            enabled: z.boolean().optional(),
+            after: z.number().int().min(1).optional(),
+            cooldownMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+>>>>>>> 4637b90c0 (feat(cron): configurable failure alerts for repeated job errors (openclaw#24789) thanks @0xbrak)
       })
       .strict()
       .optional(),
