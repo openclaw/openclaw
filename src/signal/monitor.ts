@@ -25,6 +25,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -291,35 +292,71 @@ async function deliverReplies(params: {
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
+  const hookRunner = getGlobalHookRunner();
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
       continue;
     }
-    if (mediaList.length === 0) {
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageSignal(target, chunk, {
-          baseUrl,
-          account,
-          maxBytes,
-          accountId,
-        });
-      }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSignal(target, caption, {
-          baseUrl,
-          account,
-          mediaUrl: url,
-          maxBytes,
-          accountId,
-        });
+
+    // Fire message_sending hook (may cancel delivery of this payload)
+    if (hookRunner?.hasHooks("message_sending")) {
+      try {
+        const sendingResult = await hookRunner.runMessageSending(
+          { to: target, content: text, metadata: { channel: "signal", accountId } },
+          { channelId: "signal", accountId: accountId ?? undefined },
+        );
+        if (sendingResult?.cancel) {
+          continue;
+        }
+      } catch {
+        // Don't block delivery on hook failure
       }
     }
+
+    const emitMessageSent = (success: boolean, error?: string) => {
+      if (!hookRunner?.hasHooks("message_sent")) {
+        return;
+      }
+      void hookRunner
+        .runMessageSent(
+          { to: target, content: text, success, ...(error ? { error } : {}) },
+          { channelId: "signal", accountId: accountId ?? undefined },
+        )
+        .catch(() => {});
+    };
+
+    try {
+      if (mediaList.length === 0) {
+        for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+          await sendMessageSignal(target, chunk, {
+            baseUrl,
+            account,
+            maxBytes,
+            accountId,
+          });
+        }
+      } else {
+        let first = true;
+        for (const url of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          await sendMessageSignal(target, caption, {
+            baseUrl,
+            account,
+            mediaUrl: url,
+            maxBytes,
+            accountId,
+          });
+        }
+      }
+      emitMessageSent(true);
+    } catch (err) {
+      emitMessageSent(false, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
     runtime.log?.(`delivered reply to ${target}`);
   }
 }

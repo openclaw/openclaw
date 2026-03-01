@@ -199,7 +199,7 @@ export async function dispatchReplyFromConfig(params: {
             senderUsername: ctx.SenderUsername,
             senderE164: ctx.SenderE164,
             guildId: ctx.GroupSpace,
-            channelName: ctx.GroupChannel,
+            channelName: ctx.GroupChannel ?? ctx.GroupSubject,
           },
         },
         {
@@ -234,7 +234,7 @@ export async function dispatchReplyFromConfig(params: {
           senderUsername: ctx.SenderUsername,
           senderE164: ctx.SenderE164,
           guildId: ctx.GroupSpace,
-          channelName: ctx.GroupChannel,
+          channelName: ctx.GroupChannel ?? ctx.GroupSubject,
         },
       }),
     ).catch((err) => {
