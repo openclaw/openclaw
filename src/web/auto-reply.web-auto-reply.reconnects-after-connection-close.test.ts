@@ -274,6 +274,45 @@ describe("web auto-reply", () => {
     }
   });
 
+  it("reports cleanup failure when logged-out auth removal returns false", async () => {
+    const logoutSpy = vi.spyOn(webSession, "logoutWeb").mockResolvedValue(false);
+    try {
+      const closeResolvers: Array<(reason?: unknown) => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<unknown>((res) => {
+          closeResolvers.push(res);
+        });
+        return { close: vi.fn(), onClose };
+      });
+      const { runtime, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+      });
+
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      closeResolvers.shift()?.({
+        status: 401,
+        isLoggedOut: true,
+        error: { output: { statusCode: 401 } },
+      });
+      await run;
+
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(logoutSpy).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("failed to clear cached web session"),
+      );
+    } finally {
+      logoutSpy.mockRestore();
+    }
+  });
+
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {

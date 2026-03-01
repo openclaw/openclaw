@@ -403,12 +403,12 @@ export async function monitorWebChannel(
     if (loggedOut) {
       let clearedCachedAuth = false;
       try {
-        await logoutWeb({
+        const cleared = await logoutWeb({
           authDir: account.authDir,
           isLegacyAuthDir: account.isLegacyAuthDir,
           runtime,
         });
-        clearedCachedAuth = true;
+        clearedCachedAuth = cleared;
       } catch (err) {
         reconnectLogger.warn(
           {
