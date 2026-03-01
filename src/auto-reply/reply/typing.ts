@@ -1,3 +1,5 @@
+import type { TypingTtlCoordinator } from "../../gateway/typing-ttl-coordinator.js";
+import { typingTtlCoordinator } from "../../gateway/typing-ttl-coordinator.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
@@ -18,6 +20,23 @@ export function createTypingController(params: {
   typingTtlMs?: number;
   silentToken?: string;
   log?: (message: string) => void;
+  /**
+   * Unique key for this typing session (e.g. session key or channel+session).
+   * When provided, the session is registered with the gateway-level TTL coordinator
+   * as defense-in-depth against leaked typing indicators.
+   * If omitted, coordinator registration is skipped.
+   */
+  coordinatorKey?: string;
+  /**
+   * Gateway-level TTL coordinator. Defaults to the process singleton when
+   * `coordinatorKey` is provided. Override in tests to use an isolated instance.
+   */
+  coordinator?: TypingTtlCoordinator;
+  /**
+   * Hard TTL enforced by the gateway coordinator (ms). Defaults to coordinator default (120s).
+   * Only used when `coordinatorKey` is provided.
+   */
+  typingMaxTtlMs?: number;
 }): TypingController {
   const {
     onReplyStart,
@@ -26,6 +45,9 @@ export function createTypingController(params: {
     typingTtlMs = 2 * 60_000,
     silentToken = SILENT_REPLY_TOKEN,
     log,
+    coordinatorKey,
+    coordinator = coordinatorKey ? typingTtlCoordinator : undefined,
+    typingMaxTtlMs,
   } = params;
   let started = false;
   let active = false;
@@ -38,6 +60,9 @@ export function createTypingController(params: {
   let typingTimer: NodeJS.Timeout | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = typingIntervalSeconds * 1000;
+
+  // Gateway-level coordinator deregister. Set when typing first starts; cleared on cleanup.
+  let coordinatorDeregister: (() => boolean) | undefined;
 
   const formatTypingTtl = (ms: number) => {
     if (ms % 60_000 === 0) {
@@ -64,6 +89,12 @@ export function createTypingController(params: {
     if (typingTimer) {
       clearInterval(typingTimer);
       typingTimer = undefined;
+    }
+    // Deregister from gateway-level coordinator on clean stop.
+    // This cancels the hard TTL so the coordinator won't fire a redundant forced cleanup.
+    if (coordinatorDeregister) {
+      coordinatorDeregister();
+      coordinatorDeregister = undefined;
     }
     // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
     // This fires only once (sealed prevents re-entry).
@@ -148,6 +179,13 @@ export function createTypingController(params: {
     }
     if (typingIntervalMs <= 0) {
       return;
+    }
+    // Register with the gateway-level TTL coordinator the first time typing starts.
+    // The coordinator is a defense-in-depth safety net: if all other cleanup paths fail
+    // (dispatcher hang, event-lane blockage, NO_REPLY path leak, etc.), the coordinator
+    // will unconditionally call cleanup() after the hard TTL and emit a diagnostic warning.
+    if (coordinator && coordinatorKey && !coordinatorDeregister) {
+      coordinatorDeregister = coordinator.register(coordinatorKey, cleanup, typingMaxTtlMs);
     }
     if (typingTimer) {
       return;

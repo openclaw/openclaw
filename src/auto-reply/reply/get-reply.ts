@@ -117,6 +117,9 @@ export async function getReplyFromConfig(
     typingIntervalSeconds,
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
+    // Register with the gateway-level TTL coordinator for defense-in-depth cleanup.
+    // Uses the session key as the unique identifier for this typing session.
+    coordinatorKey: agentSessionKey || undefined,
   });
   opts?.onTypingController?.(typing);
 
