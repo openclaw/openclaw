@@ -3,7 +3,9 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { createCryptoAdapter } from "./src/adapters/crypto-adapter.js";
 import type { CcxtExchange } from "./src/adapters/crypto-adapter.js";
 import { createEquityAdapter } from "./src/adapters/equity-adapter.js";
-import type { DataHubGateway } from "./src/adapters/equity-adapter.js";
+import type { DataHubGateway, EquityAdapter } from "./src/adapters/equity-adapter.js";
+import { createYahooAdapter } from "./src/adapters/yahoo-adapter.js";
+import type { YahooFinanceClient } from "./src/adapters/yahoo-adapter.js";
 import { OHLCVCache } from "./src/ohlcv-cache.js";
 import { RegimeDetector } from "./src/regime-detector.js";
 import type { MarketType } from "./src/types.js";
@@ -34,7 +36,7 @@ const finDataBusPlugin = {
   description: "Unified multi-market data bus with OHLCV cache and regime detection",
   kind: "financial" as const,
 
-  register(api: OpenClawPluginApi) {
+  async register(api: OpenClawPluginApi) {
     const dbPath = api.resolvePath("state/fin-ohlcv-cache.sqlite");
     const cache = new OHLCVCache(dbPath);
     const regimeDetector = new RegimeDetector();
@@ -59,7 +61,19 @@ const finDataBusPlugin = {
     // Try to get equity data gateway from fin-data-hub plugin
     const runtime = api.runtime as unknown as { services?: Map<string, unknown> };
     const gateway = runtime.services?.get?.("fin-datahub-gateway") as DataHubGateway | undefined;
-    const equityAdapter = gateway ? createEquityAdapter(cache, gateway) : undefined;
+    let equityAdapter: EquityAdapter | undefined;
+    if (gateway) {
+      equityAdapter = createEquityAdapter(cache, gateway);
+    } else {
+      // Fallback: Yahoo Finance as free equity data source
+      try {
+        const yf = await import("yahoo-finance2");
+        const yahooClient = (yf.default ?? yf) as unknown as YahooFinanceClient;
+        equityAdapter = createYahooAdapter(cache, yahooClient);
+      } catch {
+        // yahoo-finance2 not installed; equity stays disabled
+      }
+    }
 
     const provider = new UnifiedDataProvider(cryptoAdapter, regimeDetector, equityAdapter);
 

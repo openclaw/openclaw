@@ -4,6 +4,9 @@
   "private": true,
   "description": "Unified multi-market data bus — OHLCV cache, adapters, regime detection",
   "type": "module",
+  "dependencies": {
+    "yahoo-finance2": "^3.13.0"
+  },
   "devDependencies": {
     "openfinclaw": "workspace:*"
   },

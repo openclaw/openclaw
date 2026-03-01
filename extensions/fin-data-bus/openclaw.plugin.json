@@ -6,6 +6,15 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "yahooFinanceEnabled": {
+        "type": "boolean",
+        "description": "Enable Yahoo Finance as free equity data source (default: true when yahoo-finance2 is installed)"
+      },
+      "alphaVantageApiKey": {
+        "type": "string",
+        "description": "Alpha Vantage API key for equity data (reserved for future use)"
+      }
+    }
   }
 }

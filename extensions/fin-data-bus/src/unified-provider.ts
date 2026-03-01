@@ -22,7 +22,9 @@ export class UnifiedDataProvider {
     }
     if (params.market === "equity") {
       if (!this.equityAdapter) {
-        throw new Error("Equity adapter not available. Ensure fin-data-hub plugin is loaded.");
+        throw new Error(
+          "Equity adapter not available. Install yahoo-finance2 or load fin-data-hub plugin.",
+        );
       }
       return this.equityAdapter.getOHLCV(params);
     }
@@ -35,7 +37,9 @@ export class UnifiedDataProvider {
     }
     if (market === "equity") {
       if (!this.equityAdapter) {
-        throw new Error("Equity adapter not available. Ensure fin-data-hub plugin is loaded.");
+        throw new Error(
+          "Equity adapter not available. Install yahoo-finance2 or load fin-data-hub plugin.",
+        );
       }
       return this.equityAdapter.getTicker(symbol);
     }

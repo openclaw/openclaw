@@ -5,6 +5,14 @@ import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import finDataBusPlugin from "./index.js";
 
+// Mock yahoo-finance2 so the dynamic import in register() gets a controllable stub
+vi.mock("yahoo-finance2", () => ({
+  default: {
+    chart: vi.fn().mockResolvedValue({ quotes: [] }),
+    quote: vi.fn().mockResolvedValue({ regularMarketPrice: 0 }),
+  },
+}));
+
 // --- Mock exchange instance ---
 function createMockExchange() {
   return {
@@ -103,7 +111,7 @@ describe("fin-data-bus plugin", () => {
   let mockExchange: ReturnType<typeof createMockExchange>;
   let tempDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     tempDir = mkdtempSync(join(tmpdir(), "fin-data-bus-test-"));
     registry = createMockRegistry([{ id: "test-binance", exchange: "binance", testnet: false }]);
@@ -111,7 +119,7 @@ describe("fin-data-bus plugin", () => {
     const result = createFakeApi(registry, tempDir);
     tools = result.tools;
     services = result.services;
-    finDataBusPlugin.register(result.api);
+    await finDataBusPlugin.register(result.api);
   });
 
   afterEach(() => {
@@ -149,13 +157,16 @@ describe("fin-data-bus plugin", () => {
       expect((result.candles as unknown[]).length).toBe(2);
     });
 
-    it("returns error when equity adapter is not available", async () => {
+    it("returns empty result for equity via Yahoo fallback", async () => {
       const tool = tools.get("fin_data_ohlcv")!;
       const result = parseResult(
         await tool.execute("call-2", { symbol: "AAPL", market: "equity" }),
       ) as Record<string, unknown>;
 
-      expect(result.error).toContain("Equity adapter not available");
+      // Yahoo mock returns empty quotes, so count is 0 (no error)
+      expect(result.count).toBe(0);
+      expect(result.symbol).toBe("AAPL");
+      expect(result.market).toBe("equity");
     });
 
     it("returns error on exchange failure", async () => {
@@ -194,13 +205,17 @@ describe("fin-data-bus plugin", () => {
       expect(["bull", "bear", "sideways", "volatile", "crisis"]).toContain(result.regime);
     });
 
-    it("returns error when equity adapter is not available", async () => {
+    it("returns regime for equity via Yahoo fallback", async () => {
+      // Yahoo mock returns empty quotes → regime detection on empty data
       const tool = tools.get("fin_data_regime")!;
       const result = parseResult(
         await tool.execute("call-5", { symbol: "AAPL", market: "equity" }),
       ) as Record<string, unknown>;
 
-      expect(result.error).toContain("Equity adapter not available");
+      expect(result.symbol).toBe("AAPL");
+      expect(result.market).toBe("equity");
+      // With empty data, regime detector returns a valid regime
+      expect(["bull", "bear", "sideways", "volatile", "crisis"]).toContain(result.regime);
     });
   });
 
@@ -216,14 +231,14 @@ describe("fin-data-bus plugin", () => {
       expect(crypto?.available).toBe(true);
 
       const equity = markets.find((m) => m.market === "equity");
-      expect(equity?.available).toBe(false);
+      expect(equity?.available).toBe(true);
     });
   });
 
   describe("error scenarios", () => {
     it("returns error when fin-core not loaded", async () => {
       const { api, tools: noRegistryTools } = createFakeApi(null, tempDir);
-      finDataBusPlugin.register(api);
+      await finDataBusPlugin.register(api);
 
       const tool = noRegistryTools.get("fin_data_ohlcv")!;
       const result = parseResult(
@@ -236,7 +251,7 @@ describe("fin-data-bus plugin", () => {
     it("returns error when no exchanges configured", async () => {
       const emptyRegistry = createMockRegistry([]);
       const { api, tools: emptyTools } = createFakeApi(emptyRegistry, tempDir);
-      finDataBusPlugin.register(api);
+      await finDataBusPlugin.register(api);
 
       const tool = emptyTools.get("fin_data_ohlcv")!;
       const result = parseResult(
