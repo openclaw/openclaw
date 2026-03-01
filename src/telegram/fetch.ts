@@ -12,6 +12,7 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let skippedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
 
 function hasProxyEnvConfigured(): boolean {
@@ -57,9 +58,12 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     if (hasProxyEnvConfigured()) {
-      log.info(
-        "skip global undici dispatcher autoSelectFamily override because proxy env is configured",
-      );
+      if (skippedGlobalDispatcherAutoSelectFamily !== autoSelectDecision.value) {
+        log.info(
+          "skip global undici dispatcher autoSelectFamily override because proxy env is configured",
+        );
+        skippedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+      }
     } else {
       try {
         setGlobalDispatcher(
@@ -71,6 +75,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
           }),
         );
         appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+        skippedGlobalDispatcherAutoSelectFamily = null;
         log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
       } catch {
         // ignore if setGlobalDispatcher is unavailable
@@ -116,4 +121,5 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  skippedGlobalDispatcherAutoSelectFamily = null;
 }

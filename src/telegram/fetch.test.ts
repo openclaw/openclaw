@@ -179,6 +179,23 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).not.toHaveBeenCalled();
   });
 
+  it("applies global dispatcher after proxy env is removed", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+
+    clearProxyEnv();
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(AgentCtor).toHaveBeenCalledWith({
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+  });
+
   it("sets global dispatcher only once across repeated equal decisions", async () => {
     clearProxyEnv();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
