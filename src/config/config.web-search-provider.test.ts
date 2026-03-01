@@ -50,6 +50,75 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts exa provider with full config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "exa",
+            exa: {
+              apiKey: "exa-test-key",
+              type: "neural",
+              contents: "highlights",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa provider with minimal config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa contents=text option", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+            exa: {
+              contents: "text",
+              type: "keyword",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid exa type value", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "exa",
+            exa: {
+              type: "invalid-type" as unknown as "auto",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("web search provider auto-detection", () => {
