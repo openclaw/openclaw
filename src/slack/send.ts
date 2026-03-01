@@ -1,9 +1,4 @@
-import {
-  type Block,
-  type FilesUploadV2Arguments,
-  type KnownBlock,
-  type WebClient,
-} from "@slack/web-api";
+import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -13,6 +8,7 @@ import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -24,6 +20,10 @@ import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
 const SLACK_TEXT_LIMIT = 4000;
+const SLACK_UPLOAD_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 type SlackRecipient =
   | {
@@ -194,36 +194,54 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const {
-    buffer,
-    contentType: _contentType,
-    fileName,
-  } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
-  const basePayload = {
+  // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
+  // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
+  // and can fail with missing_scope even when files:write is granted.
+  const uploadUrlResp = await params.client.files.getUploadURLExternal({
+    filename: fileName ?? "upload",
+    length: buffer.length,
+  });
+  if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
+    throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
+  }
+
+  // Upload the file content to the presigned URL
+  const uploadBody = new Uint8Array(buffer) as BodyInit;
+  const { response: uploadResp, release } = await fetchWithSsrFGuard({
+    url: uploadUrlResp.upload_url,
+    init: {
+      method: "POST",
+      ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+      body: uploadBody,
+    },
+    policy: SLACK_UPLOAD_SSRF_POLICY,
+    proxy: "env",
+    auditContext: "slack-upload-file",
+  });
+  try {
+    if (!uploadResp.ok) {
+      throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
+    }
+  } finally {
+    await release();
+  }
+
+  // Complete the upload and share to channel/thread
+  const completeResp = await params.client.files.completeUploadExternal({
+    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
     channel_id: params.channelId,
-    file: buffer,
-    filename: fileName,
     ...(params.caption ? { initial_comment: params.caption } : {}),
-    // Note: filetype is deprecated in files.uploadV2, Slack auto-detects from file content
-  };
-  const payload: FilesUploadV2Arguments = params.threadTs
-    ? { ...basePayload, thread_ts: params.threadTs }
-    : basePayload;
-  const response = await params.client.files.uploadV2(payload);
-  const parsed = response as {
-    files?: Array<{ id?: string; name?: string }>;
-    file?: { id?: string; name?: string };
-  };
-  const fileId =
-    parsed.files?.[0]?.id ??
-    parsed.file?.id ??
-    parsed.files?.[0]?.name ??
-    parsed.file?.name ??
-    "unknown";
-  return fileId;
+    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+  });
+  if (!completeResp.ok) {
+    throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);
+  }
+
+  return uploadUrlResp.file_id;
 }
 
 export async function sendMessageSlack(
