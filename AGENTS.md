@@ -80,6 +80,7 @@
 - In tests, prefer per-instance stubs over prototype mutation (`SomeClass.prototype.method = ...`) unless a test explicitly documents why prototype-level patching is required.
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
+- QMD subprocess spawning: use `QmdMemoryManager.runSubprocess()` for all subprocess invocations in `src/memory/qmd-manager.ts`. Do not add inline `spawn()` calls; add thin wrappers that delegate to `runSubprocess()` instead.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
 

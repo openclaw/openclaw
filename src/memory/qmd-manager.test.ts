@@ -2339,6 +2339,128 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+
+  describe("runQmd delegates to runSubprocess", () => {
+    it("passes the configured qmd command and 'qmd' label to spawn", async () => {
+      spawnMock.mockImplementation(() => createMockChild());
+      const { manager } = await createManager();
+
+      // Trigger a runQmd call via the public sync() method.
+      await manager.sync();
+
+      // Verify it uses the configured command (default: "qmd").
+      const updateCall = spawnMock.mock.calls.find((call: string[][]) => call[1]?.[0] === "update");
+      expect(updateCall).toBeDefined();
+      expect(updateCall![0]).toBe("qmd");
+      await manager.close();
+    });
+
+    it("propagates timeout errors with the 'qmd' label", async () => {
+      spawnMock.mockImplementation(() => createMockChild({ autoClose: false }));
+      const shortTimeoutCfg: OpenClawConfig = {
+        ...cfg,
+        memory: {
+          ...cfg.memory,
+          qmd: {
+            ...cfg.memory!.qmd!,
+            limits: { timeoutMs: 1 },
+          },
+        },
+      };
+      const { manager } = await createManager({ cfg: shortTimeoutCfg });
+
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(/^qmd .* timed out/);
+      await manager.close();
+    });
+
+    it("propagates failure errors with the 'qmd' label", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", "something broke", 1);
+          return child;
+        }
+        return createMockChild();
+      });
+      const { manager } = await createManager();
+
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(/^qmd .* failed/);
+      await manager.close();
+    });
+
+    it("propagates spawn errors (e.g. ENOENT) through runSubprocess", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          queueMicrotask(() => {
+            child.emit("error", new Error("spawn ENOENT"));
+          });
+          return child;
+        }
+        return createMockChild();
+      });
+      const { manager } = await createManager();
+
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(/spawn ENOENT/);
+      await manager.close();
+    });
+
+    it("rejects with output-cap error when stderr exceeds limit", async () => {
+      const noisyPayload = "e".repeat(240_000);
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", noisyPayload);
+          return child;
+        }
+        return createMockChild();
+      });
+      const { manager } = await createManager();
+
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(/too much output/);
+      await manager.close();
+    });
+
+    it("includes stderr in failure message when stdout is empty", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "search") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stderr", "detailed error info", 2);
+          return child;
+        }
+        return createMockChild();
+      });
+      const { manager } = await createManager();
+
+      await expect(
+        manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+      ).rejects.toThrow(/detailed error info/);
+      await manager.close();
+    });
+
+    it("passes env and cwd to the spawned subprocess", async () => {
+      spawnMock.mockImplementation(() => createMockChild());
+      const { manager } = await createManager();
+
+      await manager.sync();
+
+      const updateCall = spawnMock.mock.calls.find((call: string[][]) => call[1]?.[0] === "update");
+      expect(updateCall).toBeDefined();
+      // Third arg is spawn options with env and cwd.
+      const spawnOpts = updateCall![2] as { env: Record<string, string>; cwd: string };
+      expect(spawnOpts.cwd).toBe(workspaceDir);
+      expect(spawnOpts.env).toBeDefined();
+      await manager.close();
+    });
+  });
 });
 
 function createDeferred<T>() {
