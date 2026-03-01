@@ -68,6 +68,17 @@ metadata:
     expect(parsed.openclaw?.events).toEqual(["command:new"]);
   });
 
+  it("preserves description containing mid-string colons", () => {
+    const content = `---
+name: anime-skill
+description: Use anime style IMPORTANT: Must be kawaii
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("anime-skill");
+    expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
