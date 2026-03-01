@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import {
-  ABSOLUTE_MAX_TRUST_MINUTES,
-  DEFAULT_MAX_TRUST_MINUTES,
   readExecApprovalsSnapshot,
   saveExecApprovals,
   type ExecApprovalsAgent,
@@ -511,18 +509,6 @@ export function registerExecApprovalsCli(program: Command) {
         const minutes = parseInt(String(opts.minutes), 10);
         if (isNaN(minutes) || minutes <= 0) {
           exitWithError("--minutes must be a positive integer.");
-        }
-        if (minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
-          exitWithError(
-            `Maximum trust window is ${ABSOLUTE_MAX_TRUST_MINUTES} minutes (${ABSOLUTE_MAX_TRUST_MINUTES / 60}h). ` +
-              `For longer periods, adjust the base security policy.`,
-          );
-        }
-        if (minutes > DEFAULT_MAX_TRUST_MINUTES && !opts.force) {
-          exitWithError(
-            `Default max is ${DEFAULT_MAX_TRUST_MINUTES} minutes. ` +
-              `Use --force to grant up to ${ABSOLUTE_MAX_TRUST_MINUTES} minutes.`,
-          );
         }
 
         const agentKey = opts.agent?.trim() || "main";

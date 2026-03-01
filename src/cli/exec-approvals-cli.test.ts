@@ -179,25 +179,41 @@ describe("exec approvals CLI", () => {
     it("rejects minutes above absolute max", async () => {
       Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 
+      callGatewayFromCli.mockResolvedValueOnce(
+        Promise.resolve({
+          ok: false,
+          message: `minutes must be between 1 and 480`,
+        }) as Promise<Record<string, unknown>>,
+      );
+
       try {
-        await runApprovalsCommand(["approvals", "trust", "--minutes", "600"]);
+        await runApprovalsCommand(["approvals", "trust", "--minutes", "600", "--yes"]);
       } catch {
         // commander exitOverride throws
       }
 
-      expect(runtimeErrors.some((e) => String(e).includes("480 minutes"))).toBe(true);
+      expect(runtimeErrors.some((e) => String(e).includes("480"))).toBe(true);
     });
 
     it("rejects minutes above default max without --force", async () => {
       Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 
+      callGatewayFromCli.mockResolvedValueOnce(
+        Promise.resolve({
+          ok: false,
+          message: "Duration exceeds default cap (60m). Use force to allow up to 480m.",
+        }) as Promise<Record<string, unknown>>,
+      );
+
       try {
-        await runApprovalsCommand(["approvals", "trust", "--minutes", "120"]);
+        await runApprovalsCommand(["approvals", "trust", "--minutes", "120", "--yes"]);
       } catch {
         // commander exitOverride throws
       }
 
-      expect(runtimeErrors.some((e) => String(e).includes("--force"))).toBe(true);
+      expect(
+        runtimeErrors.some((e) => String(e).includes("cap") || String(e).includes("force")),
+      ).toBe(true);
     });
   });
 

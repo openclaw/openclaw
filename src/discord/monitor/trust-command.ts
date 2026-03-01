@@ -18,8 +18,7 @@ type TrustCommandContext = {
   guildId?: string;
 };
 
-const DEFAULT_MAX_TRUST_MINUTES = 60;
-const ABSOLUTE_MAX_TRUST_MINUTES = 480;
+import { DEFAULT_MAX_TRUST_MINUTES } from "../../infra/exec-approvals.js";
 
 function isOwnerAuthorized(
   interaction: CommandInteraction,
@@ -143,18 +142,6 @@ class DiscordTrustCommand extends Command {
 
     const minutes = interaction.options.getNumber("minutes") ?? DEFAULT_MAX_TRUST_MINUTES;
     const agentId = interaction.options.getString("agent")?.trim() || "main";
-
-    if (minutes <= 0) {
-      await interaction.reply({ content: "Minutes must be a positive number.", ephemeral: true });
-      return;
-    }
-    if (minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
-      await interaction.reply({
-        content: `Maximum trust window is ${ABSOLUTE_MAX_TRUST_MINUTES} minutes (${ABSOLUTE_MAX_TRUST_MINUTES / 60}h).`,
-        ephemeral: true,
-      });
-      return;
-    }
 
     try {
       const result = (await callGatewayRpc(this.ctx.cfg, "exec.approvals.trust", {
