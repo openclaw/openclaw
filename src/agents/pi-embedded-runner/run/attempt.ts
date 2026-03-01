@@ -42,6 +42,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   isCloudCodeAssistFormatError,
@@ -866,6 +867,16 @@ export async function runEmbeddedAttempt(
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
+      } else if (params.model.api === "openai-responses" && params.provider === "openai") {
+        const wsApiKey = await params.authStorage.getApiKey(params.provider);
+        if (wsApiKey) {
+          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
+            signal: runAbortController.signal,
+          });
+        } else {
+          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
+          activeSession.agent.streamFn = streamSimple;
+        }
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
@@ -1548,6 +1559,7 @@ export async function runEmbeddedAttempt(
         sessionManager,
       });
       session?.dispose();
+      releaseWsSession(params.sessionId);
       await sessionLock.release();
     }
   } finally {
