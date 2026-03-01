@@ -5,5 +5,6 @@ export const DIFFS_AGENT_GUIDANCE = [
   "Use `mode=image` when you need a rendered PNG. The tool result includes `details.imagePath` for the generated file.",
   "When you need to deliver the PNG to a user or channel, do not rely on the raw tool-result image renderer. Instead, call the `message` tool and pass `details.imagePath` through `path` or `filePath`.",
   "Use `mode=both` when you want both the gateway viewer URL and the PNG artifact.",
-  "Good defaults: `theme=dark` for canvas rendering, `layout=unified` for most diffs, and include `path` for before/after text when you know the file name.",
+  "If the user has configured diffs plugin defaults, prefer omitting `mode`, `theme`, `layout`, and related presentation options unless you need to override them for this specific diff.",
+  "Include `path` for before/after text when you know the file name.",
 ].join("\n");
