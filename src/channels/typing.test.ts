@@ -184,6 +184,42 @@ describe("createTypingCallbacks", () => {
     }
   });
 
+  // ========== Race condition tests ==========
+  it("does not restart keepalive when fireStop races during async start", async () => {
+    vi.useFakeTimers();
+    try {
+      let startResolve: () => void;
+      const start = vi.fn().mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            startResolve = resolve;
+          }),
+      );
+      const stop = vi.fn().mockResolvedValue(undefined);
+      const onStartError = vi.fn();
+      const callbacks = createTypingCallbacks({ start, stop, onStartError });
+
+      // Begin onReplyStart — it will await fireStart() which is now pending
+      const replyPromise = callbacks.onReplyStart();
+
+      // While start() is pending, a concurrent stop fires (e.g. from cleanup)
+      callbacks.onIdle?.();
+      await flushMicrotasks();
+      expect(stop).toHaveBeenCalledTimes(1);
+
+      // Now resolve the pending start — onReplyStart should see closed=true
+      startResolve!();
+      await replyPromise;
+
+      // Keepalive should NOT have been restarted
+      await vi.advanceTimersByTimeAsync(9_000);
+      // start was called once by the initial fireStart; no keepalive ticks
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ========== TTL Safety Tests ==========
   describe("TTL safety", () => {
     it("auto-stops typing after maxDurationMs", async () => {

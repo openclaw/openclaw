@@ -80,6 +80,11 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (startGuard.isTripped()) {
       return;
     }
+    // Re-check closed after the async fireStart() — a concurrent fireStop() may have
+    // set closed=true and cleared the interval while we awaited.
+    if (closed) {
+      return;
+    }
     keepaliveLoop.start();
     startTtlTimer(); // Start TTL safety timer
   };
