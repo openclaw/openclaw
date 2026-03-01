@@ -239,6 +239,35 @@ describe("createTelegramDraftStream", () => {
       expect.stringContaining("telegram stream preview stopped (text length 127 > 100)"),
     );
   });
+
+  it("rotates to a new preview message when stream text exceeds maxChars after initial send", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 20,
+      warn,
+    });
+
+    stream.update("12345678901234567890");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "12345678901234567890", undefined);
+
+    stream.update("12345678901234567890-ABCDE");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "-ABCDE", undefined);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("continuing in a new preview message"),
+    );
+
+    stream.update("12345678901234567890-ABCDEFGHIJ");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 42, "-ABCDEFGHIJ");
+  });
 });
 
 describe("draft stream initial message debounce", () => {

@@ -57,6 +57,8 @@ export function createTelegramDraftStream(params: {
 
   const streamState = { stopped: false, final: false };
   let streamMessageId: number | undefined;
+  let sourcePrefixChars = 0;
+  let lastSentSourceText = "";
   let lastSentText = "";
   let lastSentParseMode: "HTML" | undefined;
   let generation = 0;
@@ -70,13 +72,31 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-    const rendered = params.renderText?.(trimmed) ?? { text: trimmed };
+    const sourceText = trimmed.slice(sourcePrefixChars);
+    if (!sourceText.trimEnd()) {
+      return false;
+    }
+    const rendered = params.renderText?.(sourceText) ?? { text: sourceText };
     const renderedText = rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
     }
     if (renderedText.length > maxChars) {
+      if (lastSentSourceText.length > 0) {
+        sourcePrefixChars += lastSentSourceText.length;
+        generation += 1;
+        streamMessageId = undefined;
+        lastSentSourceText = "";
+        lastSentText = "";
+        lastSentParseMode = undefined;
+        loop.resetPending();
+        loop.resetThrottleWindow();
+        params.warn?.(
+          `telegram stream preview exceeded ${maxChars} chars; continuing in a new preview message`,
+        );
+        return await sendOrEditStreamMessage(text);
+      }
       // Telegram text messages/edits cap at 4096 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
@@ -85,7 +105,11 @@ export function createTelegramDraftStream(params: {
       );
       return false;
     }
-    if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
+    if (
+      sourceText === lastSentSourceText &&
+      renderedText === lastSentText &&
+      renderedParseMode === lastSentParseMode
+    ) {
       return true;
     }
     const sendGeneration = generation;
@@ -97,6 +121,7 @@ export function createTelegramDraftStream(params: {
       }
     }
 
+    lastSentSourceText = sourceText;
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
@@ -166,6 +191,8 @@ export function createTelegramDraftStream(params: {
   const forceNewMessage = () => {
     generation += 1;
     streamMessageId = undefined;
+    sourcePrefixChars = 0;
+    lastSentSourceText = "";
     lastSentText = "";
     lastSentParseMode = undefined;
     loop.resetPending();
