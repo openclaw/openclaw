@@ -349,6 +349,33 @@ describe("promptSingleChannelSecretInput", () => {
       resolvedValue: "secret-token",
     });
   });
+
+  it("returns keep action when ref mode keeps an existing configured ref", async () => {
+    const prompter = {
+      select: vi.fn(async () => "ref"),
+      confirm: vi.fn(async () => true),
+      text: vi.fn(async () => ""),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "telegram",
+      credentialLabel: "Telegram bot token",
+      accountConfigured: true,
+      canUseEnv: false,
+      hasConfigToken: true,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+    });
+
+    expect(result).toEqual({ action: "keep" });
+    expect(prompter.text).not.toHaveBeenCalled();
+  });
 });
 
 describe("applySingleTokenPromptResult", () => {

@@ -474,6 +474,16 @@ export async function promptSingleChannelSecretInput(params: {
     return { action: "keep" };
   }
 
+  if (params.hasConfigToken && params.accountConfigured) {
+    const keep = await params.prompter.confirm({
+      message: params.keepPrompt,
+      initialValue: true,
+    });
+    if (keep) {
+      return { action: "keep" };
+    }
+  }
+
   const resolved = await promptSecretRefForOnboarding({
     provider: params.providerHint,
     config: params.cfg,
