@@ -558,10 +558,26 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
+  // First check per-model params.thinking (highest priority)
+  const modelKey = `${params.provider}/${params.model}`;
+  const modelConfig = params.cfg.agents?.defaults?.models?.[modelKey];
+  if (modelConfig?.params?.thinking) {
+    const thinkingValue = modelConfig.params.thinking;
+    if (
+      typeof thinkingValue === "string" &&
+      ["off", "minimal", "low", "medium", "high", "xhigh"].includes(thinkingValue)
+    ) {
+      return thinkingValue as ThinkLevel;
+    }
+  }
+
+  // Then check global thinkingDefault
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
   }
+
+  // Finally check catalog for reasoning support
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
