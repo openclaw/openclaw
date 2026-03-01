@@ -16,6 +16,33 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import {
+  installWindowsService,
+  isWindowsServiceInstalled,
+  readWindowsServiceCommand,
+  readWindowsServiceRuntime,
+  restartWindowsService,
+  startWindowsService,
+  stopWindowsService,
+  uninstallWindowsService,
+} from "./windows-service.js";
+  installLaunchAgent,
+  isLaunchAgentLoaded,
+  readLaunchAgentProgramArguments,
+  readLaunchAgentRuntime,
+  restartLaunchAgent,
+  stopLaunchAgent,
+  uninstallLaunchAgent,
+} from "./launchd.js";
+import {
+  installScheduledTask,
+  isScheduledTaskInstalled,
+  readScheduledTaskCommand,
+  readScheduledTaskRuntime,
+  restartScheduledTask,
+  stopScheduledTask,
+  uninstallScheduledTask,
+} from "./schtasks.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -96,6 +123,20 @@ export function resolveGatewayService(): GatewayService {
   }
 
   if (process.platform === "win32") {
+    // Use Windows SCM Service (preferred) with Task Scheduler fallback
+    return {
+      label: "Windows Service",
+      loadedText: "running",
+      notLoadedText: "not installed",
+      install: ignoreInstallResult(installWindowsService),
+      uninstall: uninstallWindowsService,
+      stop: stopWindowsService,
+      restart: restartWindowsService,
+      isLoaded: isWindowsServiceInstalled,
+      readCommand: readWindowsServiceCommand,
+      readRuntime: readWindowsServiceRuntime,
+    };
+  }
     return {
       label: "Scheduled Task",
       loadedText: "registered",

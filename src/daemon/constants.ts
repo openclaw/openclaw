@@ -2,6 +2,11 @@
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+export const GATEWAY_WINDOWS_SERVICE_NAME = "OpenClawGateway";
+export const GATEWAY_SERVICE_MARKER = "openclaw";
+export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
+export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
+export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
 export const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
