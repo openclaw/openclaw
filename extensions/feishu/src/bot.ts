@@ -457,6 +457,9 @@ function formatSubMessageContent(content: string, contentType: string): string {
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botName?: string): boolean {
   if (!botOpenId) return false;
+  // Check for @all (@_all in Feishu) — treat as mentioning every bot
+  const rawContent = event.message.content ?? "";
+  if (rawContent.includes("@_all")) return true;
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
     return mentions.some((m) => {
