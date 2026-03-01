@@ -5,6 +5,8 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const getGlobalDispatcherState = vi.hoisted(() => ({ value: undefined as unknown }));
+const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => getGlobalDispatcherState.value));
 const EnvHttpProxyAgentCtor = vi.hoisted(() =>
   vi.fn(function MockEnvHttpProxyAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
@@ -29,6 +31,7 @@ vi.mock("node:dns", async () => {
 
 vi.mock("undici", () => ({
   EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+  getGlobalDispatcher,
   setGlobalDispatcher,
 }));
 
@@ -39,6 +42,8 @@ afterEach(() => {
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
   setGlobalDispatcher.mockReset();
+  getGlobalDispatcher.mockClear();
+  getGlobalDispatcherState.value = undefined;
   EnvHttpProxyAgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -158,6 +163,31 @@ describe("resolveTelegramFetch", () => {
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+  });
+
+  it("keeps an existing proxy-like global dispatcher", async () => {
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
+  });
+
+  it("updates proxy-like dispatcher when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    getGlobalDispatcherState.value = {
+      constructor: { name: "ProxyAgent" },
+    };
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
   });
 
   it("sets global dispatcher only once across repeated equal decisions", async () => {
