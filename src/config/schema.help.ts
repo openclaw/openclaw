@@ -177,7 +177,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.stream.deliveryMode":
     "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
   "acp.stream.hiddenBoundarySeparator":
-    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph).",
+    "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
   "acp.stream.maxTurnChars":
     "Maximum assistant text characters projected per ACP turn before truncation notice is emitted.",
   "acp.stream.maxToolSummaryChars":
