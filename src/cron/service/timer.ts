@@ -640,9 +640,10 @@ export async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
-    // main-target cron jobs should always resolve via the agent's main session.
-    // Avoid forwarding persisted channel session keys from legacy records.
-    const targetMainSessionKey = undefined;
+    // Preserve the job session namespace for main-target reminders so heartbeat
+    // routing can deliver follow-through in the originating channel/thread.
+    // Downstream gateway wiring canonicalizes/guards this key per agent.
+    const targetMainSessionKey = job.sessionKey;
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
       sessionKey: targetMainSessionKey,

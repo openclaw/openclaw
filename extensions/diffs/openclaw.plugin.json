@@ -1,0 +1,80 @@
+{
+  "id": "diffs",
+  "name": "Diffs",
+  "description": "Read-only diff viewer and image renderer for agents.",
+  "uiHints": {
+    "defaults.fontFamily": {
+      "label": "Default Font",
+      "help": "Preferred font family name for diff content and headers."
+    },
+    "defaults.fontSize": {
+      "label": "Default Font Size",
+      "help": "Base diff font size in pixels."
+    },
+    "defaults.layout": {
+      "label": "Default Layout",
+      "help": "Initial diff layout shown in the viewer."
+    },
+    "defaults.wordWrap": {
+      "label": "Default Word Wrap",
+      "help": "Wrap long lines by default."
+    },
+    "defaults.background": {
+      "label": "Default Background Highlights",
+      "help": "Show added/removed background highlights by default."
+    },
+    "defaults.theme": {
+      "label": "Default Theme",
+      "help": "Initial viewer theme."
+    },
+    "defaults.mode": {
+      "label": "Default Output Mode",
+      "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, image for PNG, or both."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaults": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fontFamily": {
+            "type": "string",
+            "default": "Fira Code"
+          },
+          "fontSize": {
+            "type": "number",
+            "minimum": 10,
+            "maximum": 24,
+            "default": 15
+          },
+          "layout": {
+            "type": "string",
+            "enum": ["unified", "split"],
+            "default": "unified"
+          },
+          "wordWrap": {
+            "type": "boolean",
+            "default": true
+          },
+          "background": {
+            "type": "boolean",
+            "default": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": ["light", "dark"],
+            "default": "dark"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["view", "image", "both"],
+            "default": "both"
+          }
+        }
+      }
+    }
+  }
+}
