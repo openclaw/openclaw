@@ -65,6 +65,12 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
+function resolveAnnounceReplyStyle(
+  cfg: ReturnType<typeof loadConfig>,
+): "synthesize" | "passthrough" {
+  return cfg.agents?.defaults?.subagents?.announceReplyStyle ?? "synthesize";
+}
+
 function buildCompletionDeliveryMessage(params: {
   findings: string;
   subagentName: string;
@@ -1041,12 +1047,16 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceReplyStyle?: "synthesize" | "passthrough";
 }): string {
   if (params.remainingActiveSubagentRuns > 0) {
     const activeRunsLabel = params.remainingActiveSubagentRuns === 1 ? "run" : "runs";
     return `There are still ${params.remainingActiveSubagentRuns} active subagent ${activeRunsLabel} for this session. If they are part of the same workflow, wait for the remaining results before sending a user update. If they are unrelated, respond normally using only the result above.`;
   }
   if (params.requesterIsSubagent) {
+    if (params.announceReplyStyle === "passthrough") {
+      return `Forward the subagent's result text above VERBATIM as your reply. Copy it exactly — do not summarize, rephrase, or add commentary. Do not output ${SILENT_REPLY_TOKEN}. The result IS your response.`;
+    }
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
@@ -1267,11 +1277,13 @@ export async function runSubagentAnnounceFlow(params: {
     } catch {
       // Best-effort only; fall back to default announce instructions when unavailable.
     }
+    const announceCfg = loadConfig();
     const replyInstruction = buildAnnounceReplyInstruction({
       remainingActiveSubagentRuns,
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      announceReplyStyle: resolveAnnounceReplyStyle(announceCfg),
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
