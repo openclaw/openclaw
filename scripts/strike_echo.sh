@@ -19,6 +19,7 @@ for i in $(seq 1 10); do
 done
 
 cleanup() {
+  [[ "${KEEP_TMP:-0}" == "1" ]] && return 0
   rm -f "${TMP_PREFIX}-"*.out "${TMP_PREFIX}-"*.json 2>/dev/null || true
 }
 trap cleanup EXIT
