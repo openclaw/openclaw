@@ -46,6 +46,7 @@ export function resolveSignalAccount(params: {
   const baseUrl = merged.httpUrl?.trim() || `http://${host}:${port}`;
   const configured = Boolean(
     merged.account?.trim() ||
+    merged.configPath?.trim() ||
     merged.httpUrl?.trim() ||
     merged.cliPath?.trim() ||
     merged.httpHost?.trim() ||

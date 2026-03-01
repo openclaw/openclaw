@@ -1327,6 +1327,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow Signal to write config in response to channel events/commands (default: true).",
   "channels.signal.account":
     "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+  "channels.signal.configPath":
+    "Optional directory passed to signal-cli via --config to control where Signal account state is stored/read. Use this when your service runtime needs a non-default signal-cli data path.",
   "channels.imessage.configWrites":
     "Allow iMessage to write config in response to channel events/commands (default: true).",
   "channels.imessage.cliPath":

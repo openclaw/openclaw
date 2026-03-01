@@ -38,6 +38,7 @@ export type MonitorSignalOpts = {
   autoStart?: boolean;
   startupTimeoutMs?: number;
   cliPath?: string;
+  configPath?: string;
   httpHost?: string;
   httpPort?: number;
   receiveMode?: "on-start" | "manual";
@@ -381,9 +382,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const configPathRaw = opts.configPath ?? accountInfo.config.configPath;
+    const configPath = configPathRaw?.trim() || undefined;
     const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
     const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
-    daemonHandle = spawnSignalDaemon({
+    const daemonOpts = {
       cliPath,
       account,
       httpHost,
@@ -393,7 +396,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
       sendReadReceipts,
       runtime,
-    });
+      ...(configPath ? { configPath } : {}),
+    };
+    daemonHandle = spawnSignalDaemon(daemonOpts);
     daemonLifecycle.attach(daemonHandle);
   }
 

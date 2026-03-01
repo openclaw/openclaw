@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 export type SignalDaemonOpts = {
   cliPath: string;
+  configPath?: string;
   account?: string;
   httpHost: string;
   httpPort: number;
@@ -65,6 +66,9 @@ function bindSignalCliOutput(params: {
 
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", opts.configPath.trim());
+  }
   if (opts.account) {
     args.push("-a", opts.account);
   }

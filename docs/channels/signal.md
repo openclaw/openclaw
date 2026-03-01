@@ -45,12 +45,13 @@ Minimal config:
 
 Field reference:
 
-| Field       | Description                                       |
-| ----------- | ------------------------------------------------- |
-| `account`   | Bot phone number in E.164 format (`+15551234567`) |
-| `cliPath`   | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
-| `dmPolicy`  | DM access policy (`pairing` recommended)          |
-| `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
+| Field        | Description                                       |
+| ------------ | ------------------------------------------------- |
+| `account`    | Bot phone number in E.164 format (`+15551234567`) |
+| `cliPath`    | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
+| `configPath` | signal-cli config dir passed as `--config`        |
+| `dmPolicy`   | DM access policy (`pairing` recommended)          |
+| `allowFrom`  | Phone numbers or `uuid:<id>` values allowed to DM |
 
 ## What it is
 
@@ -300,6 +301,7 @@ Provider options:
 - `channels.signal.enabled`: enable/disable channel startup.
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
+- `channels.signal.configPath`: optional `signal-cli --config` directory.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
 - `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default 127.0.0.1:8080).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).

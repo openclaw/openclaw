@@ -6,6 +6,8 @@ export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 export type SignalAccountConfig = CommonChannelMessagingConfig & {
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
+  /** Optional signal-cli config directory path (passed as --config). */
+  configPath?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
   httpUrl?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */

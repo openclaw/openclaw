@@ -105,9 +105,9 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
     accountStringKeys: ["botToken", "appToken", "userToken"],
   },
   signal: {
-    stringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+    stringKeys: ["account", "configPath", "httpUrl", "httpHost", "cliPath"],
     numberKeys: ["httpPort"],
-    accountStringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+    accountStringKeys: ["account", "configPath", "httpUrl", "httpHost", "cliPath"],
   },
   imessage: {
     stringKeys: ["cliPath"],

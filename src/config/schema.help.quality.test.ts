@@ -509,6 +509,7 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "channels.msteams",
   "channels.signal",
   "channels.signal.account",
+  "channels.signal.configPath",
   "channels.slack",
   "channels.slack.appToken",
   "channels.slack.botToken",
