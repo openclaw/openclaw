@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetch usage stats for all openai-codex OAuth profiles in an agent auth store.
+# Fetch usage stats for all openai-codex OAuth profiles in agent auth stores.
 #
 # Notes:
 # - Uses per-profile OAuth access tokens from auth-profiles.json
 # - Tries modern costs endpoint first, then legacy dashboard usage endpoint
-# - Prints a compact table + writes raw JSON responses to ./tmp/openai-usage/<timestamp>/
+# - Prints a compact table by default
+# - Optional JSON output with --json
+# - Writes raw API responses under ./tmp/openai-usage/<timestamp>/
 #
 # Usage:
 #   scripts/openai-codex-usage-all-profiles.sh
 #   scripts/openai-codex-usage-all-profiles.sh --agent main --days 30
+#   scripts/openai-codex-usage-all-profiles.sh --all-agents --json
 #   scripts/openai-codex-usage-all-profiles.sh --auth-file ~/.openclaw/agents/main/agent/auth-profiles.json
 #   scripts/openai-codex-usage-all-profiles.sh --dry-run
 
@@ -19,6 +22,8 @@ AUTH_FILE=""
 DAYS=30
 DRY_RUN=0
 OUT_DIR=""
+JSON_OUT=0
+ALL_AGENTS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,8 +47,16 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --json)
+      JSON_OUT=1
+      shift
+      ;;
+    --all-agents)
+      ALL_AGENTS=1
+      shift
+      ;;
     -h|--help)
-      sed -n '1,60p' "$0"
+      sed -n '1,80p' "$0"
       exit 0
       ;;
     *)
@@ -53,18 +66,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
-if [[ -z "$AUTH_FILE" ]]; then
-  AUTH_FILE="$OPENCLAW_HOME/agents/$AGENT/agent/auth-profiles.json"
-fi
-
-if [[ ! -f "$AUTH_FILE" ]]; then
-  echo "error: auth file not found: $AUTH_FILE" >&2
+if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+  echo "error: --days must be an integer" >&2
   exit 1
 fi
 
-if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
-  echo "error: --days must be an integer" >&2
+OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
+
+declare -a AUTH_FILES=()
+if [[ -n "$AUTH_FILE" ]]; then
+  AUTH_FILES+=("$AUTH_FILE")
+elif [[ "$ALL_AGENTS" == "1" ]]; then
+  for f in "$OPENCLAW_HOME"/agents/*/agent/auth-profiles.json; do
+    [[ -f "$f" ]] && AUTH_FILES+=("$f")
+  done
+else
+  AUTH_FILES+=("$OPENCLAW_HOME/agents/$AGENT/agent/auth-profiles.json")
+fi
+
+if [[ ${#AUTH_FILES[@]} -eq 0 ]]; then
+  echo "error: no auth stores found" >&2
   exit 1
 fi
 
@@ -78,21 +99,6 @@ if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="tmp/openai-usage/$stamp"
 fi
 mkdir -p "$OUT_DIR"
-
-mapfile -t PROFILE_IDS < <(jq -r '
-  .profiles
-  | to_entries[]
-  | select(.value.provider=="openai-codex" and .value.type=="oauth")
-  | .key
-' "$AUTH_FILE")
-
-if [[ ${#PROFILE_IDS[@]} -eq 0 ]]; then
-  echo "No openai-codex oauth profiles found in $AUTH_FILE"
-  exit 0
-fi
-
-printf "%-28s %-8s %-14s %-10s\n" "PROFILE" "STATUS" "USAGE_USD" "ENDPOINT"
-printf "%s\n" "--------------------------------------------------------------------------------"
 
 fetch_costs() {
   local token="$1"
@@ -118,7 +124,6 @@ fetch_legacy() {
 
 extract_amount() {
   local file="$1"
-  # Try modern costs schema first, then legacy schema.
   jq -r '
     if (type=="object" and has("data")) then
       ([.data[]?.results[]?.amount?.value] | map(select(.!=null)) | add) // empty
@@ -130,46 +135,88 @@ extract_amount() {
   ' "$file" 2>/dev/null || true
 }
 
-for pid in "${PROFILE_IDS[@]}"; do
-  token="$(jq -r --arg p "$pid" '.profiles[$p].access // empty' "$AUTH_FILE")"
-  if [[ -z "$token" ]]; then
-    printf "%-28s %-8s %-14s %-10s\n" "$pid" "no-token" "-" "-"
+results_jsonl="$OUT_DIR/results.jsonl"
+: > "$results_jsonl"
+
+if [[ "$JSON_OUT" != "1" ]]; then
+  printf "%-16s %-28s %-10s %-14s %-10s\n" "AGENT" "PROFILE" "STATUS" "USAGE_USD" "ENDPOINT"
+  printf "%s\n" "-----------------------------------------------------------------------------------------------"
+fi
+
+for auth_path in "${AUTH_FILES[@]}"; do
+  if [[ ! -f "$auth_path" ]]; then
+    echo "warn: auth file not found: $auth_path" >&2
     continue
   fi
 
-  if [[ "$DRY_RUN" == "1" ]]; then
-    printf "%-28s %-8s %-14s %-10s\n" "$pid" "dry-run" "-" "costs"
-    continue
-  fi
+  agent_name="$(echo "$auth_path" | sed -E 's#^.*/agents/([^/]+)/agent/auth-profiles.json#\1#')"
 
-  costs_file="$OUT_DIR/${pid//[:\/]/_}.costs.json"
-  legacy_file="$OUT_DIR/${pid//[:\/]/_}.legacy.json"
+  mapfile -t PROFILE_IDS < <(jq -r '
+    .profiles
+    | to_entries[]?
+    | select(.value.provider=="openai-codex" and .value.type=="oauth")
+    | .key
+  ' "$auth_path")
 
-  code="$(fetch_costs "$token" "$costs_file")"
-  endpoint="costs"
-  status="ok"
-
-  if [[ "$code" != "200" ]]; then
-    code2="$(fetch_legacy "$token" "$legacy_file")"
-    endpoint="legacy"
-    if [[ "$code2" != "200" ]]; then
-      status="http:$code/$code2"
-      printf "%-28s %-8s %-14s %-10s\n" "$pid" "$status" "-" "$endpoint"
-      continue
-    fi
-    use_file="$legacy_file"
-  else
-    use_file="$costs_file"
-  fi
-
-  amount="$(extract_amount "$use_file")"
-  if [[ -z "$amount" ]]; then
-    status="ok?"
+  for pid in "${PROFILE_IDS[@]}"; do
+    token="$(jq -r --arg p "$pid" '.profiles[$p].access // empty' "$auth_path")"
+    status="ok"
+    endpoint="costs"
     amount="-"
-  fi
 
-  printf "%-28s %-8s %-14s %-10s\n" "$pid" "$status" "$amount" "$endpoint"
+    if [[ -z "$token" ]]; then
+      status="no-token"
+      endpoint="-"
+    elif [[ "$DRY_RUN" == "1" ]]; then
+      status="dry-run"
+      endpoint="costs"
+    else
+      safe_agent="${agent_name//[^a-zA-Z0-9_.-]/_}"
+      safe_pid="${pid//[:\/]/_}"
+      costs_file="$OUT_DIR/${safe_agent}.${safe_pid}.costs.json"
+      legacy_file="$OUT_DIR/${safe_agent}.${safe_pid}.legacy.json"
+
+      code="$(fetch_costs "$token" "$costs_file")"
+      if [[ "$code" == "200" ]]; then
+        use_file="$costs_file"
+      else
+        code2="$(fetch_legacy "$token" "$legacy_file")"
+        endpoint="legacy"
+        if [[ "$code2" == "200" ]]; then
+          use_file="$legacy_file"
+        else
+          status="http:$code/$code2"
+          use_file=""
+        fi
+      fi
+
+      if [[ -n "${use_file:-}" ]]; then
+        amount="$(extract_amount "$use_file")"
+        if [[ -z "$amount" ]]; then
+          status="ok?"
+          amount="-"
+        fi
+      fi
+    fi
+
+    jq -nc \
+      --arg agent "$agent_name" \
+      --arg profile "$pid" \
+      --arg status "$status" \
+      --arg endpoint "$endpoint" \
+      --arg usageUsd "$amount" \
+      '{agent:$agent,profile:$profile,status:$status,usageUsd:$usageUsd,endpoint:$endpoint}' \
+      >> "$results_jsonl"
+
+    if [[ "$JSON_OUT" != "1" ]]; then
+      printf "%-16s %-28s %-10s %-14s %-10s\n" "$agent_name" "$pid" "$status" "$amount" "$endpoint"
+    fi
+  done
 done
 
-echo
-echo "Raw responses written to: $OUT_DIR"
+if [[ "$JSON_OUT" == "1" ]]; then
+  jq -s --arg outDir "$OUT_DIR" '{results: ., outDir: $outDir}' "$results_jsonl"
+else
+  echo
+  echo "Raw responses written to: $OUT_DIR"
+fi
