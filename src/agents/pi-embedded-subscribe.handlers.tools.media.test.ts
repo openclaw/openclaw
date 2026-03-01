@@ -9,6 +9,7 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
+  toolResultFormat?: "markdown" | "plain";
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -16,6 +17,7 @@ function createMockContext(overrides?: {
       runId: "test-run",
       onToolResult,
       onAgentEvent: vi.fn(),
+      toolResultFormat: overrides?.toolResultFormat,
     },
     state: {
       toolMetaById: new Map(),
@@ -250,5 +252,51 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(onToolResult).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/canvas-output.png"],
     });
+  });
+});
+
+describe("handleToolExecutionEnd media dedup tracking (messagingToolSentMediaUrls)", () => {
+  it("tracks media URLs when verbose is off (direct delivery)", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false });
+    await emitPngMediaToolResult(ctx);
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("/tmp/screenshot.png");
+  });
+
+  it("does NOT track media URLs when verbose=full + markdown (fenced output, MEDIA: skipped)", async () => {
+    // In verbose=full + markdown, emitToolOutput wraps output in ```txt fences.
+    // splitMediaFromOutput skips MEDIA: inside fences, so URLs are never delivered.
+    const ctx = createMockContext({ shouldEmitToolOutput: true, toolResultFormat: "markdown" });
+    await emitPngMediaToolResult(ctx);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
+
+  it("does NOT track media URLs when verbose=full + default format (markdown is default)", async () => {
+    // toolResultFormat defaults to "markdown" when not specified.
+    const ctx = createMockContext({ shouldEmitToolOutput: true });
+    await emitPngMediaToolResult(ctx);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
+
+  it("tracks media URLs when verbose=full + plain (emitToolOutput delivers MEDIA: without fencing)", async () => {
+    // In verbose=full + plain, emitToolOutput does not fence the output, so
+    // MEDIA: directives are extracted and delivered via onToolResult.
+    const ctx = createMockContext({ shouldEmitToolOutput: true, toolResultFormat: "plain" });
+    await emitPngMediaToolResult(ctx);
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("/tmp/screenshot.png");
+  });
+
+  it("does NOT track media URLs when onToolResult is absent", async () => {
+    // Without onToolResult, no delivery occurs; tracking would cause false dedup.
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: undefined });
+    // Override to remove onToolResult
+    (ctx.params as Record<string, unknown>).onToolResult = undefined;
+    await emitPngMediaToolResult(ctx);
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
+
+  it("does NOT track media URLs on tool error", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false });
+    await emitPngMediaToolResult(ctx, { isError: true });
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
   });
 });

@@ -402,10 +402,17 @@ export async function handleToolExecutionEnd(
   // - gate on onToolResult presence: media is only delivered when the callback
   //   exists; without it, tracking would cause the final reply's only media
   //   attachment to be incorrectly stripped as a duplicate.
+  // - skip when output is fenced (verbose=full + markdown): splitMediaFromOutput
+  //   ignores MEDIA: directives inside fenced blocks, so the URLs never reach
+  //   the user. In plain format, emitToolOutput does not fence, so MEDIA:
+  //   directives are still delivered via onToolResult and must be tracked.
+  const willFenceOutput =
+    ctx.shouldEmitToolOutput() && (ctx.params.toolResultFormat ?? "markdown") !== "plain";
   if (
     !isToolError &&
     !isMessagingSend &&
-    ctx.params.onToolResult
+    ctx.params.onToolResult &&
+    !willFenceOutput
   ) {
     const emittedMediaUrls = filterToolResultMediaUrls(
       toolName,
