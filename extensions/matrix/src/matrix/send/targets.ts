@@ -83,9 +83,28 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     // Ignore and fall back.
   }
 
-  // 2) Fallback: look for an existing joined room that looks like a 1:1 with the user.
-  // Many clients only maintain m.direct for *their own* account data, so relying on it is brittle.
-  let fallbackRoom: string | null = null;
+  // 2) Fallback: look for an existing joined room with an explicit is_direct marker.
+  // Do not infer DM by member count: 2-person rooms can be normal group rooms.
+  let selfUserId: string | null = null;
+  try {
+    selfUserId = await client.getUserId();
+  } catch {
+    selfUserId = null;
+  }
+
+  const hasDirectFlag = async (roomId: string, targetUserId?: string | null): Promise<boolean> => {
+    const target = targetUserId?.trim();
+    if (!target) {
+      return false;
+    }
+    try {
+      const state = await client.getRoomStateEvent(roomId, "m.room.member", target);
+      return state?.is_direct === true;
+    } catch {
+      return false;
+    }
+  };
+
   try {
     const rooms = await client.getJoinedRooms();
     for (const roomId of rooms) {
@@ -98,27 +117,20 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       if (!members.includes(trimmed)) {
         continue;
       }
-      // Prefer classic 1:1 rooms, but allow larger rooms if requested.
-      if (members.length === 2) {
+
+      const directViaState =
+        (await hasDirectFlag(roomId, trimmed)) || (await hasDirectFlag(roomId, selfUserId));
+      if (directViaState) {
         setDirectRoomCached(trimmed, roomId);
         await persistDirectRoom(client, trimmed, roomId);
         return roomId;
-      }
-      if (!fallbackRoom) {
-        fallbackRoom = roomId;
       }
     }
   } catch {
     // Ignore and fall back.
   }
 
-  if (fallbackRoom) {
-    setDirectRoomCached(trimmed, fallbackRoom);
-    await persistDirectRoom(client, trimmed, fallbackRoom);
-    return fallbackRoom;
-  }
-
-  throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
+  throw new Error(`No direct room found for ${trimmed} (m.direct missing or is_direct not set)`);
 }
 
 export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
