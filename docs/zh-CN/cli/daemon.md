@@ -9,7 +9,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 290792d3d94a18dadcc62c0482685db3afa4d0ba11536622e894ac056c6f7843
-  source_path: cli/daemon.md
+  source_path: docs/cli/daemon.md
   workflow: 15
 ---
 
