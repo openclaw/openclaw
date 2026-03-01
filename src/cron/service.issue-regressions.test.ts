@@ -241,6 +241,55 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
+    const store = await makeStorePath();
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "legacy-isolated",
+            agentId: "feature-dev_planner",
+            sessionKey: "agent:main:main",
+            name: "legacy isolated",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 300_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "poll workflow queue" },
+            state: {},
+          },
+        ],
+      }),
+    );
+
+    const cron = new CronService({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const status = await cron.status();
+    const jobs = await cron.list({ includeDisabled: true });
+    const isolated = jobs.find((job) => job.id === "legacy-isolated");
+    expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
+    expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: Array<{ id: string; state?: { nextRunAtMs?: number | null } }>;
+    };
+    const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
+    expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
+    expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
+
+    cron.stop();
+  });
+
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = await makeStorePath();
     const cron = await startCronForStore({ storePath: store.storePath });
@@ -701,6 +750,224 @@ describe("Cron issue regressions", () => {
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
       cron.stop();
     }
+  });
+
+  it("#24355: one-shot job retries on transient error, then succeeds", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-retry",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = false;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+    let job = state.store?.jobs.find((j) => j.id === "oneshot-retry");
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(true);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.nextRunAtMs).toBeDefined();
+    expect(job!.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    now = (job!.state.nextRunAtMs ?? 0) + 1;
+    await onTimer(state);
+    job = state.store?.jobs.find((j) => j.id === "oneshot-retry");
+    expect(job).toBeDefined();
+    expect(job!.state.lastStatus).toBe("ok");
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("#24355: one-shot job disabled after max transient retries", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-max-retries",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "429 rate limit exceeded",
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    for (let i = 0; i < 4; i++) {
+      await onTimer(state);
+      const job = state.store?.jobs.find((j) => j.id === "oneshot-max-retries");
+      expect(job).toBeDefined();
+      if (i < 3) {
+        expect(job!.enabled).toBe(true);
+        now = (job!.state.nextRunAtMs ?? now) + 1;
+      } else {
+        expect(job!.enabled).toBe(false);
+      }
+    }
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
+  });
+
+  it("#24355: one-shot job respects cron.retry config", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-custom-retry",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "429 rate limit exceeded",
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+      cronConfig: {
+        retry: { maxAttempts: 2, backoffMs: [1000, 2000] },
+      },
+    });
+
+    for (let i = 0; i < 4; i++) {
+      await onTimer(state);
+      const job = state.store?.jobs.find((j) => j.id === "oneshot-custom-retry");
+      expect(job).toBeDefined();
+      if (i < 2) {
+        expect(job!.enabled).toBe(true);
+        now = (job!.state.nextRunAtMs ?? now) + 1;
+      } else {
+        expect(job!.enabled).toBe(false);
+      }
+    }
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(3);
+  });
+
+  it("#24355: one-shot job disabled immediately on permanent error", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-permanent-error",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({
+        status: "error",
+        error: "invalid API key",
+      }),
+    });
+
+    await onTimer(state);
+
+    const job = state.store?.jobs.find((j) => j.id === "oneshot-permanent-error");
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(false);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("#24355: deleteAfterRun:true one-shot job is deleted after successful retry", async () => {
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-deleteAfterRun-retry",
+      name: "reminder",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "remind me" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = true;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    let now = scheduledAt;
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
+      .mockResolvedValueOnce({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    // First run: transient error → retry scheduled, job still in store.
+    await onTimer(state);
+    let job = state.store?.jobs.find((j) => j.id === "oneshot-deleteAfterRun-retry");
+    expect(job).toBeDefined();
+    expect(job!.enabled).toBe(true);
+    expect(job!.state.lastStatus).toBe("error");
+    expect(job!.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
+
+    // Second run: success → deleteAfterRun removes the job from the store.
+    now = (job!.state.nextRunAtMs ?? 0) + 1;
+    await onTimer(state);
+    const deleted = state.store?.jobs.find((j) => j.id === "oneshot-deleteAfterRun-retry");
+    expect(deleted).toBeUndefined();
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("prevents spin loop when cron job completes within the scheduled second (#17821)", async () => {
