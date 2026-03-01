@@ -253,4 +253,10 @@ describe("docker-setup.sh", () => {
     expect(compose).not.toContain("gateway-daemon");
     expect(compose).toContain('"gateway"');
   });
+
+  it("keeps docker-compose CLI network namespace settings in sync", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).toContain('network_mode: "service:openclaw-gateway"');
+    expect(compose).toContain("depends_on:\n      - openclaw-gateway");
+  });
 });
