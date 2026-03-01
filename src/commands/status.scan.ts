@@ -194,16 +194,25 @@ export async function scanStatus(
       progress.setLabel("Loading config…");
       const cfg = loadConfig();
       const osSummary = resolveOsSummary();
+      const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+      const tailscaleDnsPromise =
+        tailscaleMode === "off"
+          ? Promise.resolve<string | null>(null)
+          : getTailnetHostname((cmd, args) =>
+              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+            ).catch(() => null);
+      const updateTimeoutMs = opts.all ? 6500 : 2500;
+      const updatePromise = getUpdateCheckResult({
+        timeoutMs: updateTimeoutMs,
+        fetchGit: true,
+        includeRegistry: true,
+      });
+      const agentStatusPromise = getAgentLocalStatuses();
+      const summaryPromise = getStatusSummary();
       progress.tick();
 
       progress.setLabel("Checking Tailscale…");
-      const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-      const tailscaleDns =
-        tailscaleMode === "off"
-          ? null
-          : await getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ).catch(() => null);
+      const tailscaleDns = await tailscaleDnsPromise;
       const tailscaleHttpsUrl =
         tailscaleMode !== "off" && tailscaleDns
           ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
@@ -211,16 +220,11 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Checking for updates…");
-      const updateTimeoutMs = opts.all ? 6500 : 2500;
-      const update = await getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-      });
+      const update = await updatePromise;
       progress.tick();
 
       progress.setLabel("Resolving agents…");
-      const agentStatus = await getAgentLocalStatuses();
+      const agentStatus = await agentStatusPromise;
       progress.tick();
 
       progress.setLabel("Probing gateway…");
@@ -289,7 +293,7 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Reading sessions…");
-      const summary = await getStatusSummary();
+      const summary = await summaryPromise;
       progress.tick();
 
       progress.setLabel("Rendering…");
