@@ -177,9 +177,7 @@ export class BotApp extends LitElement {
   @state() pendingGatewayUrl: string | null = null;
 
   @state() configLoading = false;
-  @state() configRaw = "{
-}
-";
+  @state() configRaw = "{\n}\n";
   @state() configRawOriginal = "";
   @state() configValid: boolean | null = null;
   @state() configIssues: unknown[] = [];
