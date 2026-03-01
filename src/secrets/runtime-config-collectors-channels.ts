@@ -143,16 +143,58 @@ function collectTelegramAssignments(params: {
     topInactiveReason: "no enabled account inherits this top-level Telegram botToken.",
     accountInactiveReason: "Telegram account is disabled.",
   });
-  collectSimpleChannelFieldAssignments({
-    channelKey: "telegram",
-    field: "webhookSecret",
-    channel: telegram,
-    surface,
+  const baseWebhookUrl = typeof telegram.webhookUrl === "string" ? telegram.webhookUrl.trim() : "";
+  const topLevelWebhookSecretActive = !surface.channelEnabled
+    ? false
+    : !surface.hasExplicitAccounts
+      ? baseWebhookUrl.length > 0
+      : surface.accounts.some(
+          ({ account, enabled }) =>
+            enabled &&
+            !hasOwnProperty(account, "webhookSecret") &&
+            (hasOwnProperty(account, "webhookUrl")
+              ? typeof account.webhookUrl === "string" && account.webhookUrl.trim().length > 0
+              : baseWebhookUrl.length > 0),
+        );
+  collectSecretInputAssignment({
+    value: telegram.webhookSecret,
+    path: "channels.telegram.webhookSecret",
+    expected: "string",
     defaults: params.defaults,
     context: params.context,
-    topInactiveReason: "no enabled account inherits this top-level Telegram webhookSecret.",
-    accountInactiveReason: "Telegram account is disabled.",
+    active: topLevelWebhookSecretActive,
+    inactiveReason:
+      "no enabled Telegram webhook surface inherits this top-level webhookSecret (webhook mode is not active).",
+    apply: (value) => {
+      telegram.webhookSecret = value;
+    },
   });
+  if (!surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of surface.accounts) {
+    if (!hasOwnProperty(account, "webhookSecret")) {
+      continue;
+    }
+    const accountWebhookUrl = hasOwnProperty(account, "webhookUrl")
+      ? typeof account.webhookUrl === "string"
+        ? account.webhookUrl.trim()
+        : ""
+      : baseWebhookUrl;
+    collectSecretInputAssignment({
+      value: account.webhookSecret,
+      path: `channels.telegram.accounts.${accountId}.webhookSecret`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: enabled && accountWebhookUrl.length > 0,
+      inactiveReason:
+        "Telegram account is disabled or webhook mode is not active for this account.",
+      apply: (value) => {
+        account.webhookSecret = value;
+      },
+    });
+  }
 }
 
 function collectSlackAssignments(params: {

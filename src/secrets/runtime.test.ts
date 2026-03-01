@@ -647,6 +647,39 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats Telegram webhookSecret refs as inactive when webhook mode is not configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          telegram: {
+            webhookSecret: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_TELEGRAM_WEBHOOK_SECRET",
+            },
+            accounts: {
+              work: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.telegram?.webhookSecret).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_TELEGRAM_WEBHOOK_SECRET",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.telegram.webhookSecret",
+    );
+  });
+
   it("treats top-level Google Chat serviceAccount as inactive when enabled accounts use serviceAccountRef", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
