@@ -1557,7 +1557,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     // Keep QMD recall responsive when the updater holds a write lock.
-    this.db.exec("PRAGMA busy_timeout = 1");
+    this.db.exec("PRAGMA busy_timeout = 2000");
     return this.db;
   }
 
@@ -2097,12 +2097,42 @@ export class QmdMemoryManager implements MemorySearchManager {
     log.debug(
       `qmd ${command} multi-collection workaround active (${collectionNames.length} collections)`,
     );
+    const results = await Promise.allSettled(
+      collectionNames.map(async (collectionName) => {
+        const args = this.buildSearchArgs(command, query, limit);
+        args.push("-c", collectionName);
+        const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+        return { collectionName, parsed: parseQmdQueryJson(result.stdout, result.stderr) };
+      }),
+    );
+
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const fulfilled = results.filter(
+      (r): r is PromiseFulfilledResult<{ collectionName: string; parsed: QmdQueryResult[] }> =>
+        r.status === "fulfilled",
+    );
+
+    // Re-throw structural errors (missing collections, unsupported flags) so the
+    // caller can trigger repair/fallback logic. Only swallow transient errors
+    // (timeouts) when at least some collections succeeded.
+    for (const r of rejected) {
+      const err = r.reason;
+      if (this.isMissingCollectionSearchError(err) || this.isUnsupportedQmdOptionError(err)) {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    if (fulfilled.length === 0 && rejected.length > 0) {
+      const first = rejected[0].reason;
+      throw first instanceof Error ? first : new Error(String(first));
+    }
+
+    for (const r of rejected) {
+      log.debug(`qmd ${command} collection query failed: ${r.reason}`);
+    }
+
     const bestByResultKey = new Map<string, QmdQueryResult>();
-    for (const collectionName of collectionNames) {
-      const args = this.buildSearchArgs(command, query, limit);
-      args.push("-c", collectionName);
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+    for (const settled of fulfilled) {
+      const { collectionName, parsed } = settled.value;
       for (const entry of parsed) {
         const normalizedHints = this.normalizeDocHints({
           preferredCollection: entry.collection ?? collectionName,
@@ -2164,17 +2194,28 @@ export class QmdMemoryManager implements MemorySearchManager {
     minScore: number;
     collectionNames: string[];
   }): Promise<QmdQueryResult[]> {
+    const results = await Promise.allSettled(
+      params.collectionNames.map(async (collectionName) => {
+        const parsed = await this.runQmdSearchViaMcporter({
+          mcporter: this.qmd.mcporter,
+          tool: params.tool,
+          query: params.query,
+          limit: params.limit,
+          minScore: params.minScore,
+          collection: collectionName,
+          timeoutMs: this.qmd.limits.timeoutMs,
+        });
+        return { collectionName, parsed };
+      }),
+    );
+
     const bestByDocId = new Map<string, QmdQueryResult>();
-    for (const collectionName of params.collectionNames) {
-      const parsed = await this.runQmdSearchViaMcporter({
-        mcporter: this.qmd.mcporter,
-        tool: params.tool,
-        query: params.query,
-        limit: params.limit,
-        minScore: params.minScore,
-        collection: collectionName,
-        timeoutMs: this.qmd.limits.timeoutMs,
-      });
+    for (const settled of results) {
+      if (settled.status === "rejected") {
+        log.debug(`qmd mcporter ${params.tool} collection query failed: ${settled.reason}`);
+        continue;
+      }
+      const { parsed } = settled.value;
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
           continue;
