@@ -67,7 +67,6 @@ function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): n
 
 function buildCompletionDeliveryMessage(params: {
   findings: string;
-  subagentName: string;
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
@@ -76,30 +75,100 @@ function buildCompletionDeliveryMessage(params: {
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
-  const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
-  // Cron completions are standalone messages — skip the subagent status header.
+  // Cron completions are standalone messages.
   if (params.announceType === "cron job") {
-    return hasFindings ? findingsText : "";
+    return sanitizeCompletionFindings(findingsText);
   }
-  const header = (() => {
-    if (params.outcome?.status === "error") {
-      return params.spawnMode === "session"
-        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
-        : `❌ Subagent ${params.subagentName} failed`;
-    }
-    if (params.outcome?.status === "timeout") {
-      return params.spawnMode === "session"
-        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
-        : `⏱️ Subagent ${params.subagentName} timed out`;
-    }
-    return params.spawnMode === "session"
-      ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
-      : `✅ Subagent ${params.subagentName} finished`;
-  })();
-  if (!hasFindings) {
-    return header;
+  const cleanedFindings = sanitizeCompletionFindings(findingsText);
+  if (cleanedFindings) {
+    return cleanedFindings;
   }
-  return `${header}\n\n${findingsText}`;
+  if (params.outcome?.status === "timeout") {
+    return "Task timed out.";
+  }
+  if (params.outcome?.status === "error") {
+    const reason = params.outcome.error?.trim();
+    return reason ? `Task failed: ${reason}` : "Task failed.";
+  }
+  return "Task completed.";
+}
+
+function tryExtractJsonPayload(text: string): string | undefined {
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = fenced ? fenced[1] : text;
+  const trimmed = candidate.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function summarizeJsonForDelivery(rawJson: string): string | undefined {
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(parsed)) {
+      if (parsed.length === 0) {
+        return "Task completed.";
+      }
+      return `Task completed (${parsed.length} items).`;
+    }
+    const obj = parsed as Record<string, unknown>;
+    const preferredStringKeys = ["result", "RESULT", "message", "summary", "answer"];
+    for (const key of preferredStringKeys) {
+      const value = obj[key];
+      if (typeof value === "string" && value.trim()) {
+        return sanitizeTextContent(value).trim();
+      }
+    }
+    const status = typeof obj.status === "string" ? obj.status.trim() : "";
+    const error = typeof obj.error === "string" ? obj.error.trim() : "";
+    if (status && error) {
+      return `${status}: ${error}`;
+    }
+    if (status) {
+      return `Status: ${status}`;
+    }
+    if (error) {
+      return `Error: ${error}`;
+    }
+    if (Array.isArray(obj.jobs)) {
+      return `Task completed (${obj.jobs.length} jobs).`;
+    }
+  } catch {
+    // Ignore parse failures and keep original text path.
+  }
+  return undefined;
+}
+
+function sanitizeCompletionFindings(findings: string): string {
+  const trimmed = findings.trim();
+  if (!trimmed || trimmed === "(no output)") {
+    return "";
+  }
+  const message = trimmed
+    .replace(/^✅\s*Subagent[^\n]*\n*/i, "")
+    .replace(/^\[System Message\][\s\S]*?\nResult:\s*/i, "")
+    .trim();
+  const lower = message.toLowerCase();
+  if (
+    message.includes("[Subagent Context]") ||
+    lower.startsWith("# subagent context") ||
+    lower.includes("you are running as a subagent")
+  ) {
+    return "";
+  }
+  const jsonPayload = tryExtractJsonPayload(message);
+  if (jsonPayload) {
+    const summarized = summarizeJsonForDelivery(jsonPayload);
+    if (summarized) {
+      return summarized;
+    }
+    return "";
+  }
+  return message;
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -1212,7 +1281,6 @@ export async function runSubagentAnnounceFlow(params: {
     // Build instructional message for main agent
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
-    const subagentName = resolveAgentIdFromSessionKey(params.childSessionKey);
     const announceSessionId = childSessionId || "unknown";
     const findings = reply || "(no output)";
     let completionMessage = "";
@@ -1280,7 +1348,6 @@ export async function runSubagentAnnounceFlow(params: {
     });
     completionMessage = buildCompletionDeliveryMessage({
       findings,
-      subagentName,
       spawnMode: params.spawnMode,
       outcome,
       announceType,

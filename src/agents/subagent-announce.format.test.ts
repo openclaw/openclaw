@@ -396,9 +396,87 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(msg).toContain("✅ Subagent main finished");
+    expect(msg).not.toContain("✅ Subagent");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
+  });
+
+  it("suppresses leaked subagent bootstrap text in completion-mode direct delivery", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-bootstrap",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bootstrap",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "[Subagent Context] You are running as a subagent.\n\n[Subagent Task]: do thing",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-bootstrap",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toBe("Task completed.");
+  });
+
+  it("summarizes raw JSON payloads in completion-mode direct delivery", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-json",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-json",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "{\"version\":1,\"jobs\":[{\"id\":1},{\"id\":2}]}",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-json",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toBe("Task completed (2 jobs).");
   });
 
   it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
@@ -715,7 +793,7 @@ describe("subagent announce formatting", () => {
     expect(directTargets).not.toContain("channel:main-parent-channel");
   });
 
-  it("uses completion direct-send headers for error and timeout outcomes", async () => {
+  it("uses clean completion direct-send messages for error and timeout outcomes", async () => {
     const cases = [
       {
         childSessionId: "child-session-direct-error",
@@ -723,7 +801,7 @@ describe("subagent announce formatting", () => {
         childRunId: "run-direct-completion-error",
         replyText: "boom details",
         outcome: { status: "error", error: "boom" } as const,
-        expectedHeader: "❌ Subagent main failed this task (session remains active)",
+        expectedHeader: "boom details",
         excludedHeader: "✅ Subagent main",
         spawnMode: "session" as const,
       },
@@ -733,7 +811,7 @@ describe("subagent announce formatting", () => {
         childRunId: "run-direct-completion-timeout",
         replyText: "partial output",
         outcome: { status: "timeout" } as const,
-        expectedHeader: "⏱️ Subagent main timed out",
+        expectedHeader: "partial output",
         excludedHeader: "✅ Subagent main finished",
         spawnMode: undefined,
       },
@@ -1360,7 +1438,7 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
     const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("✅ Subagent main finished");
+    expect(msg).not.toContain("✅ Subagent");
     expect(msg).not.toContain("user prompt should not be announced");
   });
 
