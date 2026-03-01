@@ -306,4 +306,78 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
+
+  it("restarts stale channels (no inbound for >15 minutes)", async () => {
+    const staleTimestamp = Date.now() - 16 * 60_000; // 16 minutes ago
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: staleTimestamp,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default");
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("telegram", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("telegram", "default");
+    monitor.stop();
+  });
+
+  it("skips healthy channels with recent inbound activity", async () => {
+    const recentTimestamp = Date.now() - 5 * 60_000; // 5 minutes ago
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: recentTimestamp,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("skips channels that have never received inbound (lastInboundAt is null)", async () => {
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: null,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("skips channels that have never received inbound (lastInboundAt is undefined)", async () => {
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
 });
