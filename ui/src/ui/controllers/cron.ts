@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
@@ -95,28 +96,28 @@ export function normalizeCronFormState(form: CronFormState): CronFormState {
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
-    errors.name = "Name is required.";
+    errors.name = "cron.errors.nameRequired";
   }
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
-      errors.scheduleAt = "Enter a valid date/time.";
+      errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
     if (amount <= 0) {
-      errors.everyAmount = "Interval must be greater than 0.";
+      errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else {
     if (!form.cronExpr.trim()) {
-      errors.cronExpr = "Cron expression is required.";
+      errors.cronExpr = "cron.errors.cronExprRequired";
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
       if (staggerAmount) {
         const stagger = toNumber(staggerAmount, 0);
         if (stagger <= 0) {
-          errors.staggerAmount = "Stagger must be greater than 0.";
+          errors.staggerAmount = "cron.errors.staggerAmountInvalid";
         }
       }
     }
@@ -124,24 +125,24 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.payloadText.trim()) {
     errors.payloadText =
       form.payloadKind === "systemEvent"
-        ? "System text is required."
-        : "Agent message is required.";
+        ? "cron.errors.systemTextRequired"
+        : "cron.errors.agentMessageRequired";
   }
   if (form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
       const timeout = toNumber(timeoutRaw, 0);
       if (timeout <= 0) {
-        errors.timeoutSeconds = "If set, timeout must be greater than 0 seconds.";
+        errors.timeoutSeconds = "cron.errors.timeoutInvalid";
       }
     }
   }
   if (form.deliveryMode === "webhook") {
     const target = form.deliveryTo.trim();
     if (!target) {
-      errors.deliveryTo = "Webhook URL is required.";
+      errors.deliveryTo = "cron.errors.webhookUrlRequired";
     } else if (!/^https?:\/\//i.test(target)) {
-      errors.deliveryTo = "Webhook URL must start with http:// or https://.";
+      errors.deliveryTo = "cron.errors.webhookUrlInvalid";
     }
   }
   return errors;
@@ -428,14 +429,14 @@ export function buildCronSchedule(form: CronFormState) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
-      throw new Error("Invalid run time.");
+      throw new Error(t("cron.errors.invalidRunTime"));
     }
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
     if (amount <= 0) {
-      throw new Error("Invalid interval amount.");
+      throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
     const unit = form.everyUnit;
     const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
@@ -443,7 +444,7 @@ export function buildCronSchedule(form: CronFormState) {
   }
   const expr = form.cronExpr.trim();
   if (!expr) {
-    throw new Error("Cron expression required.");
+    throw new Error(t("cron.errors.cronExprRequiredShort"));
   }
   if (form.scheduleExact) {
     return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs: 0 };
@@ -454,7 +455,7 @@ export function buildCronSchedule(form: CronFormState) {
   }
   const staggerValue = toNumber(staggerAmount, 0);
   if (staggerValue <= 0) {
-    throw new Error("Invalid stagger amount.");
+    throw new Error(t("cron.errors.invalidStaggerAmount"));
   }
   const staggerMs = form.staggerUnit === "minutes" ? staggerValue * 60_000 : staggerValue * 1_000;
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
@@ -464,13 +465,13 @@ export function buildCronPayload(form: CronFormState) {
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {
-      throw new Error("System event text required.");
+      throw new Error(t("cron.errors.systemEventTextRequired"));
     }
     return { kind: "systemEvent" as const, text };
   }
   const message = form.payloadText.trim();
   if (!message) {
-    throw new Error("Agent message required.");
+    throw new Error(t("cron.errors.agentMessageRequiredShort"));
   }
   const payload: {
     kind: "agentTurn";
@@ -540,7 +541,7 @@ export async function addCronJob(state: CronState) {
       delivery,
     };
     if (!job.name) {
-      throw new Error("Name required.");
+      throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (state.cronEditingJobId) {
       await state.client.request("cron.update", {
