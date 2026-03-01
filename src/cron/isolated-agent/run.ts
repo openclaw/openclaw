@@ -161,10 +161,13 @@ export async function runCronIsolatedAgentTurn(params: {
     params.cfg.agents?.defaults,
     agentOverrideRest as Partial<AgentDefaultsConfig>,
   );
-  if (typeof overrideModel === "string") {
-    agentCfg.model = { ...agentCfg.model, primary: overrideModel };
-  } else if (overrideModel) {
-    agentCfg.model = { ...agentCfg.model, ...overrideModel };
+  if (typeof overrideModel === "string" || overrideModel) {
+    const base =
+      typeof agentCfg.model === "string" ? { primary: agentCfg.model } : (agentCfg.model ?? {});
+    agentCfg.model =
+      typeof overrideModel === "string"
+        ? { ...base, primary: overrideModel }
+        : { ...base, ...overrideModel };
   }
   const cfgWithAgentDefaults: BotConfig = {
     ...params.cfg,
