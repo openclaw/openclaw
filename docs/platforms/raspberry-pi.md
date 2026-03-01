@@ -211,7 +211,6 @@ Notes:
 - `/var/tmp` survives reboots better than `/tmp`.
 - `OPENCLAW_NO_RESPAWN=1` avoids extra startup cost from CLI self-respawn.
 - First run warms the cache; later runs benefit most.
-- Optional experimental path: `OPENCLAW_CLI_BUNDLED_ENTRY=1` uses `dist/entry.bundle.mjs` when available.
 
 ### systemd startup tuning (optional)
 
