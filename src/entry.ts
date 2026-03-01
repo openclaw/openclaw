@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { isRootVersionInvocation } from "./cli/argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -114,6 +115,24 @@ if (
     return true;
   }
 
+  function tryHandleRootVersionFastPath(argv: string[]): boolean {
+    if (!isRootVersionInvocation(argv)) {
+      return false;
+    }
+    import("./version.js")
+      .then(({ VERSION }) => {
+        console.log(VERSION);
+      })
+      .catch((error) => {
+        console.error(
+          "[openclaw] Failed to resolve version:",
+          error instanceof Error ? (error.stack ?? error.message) : error,
+        );
+        process.exitCode = 1;
+      });
+    return true;
+  }
+
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureExperimentalWarningSuppressed()) {
@@ -128,6 +147,10 @@ if (
       applyCliProfileEnv({ profile: parsed.profile });
       // Keep Commander and ad-hoc argv checks consistent.
       process.argv = parsed.argv;
+    }
+
+    if (tryHandleRootVersionFastPath(process.argv)) {
+      return;
     }
 
     import("./cli/run-main.js")
