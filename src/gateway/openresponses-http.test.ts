@@ -433,7 +433,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       agentCommand.mockClear();
-      agentCommand.mockImplementationOnce(async (opts: unknown) => {
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
         const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
         const onReasoningStream = (
           opts as { onReasoningStream?: (payload: { text?: string }) => void }
@@ -465,7 +465,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           },
         });
         return { payloads: [{ text: "hello" }] } as never;
-      });
+      }) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
