@@ -272,6 +272,7 @@ describe("models-config", () => {
           providers: {
             "minimax-portal": {
               apiKey: "MINIMAX_REAL_KEY",
+              baseUrl: "https://api.minimax.io/v1",
               api: "openai-completions",
               models: [
                 {

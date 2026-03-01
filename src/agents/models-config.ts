@@ -155,8 +155,7 @@ export async function ensureOpenClawModelsJson(
           | undefined;
         if (existing) {
           const preserved: Record<string, unknown> = {};
-          const existingApiKey =
-            typeof existing.apiKey === "string" ? existing.apiKey.trim() : "";
+          const existingApiKey = typeof existing.apiKey === "string" ? existing.apiKey.trim() : "";
           const keepExistingApiKey =
             existingApiKey.length > 0 &&
             !(key === "minimax-portal" && existingApiKey === "minimax-oauth");
