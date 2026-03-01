@@ -190,6 +190,46 @@ export async function createMattermostPost(
   });
 }
 
+export type MattermostPostList = {
+  order: string[];
+  posts: Record<string, MattermostPost>;
+};
+
+/**
+ * Fetch posts from a Mattermost channel using GET /channels/{channelId}/posts.
+ * Returns posts in reverse-chronological order (newest first) by default.
+ */
+export async function fetchMattermostChannelPosts(
+  client: MattermostClient,
+  channelId: string,
+  opts?: {
+    /** Max posts to return (default 60, max 200). */
+    limit?: number;
+    /** Fetch posts before this post ID. */
+    before?: string;
+    /** Fetch posts after this post ID. */
+    after?: string;
+  },
+): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
+  const params = new URLSearchParams();
+  const perPage = Math.min(opts?.limit ?? 60, 200);
+  params.set("per_page", String(perPage));
+  if (opts?.before) {
+    params.set("before", opts.before);
+  }
+  if (opts?.after) {
+    params.set("after", opts.after);
+  }
+  const data = await client.request<MattermostPostList>(
+    `/channels/${channelId}/posts?${params.toString()}`,
+  );
+  const posts = (data.order ?? []).map((id) => data.posts[id]).filter(Boolean);
+  return {
+    messages: posts,
+    hasMore: posts.length >= perPage,
+  };
+}
+
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {

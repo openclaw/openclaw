@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mattermostPlugin } from "./channel.js";
 import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
@@ -196,6 +196,152 @@ describe("mattermostPlugin", () => {
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
       expect(result?.details).toEqual({});
+    });
+
+    // --- read action tests ---
+
+    it("exposes read when mattermost is configured", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
+
+      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      expect(actions).toContain("read");
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "read" })).toBe(true);
+    });
+
+    it("hides read when actions.messages is false", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+            actions: { messages: false },
+          },
+        },
+      };
+
+      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      expect(actions).not.toContain("read");
+    });
+
+    it("respects per-account actions.messages in listActions", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { messages: false },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { messages: true },
+              },
+            },
+          },
+        },
+      };
+
+      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      expect(actions).toContain("read");
+    });
+
+    it("blocks read when messages are disabled in config", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { messages: true },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { messages: false },
+              },
+            },
+          },
+        },
+      };
+
+      await expect(
+        mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "read",
+          params: { channelId: "CH1" },
+          cfg,
+        } as any),
+      ).rejects.toThrow("Mattermost message reads are disabled in config");
+    });
+
+    it("throws when channelId is missing for read", async () => {
+      const cfg = createMattermostTestConfig();
+      const fetchMock = vi.fn();
+
+      await expect(
+        withMockedGlobalFetch(fetchMock as unknown as typeof fetch, async () => {
+          return await mattermostPlugin.actions?.handleAction?.({
+            channel: "mattermost",
+            action: "read",
+            params: {},
+            cfg,
+            accountId: "default",
+          } as any);
+        }),
+      ).rejects.toThrow("Mattermost read requires channelId or to");
+    });
+
+    it("handles read action and returns messages JSON", async () => {
+      const postsData = {
+        order: ["p1"],
+        posts: { p1: { id: "p1", user_id: "u1", message: "hi", create_at: 1000 } },
+      };
+      const fetchMock = vi.fn(async (url: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/posts")) {
+          return new Response(JSON.stringify(postsData), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (urlStr.includes("/users/u1")) {
+          return new Response(JSON.stringify({ id: "u1", username: "alice" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error(`Unexpected URL: ${urlStr}`);
+      });
+
+      const cfg = createMattermostTestConfig();
+      const result = await withMockedGlobalFetch(fetchMock as unknown as typeof fetch, async () => {
+        return await mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "read",
+          params: { channelId: "CH1" },
+          cfg,
+          accountId: "default",
+        } as any);
+      });
+
+      expect(result?.content).toHaveLength(1);
+      const first = result!.content[0] as { type: string; text: string };
+      const parsed = JSON.parse(first.text);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.messages).toHaveLength(1);
+      expect(parsed.messages[0]).toMatchObject({
+        id: "p1",
+        username: "alice",
+        message: "hi",
+      });
     });
   });
 
