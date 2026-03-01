@@ -1,5 +1,6 @@
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "vitest";
-import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+import { stripAnsi } from "../../terminal/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {

@@ -7,8 +7,9 @@ import {
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
+  visibleWidth,
 } from "@mariozechner/pi-tui";
-import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+import { stripAnsi } from "../../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
@@ -255,7 +256,13 @@ export class SearchableSelectList implements Component {
       lines.push(this.theme.scrollInfo(`  ${scrollInfo}`));
     }
 
-    return lines;
+    // Defensive: ensure no line exceeds the declared render width.
+    // The pi-tui framework crashes if a component returns lines wider than
+    // the width passed to render(). Guard against any width-calculation drift
+    // between ANSI-heavy content and the framework's own visibleWidth().
+    return lines.map((line) =>
+      visibleWidth(line) > width ? truncateToWidth(line, width, "") : line,
+    );
   }
 
   private renderItemLine(
