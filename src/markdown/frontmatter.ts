@@ -151,6 +151,22 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   for (const [key, value] of Object.entries(lineParsed)) {
     if (value.startsWith("{") || value.startsWith("[")) {
       merged[key] = value;
+      continue;
+    }
+    // When YAML misparses a value containing a colon (e.g. "Some text IMPORTANT: note")
+    // as a nested object, coerceFrontmatterValue stringifies it to JSON. The line parser
+    // recovers the correct single-line string in this case. Prefer it, but only when the
+    // line-parsed value is truly inline (no newlines) — multi-line indented YAML blocks
+    // are handled correctly by the YAML parser and should not be overridden.
+    const yamlValue = yamlParsed[key];
+    if (
+      value &&
+      !value.includes("\n") &&
+      yamlValue &&
+      yamlValue.startsWith("{") &&
+      !value.startsWith("{")
+    ) {
+      merged[key] = value;
     }
   }
   return merged;

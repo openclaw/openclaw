@@ -72,4 +72,17 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
   });
+
+  it("preserves description string containing a colon", () => {
+    // YAML misparses "Some description IMPORTANT: note" as a nested object.
+    // The line parser recovers the correct string; we should prefer it.
+    const content = `---
+name: test-skill
+description: Use anime style IMPORTANT: Must be kawaii
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("test-skill");
+    expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
+  });
 });
