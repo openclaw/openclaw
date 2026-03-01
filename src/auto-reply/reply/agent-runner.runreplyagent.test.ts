@@ -1355,6 +1355,50 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("reports rate-limit reset windows when provider includes reset-after duration", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-02-24T00:00:00.000Z"));
+    try {
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 2h17m9s.",
+        );
+      });
+
+      const { run } = createMinimalRun({});
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Rate limit hit"),
+      });
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Resets in ~2h17m9s"),
+      });
+      expect(res).toMatchObject({
+        text: expect.stringContaining("2026-02-24 02:17 UTC"),
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("reports missing reset time when provider returns generic 429 without metadata", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error(
+        `429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}`,
+      );
+    });
+
+    const { run } = createMinimalRun({});
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Rate limit hit (429)"),
+    });
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Provider did not return a reset time"),
+    });
+  });
+
   it("still replies even if session reset fails to persist", async () => {
     await withTempStateDir(async (stateDir) => {
       const saveSpy = vi

@@ -69,6 +69,117 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+type RateLimitInfo =
+  | { isRateLimit: false }
+  | {
+      isRateLimit: true;
+      resetAfterMs?: number;
+      resetAfterLabel?: string;
+    };
+
+function parseCompactDurationToMs(raw: string): number | undefined {
+  const text = raw.trim().toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  const re = /(\d+)\s*(ms|d|h|m|s)/g;
+  let match: RegExpExecArray | null;
+  let total = 0;
+  let matched = false;
+  while ((match = re.exec(text)) !== null) {
+    const value = Number.parseInt(match[1] ?? "0", 10);
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+    const unit = match[2];
+    matched = true;
+    if (unit === "d") {
+      total += value * 24 * 60 * 60 * 1000;
+    } else if (unit === "h") {
+      total += value * 60 * 60 * 1000;
+    } else if (unit === "m") {
+      total += value * 60 * 1000;
+    } else if (unit === "s") {
+      total += value * 1000;
+    } else if (unit === "ms") {
+      total += value;
+    }
+  }
+  return matched && total > 0 ? total : undefined;
+}
+
+function formatUtcMinute(tsMs: number): string {
+  return `${new Date(tsMs).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+function formatDurationCompact(ms: number): string {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+  if (seconds > 0 || parts.length === 0) {
+    parts.push(`${seconds}s`);
+  }
+  return parts.join("");
+}
+
+function extractRateLimitInfo(message: string): RateLimitInfo {
+  const lower = message.toLowerCase();
+  const isRateLimit =
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    /\b429\b/.test(lower) ||
+    lower.includes("quota");
+  if (!isRateLimit) {
+    return { isRateLimit: false };
+  }
+
+  const resetAfter =
+    message.match(/reset(?:s)?\s+(?:after|in)\s+([0-9a-zA-Z.\s]+)/i) ??
+    message.match(/quota will reset after\s+([0-9a-zA-Z.\s]+)/i) ??
+    message.match(/retry(?:\s+after)?\s+([0-9a-zA-Z.\s]+)/i) ??
+    message.match(/"retry_after"\s*:\s*([0-9.]+)/i);
+  const rawDuration = resetAfter?.[1]?.trim().replace(/[.,]+$/, "");
+  const resetAfterMs = rawDuration ? parseCompactDurationToMs(rawDuration) : undefined;
+  const resetAfterLabel = resetAfterMs
+    ? formatDurationCompact(resetAfterMs)
+    : rawDuration && rawDuration.length <= 32
+      ? rawDuration
+      : undefined;
+
+  return {
+    isRateLimit: true,
+    resetAfterMs,
+    resetAfterLabel,
+  };
+}
+
+function buildRateLimitReplyText(message: string): string {
+  const info = extractRateLimitInfo(message);
+  if (!info.isRateLimit) {
+    return "";
+  }
+  const resetAtText = info.resetAfterMs
+    ? formatUtcMinute(Date.now() + info.resetAfterMs)
+    : undefined;
+  if (resetAtText) {
+    const rel = info.resetAfterLabel ? `~${info.resetAfterLabel}` : "soon";
+    return `⚠️ Rate limit hit. Resets in ${rel} (at ${resetAtText}).\nLogs: openclaw logs --follow`;
+  }
+  return "⚠️ Rate limit hit (429). Provider did not return a reset time.\nLogs: openclaw logs --follow";
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -568,11 +679,13 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
+      const rateLimitText = buildRateLimitReplyText(safeMessage);
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : rateLimitText ||
+            `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
