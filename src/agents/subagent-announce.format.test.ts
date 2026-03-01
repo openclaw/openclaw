@@ -452,6 +452,27 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
+  it("strips trailing NO_REPLY token from cron completion delivery text", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-trailing-no-reply",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "telegram", to: "telegram:1234", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      announceType: "cron job",
+      expectsCompletionMessage: true,
+      roundOneReply: "Daily summary ready.\n\nNO_REPLY",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toContain("Daily summary ready.");
+    expect(call?.params?.message).not.toContain("NO_REPLY");
+  });
+
   it("retries completion direct send on transient channel-unavailable errors", async () => {
     sendSpy
       .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))

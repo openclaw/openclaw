@@ -72,7 +72,7 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
 }): string {
-  const findingsText = params.findings.trim();
+  const findingsText = stripTrailingSilentReplyLine(params.findings);
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
@@ -100,6 +100,25 @@ function buildCompletionDeliveryMessage(params: {
     return header;
   }
   return `${header}\n\n${findingsText}`;
+}
+
+function stripTrailingSilentReplyLine(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let end = lines.length - 1;
+  while (end >= 0 && !(lines[end] ?? "").trim()) {
+    end -= 1;
+  }
+  if (end < 0) {
+    return "";
+  }
+  if (((lines[end] ?? "").trim().toUpperCase() ?? "") !== SILENT_REPLY_TOKEN.toUpperCase()) {
+    return text.trim();
+  }
+  const stripped = lines.slice(0, end);
+  while (stripped.length > 0 && !(stripped.at(-1) ?? "").trim()) {
+    stripped.pop();
+  }
+  return stripped.join("\n").trim();
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -1214,7 +1233,7 @@ export async function runSubagentAnnounceFlow(params: {
     const taskLabel = params.label || params.task || "task";
     const subagentName = resolveAgentIdFromSessionKey(params.childSessionKey);
     const announceSessionId = childSessionId || "unknown";
-    const findings = reply || "(no output)";
+    const findings = stripTrailingSilentReplyLine(reply || "") || "(no output)";
     let completionMessage = "";
     let triggerMessage = "";
 
