@@ -10,6 +10,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import type { ImageContent } from "../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -189,6 +190,7 @@ export async function tryDispatchAcpReply(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   sessionKey?: string;
+  images?: ImageContent[];
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;

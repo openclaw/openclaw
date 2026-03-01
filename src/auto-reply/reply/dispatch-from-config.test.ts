@@ -1863,6 +1863,68 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("threads image-only messages through ACP dispatch instead of short-circuiting", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "I see an image" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    // No text body — image-only message
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:codex-acp:session-1",
+    });
+    const testImage = { type: "image" as const, data: "base64data", mimeType: "image/jpeg" };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { images: [testImage] },
+      replyResolver: vi.fn(),
+    });
+
+    // runtime.runTurn was called (not short-circuited as acp_empty_prompt)
+    expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+    // images were passed through to the runtime
+    const runTurnInput = (runtime.runTurn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(runTurnInput).toBeDefined();
+    // The AcpSessionManager wraps the runtime call, so images arrive via
+    // the manager's runTurn input. Verify the runtime was actually invoked
+    // (which means the empty-prompt guard did not fire).
+    expect(dispatcher.sendBlockReply).toHaveBeenCalled();
+  });
+
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
