@@ -1782,7 +1782,7 @@ describe("broadcast dispatch", () => {
     );
   });
 
-  it("dispatches to all broadcast agents with no-op when bot is NOT mentioned", async () => {
+  it("skips broadcast dispatch when bot is NOT mentioned (requireMention=true)", async () => {
     const cfg: ClawdbotConfig = {
       broadcast: { "oc-broadcast-group": ["susan", "main"] },
       agents: { list: [{ id: "main" }, { id: "susan" }] },
@@ -1814,10 +1814,10 @@ describe("broadcast dispatch", () => {
       runtime: createRuntimeEnv(),
     });
 
-    // Both agents should get dispatched
-    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
-
-    // NO real Feishu reply dispatcher should be created (all agents observe silently)
+    // No dispatch: requireMention=true and bot not mentioned → returns early.
+    // The mentioned bot's handler (on another account or same account with
+    // matching botOpenId) will handle broadcast dispatch for all agents.
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(mockCreateFeishuReplyDispatcher).not.toHaveBeenCalled();
   });
 
@@ -1859,6 +1859,56 @@ describe("broadcast dispatch", () => {
         SessionKey: "agent:main:feishu:group:oc-broadcast-group",
       }),
     );
+  });
+
+  it("cross-account broadcast dedup: second account skips dispatch", async () => {
+    const cfg: ClawdbotConfig = {
+      broadcast: { "oc-broadcast-group": ["susan", "main"] },
+      agents: { list: [{ id: "main" }, { id: "susan" }] },
+      channels: {
+        feishu: {
+          groups: {
+            "oc-broadcast-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: "msg-multi-account-dedup",
+        chat_id: "oc-broadcast-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    // First account handles broadcast normally
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+      accountId: "account-A",
+    });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+
+    mockDispatchReplyFromConfig.mockClear();
+    mockFinalizeInboundContext.mockClear();
+
+    // Second account: same message ID, different account.
+    // Per-account dedup passes (different namespace), but cross-account
+    // broadcast dedup blocks dispatch.
+    await handleFeishuMessage({
+      cfg,
+      event,
+      runtime: createRuntimeEnv(),
+      accountId: "account-B",
+    });
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
   it("skips unknown agents not in agents.list", async () => {

@@ -997,25 +997,23 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
       );
-      if (!broadcastAgents) {
-        // Non-broadcast group: record to pending history and return
-        if (chatHistories && groupHistoryKey) {
-          recordPendingHistoryEntryIfEnabled({
-            historyMap: chatHistories,
-            historyKey: groupHistoryKey,
-            limit: historyLimit,
-            entry: {
-              sender: ctx.senderOpenId,
-              body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
-              timestamp: Date.now(),
-              messageId: ctx.messageId,
-            },
-          });
-        }
-        return;
+      // Record to pending history and return. For broadcast groups with requireMention,
+      // the mentioned bot's handler will dispatch to all agents; non-mentioned handlers
+      // skip dispatch entirely to avoid cross-account duplication in multi-account setups.
+      if (chatHistories && groupHistoryKey) {
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: chatHistories,
+          historyKey: groupHistoryKey,
+          limit: historyLimit,
+          entry: {
+            sender: ctx.senderOpenId,
+            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+            timestamp: Date.now(),
+            messageId: ctx.messageId,
+          },
+        });
       }
-      // Broadcast group: skip history recording (message dispatched directly to all agents)
-      // to avoid duplicating the message in the agent prompt via buildPendingHistoryContextFromMap.
+      return;
     }
   } else {
   }
@@ -1286,6 +1284,18 @@ export async function handleFeishuMessage(params: {
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
 
     if (broadcastAgents) {
+      // Cross-account dedup: in multi-account setups, Feishu delivers the same
+      // event to every bot account in the group. Only one account should handle
+      // broadcast dispatch to avoid duplicate agent sessions and race conditions.
+      // Uses a shared "broadcast" namespace (not per-account) so the first handler
+      // to reach this point claims the message; subsequent accounts skip.
+      if (!(await tryRecordMessagePersistent(ctx.messageId, "broadcast", log))) {
+        log(
+          `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
+        );
+        return;
+      }
+
       // --- Broadcast dispatch: send message to all configured agents ---
       const strategy =
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
