@@ -26,6 +26,8 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronJobsLimit: 50,
     cronJobsQuery: "",
     cronJobsEnabledFilter: "all",
+    cronJobsScheduleKindFilter: "all",
+    cronJobsLastStatusFilter: "all",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
     cronStatus: null,
