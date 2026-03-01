@@ -114,11 +114,18 @@ function channelKind(channelType?: string | null): ChatType {
   if (!channelType) {
     return "channel";
   }
+  // Mattermost channel types: D=direct, G=group DM, O=public channel, P=private channel.
   const normalized = channelType.trim().toUpperCase();
   if (normalized === "D") {
     return "direct";
   }
   if (normalized === "G") {
+    return "group";
+  }
+  if (normalized === "P") {
+    // Private channels are invitation-restricted spaces; route as "group" so
+    // groupPolicy / groupAllowFrom can gate access separately from open public
+    // channels (type "O"), and the From prefix becomes mattermost:group:<id>.
     return "group";
   }
   return "channel";
