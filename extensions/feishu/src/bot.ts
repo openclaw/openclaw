@@ -476,6 +476,7 @@ function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string, botNam
 function normalizeMentions(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
+  botStripId?: string,
 ): string {
   if (!mentions || mentions.length === 0) return text;
 
@@ -485,9 +486,12 @@ function normalizeMentions(
 
   for (const mention of mentions) {
     const mentionId = mention.id.open_id;
-    const replacement = mentionId
-      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-      : `@${mention.name}`;
+    const replacement =
+      botStripId && mentionId === botStripId
+        ? ""
+        : mentionId
+          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+          : `@${mention.name}`;
 
     result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
   }
@@ -765,7 +769,14 @@ export function parseFeishuMessageEvent(
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId, botName);
   const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
-  const content = normalizeMentions(rawContent, event.message.mentions);
+  // In p2p, the bot mention is a pure addressing prefix with no semantic value;
+  // strip it so slash commands like @Bot /help still have a leading /.
+  // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
+  const content = normalizeMentions(
+    rawContent,
+    event.message.mentions,
+    event.message.chat_type === "p2p" ? botOpenId : undefined,
+  );
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";

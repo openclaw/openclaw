@@ -4,13 +4,14 @@ import { parseFeishuMessageEvent } from "./bot.js";
 function makeEvent(
   text: string,
   mentions?: Array<{ key: string; name: string; id: { open_id?: string; user_id?: string } }>,
+  chatType: "p2p" | "group" = "p2p",
 ) {
   return {
     sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
     message: {
       message_id: "msg_1",
       chat_id: "oc_chat1",
-      chat_type: "p2p",
+      chat_type: chatType,
       message_type: "text",
       content: JSON.stringify({ text }),
       mentions,
@@ -26,14 +27,37 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello world");
   });
 
-  it("replaces mention key with <at> tag using open_id", () => {
+  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 hello", [
         { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
       ]) as any,
       BOT_OPEN_ID,
     );
+    expect(ctx.content).toBe("hello");
+  });
+
+  it("normalizes bot mention to <at> tag in group (semantic content)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 hello",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ) as any,
+      BOT_OPEN_ID,
+    );
     expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
+  });
+
+  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent("@_bot_1 @_user_alice hello", [
+        { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
+        { key: "@_user_alice", name: "Alice", id: { open_id: "ou_alice" } },
+      ]) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
   });
 
   it("falls back to @name when open_id is absent", () => {
