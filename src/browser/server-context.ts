@@ -143,7 +143,9 @@ function createProfileContext(
       return;
     }
 
-    const pageTabs = (await listTabs()).filter((tab) => (tab.type ?? "page") === "page");
+    const pageTabs = await listTabs()
+      .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page"))
+      .catch(() => [] as BrowserTab[]);
     if (pageTabs.length <= MAX_MANAGED_BROWSER_PAGE_TABS) {
       return;
     }
