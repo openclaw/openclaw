@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -393,6 +397,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     return {
       id,
       name: meta?.name,
+      model: resolveAgentEffectiveModelPrimary(cfg, id) ?? undefined,
       identity: meta?.identity,
     };
   });
