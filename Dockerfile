@@ -46,6 +46,18 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
 
 USER node
 COPY --chown=node:node . .
+
+# Harden file permissions: ensure extensions, .agent, and .agents directories
+# are not world-writable. Some build environments or volume mounts may produce
+# 777 permissions which causes OpenClaw to block plugins at runtime.
+# See: https://github.com/openclaw/openclaw/issues/30139
+USER root
+RUN find /app/extensions /app/.agent /app/.agents -type d -exec chmod 755 {} + 2>/dev/null; \
+    find /app/extensions /app/.agent /app/.agents -type f -exec chmod 644 {} + 2>/dev/null; \
+    chown -R node:node /app/extensions /app/.agent /app/.agents 2>/dev/null; \
+    true
+USER node
+
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
