@@ -85,6 +85,23 @@ describe("web session", () => {
     expect(saveCreds).toHaveBeenCalled();
   });
 
+  it("passes proxy agent when OPENCLAW_WHATSAPP_PROXY is set", async () => {
+    const prev = process.env.OPENCLAW_WHATSAPP_PROXY;
+    process.env.OPENCLAW_WHATSAPP_PROXY = "http://127.0.0.1:7899";
+    try {
+      await createWaSocket(false, false);
+      const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+      const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
+      expect(passed?.agent).toBeTruthy();
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_WHATSAPP_PROXY;
+      } else {
+        process.env.OPENCLAW_WHATSAPP_PROXY = prev;
+      }
+    }
+  });
+
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<

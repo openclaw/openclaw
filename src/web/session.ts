@@ -7,6 +7,7 @@ import {
   makeWASocket,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import qrcode from "qrcode-terminal";
 import { formatCliCommand } from "../cli/command-format.js";
 import { danger, success } from "../globals.js";
@@ -105,12 +106,18 @@ export async function createWaSocket(
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
+  const proxyUrl =
+    process.env.OPENCLAW_WHATSAPP_PROXY ??
+    process.env.HTTPS_PROXY ??
+    process.env.HTTP_PROXY ??
+    process.env.ALL_PROXY;
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
     version,
+    ...(proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}),
     logger,
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
