@@ -188,6 +188,26 @@ function parseMessageContent(content: string, messageType: string): string {
       const { textContent } = parsePostContent(content);
       return textContent;
     }
+    if (messageType === "share_chat") {
+      // Preserve available summary text for merged/forwarded chat messages.
+      if (parsed && typeof parsed === "object") {
+        const share = parsed as {
+          body?: unknown;
+          summary?: unknown;
+          share_chat_id?: unknown;
+        };
+        if (typeof share.body === "string" && share.body.trim().length > 0) {
+          return share.body.trim();
+        }
+        if (typeof share.summary === "string" && share.summary.trim().length > 0) {
+          return share.summary.trim();
+        }
+        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim().length > 0) {
+          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        }
+      }
+      return "[Forwarded message]";
+    }
     return content;
   } catch {
     return content;
@@ -292,6 +312,29 @@ function parsePostContent(content: string): {
             const imageKey = normalizeFeishuExternalKey(element.image_key);
             if (imageKey) {
               imageKeys.push(imageKey);
+            }
+          } else if (element.tag === "code") {
+            // Inline code
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\`${code}\``;
+            }
+          } else if (element.tag === "code_block" || element.tag === "pre") {
+            // Multiline code block
+            const lang = typeof element.language === "string" ? element.language : "";
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
             }
           }
         }
