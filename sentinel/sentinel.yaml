@@ -1,0 +1,77 @@
+timezone: Asia/Taipei
+tasks:
+  nightly_ops: { schedule: "02:00", enabled: true }
+  morning_brief: { schedule: "07:00", enabled: true, ai_model: "claude-haiku-4-5-20251001" }
+  anomaly_scan: { schedule: "every 4h", enabled: true, ai_threshold: 3 }
+  weekly_review: { schedule: "sunday 10:00", enabled: true, ai_model: "claude-sonnet-4-5-20250514" }
+notifications:
+  telegram_bridge: "http://localhost:18790"
+  cruz_chat_id: "448345880"
+  quiet_hours: ["00:00", "06:00"]
+claude:
+  api_key_env: "ANTHROPIC_API_KEY"
+  max_daily_calls: 20
+paths:
+  workspace: "/Users/sulaxd/clawd/workspace"
+prune:
+  memory_days: 30
+  cross_digest_days: 14
+  logs_days: 7
+
+# ── Sentinel v2: desired state declaration ──
+desired_state:
+  services:
+    openclaw-gateway:
+      label: ai.openclaw.gateway
+      port: 18789
+      health: { type: http, url: "http://localhost:18789/health", timeout: 5 }
+      repair: { risk: low, method: kickstart, backoff: 15, cap: 300, max_retries: 10 }
+
+    bridge-dufu:
+      label: com.clawd.telegram-bridge
+      port: 18790
+      health: { type: http, url: "http://localhost:18790/health", timeout: 5 }
+      repair: { risk: low, method: kickstart, backoff: 15, cap: 300, max_retries: 10 }
+
+    bridge-andrew:
+      label: com.clawd.telegram-bridge-andrew
+      port: 18795
+      health: { type: http, url: "http://localhost:18795/health", timeout: 5 }
+      repair: { risk: low, method: kickstart, backoff: 15, cap: 300, max_retries: 10 }
+
+    cloudflare-tunnel:
+      label: com.cloudflare.clawd-line
+      health: { type: process }
+      repair: { risk: low, method: kickstart, backoff: 30, cap: 300, max_retries: 5 }
+
+    line-bot-b:
+      label: ai.openclaw.line-b
+      health: { type: process }
+      repair: { risk: med, method: kickstart }
+
+  configs:
+    openclaw-main:
+      path: "~/.openclaw/openclaw.json"
+      validators: [json_parse, { key_exists: gateway }, { key_exists: agents }]
+      on_invalid: { risk: med, action: rollback }
+
+    openclaw-line-b:
+      path: "~/.openclaw-line-b/openclaw.json"
+      validators: [json_parse, { key_exists: gateway }]
+      on_invalid: { risk: med, action: rollback }
+
+    telegram-bridge:
+      path: "~/clawd/skills/telegram-userbot/config.json"
+      validators: [json_parse, { key_exists: telegram }]
+      on_invalid: { risk: med, action: rollback }
+
+    cloudflared:
+      path: "~/.cloudflared/config.yml"
+      validators: [yaml_parse, { key_exists: tunnel }]
+      on_invalid: { risk: high, action: notify }
+
+  system:
+    disk_warn_pct: 80
+    disk_crit_pct: 90
+    swap_crit_mb: 1000
+    cpu_hog_pct: 95

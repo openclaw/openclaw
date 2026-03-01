@@ -1,0 +1,78 @@
+{
+  "bridge": {
+    "dufu": "http://localhost:18790",
+    "andrew": "http://localhost:18795"
+  },
+  "cruz_chat_id": "448345880",
+  "scan_limit": 15,
+  "sleep_seconds": 300,
+  "groups": {
+    "-1003573583957": {
+      "name": "66群",
+      "bridge": "dufu",
+      "priority": "high"
+    },
+    "-5140508587": {
+      "name": "BG666DB",
+      "bridge": "dufu",
+      "priority": "high"
+    },
+    "-4745247300": {
+      "name": "LoLoTang",
+      "bridge": "dufu",
+      "priority": "medium"
+    },
+    "-1003798513755": {
+      "name": "QQ群",
+      "bridge": "dufu",
+      "priority": "medium"
+    },
+    "-5160419850": {
+      "name": "Crypto群",
+      "bridge": "dufu",
+      "priority": "low"
+    },
+    "-5191751304": {
+      "name": "Mimi",
+      "bridge": "dufu",
+      "priority": "medium"
+    },
+    "-1003853623705": {
+      "name": "Andrew日報群",
+      "bridge": "andrew",
+      "priority": "low"
+    },
+    "-5171799801": {
+      "name": "ThinkerNews",
+      "bridge": "dufu",
+      "priority": "low"
+    }
+  },
+  "detection": {
+    "thought_leak_patterns": [
+      "讓我檢查",
+      "讓我搜索",
+      "讓我搜尋",
+      "讓我讀取",
+      "現在讓我",
+      "讓我總結",
+      "讓我分析",
+      "讓我查看",
+      "讓我來",
+      "Let me check",
+      "Let me search",
+      "Let me read",
+      "Now let me"
+    ],
+    "self_eval_patterns": ["學習點", "展現的能力", "展現了", "驗證了", "展示了"],
+    "menu_patterns": ["方案A", "方案B", "方案 A", "方案 B", "Option A", "Option B"],
+    "consecutive_msg_window_sec": 120,
+    "consecutive_msg_threshold": 3,
+    "unresponsive_timeout_min": 5
+  },
+  "severity": {
+    "P0": ["thought_leak", "unresponsive", "gateway_down", "repeated_message"],
+    "P1": ["consecutive_messages", "self_evaluation", "menu_listing"],
+    "P2": ["emoji_headers", "workspace_drift"]
+  }
+}
