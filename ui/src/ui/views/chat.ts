@@ -162,32 +162,19 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function handlePaste(e: ClipboardEvent, props: ChatProps) {
-  const items = e.clipboardData?.items;
-  if (!items || !props.onAttachmentsChange) {
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+function addImageFiles(files: File[], props: ChatProps) {
+  if (!props.onAttachmentsChange) {
     return;
   }
-
-  const imageItems: DataTransferItem[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (item.type.startsWith("image/")) {
-      imageItems.push(item);
-    }
-  }
-
-  if (imageItems.length === 0) {
-    return;
-  }
-
-  e.preventDefault();
-
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) {
       continue;
     }
-
+    if (file.size > MAX_IMAGE_SIZE) {
+      continue;
+    }
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
@@ -201,6 +188,52 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     });
     reader.readAsDataURL(file);
   }
+}
+
+function handlePaste(e: ClipboardEvent, props: ChatProps) {
+  const items = e.clipboardData?.items;
+  if (!items || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const imageFiles: File[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        imageFiles.push(file);
+      }
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  e.preventDefault();
+  addImageFiles(imageFiles, props);
+}
+
+function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  e.stopPropagation();
+  const files = e.dataTransfer?.files;
+  if (!files || !props.onAttachmentsChange) {
+    return;
+  }
+  const imageFiles: File[] = [];
+  for (let i = 0; i < files.length; i++) {
+    if (files[i].type.startsWith("image/")) {
+      imageFiles.push(files[i]);
+    }
+  }
+  addImageFiles(imageFiles, props);
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
 }
 
 function renderAttachmentPreview(props: ChatProps) {
@@ -420,9 +453,43 @@ export function renderChat(props: ChatProps) {
           : nothing
       }
 
-      <div class="chat-compose">
+      <div class="chat-compose"
+        @dragover=${handleDragOver}
+        @drop=${(e: DragEvent) => handleDrop(e, props)}
+      >
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style="display:none"
+            @change=${(e: Event) => {
+              const input = e.target as HTMLInputElement;
+              const files = input.files;
+              if (files) {
+                const arr: File[] = [];
+                for (let i = 0; i < files.length; i++) {
+                  arr.push(files[i]);
+                }
+                addImageFiles(arr, props);
+              }
+              input.value = "";
+            }}
+          />
+          <button
+            class="btn btn--icon chat-compose__attach"
+            type="button"
+            ?disabled=${!props.connected}
+            title="Attach image"
+            @click=${(e: Event) => {
+              const btn = e.currentTarget as HTMLElement;
+              const input = btn.previousElementSibling as HTMLInputElement;
+              input?.click();
+            }}
+          >
+            ${icons.paperclip}
+          </button>
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
