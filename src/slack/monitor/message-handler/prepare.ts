@@ -204,12 +204,9 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
-  // Check if bot already has an active session for this thread (used for followMentionedThreads).
-  // We check both the thread-specific session key AND the base (channel) session key because
-  // when a user @mentions the bot in a top-level channel message, the session is recorded under
-  // the base key. The bot replies in a thread, but the thread-specific key is never created.
-  // On the follow-up message in that thread, we need to find the base session to know the bot
-  // was engaged.
+  // Check if bot already has an active session for this specific thread
+  // (used for followMentionedThreads). Base channel sessions do not imply
+  // bot participation in every thread in that channel.
   const threadFollowImplicit = Boolean(
     ctx.threadFollowMentionedThreads &&
     !isDirectMessage &&
@@ -219,10 +216,7 @@ export async function prepareSlackMessage(params: {
       const storePath = resolveStorePath(ctx.cfg.session?.store, {
         agentId: route.agentId,
       });
-      return (
-        readSessionUpdatedAt({ storePath, sessionKey }) != null ||
-        readSessionUpdatedAt({ storePath, sessionKey: baseSessionKey }) != null
-      );
+      return readSessionUpdatedAt({ storePath, sessionKey }) != null;
     })(),
   );
   const implicitMention = Boolean(

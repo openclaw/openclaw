@@ -44,6 +44,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     defaultRequireMention?: boolean;
     replyToMode?: "off" | "all";
     channelsConfig?: Record<string, { systemPrompt: string }>;
+    threadFollowMentionedThreads?: boolean;
   }) {
     return createSlackMonitorContext({
       cfg: params.cfg,
@@ -82,7 +83,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ackReactionScope: "group-mentions",
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
-      threadFollowMentionedThreads: false,
+      threadFollowMentionedThreads: params.threadFollowMentionedThreads ?? false,
     });
   }
 
@@ -568,6 +569,47 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not follow unrelated thread replies when only a base channel session exists", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [route.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      defaultRequireMention: true,
+      replyToMode: "all",
+      threadFollowMentionedThreads: true,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount(),
+      createThreadReplyMessage({
+        text: "unrelated thread reply without mention",
+        ts: "301.000",
+        thread_ts: "300.000",
+        parent_user_id: "U2",
+      }),
+    );
+
+    expect(prepared).toBeNull();
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
