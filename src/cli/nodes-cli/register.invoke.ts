@@ -385,14 +385,15 @@ export function registerNodesInvokeCommands(nodes: Command) {
             throw new Error("command required");
           }
 
-          // When positional args are provided without --raw, join them into a
-          // raw shell command so the node wraps execution in a login shell
-          // (sh -lc / cmd.exe /c). This preserves the pre-2026.2.21 behavior
-          // where output was returned by default without requiring --raw.
-          const raw =
-            explicitRaw || (Array.isArray(command) && command.length > 0)
-              ? explicitRaw || command.join(" ")
-              : "";
+          // Do NOT auto-convert positional argv to a raw shell string.
+          // Joining with command.join(" ") loses argument boundaries (spaces,
+          // shell metacharacters, empty args are re-tokenized by the shell).
+          // More critically, shell-wrapper invocations (sh -lc / cmd.exe /c)
+          // are explicitly blocked in allowlist mode (shellWrapperInvocation
+          // forces allowlistSatisfied=false in exec-policy.ts), which breaks
+          // unattended ask=off runs. Pass argv directly; callers that need a
+          // login shell should use --raw explicitly.
+          const raw = explicitRaw;
 
           const nodeQuery = String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
           if (!nodeQuery) {
