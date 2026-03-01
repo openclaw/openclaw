@@ -881,6 +881,15 @@ export function buildNvidiaProvider(): ProviderConfig {
         contextWindow: 8192,
         maxTokens: 2048,
       },
+      {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5 (via NVIDIA)",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: MOONSHOT_DEFAULT_COST,
+        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
     ],
   };
 }
