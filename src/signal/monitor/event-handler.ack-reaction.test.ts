@@ -134,6 +134,25 @@ describe("Signal ACK reactions", () => {
     expect(sendReactionSignal).not.toHaveBeenCalled();
   });
 
+  it("does NOT send ack for group when scope=group-mentions and not mentioned", async () => {
+    const deps = makeDeps({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+    });
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      makeEvent({
+        dataMessage: {
+          message: "hello group no mention",
+          timestamp: 1700000000000,
+          groupInfo: { groupId: "grp123", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    // group-mentions requires a mention pattern match — no mention patterns configured so no ack
+    expect(sendReactionSignal).not.toHaveBeenCalled();
+  });
+
   it("does NOT send ack when reactionLevel=minimal", async () => {
     const deps = makeDeps({
       accountOverrides: { reactionLevel: "minimal" },
