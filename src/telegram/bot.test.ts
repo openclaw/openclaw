@@ -34,7 +34,11 @@ function mockTelegramDnsResolution() {
     async (hostname, params = {}) =>
       await resolvePinnedHostnameWithPolicy(hostname, {
         ...params,
-        lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+        lookupFn: async (hostname, family) => {
+          void hostname;
+          void family;
+          return [{ address: "93.184.216.34", family: 4 }];
+        },
       }),
   );
 }
