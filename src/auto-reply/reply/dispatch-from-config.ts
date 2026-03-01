@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveIdentityName } from "../../agents/identity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -15,12 +16,16 @@ import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ModelSelectedContext, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import {
+  applyModelSelectionToResponsePrefixContext,
+  createResponsePrefixContext,
+} from "./response-prefix-template.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -259,6 +264,28 @@ export async function dispatchReplyFromConfig(params: {
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
+  // When routing to a different channel, create a local ResponsePrefixContext so that
+  // {model} template variables are resolved using the actual model that ran (including
+  // after fallback), not the session's initial/configured model.
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: ctx.SessionKey,
+    config: cfg,
+  });
+  const routingPrefixContext = shouldRouteToOriginating
+    ? createResponsePrefixContext(resolveIdentityName(cfg, sessionAgentId))
+    : undefined;
+  // Merge the caller-supplied onModelSelected with our routing-context updater so both
+  // get notified when the actual model is selected (including after fallback).
+  const mergedOnModelSelected =
+    routingPrefixContext || params.replyOptions?.onModelSelected
+      ? (selection: ModelSelectedContext) => {
+          if (routingPrefixContext) {
+            applyModelSelectionToResponsePrefixContext(routingPrefixContext, selection);
+          }
+          params.replyOptions?.onModelSelected?.(selection);
+        }
+      : undefined;
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -286,6 +313,7 @@ export async function dispatchReplyFromConfig(params: {
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
       cfg,
+      responsePrefixContext: routingPrefixContext,
       abortSignal,
       mirror,
     });
@@ -313,6 +341,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          responsePrefixContext: routingPrefixContext,
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -408,6 +437,10 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        // Use merged onModelSelected to update routing prefix context alongside any
+        // caller-supplied handler (ensures {model} in responsePrefix is always resolved
+        // with the actual model used, including after fallback or /model switch).
+        ...(mergedOnModelSelected ? { onModelSelected: mergedOnModelSelected } : {}),
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -496,6 +529,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          responsePrefixContext: routingPrefixContext,
         });
         if (!result.ok) {
           logVerbose(
@@ -546,6 +580,7 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              responsePrefixContext: routingPrefixContext,
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {

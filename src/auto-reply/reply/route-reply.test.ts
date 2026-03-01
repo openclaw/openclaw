@@ -12,6 +12,10 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  applyModelSelectionToResponsePrefixContext,
+  createResponsePrefixContext,
+} from "./response-prefix-template.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
@@ -411,6 +415,125 @@ describe("routeReply", () => {
         mirror: undefined,
       }),
     );
+  });
+
+  describe("{model} template resolution via responsePrefixContext", () => {
+    it("resolves {model} in responsePrefix when responsePrefixContext is supplied", async () => {
+      mocks.sendMessageSlack.mockClear();
+      const cfg = {
+        messages: { responsePrefix: "[{model}]" },
+      } as unknown as OpenClawConfig;
+      const ctx = createResponsePrefixContext();
+      applyModelSelectionToResponsePrefixContext(ctx, {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      await routeReply({
+        payload: { text: "hello" },
+        channel: "slack",
+        to: "channel:C123",
+        cfg,
+        responsePrefixContext: ctx,
+      });
+      expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+        "channel:C123",
+        "[claude-opus-4-6] hello",
+        expect.any(Object),
+      );
+    });
+
+    it("leaves {model} literal when no responsePrefixContext is provided", async () => {
+      mocks.sendMessageSlack.mockClear();
+      const cfg = {
+        messages: { responsePrefix: "[{model}]" },
+      } as unknown as OpenClawConfig;
+      await routeReply({
+        payload: { text: "hello" },
+        channel: "slack",
+        to: "channel:C123",
+        cfg,
+        // No responsePrefixContext — {model} is unresolved
+      });
+      expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+        "channel:C123",
+        "[{model}] hello",
+        expect.any(Object),
+      );
+    });
+
+    it("uses the new model after /model switch (each message gets its own context)", async () => {
+      mocks.sendMessageSlack.mockClear();
+      const cfg = {
+        messages: { responsePrefix: "[{model}]" },
+      } as unknown as OpenClawConfig;
+
+      // First message: kimi-k2.5
+      const ctx1 = createResponsePrefixContext();
+      applyModelSelectionToResponsePrefixContext(ctx1, {
+        provider: "moonshot",
+        model: "kimi-k2.5",
+      });
+      await routeReply({
+        payload: { text: "first" },
+        channel: "slack",
+        to: "channel:C123",
+        cfg,
+        responsePrefixContext: ctx1,
+      });
+
+      // After /model switch: claude-opus-4-6 (fresh context per message)
+      const ctx2 = createResponsePrefixContext();
+      applyModelSelectionToResponsePrefixContext(ctx2, {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      await routeReply({
+        payload: { text: "second" },
+        channel: "slack",
+        to: "channel:C123",
+        cfg,
+        responsePrefixContext: ctx2,
+      });
+
+      expect(mocks.sendMessageSlack).toHaveBeenNthCalledWith(
+        1,
+        "channel:C123",
+        "[kimi-k2.5] first",
+        expect.any(Object),
+      );
+      expect(mocks.sendMessageSlack).toHaveBeenNthCalledWith(
+        2,
+        "channel:C123",
+        "[claude-opus-4-6] second",
+        expect.any(Object),
+      );
+    });
+
+    it("resolves fallback model — not the originally intended model", async () => {
+      mocks.sendMessageSlack.mockClear();
+      const cfg = {
+        messages: { responsePrefix: "[{model}]" },
+      } as unknown as OpenClawConfig;
+
+      // Simulates: primary model failed, fallback ran with claude-opus-4-6
+      const ctx = createResponsePrefixContext();
+      applyModelSelectionToResponsePrefixContext(ctx, {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      await routeReply({
+        payload: { text: "fallback response" },
+        channel: "slack",
+        to: "channel:C123",
+        cfg,
+        responsePrefixContext: ctx,
+      });
+      expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+        "channel:C123",
+        "[claude-opus-4-6] fallback response",
+        expect.any(Object),
+      );
+    });
   });
 });
 

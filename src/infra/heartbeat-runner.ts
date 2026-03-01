@@ -17,6 +17,11 @@ import {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import {
+  applyModelSelectionToResponsePrefixContext,
+  createResponsePrefixContext,
+  resolveResponsePrefixTemplate,
+} from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -696,7 +701,8 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "alerts-disabled" };
   }
 
-  const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
+  // heartbeatOkText is updated after model selection so {model} resolves to the actual model used.
+  let heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
   const outboundSession = buildOutboundSessionContext({
     cfg,
     agentId,
@@ -743,10 +749,35 @@ export async function runHeartbeatOnce(opts: {
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    // Capture the actual model used (may differ from configured model after fallback).
+    // This allows {model} template variables in responsePrefix to resolve correctly.
+    const prefixContext = createResponsePrefixContext(undefined);
     const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
-      : { isHeartbeat: true, suppressToolErrorWarnings };
+      ? {
+          isHeartbeat: true,
+          heartbeatModelOverride,
+          suppressToolErrorWarnings,
+          onModelSelected: (selection: { provider: string; model: string; thinkLevel?: string }) =>
+            applyModelSelectionToResponsePrefixContext(prefixContext, selection),
+        }
+      : {
+          isHeartbeat: true,
+          suppressToolErrorWarnings,
+          onModelSelected: (selection: { provider: string; model: string; thinkLevel?: string }) =>
+            applyModelSelectionToResponsePrefixContext(prefixContext, selection),
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    // Resolve template variables in responsePrefix using the actual model that ran.
+    const resolvedResponsePrefix =
+      responsePrefix && prefixContext.model
+        ? resolveResponsePrefixTemplate(responsePrefix, prefixContext)
+        : responsePrefix;
+    // Update heartbeatOkText to use the resolved prefix so {model} is properly expanded.
+    if (resolvedResponsePrefix !== responsePrefix) {
+      heartbeatOkText = resolvedResponsePrefix
+        ? `${resolvedResponsePrefix} ${HEARTBEAT_TOKEN}`
+        : HEARTBEAT_TOKEN;
+    }
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -778,7 +809,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
+    const normalized = normalizeHeartbeatReply(replyPayload, resolvedResponsePrefix, ackMaxChars);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,

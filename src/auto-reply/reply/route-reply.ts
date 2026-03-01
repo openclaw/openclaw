@@ -17,6 +17,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -33,6 +34,8 @@ export type RouteReplyParams = {
   threadId?: string | number;
   /** Config for provider-specific settings. */
   cfg: OpenClawConfig;
+  /** Optional response prefix template context for {model}/{provider} resolution. */
+  responsePrefixContext?: ResponsePrefixContext;
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
@@ -81,6 +84,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    responsePrefixContext: params.responsePrefixContext,
   });
   if (!normalized) {
     return { ok: true };

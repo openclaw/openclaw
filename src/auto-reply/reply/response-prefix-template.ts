@@ -18,6 +18,20 @@ export type ResponsePrefixContext = {
   identityName?: string;
 };
 
+export type ModelSelectionInfo = {
+  provider: string;
+  model: string;
+  thinkLevel?: string;
+};
+
+/**
+ * Create a fresh ResponsePrefixContext with optional identity name.
+ * Model/provider fields are populated later via applyModelSelectionToResponsePrefixContext.
+ */
+export function createResponsePrefixContext(identityName?: string): ResponsePrefixContext {
+  return identityName ? { identityName } : {};
+}
+
 // Regex pattern for template variables: {variableName} or {variable.name}
 const TEMPLATE_VAR_PATTERN = /\{([a-zA-Z][a-zA-Z0-9.]*)\}/g;
 
@@ -86,6 +100,21 @@ export function extractShortModelName(fullModel: string): string {
 
   // Strip date suffixes (YYYYMMDD format)
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
+}
+
+/**
+ * Apply a model-selection event to an existing ResponsePrefixContext in-place.
+ * This is used for cross-channel routing paths where the context is created
+ * independently of the main dispatcher's onModelSelected callback.
+ */
+export function applyModelSelectionToResponsePrefixContext(
+  context: ResponsePrefixContext,
+  selection: ModelSelectionInfo,
+): void {
+  context.provider = selection.provider;
+  context.model = extractShortModelName(selection.model);
+  context.modelFull = `${selection.provider}/${selection.model}`;
+  context.thinkingLevel = selection.thinkLevel ?? "off";
 }
 
 /**
