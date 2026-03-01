@@ -28,7 +28,6 @@ import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
 import {
@@ -36,13 +35,13 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import {
   formatDiscordUserTag,
   resolveDiscordSystemLocation,
@@ -174,6 +173,7 @@ export async function preflightDiscordMessage(
   }
 
   const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
+  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   let commandAuthorized = true;
   if (isDirectMessage) {
@@ -181,69 +181,61 @@ export async function preflightDiscordMessage(
       logVerbose("discord: drop dm (dmPolicy: disabled)");
       return null;
     }
-    if (dmPolicy !== "open") {
-      const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-        provider: "discord",
-        accountId: resolvedAccountId,
-        dmPolicy,
-      });
-      const effectiveAllowFrom = [...(params.allowFrom ?? []), ...storeAllowFrom];
-      const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
-      const allowMatch = allowList
-        ? resolveDiscordAllowListMatch({
-            allowList,
-            candidate: {
-              id: sender.id,
-              name: sender.name,
-              tag: sender.tag,
-            },
-            allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
-          })
-        : { allowed: false };
-      const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
-      const permitted = allowMatch.allowed;
-      if (!permitted) {
-        commandAuthorized = false;
-        if (dmPolicy === "pairing") {
-          const { code, created } = await upsertChannelPairingRequest({
-            channel: "discord",
-            id: author.id,
-            accountId: resolvedAccountId,
-            meta: {
-              tag: formatDiscordUserTag(author),
-              name: author.username ?? undefined,
-            },
-          });
-          if (created) {
-            logVerbose(
-              `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
-            );
-            try {
-              await sendMessageDiscord(
-                `user:${author.id}`,
-                buildPairingReply({
-                  channel: "discord",
-                  idLine: `Your Discord user id: ${author.id}`,
-                  code,
-                }),
-                {
-                  token: params.token,
-                  rest: params.client.rest,
-                  accountId: params.accountId,
-                },
-              );
-            } catch (err) {
-              logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
-            }
-          }
-        } else {
+    const dmAccess = await resolveDiscordDmCommandAccess({
+      accountId: resolvedAccountId,
+      dmPolicy,
+      configuredAllowFrom: params.allowFrom ?? [],
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+      useAccessGroups,
+    });
+    commandAuthorized = dmAccess.commandAuthorized;
+    if (dmAccess.decision !== "allow") {
+      const allowMatchMeta = formatAllowlistMatchMeta(
+        dmAccess.allowMatch.allowed ? dmAccess.allowMatch : undefined,
+      );
+      if (dmAccess.decision === "pairing") {
+        const { code, created } = await upsertChannelPairingRequest({
+          channel: "discord",
+          id: author.id,
+          accountId: resolvedAccountId,
+          meta: {
+            tag: formatDiscordUserTag(author),
+            name: author.username ?? undefined,
+          },
+        });
+        if (created) {
           logVerbose(
-            `Blocked unauthorized discord sender ${sender.id} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+            `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
           );
+          try {
+            await sendMessageDiscord(
+              `user:${author.id}`,
+              buildPairingReply({
+                channel: "discord",
+                idLine: `Your Discord user id: ${author.id}`,
+                code,
+              }),
+              {
+                token: params.token,
+                rest: params.client.rest,
+                accountId: params.accountId,
+              },
+            );
+          } catch (err) {
+            logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
+          }
         }
-        return null;
+      } else {
+        logVerbose(
+          `Blocked unauthorized discord sender ${sender.id} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+        );
       }
-      commandAuthorized = true;
+      return null;
     }
   }
 
@@ -598,7 +590,6 @@ export async function preflightDiscordMessage(
           { allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig) },
         )
       : false;
-    const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
