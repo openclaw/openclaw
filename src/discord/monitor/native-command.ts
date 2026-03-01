@@ -1235,12 +1235,13 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     suppressReplies,
   } = params;
-  if (isOutboundSuppressed({ cfg, channel: "discord", accountId })) {
-    logVerbose("[suppressOutbound] Blocked Discord native-command reply");
-    return;
-  }
+  const discordCommandSuppressed = isOutboundSuppressed({ cfg, channel: "discord", accountId });
 
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
+    if (discordCommandSuppressed) {
+      logVerbose("[suppressOutbound] Blocked Discord native-command respond");
+      return;
+    }
     const payload = {
       content,
       ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
@@ -1583,7 +1584,7 @@ async function dispatchDiscordCommandInteraction(params: {
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
       deliver: async (payload) => {
-        if (suppressReplies) {
+        if (suppressReplies || discordCommandSuppressed) {
           return;
         }
         try {
