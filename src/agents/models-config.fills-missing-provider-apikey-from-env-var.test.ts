@@ -244,6 +244,58 @@ describe("models-config", () => {
     });
   });
 
+  it("does not preserve stale minimax oauth placeholder apiKey in merge mode", async () => {
+    await withTempHome(async () => {
+      const agentDir = resolveOpenClawAgentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify(
+          {
+            providers: {
+              "minimax-portal": {
+                apiKey: "minimax-oauth",
+                api: "openai-completions",
+                models: [{ id: "stale-model", name: "Stale", input: ["text"] }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      await ensureOpenClawModelsJson({
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-portal": {
+              apiKey: "MINIMAX_REAL_KEY",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "config-model",
+                  name: "Config model",
+                  input: ["text"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 2048,
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string }>;
+      }>();
+      expect(parsed.providers["minimax-portal"]?.apiKey).toBe("MINIMAX_REAL_KEY");
+    });
+  });
+
   it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
     await withTempHome(async () => {
       const prevKey = process.env.MOONSHOT_API_KEY;
