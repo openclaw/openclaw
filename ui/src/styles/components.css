@@ -608,6 +608,9 @@
 .cron-workspace-form {
   position: sticky;
   top: 74px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .cron-form {
