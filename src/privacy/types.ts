@@ -117,6 +117,10 @@ export interface PrivacyConfig {
     ttl: number;
     /** Custom store path. */
     storePath: string;
+    /** Max wait time for lock acquisition in ms (default 2000). */
+    lockWaitTimeoutMs: number;
+    /** Lock stale threshold in ms (default 30000). */
+    lockStaleAfterMs: number;
   };
   /** Logging settings. */
   log: {
@@ -136,6 +140,8 @@ export const DEFAULT_PRIVACY_CONFIG: PrivacyConfig = {
   mappings: {
     ttl: 86_400_000,
     storePath: "",
+    lockWaitTimeoutMs: 2_000,
+    lockStaleAfterMs: 30_000,
   },
   log: {
     useReplacedContent: true,

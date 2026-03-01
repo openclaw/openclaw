@@ -187,7 +187,10 @@ export class PrivacyDetector {
         flags += "i";
       }
       return new RegExp(src, flags);
-    } catch {
+    } catch (err) {
+      console.warn(
+        `[privacy] Failed to compile regex pattern: ${pattern.slice(0, 120)} (${(err as Error).message})`,
+      );
       return null;
     }
   }

@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import JSON5 from "json5";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { validateBarePassword, validateHighEntropy } from "./detector.js";
 import { BASIC_RULES, EXTENDED_RULES } from "./rules.js";
 import type { CustomRulesConfig, PrivacyRule, RiskLevel, UserDefinedRule } from "./types.js";
@@ -187,24 +188,58 @@ export function validateRegexSafety(pattern: string): string | null {
     return `pattern exceeds maximum length of ${MAX_PATTERN_LENGTH} characters`;
   }
 
+  let src = pattern;
+  let flags = "gm";
+  if (src.startsWith("(?i)")) {
+    src = src.slice(4);
+    flags += "i";
+  }
+
   try {
-    let src = pattern;
-    let flags = "gm";
-    if (src.startsWith("(?i)")) {
-      src = src.slice(4);
-      flags += "i";
-    }
     new RegExp(src, flags);
   } catch (err) {
     return `invalid regex: ${(err as Error).message}`;
   }
 
-  // Basic catastrophic backtracking heuristic: nested quantifiers like (a+)+.
-  if (/\([^)]*[+*]\)[+*]/.test(pattern)) {
-    return "pattern contains potentially catastrophic nested quantifiers (e.g. (a+)+)";
+  // Block known unsafe repetition forms using the shared safe-regex guard.
+  if (!compileSafeRegex(src, flags)) {
+    return "pattern is potentially unsafe (catastrophic backtracking risk)";
+  }
+
+  // Block ambiguous alternation under repetition (e.g. (a|ab)*, (a|a)+).
+  if (hasAmbiguousAlternationRepetition(src)) {
+    return "pattern has ambiguous alternation under repetition (potential backtracking risk)";
+  }
+
+  // Block greedy-dot group repetitions that can explode with trailing overlap.
+  if (/\((?:[^()]|\([^)]*\))*\.\*(?:[^()]|\([^)]*\))*\)\s*\{/.test(src)) {
+    return "pattern repeats groups containing .* (potential catastrophic backtracking risk)";
   }
 
   return null;
+}
+
+function hasAmbiguousAlternationRepetition(source: string): boolean {
+  const repeatedAltGroup = /\(([^()]*\|[^()]*)\)\s*(?:[+*]|\{(?:\d+)(?:,\d*)?\})/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = repeatedAltGroup.exec(source)) !== null) {
+    const alts = match[1]
+      .split("|")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (let i = 0; i < alts.length; i++) {
+      for (let j = 0; j < alts.length; j++) {
+        if (i === j) {
+          continue;
+        }
+        if (alts[j].startsWith(alts[i])) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 /** Convert a UserDefinedRule to a PrivacyRule. */

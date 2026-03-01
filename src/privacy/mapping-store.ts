@@ -25,8 +25,8 @@ const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 const PBKDF2_ITERATIONS = 100_000;
 const PBKDF2_DIGEST = "sha512";
-const LOCK_WAIT_TIMEOUT_MS = 2_000;
-const LOCK_STALE_AFTER_MS = 30_000;
+const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 2_000;
+const DEFAULT_LOCK_STALE_AFTER_MS = 30_000;
 const LOCK_RETRY_MS = 25;
 const FILE_MODE_OWNER_RW = 0o600;
 const DIR_MODE_OWNER_RWX = 0o700;
@@ -115,14 +115,23 @@ export class PrivacyMappingStore {
   private key: Buffer;
   private legacyKey: Buffer;
   private lockPath: string;
+  private lockWaitTimeoutMs: number;
+  private lockStaleAfterMs: number;
 
-  constructor(options?: { storePath?: string; salt?: string }) {
+  constructor(options?: {
+    storePath?: string;
+    salt?: string;
+    lockWaitTimeoutMs?: number;
+    lockStaleAfterMs?: number;
+  }) {
     this.storePath = options?.storePath || defaultStorePath();
     const salt = options?.salt ?? "";
     const passphrase = loadOrCreateMachinePassphrase();
     this.key = deriveKey(passphrase, salt);
     this.legacyKey = deriveLegacyKey(salt);
     this.lockPath = `${this.storePath}.lock`;
+    this.lockWaitTimeoutMs = options?.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS;
+    this.lockStaleAfterMs = options?.lockStaleAfterMs ?? DEFAULT_LOCK_STALE_AFTER_MS;
   }
 
   /** Save mappings to encrypted file. */
@@ -235,7 +244,7 @@ export class PrivacyMappingStore {
           continue;
         }
 
-        if (Date.now() - startedAt > LOCK_WAIT_TIMEOUT_MS) {
+        if (Date.now() - startedAt > this.lockWaitTimeoutMs) {
           throw new Error(`privacy mapping store lock timeout: ${this.lockPath}`, { cause: err });
         }
         sleepMs(LOCK_RETRY_MS);
@@ -265,7 +274,7 @@ export class PrivacyMappingStore {
         return false;
       }
       const stat = statSync(this.lockPath);
-      return Date.now() - stat.mtimeMs > LOCK_STALE_AFTER_MS;
+      return Date.now() - stat.mtimeMs > this.lockStaleAfterMs;
     } catch {
       return false;
     }

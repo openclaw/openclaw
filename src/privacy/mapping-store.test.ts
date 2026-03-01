@@ -39,6 +39,21 @@ describe("PrivacyMappingStore", () => {
   });
 
   describe("save and load", () => {
+    it("accepts configurable lock timings", () => {
+      const dir = mkdtempSync(join(tmpdir(), "privacy-test-"));
+      cleanups.push(dir);
+      const storePath = join(dir, "test-mappings.enc");
+      const store = new PrivacyMappingStore({
+        storePath,
+        salt: "test-salt",
+        lockWaitTimeoutMs: 5_000,
+        lockStaleAfterMs: 90_000,
+      });
+
+      store.save([makeMappingData("cfg", "session-a")]);
+      expect(store.load()).toHaveLength(1);
+    });
+
     it("round-trips mappings through encrypted storage", () => {
       const { store, dir } = createTempStore();
       cleanups.push(dir);

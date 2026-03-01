@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PrivacyDetector } from "./detector.js";
 
 describe("PrivacyDetector", () => {
@@ -207,6 +207,29 @@ describe("PrivacyDetector", () => {
       const types = result.matches.map((m) => `${m.start}:${m.end}:${m.type}`);
       const unique = new Set(types);
       expect(types.length).toBe(unique.size);
+    });
+
+    it("logs when a regex pattern cannot be compiled", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const invalidRules = [
+          {
+            type: "broken_rule",
+            description: "broken",
+            enabled: true,
+            riskLevel: "low" as const,
+            pattern: "[unterminated",
+          },
+        ];
+        const localDetector = new PrivacyDetector(invalidRules);
+        const result = localDetector.detect("anything");
+        expect(result.hasPrivacyRisk).toBe(false);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("[privacy] Failed to compile regex pattern:"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });

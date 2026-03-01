@@ -18,6 +18,7 @@ import type { PrivacyConfig } from "./types.js";
 import { DEFAULT_PRIVACY_CONFIG } from "./types.js";
 
 export interface PrivacyFilterContext {
+  sessionId: string;
   detector: PrivacyDetector;
   replacer: PrivacyReplacer;
   store: PrivacyMappingStore;
@@ -50,6 +51,8 @@ export function createPrivacyFilterContext(
   const store = new PrivacyMappingStore({
     storePath: cfg.mappings.storePath || undefined,
     salt: cfg.encryption.salt || undefined,
+    lockWaitTimeoutMs: cfg.mappings.lockWaitTimeoutMs,
+    lockStaleAfterMs: cfg.mappings.lockStaleAfterMs,
   });
 
   // Load existing session mappings.
@@ -58,7 +61,7 @@ export function createPrivacyFilterContext(
     replacer.loadMappings(existing);
   }
 
-  return { detector, replacer, store, config: cfg };
+  return { sessionId, detector, replacer, store, config: cfg };
 }
 
 /**
@@ -81,8 +84,11 @@ export function filterText(text: string, ctx: PrivacyFilterContext): string {
   if (newMappings.length > 0) {
     try {
       ctx.store.append(newMappings);
-    } catch {
+    } catch (err) {
       // Non-fatal — filtering still works without persistence.
+      console.warn(
+        `[privacy] Failed to persist mappings for session ${ctx.sessionId}: ${(err as Error).message}`,
+      );
     }
   }
 

@@ -197,6 +197,10 @@ export type PrivacyConfig = {
     ttl?: number;
     /** Optional custom mapping store path. */
     storePath?: string;
+    /** Max wait time for file-lock acquisition in milliseconds. */
+    lockWaitTimeoutMs?: number;
+    /** Duration after which a stale lock file can be reclaimed. */
+    lockStaleAfterMs?: number;
   };
   log?: {
     /** Whether logs should prefer replaced content. */

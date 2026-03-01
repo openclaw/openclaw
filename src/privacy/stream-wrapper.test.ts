@@ -1,5 +1,5 @@
 import type { Message } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PrivacyDetector } from "./detector.js";
 import { PrivacyReplacer } from "./replacer.js";
 import {
@@ -45,12 +45,33 @@ describe("stream-wrapper integration", () => {
       const ctx = createPrivacyFilterContext("test-session");
       expect(filterText("", ctx)).toBe("");
     });
+
+    it("warns when mapping persistence fails", () => {
+      const ctx = createPrivacyFilterContext(`test-session-${Date.now()}`);
+      const appendSpy = vi.spyOn(ctx.store, "append").mockImplementation(() => {
+        throw new Error("disk full");
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const filtered = filterText("Please email admin@company.com", ctx);
+        expect(filtered).not.toContain("admin@company.com");
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("[privacy] Failed to persist mappings for session test-session"),
+        );
+      } finally {
+        appendSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+    });
   });
 
   describe("filterMessages", () => {
     it("filters user message text content", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "user", content: "My password=SecretPass123" }];
+      const messages: Message[] = [
+        { role: "user", content: "My password=SecretPass123", timestamp: Date.now() },
+      ];
 
       const filtered = filterMessages(messages, ctx);
       expect(filtered).not.toBe(messages);
@@ -65,6 +86,7 @@ describe("stream-wrapper integration", () => {
         {
           role: "user",
           content: [{ type: "text", text: "key: sk-abcdefghijklmnopqrstuvwxyz1234567890" }],
+          timestamp: Date.now(),
         },
       ];
 
@@ -75,7 +97,9 @@ describe("stream-wrapper integration", () => {
 
     it("does not modify system messages", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "system", content: "password=admin123456" }];
+      const messages = [
+        { role: "system", content: "password=admin123456" },
+      ] as unknown as Message[];
 
       const filtered = filterMessages(messages, ctx);
       expect(filtered).toBe(messages);
@@ -83,7 +107,9 @@ describe("stream-wrapper integration", () => {
 
     it("returns same array if no changes needed", () => {
       const ctx = createPrivacyFilterContext("test-session");
-      const messages: Message[] = [{ role: "user", content: "Hello there!" }];
+      const messages: Message[] = [
+        { role: "user", content: "Hello there!", timestamp: Date.now() },
+      ];
 
       const filtered = filterMessages(messages, ctx);
       expect(filtered).toBe(messages);

@@ -171,7 +171,15 @@ describe("custom-rules", () => {
     });
 
     it("rejects nested quantifiers", () => {
-      expect(validateRegexSafety("(a+)+")).toContain("nested quantifiers");
+      expect(validateRegexSafety("(a+)+")).toContain("unsafe");
+    });
+
+    it("rejects ambiguous alternation under repetition", () => {
+      expect(validateRegexSafety("(a|ab)*")).toContain("ambiguous alternation");
+    });
+
+    it("rejects repeated groups containing greedy dot-star", () => {
+      expect(validateRegexSafety("(.*a){3,5}")).toContain("unsafe");
     });
 
     it("accepts (?i) prefix", () => {

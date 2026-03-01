@@ -236,6 +236,8 @@ export const OpenClawSchema = z
           .object({
             ttl: z.number().int().positive().optional(),
             storePath: z.string().optional(),
+            lockWaitTimeoutMs: z.number().int().positive().optional(),
+            lockStaleAfterMs: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),

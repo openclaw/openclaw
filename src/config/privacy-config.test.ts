@@ -14,6 +14,8 @@ describe("privacy config schema", () => {
         mappings: {
           ttl: 86_400_000,
           storePath: "/tmp/privacy-mappings.enc",
+          lockWaitTimeoutMs: 5_000,
+          lockStaleAfterMs: 60_000,
         },
         log: {
           useReplacedContent: true,
@@ -22,6 +24,7 @@ describe("privacy config schema", () => {
     });
     expect(parsed.privacy?.enabled).toBe(true);
     expect(parsed.privacy?.mappings?.ttl).toBe(86_400_000);
+    expect(parsed.privacy?.mappings?.lockWaitTimeoutMs).toBe(5_000);
   });
 
   it("rejects invalid ttl", () => {
@@ -29,6 +32,17 @@ describe("privacy config schema", () => {
       privacy: {
         mappings: {
           ttl: 0,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid lock timeout", () => {
+    const result = OpenClawSchema.safeParse({
+      privacy: {
+        mappings: {
+          lockWaitTimeoutMs: 0,
         },
       },
     });
