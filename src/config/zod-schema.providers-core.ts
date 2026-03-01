@@ -749,6 +749,7 @@ export const SlackAccountSchema = z
     botToken: z.string().optional().register(sensitive),
     appToken: z.string().optional().register(sensitive),
     userToken: z.string().optional().register(sensitive),
+    slackApiUrl: z.string().url().optional(),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.boolean().optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
