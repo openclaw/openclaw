@@ -364,23 +364,26 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       err instanceof GatewayLockError ||
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
-      // Idempotent: if the gateway is already running, the desired state is
-      // achieved — exit 0 with an informational message instead of failing.
-      // This prevents automation loops from retrying endlessly when
-      // `openclaw gateway` is called to verify/ensure the gateway is up.
       const errMessage = describeUnknownError(err);
-      try {
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          // Gateway is genuinely running → idempotent success
-          defaultRuntime.log(`Gateway is already running (${errMessage.replace(/;.*$/, "")})`);
-          defaultRuntime.exit(0);
-          return;
+      // Only treat lock-contention (timeout) as idempotent — not other lock
+      // failures like EACCES or other filesystem errors.  The timeout path
+      // produces messages containing "lock timeout", so we use that as the
+      // discriminant.  See PR #30569 review.
+      const isLockContention = /lock timeout/i.test(errMessage);
+      if (isLockContention) {
+        try {
+          const diagnostics = await inspectPortUsage(port);
+          if (diagnostics.status === "busy") {
+            // Gateway is genuinely running → idempotent success
+            defaultRuntime.log(`Gateway is already running (${errMessage.replace(/;.*$/, "")})`);
+            defaultRuntime.exit(0);
+            return;
+          }
+        } catch {
+          // ignore diagnostics failures — fall through to error path
         }
-      } catch {
-        // ignore diagnostics failures — fall through to error path
       }
-      // Port is free but lock exists → stale lock or race condition → error
+      // Lock error but gateway is not confirmed running → real failure
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );
