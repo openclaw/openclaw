@@ -167,14 +167,20 @@ export const registerTelegramHandlers = ({
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (
-    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
+    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown; api?: unknown },
     message: Message,
   ): TelegramContext => {
     const getFile =
       typeof ctx.getFile === "function"
         ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
         : async () => ({});
-    return { message, me: ctx.me, getFile };
+    const api =
+      typeof ctx.api === "object" &&
+      ctx.api !== null &&
+      typeof (ctx.api as { getFile?: unknown }).getFile === "function"
+        ? (ctx.api as TelegramContext["api"])
+        : undefined;
+    return { message, me: ctx.me, getFile, api };
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,

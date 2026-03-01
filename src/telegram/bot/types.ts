@@ -13,7 +13,7 @@ export type TelegramContext = {
   me?: UserFromGetMe;
   getFile: () => Promise<{ file_path?: string }>;
   api?: {
-    getFile: (fileId: string, signal?: AbortSignal) => Promise<{ file_path?: string }>;
+    getFile: (fileId: string, signal?: unknown) => Promise<{ file_path?: string }>;
   };
 };
 
