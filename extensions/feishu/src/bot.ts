@@ -657,12 +657,17 @@ export async function handleFeishuMessage(params: {
       },
     });
 
-    const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
 
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+    // Only include a notification label (no message content preview).
+    // The full message is delivered via the inbound context below;
+    // including a truncated preview here caused the same message to
+    // appear twice in webchat (once truncated, once complete).
+    // Append messageId so consecutive messages stay unique for the
+    // system-event text-based dedupe in system-events.ts.
+    core.system.enqueueSystemEvent(`${inboundLabel} [${ctx.messageId}]`, {
       sessionKey: route.sessionKey,
       contextKey: `feishu:message:${ctx.chatId}:${ctx.messageId}`,
     });
