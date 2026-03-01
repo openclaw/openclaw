@@ -81,12 +81,48 @@ Use explicit config when:
 }
 ```
 
+## OpenAI-compatible local servers
+
+The configuration pattern above works for any OpenAI-compatible local server, including:
+
+- **LM Studio** (default port: 1234)
+- **llama.cpp server** (`llama-server`)
+- **text-generation-webui** with OpenAI extension
+
+All use the same `/v1/models` and `/v1/chat/completions` endpoints. Adjust the `baseUrl` and provider name as needed.
+
 ## Troubleshooting
 
-- Check the server is reachable:
+### Check server is reachable
 
 ```bash
 curl http://127.0.0.1:8000/v1/models
 ```
 
-- If requests fail with auth errors, set a real `VLLM_API_KEY` that matches your server configuration, or configure the provider explicitly under `models.providers.vllm`.
+If requests fail with auth errors, set a real `VLLM_API_KEY` that matches your server configuration, or configure the provider explicitly under `models.providers.vllm`.
+
+### Server binding
+
+If your server binds only to `127.0.0.1`, other machines (including Docker containers) cannot reach it. When running the gateway in a container or on a different host, configure your server to bind to `0.0.0.0` if appropriate for your network environment.
+
+<Warning>
+**Docker networking:** If the gateway runs inside a container but vLLM runs on the host, `localhost` inside the container does not reach the host.
+
+- **macOS / Windows:** Use `host.docker.internal:<port>` in your `baseUrl`.
+- **Linux:** Use the Docker bridge gateway IP (commonly `172.17.0.1`; verify with `docker network inspect bridge`).
+
+To verify from inside a container (macOS/Windows):
+
+```bash
+curl http://host.docker.internal:<port>/v1/models
+```
+
+On Linux (where `host.docker.internal` is typically not available), use the bridge gateway IP instead:
+
+```bash
+curl http://172.17.0.1:<port>/v1/models
+```
+
+Replace `<port>` with your server's port (e.g., 8000 for vLLM, 1234 for LM Studio).
+
+</Warning>

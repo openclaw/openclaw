@@ -275,6 +275,81 @@ ps aux | grep ollama
 ollama serve
 ```
 
+## Common pitfalls
+
+### Models not discovered
+
+**Symptom:** Ollama models do not appear in `openclaw models list`.
+
+**Likely cause:** Ollama is not running or not reachable. OpenClaw probes your configured Ollama URL (default: `http://127.0.0.1:11434`).
+
+**Fix:** Verify Ollama is running and reachable at the URL OpenClaw is configured to use:
+
+```bash
+# Default URL; adjust if you set a custom baseUrl in models.providers.ollama
+curl http://localhost:11434/api/tags
+```
+
+If you see your models listed but they still do not appear in OpenClaw, define the model explicitly in `models.providers.ollama` (see [Explicit setup](#explicit-setup-manual-models)).
+
+### Docker networking (gateway in container, Ollama on host)
+
+**Symptom:** Connection refused or timeout errors when the gateway runs in Docker.
+
+**Likely cause:** `localhost` inside the container resolves to the container itself, not the host where Ollama is running.
+
+**Fix:**
+
+- **macOS / Windows:** Use `host.docker.internal:11434` in your `baseUrl`.
+- **Linux:** Use the Docker bridge gateway IP (commonly `172.17.0.1`; verify with `docker network inspect bridge`).
+
+Example explicit config:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://host.docker.internal:11434",
+        apiKey: "ollama-local",
+        api: "ollama",
+      },
+    },
+  },
+}
+```
+
+### Models not appearing after explicit config
+
+**Symptom:** You defined `models.providers.ollama` with an explicit `models` list, but expected models do not appear.
+
+**Likely cause:** When you provide an explicit `models` array in the provider config, OpenClaw uses that list instead of auto-discovering from the server.
+
+**Fix:** Remove the `models` array to let OpenClaw auto-discover from your configured `baseUrl`, or ensure the explicit list includes all models you need:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://<your-ollama-host>:11434",
+        apiKey: "ollama-local",
+        api: "ollama",
+        models: [{ id: "<your-model>", name: "My Model" }],
+      },
+    },
+  },
+}
+```
+
+### Fallback provider auth errors
+
+**Symptom:** Auth errors appear when your local model is unavailable and OpenClaw tries a fallback.
+
+**Likely cause:** The fallback provider (e.g., Anthropic, OpenAI) does not have valid credentials configured.
+
+**Fix:** Ensure all providers listed in `model.fallbacks` have valid API keys or auth profiles configured before enabling fallbacks.
+
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers

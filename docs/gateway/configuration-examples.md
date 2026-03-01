@@ -623,6 +623,73 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 }
 ```
 
+### Local models with Ollama (native API)
+
+When Ollama is running locally, OpenClaw auto-detects available models. No API key is required.
+
+Select your model:
+
+```json5
+{
+  agent: {
+    workspace: "~/.openclaw/workspace",
+    model: { primary: "ollama/<your-model>" },
+  },
+}
+```
+
+See [Ollama provider docs](/providers/ollama) for model discovery details.
+
+### Hybrid: local primary with cloud fallback
+
+```json5
+{
+  agent: {
+    workspace: "~/.openclaw/workspace",
+    model: {
+      primary: "ollama/<your-model>",
+      fallbacks: ["anthropic/<your-model>"],
+    },
+  },
+}
+```
+
+Fallback providers require valid authentication. If the primary model fails and the fallback provider is not configured, you may see auth errors.
+
+### Verify local model connectivity
+
+Before starting the gateway, verify your local model server is reachable:
+
+```bash
+# Ollama native API (from host)
+curl http://localhost:11434/api/tags
+
+# OpenAI-compatible server (vLLM, LM Studio, llama.cpp, etc.)
+curl http://localhost:<port>/v1/models
+```
+
+<Warning>
+**Docker networking:** If the gateway runs inside a container but the model server runs on the host, `localhost` inside the container does not reach the host.
+
+- **macOS / Windows:** Use `host.docker.internal` (e.g., `http://host.docker.internal:11434`)
+- **Linux:** Use the Docker bridge gateway IP (commonly `172.17.0.1`; verify with `docker network inspect bridge`)
+
+To verify from inside a container (macOS/Windows):
+
+```bash
+curl http://host.docker.internal:11434/api/tags
+curl http://host.docker.internal:<port>/v1/models
+```
+
+On Linux (where `host.docker.internal` is typically not available), use the bridge gateway IP instead:
+
+```bash
+curl http://172.17.0.1:11434/api/tags
+curl http://172.17.0.1:<port>/v1/models
+```
+
+</Warning>
+
 ## Tips
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
