@@ -413,6 +413,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    windowsHide: true,
   });
 
   if (!agent.stdin || !agent.stdout) {
