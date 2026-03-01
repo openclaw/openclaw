@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   evaluateMissingDeviceIdentity,
+  isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -49,6 +50,7 @@ describe("ws connect policy", () => {
         role: "node",
         isControlUi: false,
         controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
@@ -68,6 +70,7 @@ describe("ws connect policy", () => {
         role: "operator",
         isControlUi: true,
         controlUiAuthPolicy: controlUiStrict,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
@@ -82,6 +85,7 @@ describe("ws connect policy", () => {
         role: "operator",
         isControlUi: true,
         controlUiAuthPolicy: controlUiStrict,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
@@ -101,6 +105,7 @@ describe("ws connect policy", () => {
         role: "operator",
         isControlUi: true,
         controlUiAuthPolicy: controlUiNoInsecure,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
@@ -114,6 +119,7 @@ describe("ws connect policy", () => {
         role: "operator",
         isControlUi: false,
         controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
@@ -127,6 +133,7 @@ describe("ws connect policy", () => {
         role: "operator",
         isControlUi: false,
         controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
         sharedAuthOk: false,
         authOk: false,
         hasSharedAuth: true,
@@ -140,15 +147,31 @@ describe("ws connect policy", () => {
         role: "node",
         isControlUi: false,
         controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
         sharedAuthOk: true,
         authOk: true,
         hasSharedAuth: true,
         isLocalClient: false,
       }).kind,
     ).toBe("reject-device-required");
+
+    // Trusted-proxy authenticated Control UI should bypass device-identity gating.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: controlUiNoInsecure,
+        trustedProxyAuthOk: true,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
   });
 
-  test("pairing bypass requires control-ui bypass + shared auth", () => {
+  test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -159,8 +182,60 @@ describe("ws connect policy", () => {
       controlUiConfig: undefined,
       deviceRaw: null,
     });
-    expect(shouldSkipControlUiPairing(bypass, true)).toBe(true);
-    expect(shouldSkipControlUiPairing(bypass, false)).toBe(false);
-    expect(shouldSkipControlUiPairing(strict, true)).toBe(false);
+    expect(shouldSkipControlUiPairing(bypass, true, false)).toBe(true);
+    expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
+    expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+  });
+
+  test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
+    const cases: Array<{
+      role: "operator" | "node";
+      authMode: string;
+      authOk: boolean;
+      authMethod: string | undefined;
+      expected: boolean;
+    }> = [
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: true,
+      },
+      {
+        role: "node",
+        authMode: "trusted-proxy",
+        authOk: true,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "token",
+        authOk: true,
+        authMethod: "token",
+        expected: false,
+      },
+      {
+        role: "operator",
+        authMode: "trusted-proxy",
+        authOk: false,
+        authMethod: "trusted-proxy",
+        expected: false,
+      },
+    ];
+
+    for (const tc of cases) {
+      expect(
+        isTrustedProxyControlUiOperatorAuth({
+          isControlUi: true,
+          role: tc.role,
+          authMode: tc.authMode,
+          authOk: tc.authOk,
+          authMethod: tc.authMethod,
+        }),
+      ).toBe(tc.expected);
+    }
   });
 });

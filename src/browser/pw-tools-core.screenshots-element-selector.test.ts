@@ -1,4 +1,8 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -81,6 +85,10 @@ describe("pw-tools-core", () => {
     ).rejects.toThrow(/fullPage is not supported/i);
   });
   it("arms the next file chooser and sets files (default timeout)", async () => {
+    const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-upload-${crypto.randomUUID()}.txt`);
+    await fs.mkdir(path.dirname(uploadPath), { recursive: true });
+    await fs.writeFile(uploadPath, "fixture", "utf8");
+    const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
     const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
@@ -88,19 +96,47 @@ describe("pw-tools-core", () => {
       keyboard: { press: vi.fn(async () => {}) },
     });
 
+    try {
+      await mod.armFileUploadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        paths: [uploadPath],
+      });
+
+      // waitForEvent is awaited immediately; handler continues async.
+      await Promise.resolve();
+
+      expect(waitForEvent).toHaveBeenCalledWith("filechooser", {
+        timeout: 120_000,
+      });
+      await vi.waitFor(() => {
+        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath]);
+      });
+    } finally {
+      await fs.rm(uploadPath, { force: true });
+    }
+  });
+  it("revalidates file-chooser paths at use-time and cancels missing files", async () => {
+    const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
+    const fileChooser = { setFiles: vi.fn(async () => {}) };
+    const press = vi.fn(async () => {});
+    const waitForEvent = vi.fn(async () => fileChooser);
+    setPwToolsCoreCurrentPage({
+      waitForEvent,
+      keyboard: { press },
+    });
+
     await mod.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
-      paths: ["/tmp/a.txt"],
+      paths: [missingPath],
     });
-
-    // waitForEvent is awaited immediately; handler continues async.
     await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("filechooser", {
-      timeout: 120_000,
+    await vi.waitFor(() => {
+      expect(press).toHaveBeenCalledWith("Escape");
     });
-    expect(fileChooser.setFiles).toHaveBeenCalledWith(["/tmp/a.txt"]);
+    expect(fileChooser.setFiles).not.toHaveBeenCalled();
   });
   it("arms the next file chooser and escapes if no paths provided", async () => {
     const fileChooser = { setFiles: vi.fn(async () => {}) };
