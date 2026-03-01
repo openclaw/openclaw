@@ -522,6 +522,57 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+
+/**
+ * Check if a message is an internal/runtime message that should be hidden from
+ * the regular chat view. This includes heartbeat responses and system messages
+ * that are not user-facing.
+ *
+ * @param raw - The raw message object (may contain __openclaw marker)
+ * @param normalized - The normalized message with role and content
+ * @returns true if the message should be filtered out
+ */
+function isInternalMessage(
+  raw: Record<string, unknown>,
+  normalized: { role: string; content: { type?: string; text?: string }[] },
+): boolean {
+  const role = normalized.role.toLowerCase();
+  const marker = raw.__openclaw as Record<string, unknown> | undefined;
+
+  // Allow certain system messages with explicit markers (e.g., history notice, compaction)
+  if (marker && (marker.kind === "history-notice" || marker.kind === "compaction")) {
+    return false;
+  }
+
+  // Filter out system messages (they're internal directives, not user-facing)
+  if (role === "system") {
+    return true;
+  }
+
+  // Filter out heartbeat responses (HEARTBEAT_OK or text starting with it)
+  if (role === "assistant") {
+    for (const item of normalized.content) {
+      if (item.type === "text" && typeof item.text === "string") {
+        const trimmed = item.text.trim();
+        // Match HEARTBEAT_OK at start (possibly with prefix text) or as entire content
+        if (
+          trimmed === HEARTBEAT_TOKEN ||
+          trimmed.startsWith(HEARTBEAT_TOKEN + " ") ||
+          trimmed.startsWith(HEARTBEAT_TOKEN + "\n") ||
+          trimmed.startsWith(HEARTBEAT_TOKEN + "*") ||
+          trimmed.startsWith(HEARTBEAT_TOKEN + "`") ||
+          trimmed.startsWith(HEARTBEAT_TOKEN + "_")
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
@@ -535,6 +586,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
         role: "system",
         content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
         timestamp: Date.now(),
+        __openclaw: { kind: "history-notice" },
       },
     });
   }
@@ -557,6 +609,11 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
+    // Filter out internal messages (heartbeat responses, system messages)
+    if (isInternalMessage(raw, normalized)) {
       continue;
     }
 
