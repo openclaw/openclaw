@@ -74,6 +74,29 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out[3]?.role).toBe("user");
   });
 
+  it("repairs blank tool result names from matching tool calls", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "   ",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    const toolResult = out.find((message) => message.role === "toolResult") as {
+      toolName?: string;
+    };
+
+    expect(toolResult?.toolName).toBe("read");
+  });
+
   it("drops duplicate tool results for the same id within a span", () => {
     const input = [
       ...buildDuplicateToolResultInput(),
