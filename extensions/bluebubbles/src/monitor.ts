@@ -24,6 +24,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
@@ -128,12 +129,80 @@ export async function handleBlueBubblesWebhookRequest(
   }
   const { path, targets } = resolved;
   const url = new URL(req.url ?? "/", "http://localhost");
-  const requestLifecycle = beginWebhookRequestPipelineOrReject({
-    req,
-    res,
-    allowMethods: ["POST"],
-    inFlightLimiter: webhookInFlightLimiter,
-    inFlightKey: `${path}:${req.socket.remoteAddress ?? "unknown"}`,
+
+  if (rejectNonPostWebhookRequest(req, res)) {
+    return true;
+  }
+
+  const body = await readBlueBubblesWebhookBody(req, 1024 * 1024);
+  if (!body.ok) {
+    res.statusCode = body.statusCode;
+    res.end(body.error ?? "invalid payload");
+    console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
+    return true;
+  }
+
+  const payload = asRecord(body.value) ?? {};
+  const firstTarget = targets[0];
+  if (firstTarget) {
+    logVerbose(
+      firstTarget.core,
+      firstTarget.runtime,
+      `webhook received path=${path} keys=${Object.keys(payload).join(",") || "none"}`,
+    );
+  }
+  const eventTypeRaw = payload.type;
+  const eventType = typeof eventTypeRaw === "string" ? eventTypeRaw.trim() : "";
+  const allowedEventTypes = new Set([
+    "new-message",
+    "updated-message",
+    "message-reaction",
+    "reaction",
+  ]);
+  if (eventType && !allowedEventTypes.has(eventType)) {
+    res.statusCode = 200;
+    res.end("ok");
+    if (firstTarget) {
+      logVerbose(firstTarget.core, firstTarget.runtime, `webhook ignored type=${eventType}`);
+    }
+    return true;
+  }
+  const reaction = normalizeWebhookReaction(payload);
+  if (
+    (eventType === "updated-message" ||
+      eventType === "message-reaction" ||
+      eventType === "reaction") &&
+    !reaction
+  ) {
+    res.statusCode = 200;
+    res.end("ok");
+    if (firstTarget) {
+      logVerbose(
+        firstTarget.core,
+        firstTarget.runtime,
+        `webhook ignored ${eventType || "event"} without reaction`,
+      );
+    }
+    return true;
+  }
+  const message = reaction ? null : normalizeWebhookMessage(payload);
+  if (!message && !reaction) {
+    res.statusCode = 400;
+    res.end("invalid payload");
+    console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+    return true;
+  }
+
+  const guidParam = url.searchParams.get("guid") ?? url.searchParams.get("password");
+  const headerToken =
+    req.headers["x-guid"] ??
+    req.headers["x-password"] ??
+    req.headers["x-bluebubbles-guid"] ??
+    req.headers["authorization"];
+  const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
+  const matchedTarget = resolveSingleWebhookTarget(targets, (target) => {
+    const token = normalizeSecretInputString(target.account.config.password) ?? "";
+    return safeEqualSecret(guid, token);
   });
   if (!requestLifecycle.ok) {
     return true;

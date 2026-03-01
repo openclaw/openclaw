@@ -18,6 +18,7 @@ import {
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { parseBlueBubblesAllowTarget } from "./targets.js";
 import { normalizeBlueBubblesServerUrl } from "./types.js";
 
@@ -222,7 +223,7 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     // Prompt for password
-    let password = resolvedAccount.config.password?.trim();
+    let password = normalizeSecretInputString(resolvedAccount.config.password);
     if (!password) {
       await prompter.note(
         [

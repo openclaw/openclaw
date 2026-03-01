@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
@@ -18,8 +19,12 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     cfg: params.cfg ?? {},
     accountId: params.accountId,
   });
-  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = params.password?.trim() || account.config.password?.trim();
+  const baseUrl =
+    normalizeSecretInputString(params.serverUrl) ||
+    normalizeSecretInputString(account.config.serverUrl);
+  const password =
+    normalizeSecretInputString(params.password) ||
+    normalizeSecretInputString(account.config.password);
   if (!baseUrl) {
     throw new Error("BlueBubbles serverUrl is required");
   }
