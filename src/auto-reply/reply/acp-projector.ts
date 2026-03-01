@@ -141,6 +141,7 @@ export function createAcpReplyProjector(params: {
     cfg: params.cfg,
     provider: params.provider,
     accountId: params.accountId,
+    deliveryMode: settings.deliveryMode,
   });
   const blockReplyPipeline = createBlockReplyPipeline({
     onBlockReply: async (payload) => {
@@ -179,8 +180,9 @@ export function createAcpReplyProjector(params: {
     if (settings.deliveryMode === "final_only" && !force) {
       return;
     }
+    const effectiveForce = settings.deliveryMode === "live" ? true : force;
     chunker.drain({
-      force,
+      force: effectiveForce,
       emit: (chunk) => {
         blockReplyPipeline.enqueue({ text: chunk });
       },
