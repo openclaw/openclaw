@@ -6,9 +6,11 @@ on:
       - main
     paths:
       - 'apps/android/**'
+      - 'apps/shared/OpenClawKit/**'
   pull_request:
     paths:
       - 'apps/android/**'
+      - 'apps/shared/OpenClawKit/**'
   release:
     types: [created]
 
@@ -29,6 +31,7 @@ jobs:
       with:
         sparse-checkout: |
           apps/android
+          apps/shared
         sparse-checkout-cone-mode: true
 
     - name: Set up JDK 17 (Temurin)
@@ -46,8 +49,10 @@ jobs:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-          apps/android/.gradle/caches
-          apps/android/.gradle/wrapper
+          apps/android
+          apps/shared/.gradle/caches
+          apps/android
+          apps/shared/.gradle/wrapper
         key: ${{ runner.os }}-gradle-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties') }}
         restore-keys: |
           ${{ runner.os }}-gradle-
