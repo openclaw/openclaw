@@ -20,7 +20,7 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
-import type { EventLogEntry } from "./app-events.ts";
+import { collapseHealthEventHistory, type EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
   handleConnected,
@@ -128,6 +128,7 @@ export class OpenClawApp extends LitElement {
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
+  @state() hideHealthEventsInEventLog = true;
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
@@ -613,6 +614,20 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  setHideHealthEventsInEventLog(next: boolean) {
+    if (this.hideHealthEventsInEventLog === next) {
+      return;
+    }
+    this.hideHealthEventsInEventLog = next;
+    if (!next) {
+      return;
+    }
+    this.eventLogBuffer = collapseHealthEventHistory(this.eventLogBuffer);
+    if (this.tab === "debug") {
+      this.eventLog = collapseHealthEventHistory(this.eventLog);
+    }
   }
 
   render() {
