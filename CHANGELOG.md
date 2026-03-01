@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Web UI/Compatibility: avoid hard dependency on `Array.prototype.toSorted` during Control UI render by adding a safe sorting fallback for cron suggestion lists, preventing blank-page crashes on older Chromium builds. (#30467)
 - Cron/Failure alerts: add configurable repeated-failure alerting with per-job overrides and Web UI cron editor support (`inherit|disabled|custom` with threshold/cooldown/channel/target fields). (#24789) Thanks xbrak.
 - Cron/Isolated model defaults: resolve isolated cron `subagents.model` (including object-form `primary`) through allowlist-aware model selection so isolated cron runs honor subagent model defaults unless explicitly overridden by job payload model. (#11474) Thanks @AnonO6.
 - Cron/Isolated sessions list: persist the intended pre-run model/provider on isolated cron session entries so `sessions_list` reflects payload/session model overrides even when runs fail before post-run telemetry persistence. (#21279) Thanks @altaywtf.
