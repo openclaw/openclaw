@@ -12,6 +12,10 @@ import { VIEWER_LOADER_PATH } from "./viewer-assets.js";
 
 const DEFAULT_FILE_NAME = "diff.txt";
 
+function escapeCssString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -46,21 +50,25 @@ function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_af
 }
 
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
+  const fontFamily = escapeCssString(options.presentation.fontFamily);
+  const fontSize = Math.max(10, Math.floor(options.presentation.fontSize));
+  const lineHeight = Math.max(20, Math.round(fontSize * 1.6));
   return {
     theme: {
       light: "pierre-light",
       dark: "pierre-dark",
     },
-    diffStyle: options.layout,
+    diffStyle: options.presentation.layout,
     expandUnchanged: options.expandUnchanged,
-    themeType: options.theme,
-    overflow: "wrap" as const,
+    themeType: options.presentation.theme,
+    backgroundEnabled: options.presentation.background,
+    overflow: options.presentation.wordWrap ? "wrap" : "scroll",
     unsafeCSS: `
       :host {
-        --diffs-font-family: "Fira Code", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        --diffs-header-font-family: "Fira Code", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-        --diffs-font-size: 15px;
-        --diffs-line-height: 24px;
+        --diffs-font-family: "${fontFamily}", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --diffs-header-font-family: "${fontFamily}", "SF Mono", Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --diffs-font-size: ${fontSize}px;
+        --diffs-line-height: ${lineHeight}px;
       }
 
       [data-diffs-header] {
@@ -166,7 +174,7 @@ function renderDiffCard(payload: DiffViewerPayload): string {
 function buildHtmlDocument(params: {
   title: string;
   bodyHtml: string;
-  theme: DiffRenderOptions["theme"];
+  theme: DiffRenderOptions["presentation"]["theme"];
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -341,7 +349,7 @@ export async function renderDiffDocument(
     html: buildHtmlDocument({
       title,
       bodyHtml: rendered.bodyHtml,
-      theme: options.theme,
+      theme: options.presentation.theme,
     }),
     title,
     fileCount: rendered.fileCount,
