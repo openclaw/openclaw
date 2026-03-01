@@ -157,16 +157,13 @@ export function createAcpReplyProjector(params: {
     if (!params.shouldSendToolSummaries) {
       return;
     }
-    if (settings.metaMode === "off" && opts?.force !== true) {
-      return;
-    }
     const bounded = truncateText(text.trim(), settings.maxStatusChars);
     if (!bounded) {
       return;
     }
     const formatted = prefixSystemMessage(bounded);
     const hash = hashText(formatted);
-    const shouldDedupe = opts?.dedupe !== false;
+    const shouldDedupe = settings.repeatSuppression && opts?.dedupe !== false;
     if (shouldDedupe && lastStatusHash === hash) {
       return;
     }
@@ -184,7 +181,7 @@ export function createAcpReplyProjector(params: {
     event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
     opts?: { force?: boolean },
   ) => {
-    if (!params.shouldSendToolSummaries || settings.metaMode === "off") {
+    if (!params.shouldSendToolSummaries) {
       return;
     }
     if (!isAcpTagVisible(settings, event.tag)) {
@@ -198,11 +195,7 @@ export function createAcpReplyProjector(params: {
     const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
     const isStart = status === "in_progress" || event.tag === "tool_call";
 
-    if (settings.metaMode === "verbose") {
-      if (lastToolHash === hash) {
-        return;
-      }
-    } else if (settings.metaMode === "minimal") {
+    if (settings.repeatSuppression) {
       if (toolCallId) {
         const state = toolLifecycleById.get(toolCallId) ?? {
           started: false,
@@ -299,10 +292,7 @@ export function createAcpReplyProjector(params: {
       if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
-      if (event.tag === "usage_update") {
-        if (!settings.showUsage) {
-          return;
-        }
+      if (event.tag === "usage_update" && settings.repeatSuppression) {
         const usageTuple =
           typeof event.used === "number" && typeof event.size === "number"
             ? `${event.used}/${event.size}`

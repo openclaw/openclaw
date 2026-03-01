@@ -64,7 +64,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([{ kind: "block", text: "What now?" }]);
   });
 
-  it("suppresses usage_update by default and allows deduped usage when enabled", async () => {
+  it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
     const hidden: Array<{ kind: string; text?: string }> = [];
     const hiddenProjector = createAcpReplyProjector({
       cfg: createCfg(),
@@ -91,7 +91,6 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 64,
-            showUsage: true,
             tagVisibility: {
               usage_update: true,
             },
@@ -153,7 +152,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([]);
   });
 
-  it("dedupes repeated tool lifecycle updates in minimal mode", async () => {
+  it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg(),
@@ -227,7 +226,7 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[0]?.text).not.toContain("call_ABC123 (");
   });
 
-  it("respects metaMode=off and still streams assistant text", async () => {
+  it("allows repeated status/tool summaries when repeatSuppression is disabled", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -236,7 +235,10 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
-            metaMode: "off",
+            repeatSuppression: false,
+            tagVisibility: {
+              available_commands_update: true,
+            },
           },
         },
       }),
@@ -253,9 +255,21 @@ describe("createAcpReplyProjector", () => {
       tag: "available_commands_update",
     });
     await projector.onEvent({
+      type: "status",
+      text: "available commands updated",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
       type: "tool_call",
       text: "tool call",
       tag: "tool_call",
+      toolCallId: "x",
+      status: "in_progress",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      text: "tool call",
+      tag: "tool_call_update",
       toolCallId: "x",
       status: "in_progress",
     });
@@ -266,10 +280,21 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toEqual([{ kind: "block", text: "hello" }]);
+    expect(deliveries.filter((entry) => entry.kind === "tool").length).toBe(4);
+    expect(deliveries[0]).toEqual({
+      kind: "tool",
+      text: prefixSystemMessage("available commands updated"),
+    });
+    expect(deliveries[1]).toEqual({
+      kind: "tool",
+      text: prefixSystemMessage("available commands updated"),
+    });
+    expect(deliveries[2]?.text).toContain("Tool Call");
+    expect(deliveries[3]?.text).toContain("Tool Call");
+    expect(deliveries[4]).toEqual({ kind: "block", text: "hello" });
   });
 
-  it("allows non-identical status updates in metaMode=verbose while suppressing exact duplicates", async () => {
+  it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -278,7 +303,6 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
-            metaMode: "verbose",
             tagVisibility: {
               available_commands_update: true,
             },
@@ -324,7 +348,6 @@ describe("createAcpReplyProjector", () => {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
             maxTurnChars: 5,
-            metaMode: "minimal",
           },
         },
       }),
@@ -363,7 +386,6 @@ describe("createAcpReplyProjector", () => {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
             maxMetaEventsPerTurn: 1,
-            showUsage: true,
             tagVisibility: {
               usage_update: true,
             },
