@@ -265,7 +265,7 @@ describe("delivery-queue", () => {
   });
 
   describe("recoverPendingDeliveries", () => {
-    const baseCfg = {};
+    const baseCfg: OpenClawConfig = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
     const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
@@ -292,15 +292,17 @@ describe("delivery-queue", () => {
       deliver,
       log = createLog(),
       maxRecoveryMs,
+      cfg = baseCfg,
     }: {
       deliver: ReturnType<typeof vi.fn>;
       log?: ReturnType<typeof createLog>;
       maxRecoveryMs?: number;
+      cfg?: OpenClawConfig;
     }) => {
       const result = await recoverPendingDeliveries({
         deliver: deliver as DeliverFn,
         log,
-        cfg: baseCfg,
+        cfg,
         stateDir: tmpDir,
         ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
@@ -340,6 +342,27 @@ describe("delivery-queue", () => {
       expect(result.deferredBackoff).toBe(0);
 
       // Entry should be in failed/ directory.
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    });
+
+    it("respects delivery.maxRetries override during recovery", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      setEntryState(id, { retryCount: 2 });
+
+      const deliver = vi.fn();
+      const { result } = await runRecovery({
+        deliver,
+        cfg: { delivery: { maxRetries: 2 } },
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.skippedMaxRetries).toBe(1);
+      expect(result.deferredBackoff).toBe(0);
+
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
     });

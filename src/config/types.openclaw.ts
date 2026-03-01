@@ -105,6 +105,13 @@ export type OpenClawConfig = {
   session?: SessionConfig;
   web?: WebConfig;
   channels?: ChannelsConfig;
+  delivery?: {
+    /**
+     * Max delivery retry attempts before an entry is moved to delivery-queue/failed.
+     * Default: 5.
+     */
+    maxRetries?: number;
+  };
   cron?: CronConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;

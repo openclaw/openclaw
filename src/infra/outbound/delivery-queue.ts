@@ -58,6 +58,18 @@ export type RecoverySummary = {
   deferredBackoff: number;
 };
 
+export function resolveDeliveryMaxRetries(cfg: OpenClawConfig): number {
+  const configuredMaxRetries = cfg.delivery?.maxRetries;
+  if (
+    typeof configuredMaxRetries === "number" &&
+    Number.isInteger(configuredMaxRetries) &&
+    configuredMaxRetries >= 0
+  ) {
+    return configuredMaxRetries;
+  }
+  return MAX_RETRIES;
+}
+
 function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
@@ -273,7 +285,7 @@ export interface RecoveryLogger {
 
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.
- * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * Uses exponential backoff and moves entries that exceed max retries to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
@@ -294,6 +306,7 @@ export async function recoverPendingDeliveries(opts: {
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const maxRetries = resolveDeliveryMaxRetries(opts.cfg);
 
   let recovered = 0;
   let failed = 0;
@@ -307,9 +320,9 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
-    if (entry.retryCount >= MAX_RETRIES) {
+    if (entry.retryCount >= maxRetries) {
       opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
+        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${maxRetries}) — moving to failed/`,
       );
       try {
         await moveToFailed(entry.id, opts.stateDir);

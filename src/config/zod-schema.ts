@@ -369,6 +369,12 @@ export const OpenClawSchema = z
     commands: CommandsSchema,
     approvals: ApprovalsSchema,
     session: SessionSchema,
+    delivery: z
+      .object({
+        maxRetries: z.number().int().min(0).optional(),
+      })
+      .strict()
+      .optional(),
     cron: z
       .object({
         enabled: z.boolean().optional(),

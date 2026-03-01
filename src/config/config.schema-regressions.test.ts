@@ -75,6 +75,29 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts delivery.maxRetries", () => {
+    const res = validateConfigObject({
+      delivery: {
+        maxRetries: 3,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects negative delivery.maxRetries", () => {
+    const res = validateConfigObject({
+      delivery: {
+        maxRetries: -1,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("delivery.maxRetries");
+    }
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
