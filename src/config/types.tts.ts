@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "fishaudio" | "openai" | "edge";
 
 export type TtsMode = "final" | "all";
 
@@ -52,6 +52,14 @@ export type TtsConfig = {
       useSpeakerBoost?: boolean;
       speed?: number;
     };
+  };
+  /** Fish Audio configuration. */
+  fishaudio?: {
+    apiKey?: string;
+    baseUrl?: string;
+    voiceId?: string;
+    format?: "mp3" | "wav" | "pcm" | "opus";
+    latency?: "normal" | "balanced";
   };
   /** OpenAI configuration. */
   openai?: {

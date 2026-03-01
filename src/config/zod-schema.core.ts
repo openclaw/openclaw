@@ -353,7 +353,7 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.enum(["elevenlabs", "fishaudio", "openai", "edge"]);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
 export const TtsConfigSchema = z
@@ -395,6 +395,16 @@ export const TtsConfigSchema = z
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    fishaudio: z
+      .object({
+        apiKey: z.string().optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        voiceId: z.string().optional(),
+        format: z.enum(["mp3", "wav", "pcm", "opus"]).optional(),
+        latency: z.enum(["normal", "balanced"]).optional(),
       })
       .strict()
       .optional(),

@@ -120,7 +120,7 @@ Example:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+Voice Call uses the core `messages.tts` configuration (OpenAI, ElevenLabs, or Fish Audio) for
 streaming speech on calls. You can override it under the plugin config with the
 same shape — overrides deep-merge with `messages.tts`.
 

@@ -16,11 +16,12 @@ x-i18n:
 
 # 文本转语音（TTS）
 
-OpenClaw 可以使用 ElevenLabs、OpenAI 或 Edge TTS 将出站回复转换为音频。它可以在任何 OpenClaw 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
+OpenClaw 可以使用 ElevenLabs、Fish Audio、OpenAI 或 Edge TTS 将出站回复转换为音频。它可以在任何 OpenClaw 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
 
 ## 支持的服务
 
 - **ElevenLabs**（主要或备用提供商）
+- **Fish Audio**（主要或备用提供商）
 - **OpenAI**（主要或备用提供商；也用于摘要）
 - **Edge TTS**（主要或备用提供商；使用 `node-edge-tts`，无 API 密钥时为默认）
 
@@ -32,9 +33,10 @@ Edge TTS 通过 `node-edge-tts` 库使用 Microsoft Edge 的在线神经网络 T
 
 ## 可选密钥
 
-如果你想使用 OpenAI 或 ElevenLabs：
+如果你想使用 OpenAI、ElevenLabs 或 Fish Audio：
 
 - `ELEVENLABS_API_KEY`（或 `XI_API_KEY`）
+- `FISH_API_KEY`
 - `OPENAI_API_KEY`
 
 Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默认使用 Edge TTS（除非通过 `messages.tts.edge.enabled=false` 禁用）。
@@ -47,6 +49,7 @@ Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默
 - [OpenAI 音频 API 参考](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs 文本转语音](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs 认证](https://elevenlabs.io/docs/api-reference/authentication)
+- [Fish Audio 文本转语音](https://docs.fish.audio/developer-guide/core-features/text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft 语音输出格式](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -132,6 +135,25 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
 }
 ```
 
+### Fish Audio 主要
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "fishaudio",
+      fishaudio: {
+        apiKey: "fish_audio_api_key",
+        voiceId: "voice_id",
+        format: "mp3",
+        latency: "balanced",
+      },
+    },
+  },
+}
+```
+
 ### 禁用 Edge TTS
 
 ```json5
@@ -198,15 +220,15 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
   - `tagged` 仅在回复包含 `[[tts]]` 标签时发送音频。
 - `enabled`：旧版开关（doctor 将其迁移到 `auto`）。
 - `mode`：`"final"`（默认）或 `"all"`（包括工具/分块回复）。
-- `provider`：`"elevenlabs"`、`"openai"` 或 `"edge"`（自动备用）。
-- 如果 `provider` **未设置**，OpenClaw 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），否则是 `edge`。
+- `provider`：`"elevenlabs"`、`"fishaudio"`、`"openai"` 或 `"edge"`（自动备用）。
+- 如果 `provider` **未设置**，OpenClaw 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），然后是 `fishaudio`（如果有密钥），否则是 `edge`。
 - `summaryModel`：用于自动摘要的可选廉价模型；默认为 `agents.defaults.model.primary`。
   - 接受 `provider/model` 或配置的模型别名。
 - `modelOverrides`：允许模型发出 TTS 指令（默认开启）。
 - `maxTextLength`：TTS 输入的硬性上限（字符）。超出时 `/tts audio` 会失败。
 - `timeoutMs`：请求超时（毫秒）。
 - `prefsPath`：覆盖本地偏好 JSON 路径（提供商/限制/摘要）。
-- `apiKey` 值回退到环境变量（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY`）。
+- `apiKey` 值回退到环境变量（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`FISH_API_KEY`、`OPENAI_API_KEY`）。
 - `elevenlabs.baseUrl`：覆盖 ElevenLabs API 基础 URL。
 - `elevenlabs.voiceSettings`：
   - `stability`、`similarityBoost`、`style`：`0..1`
@@ -215,6 +237,11 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
 - `elevenlabs.applyTextNormalization`：`auto|on|off`
 - `elevenlabs.languageCode`：2 字母 ISO 639-1（例如 `en`、`de`）
 - `elevenlabs.seed`：整数 `0..4294967295`（尽力确定性）
+- `fishaudio.apiKey`：Fish Audio API 密钥；回退到 `FISH_API_KEY`。
+- `fishaudio.baseUrl`：覆盖 Fish Audio API 基础 URL（默认 `https://api.fish.audio`）。
+- `fishaudio.voiceId`：语音参考 ID，用于语音选择/克隆。
+- `fishaudio.format`：输出音频格式（`mp3`、`wav`、`pcm`、`opus`）。
+- `fishaudio.latency`：延迟模式（`normal`、`balanced`）。
 - `edge.enabled`：允许 Edge TTS 使用（默认 `true`；无 API 密钥）。
 - `edge.voice`：Edge 神经网络语音名称（例如 `en-US-MichelleNeural`）。
 - `edge.lang`：语言代码（例如 `en-US`）。
@@ -242,8 +269,8 @@ Here you go.
 
 可用指令键（启用时）：
 
-- `provider`（`openai` | `elevenlabs` | `edge`）
-- `voice`（OpenAI 语音）或 `voiceId`（ElevenLabs）
+- `provider`（`openai` | `elevenlabs` | `fishaudio` | `edge`）
+- `voice`（OpenAI 语音）或 `voiceId`（ElevenLabs / Fish Audio）
 - `model`（OpenAI TTS 模型或 ElevenLabs 模型 ID）
 - `stability`、`similarityBoost`、`style`、`speed`、`useSpeakerBoost`
 - `applyTextNormalization`（`auto|on|off`）
@@ -295,9 +322,9 @@ Here you go.
 
 ## 输出格式（固定）
 
-- **Telegram**：Opus 语音消息（ElevenLabs 的 `opus_48000_64`，OpenAI 的 `opus`）。
+- **Telegram**：Opus 语音消息（ElevenLabs 的 `opus_48000_64`，OpenAI 和 Fish Audio 的 `opus`）。
   - 48kHz / 64kbps 是语音消息的良好权衡，圆形气泡所必需。
-- **其他渠道**：MP3（ElevenLabs 的 `mp3_44100_128`，OpenAI 的 `mp3`）。
+- **其他渠道**：MP3（ElevenLabs 的 `mp3_44100_128`，OpenAI 和 Fish Audio 的 `mp3`）。
   - 44.1kHz / 128kbps 是语音清晰度的默认平衡。
 - **Edge TTS**：使用 `edge.outputFormat`（默认 `audio-24khz-48kbitrate-mono-mp3`）。
   - `node-edge-tts` 接受 `outputFormat`，但并非所有格式都可从 Edge 服务获得。citeturn2search0

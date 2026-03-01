@@ -29,6 +29,7 @@ import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   edgeTTS,
   elevenLabsTTS,
+  fishAudioTTS,
   inferEdgeExtension,
   isValidOpenAIModel,
   isValidOpenAIVoice,
@@ -56,6 +57,10 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_FISHAUDIO_BASE_URL = "https://api.fish.audio";
+const DEFAULT_FISHAUDIO_VOICE_ID = "8ef4a238714b45718ce04243307c57a7";
+const DEFAULT_FISHAUDIO_LATENCY = "balanced" as const;
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -69,6 +74,7 @@ const TELEGRAM_OUTPUT = {
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
+  fishaudio: "opus" as const,
   extension: ".opus",
   voiceCompatible: true,
 };
@@ -76,6 +82,7 @@ const TELEGRAM_OUTPUT = {
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
+  fishaudio: "mp3" as const,
   extension: ".mp3",
   voiceCompatible: false,
 };
@@ -83,6 +90,7 @@ const DEFAULT_OUTPUT = {
 const TELEPHONY_OUTPUT = {
   openai: { format: "pcm" as const, sampleRate: 24000 },
   elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+  fishaudio: { format: "pcm" as const, sampleRate: 24000 },
 };
 
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
@@ -109,6 +117,13 @@ export type ResolvedTtsConfig = {
       useSpeakerBoost: boolean;
       speed: number;
     };
+  };
+  fishaudio: {
+    apiKey?: string;
+    baseUrl: string;
+    referenceId: string;
+    format: "mp3" | "wav" | "pcm" | "opus";
+    latency: "normal" | "balanced";
   };
   openai: {
     apiKey?: string;
@@ -168,6 +183,9 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  fishaudio?: {
+    referenceId?: string;
   };
 };
 
@@ -284,6 +302,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
           DEFAULT_ELEVENLABS_VOICE_SETTINGS.useSpeakerBoost,
         speed: raw.elevenlabs?.voiceSettings?.speed ?? DEFAULT_ELEVENLABS_VOICE_SETTINGS.speed,
       },
+    },
+    fishaudio: {
+      apiKey: raw.fishaudio?.apiKey,
+      baseUrl: raw.fishaudio?.baseUrl?.trim() || DEFAULT_FISHAUDIO_BASE_URL,
+      referenceId: raw.fishaudio?.voiceId ?? DEFAULT_FISHAUDIO_VOICE_ID,
+      format: raw.fishaudio?.format ?? "mp3",
+      latency: raw.fishaudio?.latency ?? DEFAULT_FISHAUDIO_LATENCY,
     },
     openai: {
       apiKey: raw.openai?.apiKey,
@@ -441,6 +466,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "fishaudio")) {
+    return "fishaudio";
+  }
   return "edge";
 }
 
@@ -505,13 +533,16 @@ export function resolveTtsApiKey(
   if (provider === "elevenlabs") {
     return config.elevenlabs.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
   }
+  if (provider === "fishaudio") {
+    return config.fishaudio.apiKey || process.env.FISH_API_KEY;
+  }
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "fishaudio", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -638,6 +669,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let providerOutputFormat: string;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -661,6 +693,21 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.elevenlabs;
+      } else if (provider === "fishaudio") {
+        const referenceIdOverride = params.overrides?.fishaudio?.referenceId;
+        const fishaudioFormat =
+          channelId === "telegram" ? output.fishaudio : config.fishaudio.format;
+        audioBuffer = await fishAudioTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.fishaudio.baseUrl,
+          referenceId: referenceIdOverride ?? config.fishaudio.referenceId,
+          format: fishaudioFormat,
+          latency: config.fishaudio.latency,
+          timeoutMs: config.timeoutMs,
+        });
+        providerOutputFormat = fishaudioFormat;
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -672,6 +719,7 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+        providerOutputFormat = output.openai;
       }
 
       const latencyMs = Date.now() - providerStart;
@@ -688,7 +736,7 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat: providerOutputFormat,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -749,6 +797,29 @@ export async function textToSpeechTelephony(params: {
           applyTextNormalization: config.elevenlabs.applyTextNormalization,
           languageCode: config.elevenlabs.languageCode,
           voiceSettings: config.elevenlabs.voiceSettings,
+          timeoutMs: config.timeoutMs,
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: output.format,
+          sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "fishaudio") {
+        const output = TELEPHONY_OUTPUT.fishaudio;
+        const audioBuffer = await fishAudioTTS({
+          text: params.text,
+          apiKey,
+          baseUrl: config.fishaudio.baseUrl,
+          referenceId: config.fishaudio.referenceId,
+          format: output.format,
+          latency: config.fishaudio.latency,
+          sampleRate: output.sampleRate,
           timeoutMs: config.timeoutMs,
         });
 
@@ -943,6 +1014,7 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  DEFAULT_FISHAUDIO_VOICE_ID,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,

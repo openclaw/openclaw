@@ -32,6 +32,10 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+function normalizeFishAudioBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "");
+}
+
 function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
@@ -139,7 +143,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "fishaudio" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -159,6 +168,22 @@ export function parseTtsDirectives(
             break;
           case "voiceid":
           case "voice_id":
+            if (!policy.allowVoice) {
+              break;
+            }
+            // Generic voiceId sets both providers; the active one uses it
+            if (isValidVoiceId(rawValue)) {
+              overrides.elevenlabs = { ...overrides.elevenlabs, voiceId: rawValue };
+            }
+            overrides.fishaudio = { ...overrides.fishaudio, referenceId: rawValue };
+            break;
+          case "referenceid":
+          case "reference_id":
+            if (!policy.allowVoice) {
+              break;
+            }
+            overrides.fishaudio = { ...overrides.fishaudio, referenceId: rawValue };
+            break;
           case "elevenlabs_voice":
           case "elevenlabsvoice":
             if (!policy.allowVoice) {
@@ -626,6 +651,54 @@ export async function openaiTTS(params: {
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fishAudioTTS(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  referenceId?: string;
+  format: "mp3" | "wav" | "pcm" | "opus";
+  latency: "normal" | "balanced";
+  sampleRate?: number;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, baseUrl, referenceId, format, latency, sampleRate, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const body: Record<string, unknown> = {
+      text,
+      format,
+      latency,
+    };
+    if (referenceId) {
+      body.reference_id = referenceId;
+    }
+    if (sampleRate) {
+      body.sample_rate = sampleRate;
+    }
+
+    const response = await fetch(`${normalizeFishAudioBaseUrl(baseUrl)}/v1/tts`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Fish Audio API error (${response.status})`);
     }
 
     return Buffer.from(await response.arrayBuffer());
