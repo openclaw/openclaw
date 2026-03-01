@@ -207,6 +207,28 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("uses persisted session levels when runtime overrides are absent", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: {
+        sessionId: "levels-1",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        verboseLevel: "full",
+        reasoningLevel: "stream",
+        elevatedLevel: "ask",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("Think: high");
+    expect(text).toContain("verbose:full");
+    expect(text).toContain("Reasoning: stream");
+    expect(text).toContain("elevated:ask");
+  });
+
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },
