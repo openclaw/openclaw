@@ -41,7 +41,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
 }
 
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
-  if (job.delivery && job.sessionTarget !== "isolated") {
+  // delivery: { mode: "none" } is a no-op — skip validation so main-session
+  // systemEvent jobs can include it without triggering the isolated-only guard.
+  if (!job.delivery || job.delivery.mode === "none") {
+    return;
+  }
+  if (job.sessionTarget !== "isolated") {
     throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
   }
 }
