@@ -292,6 +292,8 @@ export type DiscordAccountConfig = {
    * Discord supports both unicode emoji and custom emoji names.
    */
   ackReaction?: string;
+  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Bot activity status text (e.g. "Watching X"). */
   activity?: string;
   /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
