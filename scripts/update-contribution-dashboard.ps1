@@ -225,20 +225,17 @@ $miniBlock = @"
 <!-- AUTO:contribution-dashboard:START -->
 > **Last updated:** $Now
 
-| Item | Value |
-|------|-------|
-| Total Score | **${totalScore} pt** |
-| Contributions | $totalContrib |
-| PR Merged | $mergedCount |
-| PR Open | $openCount |
-| MRR | KRW 0 (pre-revenue) |
+| Total Score | Contributions | PR Merged | PR Open | MRR |
+|-------------|---------------|-----------|---------|-----|
+| **${totalScore} pt** | $totalContrib | $mergedCount | $openCount | KRW 0 |
 
 ``````mermaid
 xychart-beta
-    title "Contribution Score (pt)"
+    title "Contribution (bar, pt) vs Monetization (line, 10k KRW)"
     x-axis [$lbl]
-    y-axis "score" 0 --> 50
+    y-axis "value" 0 --> 50
     bar [$pts]
+    line [$rev]
 ``````
 <!-- AUTO:contribution-dashboard:END -->
 "@
