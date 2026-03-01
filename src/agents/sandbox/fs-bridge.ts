@@ -24,7 +24,7 @@ type PathSafetyOptions = {
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowMissingTarget?: boolean;
-  allowedTypes?: readonly SafeOpenSyncAllowedType[];
+  allowedType?: SafeOpenSyncAllowedType;
 };
 
 export type SandboxResolvedPath = {
@@ -137,7 +137,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     await this.assertPathSafety(target, {
       action: "create directories",
       requireWritable: true,
-      allowedTypes: ["directory"],
+      allowedType: "directory",
     });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
@@ -264,7 +264,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
       aliasPolicy: options.aliasPolicy,
-      allowedTypes: options.allowedTypes,
+      allowedType: options.allowedType,
     });
     if (!guarded.ok) {
       if (guarded.reason !== "path" || options.allowMissingTarget === false) {
