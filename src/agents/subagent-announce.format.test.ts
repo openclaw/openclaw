@@ -2002,5 +2002,57 @@ describe("subagent announce formatting", () => {
       const msg = typeof call?.params?.message === "string" ? call.params.message : "";
       expect(msg).toContain("❌ Subagent main failed");
     });
+
+    it("preserves error headers even when announceHeader is false", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: false } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("error details");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-false-error",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        outcome: { status: "error" },
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).toContain("❌ Subagent main failed");
+      expect(msg).toContain("error details");
+    });
+
+    it("preserves timeout headers even when announceHeader is false", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: false } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("partial output");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-false-timeout",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        outcome: { status: "timeout" },
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).toContain("⏱️ Subagent main timed out");
+      expect(msg).toContain("partial output");
+    });
   });
 });

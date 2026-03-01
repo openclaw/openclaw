@@ -89,8 +89,10 @@ function buildCompletionDeliveryMessage(params: {
   const cfg = loadConfig();
   const customHeader = resolveAnnounceHeader(cfg);
 
-  // If announceHeader is false, suppress header entirely and deliver only the body.
-  if (customHeader === false) {
+  // If announceHeader is false, suppress header for non-error/timeout outcomes.
+  const isErrorOrTimeout =
+    params.outcome?.status === "error" || params.outcome?.status === "timeout";
+  if (customHeader === false && !isErrorOrTimeout) {
     return hasFindings ? findingsText : "";
   }
 
