@@ -13,15 +13,9 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and loads plugins for human-readable output", () => {
+  it("matches status route and always loads plugins for security parity", () => {
     const route = expectRoute(["status"]);
-    expect(typeof route?.loadPlugins).toBe("function");
-    const loadPlugins = route?.loadPlugins;
-    if (typeof loadPlugins !== "function") {
-      throw new Error("expected status route loadPlugins predicate");
-    }
-    expect(loadPlugins(["node", "openclaw", "status"])).toBe(true);
-    expect(loadPlugins(["node", "openclaw", "status", "--json"])).toBe(false);
+    expect(route?.loadPlugins).toBe(true);
   });
 
   it("matches health route without eager plugin loading", () => {
