@@ -1172,7 +1172,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private runQmd(args: string[], opts?: { timeoutMs?: number; discardOutput?: boolean }) {
+  private async runQmd(args: string[], opts?: { timeoutMs?: number; discardOutput?: boolean }) {
     // Subprocess spawning consolidated into runSubprocess() — use that for new commands.
     return this.runSubprocess({
       command: this.qmd.command,
