@@ -175,7 +175,7 @@ export async function fetchBrowserJson<T>(
       throw new Error("browser control disabled");
     }
     const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
-    const parsed = new URL(url, "http://localhost");
+    const parsed = new URL(url, "http://127.0.0.1");
     const query: Record<string, unknown> = {};
     for (const [key, value] of parsed.searchParams.entries()) {
       query[key] = value;
