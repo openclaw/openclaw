@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -11,6 +12,28 @@ const execFileAsync = promisify(execFile);
 
 function resolveHomeDir(): string {
   return process.env.HOME ?? os.homedir();
+}
+
+function normalizeProfile(profile: string | undefined): string | undefined {
+  const trimmed = profile?.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function hasGatewayLaunchAgentPlist(homeDir: string): boolean {
+  const launchAgentsDir = path.join(homeDir, "Library", "LaunchAgents");
+  const normalizedProfile = normalizeProfile(process.env.OPENCLAW_PROFILE);
+  const labels = [
+    resolveGatewayLaunchAgentLabel(),
+    resolveGatewayLaunchAgentLabel(normalizedProfile),
+    "com.openclaw.gateway",
+    normalizedProfile ? `com.openclaw.${normalizedProfile}` : undefined,
+    "bot.molt.gateway",
+    normalizedProfile ? `bot.molt.${normalizedProfile}` : undefined,
+  ].filter((label): label is string => Boolean(label));
+  return labels.some((label) => fs.existsSync(path.join(launchAgentsDir, `${label}.plist`)));
 }
 
 export async function noteMacLaunchAgentOverrides() {
@@ -31,6 +54,32 @@ export async function noteMacLaunchAgentOverrides() {
     `  rm ${displayMarkerPath}`,
   ].filter((line): line is string => Boolean(line));
   note(lines.join("\n"), "Gateway (macOS)");
+}
+
+export function noteMacAutomationPermissionContext(deps?: {
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  hasGatewayLaunchAgentPlist?: (homeDir: string) => boolean;
+  noteFn?: typeof note;
+}) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return;
+  }
+  const homeDir = deps?.homeDir ?? resolveHomeDir();
+  const hasLaunchAgent =
+    deps?.hasGatewayLaunchAgentPlist?.(homeDir) ?? hasGatewayLaunchAgentPlist(homeDir);
+  if (!hasLaunchAgent) {
+    return;
+  }
+
+  const lines = [
+    "- macOS Automation permissions are scoped per process context.",
+    "- Terminal/iTerm Node grants do not automatically apply to LaunchAgent-run OpenClaw.",
+    "- If AppleScript works in Terminal but fails in OpenClaw (for example, Notes writes), re-grant Automation for the LaunchAgent context, then restart gateway.",
+    "- Guide: https://docs.openclaw.ai/platforms/mac/permissions",
+  ];
+  (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {

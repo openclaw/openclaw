@@ -42,3 +42,12 @@ launchctl getenv OPENCLAW_GATEWAY_PASSWORD
 launchctl unsetenv OPENCLAW_GATEWAY_TOKEN
 launchctl unsetenv OPENCLAW_GATEWAY_PASSWORD
 ```
+
+## macOS: Automation permission context mismatch
+
+Automation grants are per process context. A permission granted to Terminal/iTerm
+Node does not automatically apply to LaunchAgent-run OpenClaw.
+
+If AppleScript works in Terminal but fails inside OpenClaw (for example, Apple
+Notes writes), re-grant Automation for the LaunchAgent context and restart the
+gateway. See: [macOS permissions](/platforms/mac/permissions).
