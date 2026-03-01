@@ -424,12 +424,53 @@ class NodeRuntime(context: Context) {
     )
   }
 
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/NodeRuntime.kt
+=======
+  val micStatusText: StateFlow<String>
+    get() = micCapture.statusText
+
+  val micLiveTranscript: StateFlow<String?>
+    get() = micCapture.liveTranscript
+
+  val micIsListening: StateFlow<Boolean>
+    get() = micCapture.isListening
+
+  val micEnabled: StateFlow<Boolean>
+    get() = micCapture.micEnabled
+
+  val micQueuedMessages: StateFlow<List<String>>
+    get() = micCapture.queuedMessages
+
+  val micConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = micCapture.conversation
+
+  val micInputLevel: StateFlow<Float>
+    get() = micCapture.inputLevel
+
+  val micIsSending: StateFlow<Boolean>
+    get() = micCapture.isSending
+
+  private val talkMode: TalkModeManager by lazy {
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = true,
+      isConnected = { operatorConnected },
+    )
+  }
+
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/NodeRuntime.kt
     voiceReplySpeaker.setMainSessionKey(trimmed)
+=======
+    talkMode.setMainSessionKey(trimmed)
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -539,8 +580,24 @@ class NodeRuntime(context: Context) {
     }
 
     scope.launch {
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/NodeRuntime.kt
       talkEnabled.collect { enabled ->
         voiceReplySpeaker.setEnabled(enabled)
+=======
+      prefs.loadGatewayToken()
+    }
+
+    scope.launch {
+      prefs.talkEnabled.collect { enabled ->
+        // MicCaptureManager handles STT + send to gateway.
+        // TalkModeManager plays TTS on assistant responses.
+        micCapture.setMicEnabled(enabled)
+        if (enabled) {
+          // Mic on = user is on voice screen and wants TTS responses.
+          talkMode.ttsOnAllResponses = true
+          scope.launch { talkMode.ensureChatSubscribed() }
+        }
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -648,6 +705,7 @@ class NodeRuntime(context: Context) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/NodeRuntime.kt
   fun setWakeWords(words: List<String>) {
     prefs.setWakeWords(words)
     gatewayEventHandler.scheduleWakeWordsSyncIfNeeded()
@@ -675,6 +733,29 @@ class NodeRuntime(context: Context) {
 
   fun setOnboardingCompleted(value: Boolean) {
     prefs.setOnboardingCompleted(value)
+=======
+  fun setVoiceScreenActive(active: Boolean) {
+    if (!active) {
+      // User left voice screen — stop mic and TTS
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopTts()
+      micCapture.setMicEnabled(false)
+      prefs.setTalkEnabled(false)
+    }
+    // Don't re-enable on active=true; mic toggle drives that
+  }
+
+  fun setMicEnabled(value: Boolean) {
+    prefs.setTalkEnabled(value)
+    if (value) {
+      // Tapping mic on interrupts any active TTS (barge-in)
+      talkMode.stopTts()
+      talkMode.ttsOnAllResponses = true
+      scope.launch { talkMode.ensureChatSubscribed() }
+    }
+    micCapture.setMicEnabled(value)
+    externalAudioCaptureActive.value = value
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -900,9 +981,23 @@ class NodeRuntime(context: Context) {
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/NodeRuntime.kt
     if (event == "voicewake.changed") {
       gatewayEventHandler.handleVoiceWakeChangedEvent(payloadJson)
       return
+=======
+    micCapture.handleGatewayEvent(event, payloadJson)
+    talkMode.handleGatewayEvent(event, payloadJson)
+    chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun parseChatSendRunId(response: String): String? {
+    return try {
+      val root = json.parseToJsonElement(response).asObjectOrNull() ?: return null
+      root["runId"].asStringOrNull()
+    } catch (_: Throwable) {
+      null
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/NodeRuntime.kt
     }
 
     voiceReplySpeaker.handleGatewayEvent(event, payloadJson)

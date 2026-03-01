@@ -86,4 +86,34 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+<<<<<<< HEAD
 .claude/worktrees/
+=======
+.claude/settings.local.json
+.agents/
+.agents
+.agent/
+skills-lock.json
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig
+
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+Swabble/build/
+
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+.ant-colony/
+
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
+
+# Synthing
+**/.stfolder/
+apps/android/.kotlin/
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS)

@@ -132,6 +132,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setCanvasDebugStatusEnabled(value)
   }
 
+<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/MainViewModel.kt
   fun setWakeWords(words: List<String>) {
     runtime.setWakeWords(words)
   }
@@ -146,6 +147,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setTalkEnabled(enabled: Boolean) {
     runtime.setTalkEnabled(enabled)
+=======
+  fun setVoiceScreenActive(active: Boolean) {
+    runtime.setVoiceScreenActive(active)
+>>>>>>> 68db055f1 (feat(android): wire TalkModeManager into NodeRuntime for voice screen TTS):apps/android/app/src/main/java/ai/openclaw/android/MainViewModel.kt
   }
 
   fun setMicEnabled(enabled: Boolean) {
