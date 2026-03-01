@@ -1,4 +1,4 @@
----
+﻿---
 type: project-memory
 project: MAIBEAUTY
 tags: [vietnam, cosmetics, BnF, ecommerce, beauty]
@@ -812,11 +812,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 <!-- AUTO:subrepo-commits:START -->
 
+- `8565e2d docs(A019): Google Flow M02 통합 차후 계획 추가 (Phase 1/2 로드맵, Flow API 공개 대기) (03-01)`
 - `ed67d18 docs(A019): Google Flow 멀티샷 연출 MAIBEAUTY 적용 가이드 (03-01)`
 - `f01471c build(web-admin): switch production build to webpack for stable pages assets (02-26)`
 - `7c1eb07 fix(web-admin): normalize brands list payload to prevent dashboard crash (02-26)`
 - `a6429bf fix(api): prevent auth login 500 when brand code field is missing (02-26)`
-- `68aa2a1 fix(web-admin): stop login-page reload loop on expired tokens (02-26)`
 <!-- AUTO:subrepo-commits:END -->
 
 ---
@@ -829,3 +829,26 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - **Pocket TTS**: CPU 실시간 TTS + 음성 클로닝 — edge-tts 보완/대안
 
 _Last updated: 2026-02-24_
+
+---
+
+## 백로그 — M02 Google Flow 통합 (Flow API 공개 대기)
+
+> **등록일:** 2026-03-01 | **조건:** Google Flow API 공개 시 착수
+
+### 개요
+
+Google Flow (Veo 3.1) 멀티샷 연출을 M02 Viral Content Factory에 완전 통합.
+캐릭터 시트 + Gem 프롬프트 자동화 + Flow 배치 생성 → 기존 FFmpeg 파이프라인 연결.
+
+### 준비 작업 (지금 가능)
+
+- [ ] Gemini 구독 확인 (Google One AI Premium)
+- [ ] BnF 아바타 캐릭터 시트 4장 제작 (Midjourney/SD Turbo)
+- [ ] Google Gem "BnF TikTok Shot Designer" 설정
+- [ ] flow_video_composer.py API 인터페이스 스펙 설계
+
+### 모니터링
+
+- Google Flow API 공개 공지 주시 (Google I/O 2026 예상)
+- 상세 계획: `docs/A019-Google-Flow-Multishot-Integration.md` (Phase 2)
