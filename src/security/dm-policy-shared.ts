@@ -3,6 +3,8 @@ import { resolveControlCommandGate } from "../channels/command-gating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { MessageRateLimitResult, MessageRateLimiter } from "./message-rate-limit.js";
+import { buildRateLimitKey } from "./message-rate-limit.js";
 
 export function resolveEffectiveAllowFromLists(params: {
   allowFrom?: Array<string | number> | null;
@@ -299,4 +301,50 @@ export async function resolveDmAllowState(params: {
     allowCount,
     isMultiUserDm: hasWildcard || allowCount > 1,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit integration for the access decision pipeline
+// ---------------------------------------------------------------------------
+
+export type AccessDecisionWithRateLimit = {
+  decision: DmGroupAccessDecision;
+  reason: string;
+  rateLimited: boolean;
+  rateLimitResult?: MessageRateLimitResult;
+};
+
+/**
+ * Wraps a DM/group access decision with an optional rate-limit check.
+ * If the access decision is "allow" and a rate limiter is provided, the
+ * sender is checked against the rate limiter. If throttled, the decision
+ * is downgraded to "block" with the rate-limit reason.
+ */
+export function applyRateLimitToAccessDecision(params: {
+  decision: { decision: DmGroupAccessDecision; reason: string };
+  rateLimiter?: MessageRateLimiter;
+  channel: string;
+  accountId: string;
+  senderId: string;
+}): AccessDecisionWithRateLimit {
+  if (params.decision.decision !== "allow" || !params.rateLimiter) {
+    return { ...params.decision, rateLimited: false };
+  }
+
+  const key = buildRateLimitKey({
+    channel: params.channel,
+    accountId: params.accountId,
+    senderId: params.senderId,
+  });
+  const result = params.rateLimiter.check(key);
+  if (!result.allowed) {
+    return {
+      decision: "block",
+      reason: `rate-limited (${result.reason ?? "throttled"})`,
+      rateLimited: true,
+      rateLimitResult: result,
+    };
+  }
+
+  return { ...params.decision, rateLimited: false, rateLimitResult: result };
 }

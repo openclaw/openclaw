@@ -315,6 +315,52 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type MessageRateLimitConfig = {
+  /** Master switch for per-sender message rate limiting. @default true */
+  enabled?: boolean;
+  /** Max messages in a 60 s sliding window. @default 20 */
+  maxMessagesPerMinute?: number;
+  /** Max messages in a 3600 s sliding window. @default 200 */
+  maxMessagesPerHour?: number;
+  /** Max messages in a 10 s burst window. @default 5 */
+  burstLimit?: number;
+  /** Cooldown duration (ms) after a burst is detected. @default 60_000 */
+  cooldownMs?: number;
+  /** Sender IDs completely exempt from rate limiting. */
+  exemptSenders?: string[];
+  /** Channels completely exempt (e.g. "webchat" for local use). */
+  exemptChannels?: string[];
+  /** Background prune interval in ms; <=0 disables auto-prune. @default 60_000 */
+  pruneIntervalMs?: number;
+  /** Per-channel limit overrides. */
+  perChannel?: Record<
+    string,
+    {
+      maxMessagesPerMinute?: number;
+      maxMessagesPerHour?: number;
+      burstLimit?: number;
+    }
+  >;
+};
+
+export type CostBudgetConfig = {
+  /** Master switch (off by default). @default false */
+  enabled?: boolean;
+  /** Maximum daily spend per sender in cents (e.g. 500 = $5.00/day). @default 500 */
+  maxDailyCostCents?: number;
+  /** Maximum cost per single message in cents. @default 100 */
+  maxPerMessageCostCents?: number;
+  /** UTC hour at which daily budgets reset (0–23). @default 0 */
+  resetHourUtc?: number;
+};
+
+export type SecurityConfig = {
+  /** Per-sender/per-session message rate limiting. */
+  messageRateLimit?: MessageRateLimitConfig;
+  /** Optional per-sender daily cost budget (off by default). */
+  costBudget?: CostBudgetConfig;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;

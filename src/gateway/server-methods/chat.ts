@@ -9,6 +9,11 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import {
+  buildRateLimitKey,
+  createMessageRateLimiter,
+  type MessageRateLimiter,
+} from "../../security/message-rate-limit.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -63,6 +68,18 @@ type AbortedPartialSnapshot = {
   text: string;
   abortOrigin: AbortOrigin;
 };
+
+// Lazy-initialized module-level rate limiter for gateway chat messages.
+let chatRateLimiter: MessageRateLimiter | null = null;
+
+function getOrCreateChatRateLimiter(
+  rateLimitConfig?: import("../../config/types.gateway.js").MessageRateLimitConfig,
+): MessageRateLimiter {
+  if (!chatRateLimiter) {
+    chatRateLimiter = createMessageRateLimiter(rateLimitConfig);
+  }
+  return chatRateLimiter;
+}
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -756,6 +773,28 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Per-sender rate limit check for gateway chat messages.
+    const rateLimitCfg = cfg.security?.messageRateLimit;
+    if (rateLimitCfg?.enabled !== false) {
+      const limiter = getOrCreateChatRateLimiter(rateLimitCfg);
+      const clientInfo = client?.connect?.client;
+      const rateLimitKey = buildRateLimitKey({
+        channel: "webchat",
+        accountId: "gateway",
+        senderId: clientInfo?.id ?? "anonymous",
+        sessionKey,
+      });
+      const rlResult = limiter.check(rateLimitKey);
+      if (!rlResult.allowed) {
+        respond(
+          false,
+          { error: "rate_limited", retryAfterMs: rlResult.retryAfterMs },
+          errorShape(ErrorCodes.INVALID_REQUEST, "rate limited"),
+        );
+        return;
+      }
+    }
+
     if (stopCommand) {
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
@@ -784,6 +823,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+
+    // Record rate limit after dispatch is initiated (best-effort).
+    const recordRateLimit = () => {
+      const rlCfg = cfg.security?.messageRateLimit;
+      if (rlCfg?.enabled === false) {
+        return;
+      }
+      const limiter = getOrCreateChatRateLimiter(rlCfg);
+      const cInfo = client?.connect?.client;
+      const rlKey = buildRateLimitKey({
+        channel: "webchat",
+        accountId: "gateway",
+        senderId: cInfo?.id ?? "anonymous",
+        sessionKey,
+      });
+      limiter.record(rlKey);
+    };
+    recordRateLimit();
 
     try {
       const abortController = new AbortController();

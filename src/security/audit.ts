@@ -884,6 +884,73 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   return findings;
 }
 
+function collectMessageRateLimitFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const rlCfg = cfg.security?.messageRateLimit;
+
+  if (rlCfg?.enabled === false) {
+    findings.push({
+      checkId: "security.message_rate_limit_disabled",
+      severity: "warn",
+      title: "Message rate limiting is disabled",
+      detail:
+        "security.messageRateLimit.enabled is explicitly set to false. " +
+        "Per-sender rate limiting will not protect against message flooding or API credit burn.",
+      remediation:
+        "Set security.messageRateLimit.enabled to true (or remove the setting to use the default).",
+    });
+  }
+
+  const burstLimit = rlCfg?.burstLimit;
+  if (typeof burstLimit === "number" && burstLimit > 10) {
+    findings.push({
+      checkId: "security.message_rate_limit_high_burst",
+      severity: "info",
+      title: "Message rate limit burst threshold is high",
+      detail: `security.messageRateLimit.burstLimit is ${burstLimit} (>10 messages per 10 s window).`,
+    });
+  }
+
+  const exemptChannels = rlCfg?.exemptChannels;
+  if (Array.isArray(exemptChannels) && exemptChannels.length > 0) {
+    const knownChannels = [
+      "whatsapp",
+      "telegram",
+      "discord",
+      "slack",
+      "signal",
+      "imessage",
+      "webchat",
+    ];
+    const allExempt = knownChannels.every((ch) => exemptChannels.includes(ch));
+    if (allExempt) {
+      findings.push({
+        checkId: "security.message_rate_limit_exempt_all",
+        severity: "warn",
+        title: "All channels exempted from message rate limiting",
+        detail:
+          "security.messageRateLimit.exemptChannels includes all known channels; " +
+          "rate limiting is effectively bypassed.",
+        remediation: "Remove channels from the exempt list to re-enable rate limiting.",
+      });
+    }
+  }
+
+  const costCfg = cfg.security?.costBudget;
+  if (!costCfg?.enabled) {
+    findings.push({
+      checkId: "security.cost_budget_disabled",
+      severity: "info",
+      title: "Cost budgets are not enabled",
+      detail:
+        "security.costBudget is not enabled. Per-sender daily cost budgets provide an additional " +
+        "guardrail against runaway API spend.",
+    });
+  }
+
+  return findings;
+}
+
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -935,6 +1002,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
 
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
+  findings.push(...collectMessageRateLimitFindings(cfg));
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
