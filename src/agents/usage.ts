@@ -84,6 +84,17 @@ export const asFiniteNonNegativeNumber = (value: unknown): number | undefined =>
   return num;
 };
 
+export const sanitizeStoredTokenCount = (value: unknown): number | undefined => {
+  const nonNegative = asFiniteNonNegativeNumber(value);
+  if (nonNegative !== undefined) {
+    return nonNegative;
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value < 0) {
+    return 0;
+  }
+  return undefined;
+};
+
 const pickFirstFiniteNonNegative = (...values: unknown[]): number | undefined => {
   for (const value of values) {
     const num = asFiniteNonNegativeNumber(value);

@@ -10,9 +10,9 @@ import {
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import {
-  asFiniteNonNegativeNumber,
   derivePromptTokens,
   normalizeUsage,
+  sanitizeStoredTokenCount,
   type UsageLike,
 } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -178,17 +178,6 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   const totalLabel = formatTokenCount(total);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
-};
-
-const sanitizeStoredTokenCount = (value: unknown): number | undefined => {
-  const nonNegative = asFiniteNonNegativeNumber(value);
-  if (nonNegative !== undefined) {
-    return nonNegative;
-  }
-  if (typeof value === "number" && Number.isFinite(value) && value < 0) {
-    return 0;
-  }
-  return undefined;
 };
 
 export const formatContextUsageShort = (

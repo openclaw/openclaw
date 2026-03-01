@@ -4,6 +4,7 @@ import {
   hasNonzeroUsage,
   derivePromptTokens,
   deriveSessionTotalTokens,
+  sanitizeStoredTokenCount,
 } from "./usage.js";
 
 describe("normalizeUsage", () => {
@@ -183,5 +184,22 @@ describe("deriveSessionTotalTokens", () => {
       promptTokens: 2500, // Override
     });
     expect(totalTokens).toBe(2500);
+  });
+});
+
+describe("sanitizeStoredTokenCount", () => {
+  it("keeps valid non-negative numbers", () => {
+    expect(sanitizeStoredTokenCount(42)).toBe(42);
+    expect(sanitizeStoredTokenCount(0)).toBe(0);
+  });
+
+  it("clamps negative finite numbers to zero", () => {
+    expect(sanitizeStoredTokenCount(-1)).toBe(0);
+  });
+
+  it("returns undefined for invalid values", () => {
+    expect(sanitizeStoredTokenCount(undefined)).toBeUndefined();
+    expect(sanitizeStoredTokenCount(Number.NaN)).toBeUndefined();
+    expect(sanitizeStoredTokenCount("42")).toBeUndefined();
   });
 });

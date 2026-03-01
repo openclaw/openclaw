@@ -1,7 +1,7 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { asFiniteNonNegativeNumber } from "../agents/usage.js";
+import { sanitizeStoredTokenCount } from "../agents/usage.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -54,17 +54,6 @@ const buildFlags = (entry?: SessionEntry): string[] => {
     flags.push(`id:${sessionId}`);
   }
   return flags;
-};
-
-const sanitizeStoredTokenCount = (value: unknown): number | undefined => {
-  const nonNegative = asFiniteNonNegativeNumber(value);
-  if (nonNegative !== undefined) {
-    return nonNegative;
-  }
-  if (typeof value === "number" && Number.isFinite(value) && value < 0) {
-    return 0;
-  }
-  return undefined;
 };
 
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
