@@ -689,12 +689,38 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
+    // Remove ack reaction on NO_REPLY when removeAckAfterReply is enabled (like Discord does)
+    if (removeAckAfterReply) {
+      void statusReactionController.clear().catch((err) => {
+        logVerbose(`telegram: status reaction clear on NO_REPLY failed: ${String(err)}`);
+      });
+    } else {
+      void statusReactionController.setError().catch((err) => {
+        logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+      });
+    }
   }
 
   if (!hasFinalResponse) {
+    // Also remove ack reaction on NO_REPLY when removeAckAfterReply is enabled
+    if (!statusReactionController && removeAckAfterReply && ackReactionPromise) {
+      void ackReactionPromise.then((didAck) => {
+        if (!didAck) {
+          return;
+        }
+        reactionApi?.(chatId, msg.message_id ?? 0, []).catch((err) => {
+          if (!msg.message_id) {
+            return;
+          }
+          logAckFailure({
+            log: logVerbose,
+            channel: "telegram",
+            target: `${chatId}/${msg.message_id}`,
+            error: err,
+          });
+        });
+      });
+    }
     clearGroupHistory();
     return;
   }
