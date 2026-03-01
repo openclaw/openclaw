@@ -142,4 +142,3 @@ export function installOpenAiRateLimitShaper(): void {
 
   globalThis.fetch = shapedFetch;
 }
-
