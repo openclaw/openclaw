@@ -48,11 +48,40 @@ runs:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: "node22"
 
-    - name: Setup Bun
+    - name: Setup Bun (primary)
+      id: setup_bun_primary
       if: inputs.install-bun == 'true'
+      continue-on-error: true
       uses: oven-sh/setup-bun@v2
       with:
         bun-version: "1.3.9+cf6cdbbba"
+        token: ${{ github.token }}
+
+    - name: Setup Bun (retry)
+      id: setup_bun_retry
+      if: inputs.install-bun == 'true' && steps.setup_bun_primary.outcome == 'failure'
+      continue-on-error: true
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.3.9+cf6cdbbba"
+        token: ${{ github.token }}
+
+    - name: Setup Bun (fallback via npm)
+      if: inputs.install-bun == 'true' && steps.setup_bun_primary.outcome == 'failure' && steps.setup_bun_retry.outcome == 'failure'
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install -g bun@1.3.9+cf6cdbbba
+
+    - name: Verify Bun
+      if: inputs.install-bun == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v bun &>/dev/null; then
+          echo "::error::Bun setup failed after retry and fallback."
+          exit 1
+        fi
 
     - name: Runtime versions
       shell: bash
