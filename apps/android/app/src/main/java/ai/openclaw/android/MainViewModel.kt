@@ -197,4 +197,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     runtime.sendChat(message = message, thinking = thinking, attachments = attachments)
   }
+
+  /**
+   * Return the trusted gateway origin (scheme://host:port) built from stored config.
+   * Used by CanvasScreen to validate URLs before injecting auth headers.
+   */
+  fun gatewayOrigin(): String? {
+    val host = runtime.prefs.manualHost.value.ifEmpty { return null }
+    val port = runtime.prefs.manualPort.value
+    val scheme = if (runtime.prefs.manualTls.value) "https" else "http"
+    return "$scheme://$host:$port"
+  }
+
+  /** Retrieve the gateway token for authenticating HTTP requests (e.g. canvas WebView). */
+  fun loadGatewayToken(): String? = runtime.prefs.loadGatewayToken()
 }
