@@ -48,7 +48,9 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg }) => {
     const configured = listMattermostAccountIds(cfg).some((accountId) => {
       const account = resolveMattermostAccount({ cfg, accountId });
-      return Boolean(account.botToken && account.baseUrl);
+      const tokenConfigured =
+        Boolean(account.botToken) || hasConfiguredSecretInput(account.config.botToken);
+      return tokenConfigured && Boolean(account.baseUrl);
     });
     return {
       channel,

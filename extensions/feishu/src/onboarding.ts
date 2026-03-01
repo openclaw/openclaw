@@ -169,8 +169,22 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+    const topLevelConfigured = Boolean(
+      feishuCfg?.appId?.trim() && hasConfiguredSecretInput(feishuCfg?.appSecret),
+    );
+    const accountConfigured = Object.values(feishuCfg?.accounts ?? {}).some((account) => {
+      if (!account || typeof account !== "object") {
+        return false;
+      }
+      const accountAppId =
+        typeof account.appId === "string" ? account.appId.trim() : feishuCfg?.appId?.trim();
+      const accountSecretConfigured =
+        hasConfiguredSecretInput(account.appSecret) ||
+        hasConfiguredSecretInput(feishuCfg?.appSecret);
+      return Boolean(accountAppId && accountSecretConfigured);
+    });
+    const configured = topLevelConfigured || accountConfigured;
     const resolvedCredentials = resolveFeishuCredentials(feishuCfg);
-    const configured = Boolean(resolvedCredentials);
 
     // Try to probe if configured
     let probeResult = null;

@@ -213,9 +213,14 @@ export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   dmPolicy,
   getStatus: async ({ cfg }) => {
-    const configured = listZaloAccountIds(cfg).some((accountId) =>
-      Boolean(resolveZaloAccount({ cfg: cfg, accountId }).token),
-    );
+    const configured = listZaloAccountIds(cfg).some((accountId) => {
+      const account = resolveZaloAccount({ cfg: cfg, accountId });
+      return (
+        Boolean(account.token) ||
+        hasConfiguredSecretInput(account.config.botToken) ||
+        Boolean(account.config.tokenFile?.trim())
+      );
+    });
     return {
       channel,
       configured,
