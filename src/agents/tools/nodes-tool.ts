@@ -96,6 +96,9 @@ function extractPairingRequestId(message: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+/** Hard ceiling for screen_record / camera_clip durationMs to prevent gateway resource exhaustion. */
+export const MAX_RECORDING_DURATION_MS = 300_000; // 5 minutes
+
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
@@ -378,12 +381,16 @@ export function createNodesTool(options?: {
             if (facing !== "front" && facing !== "back") {
               throw new Error("invalid facing (front|back)");
             }
-            const durationMs =
+            const rawClipDurationMs =
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
                   : 3000;
+            const durationMs = Math.max(
+              1_000,
+              Math.min(rawClipDurationMs, MAX_RECORDING_DURATION_MS),
+            );
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
             const deviceId =
@@ -420,12 +427,13 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            const rawDurationMs =
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
                   : 10_000;
+            const durationMs = Math.max(1_000, Math.min(rawDurationMs, MAX_RECORDING_DURATION_MS));
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
