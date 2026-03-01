@@ -1,14 +1,16 @@
 """
-agent_base.py — 5 generic commands available to all agents.
+agent_base.py — generic commands + cross-agent intelligence helpers.
 
 Commands: status, files, read, log, config
+Cross-agent: cross_agent_recent(), parse_tasks_md()
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 OPENCLAW_CONFIG = os.path.expanduser("~/.openclaw/openclaw.json")
@@ -197,6 +199,114 @@ def cmd_config(agent, args):
         print(f"  {line}")
     if len(lines) > 30:
         print(f"  ... ({len(lines)} lines total)")
+
+
+# ── cross-agent intelligence ────────────────────────────────────────
+
+
+def cross_agent_recent(agents, hours=24):
+    """Scan all agent workspaces for recently modified files.
+
+    Returns list of (datetime, agent_id, relative_path) sorted newest first.
+    """
+    cutoff = datetime.now() - timedelta(hours=hours)
+    results = []
+
+    for aid, agent in agents.items():
+        ws = _workspace_path(agent)
+        if not ws.exists():
+            continue
+        try:
+            for f in ws.rglob("*"):
+                if not f.is_file():
+                    continue
+                # Skip hidden dirs, __pycache__, .git
+                parts = f.relative_to(ws).parts
+                if any(p.startswith(".") or p == "__pycache__" for p in parts):
+                    continue
+                try:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                except OSError:
+                    continue
+                if mtime >= cutoff:
+                    results.append((mtime, aid, str(f.relative_to(ws))))
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    return results
+
+
+def parse_tasks_md(path=None):
+    """Parse workspace/TASKS.md into structured data.
+
+    Returns dict with keys: 'pending', 'in_progress', 'completed', 'waiting'.
+    Each value is a list of dicts: {priority, text, assignee, extra}.
+    """
+    if path is None:
+        path = WORKSPACE_ROOT / "TASKS.md"
+    if not path.exists():
+        return {"pending": [], "in_progress": [], "completed": [], "waiting": []}
+
+    text = path.read_text()
+    result = {"pending": [], "in_progress": [], "completed": [], "waiting": []}
+
+    section = None
+    section_map = {
+        "待辦": "pending",
+        "進行中": "in_progress",
+        "完成": "completed",
+    }
+
+    # Priority pattern: [P0], [P1], [P2], [P3]
+    prio_re = re.compile(r"\[P(\d)\]")
+
+    for line in text.splitlines():
+        line_stripped = line.strip()
+
+        # Detect section headers
+        if line_stripped.startswith("## "):
+            heading = line_stripped[3:].strip()
+            section = section_map.get(heading)
+            continue
+
+        if section is None:
+            continue
+
+        # Parse task lines: - [ ] or - [-] or - [x]
+        task_match = re.match(r"^-\s*\[([ x\-])\]\s*(.*)", line_stripped)
+        if not task_match:
+            continue
+
+        marker = task_match.group(1)
+        body = task_match.group(2)
+
+        prio_match = prio_re.search(body)
+        priority = int(prio_match.group(1)) if prio_match else 9
+
+        # Extract assignee
+        assignee = ""
+        assignee_match = re.search(r"指派：([^\s—]+)", body)
+        if assignee_match:
+            assignee = assignee_match.group(1)
+
+        task = {
+            "priority": priority,
+            "text": body,
+            "assignee": assignee,
+            "marker": marker,
+        }
+
+        if marker == "x":
+            result["completed"].append(task)
+        elif marker == "-":
+            result["in_progress"].append(task)
+        elif "blocked" in body.lower() or "待" in body and "期限" not in body:
+            result["waiting"].append(task)
+        else:
+            result["pending"].append(task)
+
+    return result
 
 
 # ── registry ────────────────────────────────────────────────────────

@@ -4,6 +4,9 @@ wuji — unified CLI for managing OpenClaw agents.
 
 Usage:
     wuji list                     List all configured agents
+    wuji overview                 Global situational awareness
+    wuji search <query>           Cross-agent knowledge search
+    wuji pulse                    Infrastructure health check
     wuji <agent> <command> ...    Run command for an agent
     wuji <agent>                  Show agent help
 """
@@ -11,7 +14,10 @@ Usage:
 import importlib.util
 import json
 import os
+import re
+import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parent.parent  # workspace/
@@ -22,6 +28,8 @@ from lib.agent_base import (
     _find_agent,
     _load_openclaw,
     _workspace_path,
+    cross_agent_recent,
+    parse_tasks_md,
     print_agent_help,
     run_generic,
 )
@@ -140,6 +148,365 @@ def cmd_list():
     print(f"\n  {len(agents)} agents total\n")
 
 
+def cmd_overview():
+    """Global situational awareness — one screen to see everything."""
+    agents = discover_agents()
+
+    # ── Agents ──
+    try:
+        cfg = _load_openclaw()
+        bindings = cfg.get("bindings", [])
+    except Exception:
+        bindings = []
+
+    print(f"\n  ── Agents ({len(agents)}) {'─' * 44}")
+    for aid in sorted(agents):
+        a = agents[aid]
+        model_raw = a.get("model", {}).get("primary", "-")
+        # Shorten model name: "anthropic/claude-sonnet-4-5" → "sonnet-4.5"
+        model = model_raw.split("/")[-1] if "/" in model_raw else model_raw
+        if len(model) > 18:
+            model = model[:18]
+
+        n_groups = len([b for b in bindings if b.get("agentId") == aid])
+        grp_str = f"{n_groups} group{'s' if n_groups != 1 else ''}" if n_groups else "(no binding)"
+
+        # Last modified file
+        ws = _workspace_path(a)
+        last_str = ""
+        if ws.exists():
+            try:
+                files = [f for f in ws.rglob("*") if f.is_file()
+                         and not any(p.startswith(".") or p == "__pycache__"
+                                     for p in f.relative_to(ws).parts)]
+                if files:
+                    newest = max(files, key=lambda f: f.stat().st_mtime)
+                    mtime = datetime.fromtimestamp(newest.stat().st_mtime)
+                    last_str = f"last: {mtime:%m-%d %H:%M}"
+            except Exception:
+                pass
+
+        binding_marker = "✦" if n_groups > 0 else " "
+        print(f"  {aid:<14} {binding_marker} {model:<18} {grp_str:<14} {last_str}")
+
+    # ── Tasks ──
+    tasks = parse_tasks_md()
+    prio_emoji = {0: "🔴", 1: "🟡", 2: "🟢", 3: "⚪", 9: "⚪"}
+    has_tasks = any(tasks[k] for k in ("pending", "in_progress", "waiting"))
+
+    if has_tasks:
+        print(f"\n  ── Tasks {'─' * 53}")
+
+        def _clean_task_text(t):
+            """Strip [Pn] tag and trailing assignee info."""
+            text = re.sub(r"\[P\d\]\s*", "", t["text"])
+            text = re.sub(r"\s*—\s*指派.*$", "", text)
+            return text.strip()
+
+        # P0 first
+        p0_tasks = [t for t in tasks["in_progress"] + tasks["pending"] if t["priority"] == 0]
+        if p0_tasks:
+            for t in p0_tasks:
+                print(f"  🔴 P0: {_clean_task_text(t)}")
+        else:
+            print(f"  🔴 P0: [none]")
+
+        for t in tasks["in_progress"]:
+            if t["priority"] == 0:
+                continue
+            e = prio_emoji.get(t["priority"], "⚪")
+            print(f"  {e} P{t['priority']}: {_clean_task_text(t)} — in progress")
+
+        for t in tasks["pending"]:
+            if t["priority"] == 0:
+                continue
+            e = prio_emoji.get(t["priority"], "⚪")
+            print(f"  {e} P{t['priority']}: {_clean_task_text(t)}")
+
+        if tasks["waiting"]:
+            blocked = len([t for t in tasks["waiting"] if "blocked" in t["text"].lower()])
+            print(f"  ⏳ Waiting: {len(tasks['waiting'])} tasks"
+                  f"{f' ({blocked} blocked on external)' if blocked else ''}")
+
+    # ── Recent Activity ──
+    recent = cross_agent_recent(agents, hours=24)
+    if recent:
+        print(f"\n  ── Recent Activity (24h) {'─' * 38}")
+        shown = 0
+        for mtime, aid, relpath in recent:
+            if shown >= 10:
+                break
+            print(f"  {mtime:%m-%d %H:%M}  {aid:<14} {relpath}")
+            shown += 1
+        if len(recent) > 10:
+            print(f"  ... and {len(recent) - 10} more files")
+
+    # ── Scheduled Jobs ──
+    print(f"\n  ── Scheduled Jobs {'─' * 44}")
+    try:
+        out = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True, text=True, timeout=5
+        ).stdout
+        jobs = {}
+        for line in out.splitlines():
+            if re.search(r"openclaw|bg666|clawd|telegram-bridge", line, re.I):
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    pid, status, label = parts[0], parts[1], parts[2]
+                    # Skip unrelated apps (Telegram desktop etc.)
+                    if "application.com" in label or "com.cloudflare" in label:
+                        continue
+                    running = pid != "-" and pid != ""
+                    ok = status == "0" or running
+                    marker = "✅" if ok else "❌"
+                    state = f"running (pid {pid})" if running else f"exit {status}"
+                    # Shorten label
+                    short = label.replace("ai.openclaw.", "").replace("com.bg666.", "bg666:").replace("com.clawd.", "clawd:")
+                    jobs[label] = (marker, short, state)
+        if jobs:
+            for label, (marker, short, state) in sorted(jobs.items()):
+                print(f"  {marker} {short:<22} {state}")
+        else:
+            print("  (no matching launchd jobs)")
+    except Exception as e:
+        print(f"  ⚠️  launchctl error: {e}")
+
+    # ── Experience Memory ──
+    exp_script = os.path.expanduser("~/Clawd/workspace/experience-memory/search_experience")
+    if os.path.exists(exp_script):
+        print(f"\n  ── Experience Memory {'─' * 41}")
+        try:
+            out = subprocess.run(
+                [exp_script, "--stats"],
+                capture_output=True, text=True, timeout=10
+            ).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if "Total:" in line or "By severity:" in line:
+                    print(f"  {line}")
+        except Exception as e:
+            print(f"  ⚠️  {e}")
+
+    print()
+
+
+def cmd_search(query):
+    """Cross-agent knowledge search."""
+    if not query:
+        print("  usage: wuji search <query>")
+        return
+
+    agents = discover_agents()
+    found_any = False
+
+    # 1. Grep all agent knowledge/ directories
+    for aid in sorted(agents):
+        a = agents[aid]
+        ws = _workspace_path(a)
+        knowledge_dir = ws / "knowledge"
+        if not knowledge_dir.exists():
+            continue
+
+        try:
+            result = subprocess.run(
+                ["grep", "-rn", "--include=*.md", "--include=*.txt", "-i", query, str(knowledge_dir)],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.stdout.strip():
+                print(f"\n  ── {aid}/knowledge/ {'─' * (50 - len(aid))}")
+                for line in result.stdout.strip().splitlines()[:10]:
+                    # Shorten path: show relative to knowledge/
+                    try:
+                        rel = Path(line.split(":")[0]).relative_to(knowledge_dir)
+                        rest = ":".join(line.split(":")[1:])
+                        print(f"  {rel}:{rest}")
+                    except (ValueError, IndexError):
+                        print(f"  {line}")
+                found_any = True
+        except Exception:
+            pass
+
+    # 2. Experience memory
+    exp_script = os.path.expanduser("~/Clawd/workspace/experience-memory/search_experience")
+    if os.path.exists(exp_script):
+        try:
+            result = subprocess.run(
+                [exp_script, query],
+                capture_output=True, text=True, timeout=15
+            )
+            out = result.stdout.strip()
+            if out and "No results" not in out and "0 results" not in out:
+                print(f"\n  ── experience-memory {'─' * 41}")
+                for line in out.splitlines()[:15]:
+                    print(f"  {line}")
+                found_any = True
+        except Exception:
+            pass
+
+    # 3. Agent memory/ directories (recent 7 days only)
+    cutoff = datetime.now() - timedelta(days=7)
+    for aid in sorted(agents):
+        a = agents[aid]
+        ws = _workspace_path(a)
+        memory_dir = ws / "memory"
+        if not memory_dir.exists():
+            continue
+
+        # Only grep recent files
+        recent_files = []
+        for f in memory_dir.rglob("*.md"):
+            try:
+                if datetime.fromtimestamp(f.stat().st_mtime) >= cutoff:
+                    recent_files.append(str(f))
+            except OSError:
+                continue
+
+        if not recent_files:
+            continue
+
+        try:
+            result = subprocess.run(
+                ["grep", "-n", "-i", query] + recent_files,
+                capture_output=True, text=True, timeout=10
+            )
+            if result.stdout.strip():
+                print(f"\n  ── {aid}/memory/ {'─' * (50 - len(aid))}")
+                for line in result.stdout.strip().splitlines()[:8]:
+                    try:
+                        fpath = line.split(":")[0]
+                        rel = Path(fpath).relative_to(memory_dir)
+                        rest = ":".join(line.split(":")[1:])
+                        print(f"  {rel}:{rest}")
+                    except (ValueError, IndexError):
+                        print(f"  {line}")
+                found_any = True
+        except Exception:
+            pass
+
+    # 4. Shared workspace/memory/
+    shared_mem = WORKSPACE / "memory"
+    if shared_mem.exists():
+        try:
+            result = subprocess.run(
+                ["grep", "-rn", "--include=*.md", "-i", query, str(shared_mem)],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.stdout.strip():
+                print(f"\n  ── workspace/memory/ {'─' * 41}")
+                for line in result.stdout.strip().splitlines()[:8]:
+                    try:
+                        rel = Path(line.split(":")[0]).relative_to(shared_mem)
+                        rest = ":".join(line.split(":")[1:])
+                        print(f"  {rel}:{rest}")
+                    except (ValueError, IndexError):
+                        print(f"  {line}")
+                found_any = True
+        except Exception:
+            pass
+
+    if not found_any:
+        print(f"\n  No results for \"{query}\"")
+    print()
+
+
+def cmd_pulse():
+    """Infrastructure health check."""
+    print()
+
+    # Gateway: check port 18789
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", ":18789", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5
+        )
+        pid = result.stdout.strip().split("\n")[0] if result.stdout.strip() else ""
+        if pid:
+            print(f"  Gateway:    ✅ port 18789 (pid {pid})")
+        else:
+            print(f"  Gateway:    ❌ port 18789 not listening")
+    except Exception as e:
+        print(f"  Gateway:    ⚠️  check failed: {e}")
+
+    # Telegram bridge
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True, text=True, timeout=5
+        )
+        tg_found = False
+        for line in result.stdout.splitlines():
+            if "telegram-bridge" in line.lower() or "telegram_bridge" in line.lower():
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    pid, status = parts[0], parts[1]
+                    running = pid != "-" and pid != ""
+                    if running:
+                        print(f"  Telegram:   ✅ bridge running (pid {pid})")
+                    else:
+                        print(f"  Telegram:   ❌ bridge not running (exit {status})")
+                    tg_found = True
+                    break
+        if not tg_found:
+            print(f"  Telegram:   ⚠️  no bridge launchd job found")
+    except Exception as e:
+        print(f"  Telegram:   ⚠️  {e}")
+
+    # Disk usage
+    try:
+        result = subprocess.run(
+            ["df", "-h", "/"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        if len(lines) >= 2:
+            parts = lines[1].split()
+            # macOS df: Filesystem Size Used Avail Capacity ...
+            avail = parts[3] if len(parts) > 3 else "?"
+            capacity = parts[4] if len(parts) > 4 else "?"
+            cap_num = int(capacity.replace("%", "")) if "%" in capacity else 0
+            marker = "✅" if cap_num < 85 else ("⚠️ " if cap_num < 95 else "❌")
+            print(f"  Disk:       {marker} {avail} free ({capacity} used)")
+    except Exception as e:
+        print(f"  Disk:       ⚠️  {e}")
+
+    # LaunchAgent jobs
+    print(f"  Jobs:")
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True, text=True, timeout=5
+        )
+        job_count = 0
+        for line in result.stdout.splitlines():
+            if re.search(r"openclaw|bg666|clawd|cloudflare\.clawd", line, re.I):
+                if "telegram" in line.lower():
+                    continue  # Already shown above
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    pid, status, label = parts[0], parts[1], parts[2]
+                    running = pid != "-" and pid != ""
+                    ok = status == "0" or running
+                    marker = "✅" if ok else "❌"
+                    short = label.replace("ai.openclaw.", "").replace("com.bg666.", "bg666:").replace("com.clawd.", "clawd:").replace("com.cloudflare.", "cf:")
+                    if running:
+                        state = f"running (pid {pid})"
+                    elif status == "0":
+                        state = "ok"
+                    else:
+                        state = f"exit {status}"
+                    print(f"    {marker} {short:<22} {state}")
+                    job_count += 1
+        if job_count == 0:
+            print(f"    (no matching jobs)")
+    except Exception as e:
+        print(f"    ⚠️  {e}")
+
+    print()
+
+
 def main():
     args = sys.argv[1:]
 
@@ -147,8 +514,22 @@ def main():
         print(__doc__)
         return
 
+    # Top-level commands (no agent required)
     if args[0] == "list":
         cmd_list()
+        return
+
+    if args[0] == "overview":
+        cmd_overview()
+        return
+
+    if args[0] == "search":
+        query = " ".join(args[1:])
+        cmd_search(query)
+        return
+
+    if args[0] == "pulse":
+        cmd_pulse()
         return
 
     # Agent dispatch
