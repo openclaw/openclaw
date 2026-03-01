@@ -6,7 +6,7 @@ import type { FeishuProbeResult } from "./types.js";
  * burns ~43,200 calls/month, easily exceeding Feishu's free-tier quota.
  * A 10-min TTL cuts that to ~4,320 calls/month. (#26684) */
 const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
-const PROBE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const PROBE_CACHE_TTL_MS = 60 * 60 * 1000; // 60 minutes
 const MAX_PROBE_CACHE_SIZE = 64;
 
 export async function probeFeishu(creds?: FeishuClientCredentials): Promise<FeishuProbeResult> {
