@@ -76,13 +76,13 @@ x-i18n:
 
 ### 配置项对照
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `gateway.trustedProxies` | 是 | 可信代理 IP 列表。来源 IP 不在列表内会被拒绝。 |
-| `gateway.auth.mode` | 是 | 必须为 `"trusted-proxy"`。 |
-| `gateway.auth.trustedProxy.userHeader` | 是 | 承载认证后用户身份的请求头名。 |
-| `gateway.auth.trustedProxy.requiredHeaders` | 否 | 额外要求必须存在的请求头。 |
-| `gateway.auth.trustedProxy.allowUsers` | 否 | 允许的用户身份白名单。空值表示允许所有已认证用户。 |
+| 字段                                        | 必填 | 说明                                               |
+| ------------------------------------------- | ---- | -------------------------------------------------- |
+| `gateway.trustedProxies`                    | 是   | 可信代理 IP 列表。来源 IP 不在列表内会被拒绝。     |
+| `gateway.auth.mode`                         | 是   | 必须为 `"trusted-proxy"`。                         |
+| `gateway.auth.trustedProxy.userHeader`      | 是   | 承载认证后用户身份的请求头名。                     |
+| `gateway.auth.trustedProxy.requiredHeaders` | 否   | 额外要求必须存在的请求头。                         |
+| `gateway.auth.trustedProxy.allowUsers`      | 否   | 允许的用户身份白名单。空值表示允许所有已认证用户。 |
 
 ## TLS 终止与 HSTS
 
