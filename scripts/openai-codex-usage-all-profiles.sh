@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetch usage stats for all openai-codex OAuth profiles in agent auth stores.
-#
-# Notes:
-# - Uses per-profile OAuth access tokens from auth-profiles.json
-# - Tries modern costs endpoint first, then legacy dashboard usage endpoint
-# - Prints a compact table by default
-# - Optional JSON output with --json
-# - Writes raw API responses under ./tmp/openai-usage/<timestamp>/
+# Fetch Codex usage quota snapshots per openai-codex profile from auth stores.
+# Uses the same endpoint OpenClaw uses internally:
+#   https://chatgpt.com/backend-api/wham/usage
 #
 # Usage:
 #   scripts/openai-codex-usage-all-profiles.sh
-#   scripts/openai-codex-usage-all-profiles.sh --agent main --days 30
+#   scripts/openai-codex-usage-all-profiles.sh --agent main
 #   scripts/openai-codex-usage-all-profiles.sh --all-agents --json
 #   scripts/openai-codex-usage-all-profiles.sh --auth-file ~/.openclaw/agents/main/agent/auth-profiles.json
 #   scripts/openai-codex-usage-all-profiles.sh --dry-run
 
 AGENT="main"
 AUTH_FILE=""
-DAYS=30
 DRY_RUN=0
 OUT_DIR=""
 JSON_OUT=0
@@ -33,10 +27,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --auth-file)
       AUTH_FILE="${2:-}"
-      shift 2
-      ;;
-    --days)
-      DAYS="${2:-30}"
       shift 2
       ;;
     --out-dir)
@@ -56,7 +46,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      sed -n '1,80p' "$0"
+      sed -n '1,70p' "$0"
       exit 0
       ;;
     *)
@@ -65,11 +55,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
-  echo "error: --days must be an integer" >&2
-  exit 1
-fi
 
 OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 
@@ -89,66 +74,22 @@ if [[ ${#AUTH_FILES[@]} -eq 0 ]]; then
   exit 1
 fi
 
-now_epoch="$(date +%s)"
-start_epoch="$(( now_epoch - DAYS*86400 ))"
-start_date="$(date -u -d "@$start_epoch" +%F 2>/dev/null || date -u -r "$start_epoch" +%F)"
-end_date="$(date -u +%F)"
-
 stamp="$(date +%Y%m%d-%H%M%S)"
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="tmp/openai-usage/$stamp"
 fi
 mkdir -p "$OUT_DIR"
 
-fetch_costs() {
-  local token="$1"
-  local out="$2"
-  local code
-  code=$(curl -sS -o "$out" -w "%{http_code}" \
-    -H "Authorization: Bearer $token" \
-    -H "Content-Type: application/json" \
-    "https://api.openai.com/v1/organization/costs?start_time=$start_epoch&end_time=$now_epoch&bucket_width=1d&limit=$DAYS" || true)
-  echo "$code"
-}
-
-fetch_legacy() {
-  local token="$1"
-  local out="$2"
-  local code
-  code=$(curl -sS -o "$out" -w "%{http_code}" \
-    -H "Authorization: Bearer $token" \
-    -H "Content-Type: application/json" \
-    "https://api.openai.com/dashboard/billing/usage?start_date=$start_date&end_date=$end_date" || true)
-  echo "$code"
-}
-
-extract_amount() {
-  local file="$1"
-  jq -r '
-    if (type=="object" and has("data")) then
-      ([.data[]?.results[]?.amount?.value] | map(select(.!=null)) | add) // empty
-    elif (type=="object" and has("total_usage")) then
-      (.total_usage / 100.0)
-    else
-      empty
-    end
-  ' "$file" 2>/dev/null || true
-}
-
 results_jsonl="$OUT_DIR/results.jsonl"
 : > "$results_jsonl"
 
 if [[ "$JSON_OUT" != "1" ]]; then
-  printf "%-16s %-28s %-10s %-14s %-10s\n" "AGENT" "PROFILE" "STATUS" "USAGE_USD" "ENDPOINT"
-  printf "%s\n" "-----------------------------------------------------------------------------------------------"
+  printf "%-16s %-28s %-10s %-8s %-8s %-16s %s\n" "AGENT" "PROFILE" "STATUS" "3H_USED" "DAY_USED" "PLAN" "RESETS"
+  printf "%s\n" "----------------------------------------------------------------------------------------------------------------"
 fi
 
 for auth_path in "${AUTH_FILES[@]}"; do
-  if [[ ! -f "$auth_path" ]]; then
-    echo "warn: auth file not found: $auth_path" >&2
-    continue
-  fi
-
+  [[ -f "$auth_path" ]] || continue
   agent_name="$(echo "$auth_path" | sed -E 's#^.*/agents/([^/]+)/agent/auth-profiles.json#\1#')"
 
   mapfile -t PROFILE_IDS < <(jq -r '
@@ -160,41 +101,57 @@ for auth_path in "${AUTH_FILES[@]}"; do
 
   for pid in "${PROFILE_IDS[@]}"; do
     token="$(jq -r --arg p "$pid" '.profiles[$p].access // empty' "$auth_path")"
+    account_id="$(jq -r --arg p "$pid" '.profiles[$p].accountId // empty' "$auth_path")"
+
     status="ok"
-    endpoint="costs"
-    amount="-"
+    p_used="-"
+    s_used="-"
+    plan="-"
+    resets="-"
 
-    if [[ -z "$token" ]]; then
-      status="no-token"
-      endpoint="-"
-    elif [[ "$DRY_RUN" == "1" ]]; then
+    safe_agent="${agent_name//[^a-zA-Z0-9_.-]/_}"
+    safe_pid="${pid//[:\/]/_}"
+    out="$OUT_DIR/${safe_agent}.${safe_pid}.codex-usage.json"
+
+    if [[ "$DRY_RUN" == "1" ]]; then
       status="dry-run"
-      endpoint="costs"
+    elif [[ -z "$token" ]]; then
+      status="no-token"
     else
-      safe_agent="${agent_name//[^a-zA-Z0-9_.-]/_}"
-      safe_pid="${pid//[:\/]/_}"
-      costs_file="$OUT_DIR/${safe_agent}.${safe_pid}.costs.json"
-      legacy_file="$OUT_DIR/${safe_agent}.${safe_pid}.legacy.json"
-
-      code="$(fetch_costs "$token" "$costs_file")"
-      if [[ "$code" == "200" ]]; then
-        use_file="$costs_file"
-      else
-        code2="$(fetch_legacy "$token" "$legacy_file")"
-        endpoint="legacy"
-        if [[ "$code2" == "200" ]]; then
-          use_file="$legacy_file"
-        else
-          status="http:$code/$code2"
-          use_file=""
-        fi
+      hdr=(-H "Authorization: Bearer $token" -H "User-Agent: CodexBar" -H "Accept: application/json")
+      if [[ -n "$account_id" ]]; then
+        hdr+=(-H "ChatGPT-Account-Id: $account_id")
       fi
 
-      if [[ -n "${use_file:-}" ]]; then
-        amount="$(extract_amount "$use_file")"
-        if [[ -z "$amount" ]]; then
-          status="ok?"
-          amount="-"
+      code=$(curl -sS -o "$out" -w "%{http_code}" "https://chatgpt.com/backend-api/wham/usage" "${hdr[@]}" || true)
+      if [[ "$code" != "200" ]]; then
+        status="http:$code"
+      else
+        p_used="$(jq -r '.rate_limit.primary_window.used_percent // empty' "$out" 2>/dev/null || true)"
+        s_used="$(jq -r '.rate_limit.secondary_window.used_percent // empty' "$out" 2>/dev/null || true)"
+        p_reset="$(jq -r '.rate_limit.primary_window.reset_at // empty' "$out" 2>/dev/null || true)"
+        s_reset="$(jq -r '.rate_limit.secondary_window.reset_at // empty' "$out" 2>/dev/null || true)"
+        plan_type="$(jq -r '.plan_type // empty' "$out" 2>/dev/null || true)"
+        credits="$(jq -r '.credits.balance // empty' "$out" 2>/dev/null || true)"
+
+        [[ -n "$p_used" ]] || p_used="-"
+        [[ -n "$s_used" ]] || s_used="-"
+
+        if [[ -n "$plan_type" || -n "$credits" ]]; then
+          if [[ -n "$plan_type" && -n "$credits" ]]; then
+            plan="$plan_type ($$credits)"
+          elif [[ -n "$plan_type" ]]; then
+            plan="$plan_type"
+          else
+            plan="$$credits"
+          fi
+        fi
+
+        reset_parts=()
+        [[ -n "$p_reset" ]] && reset_parts+=("3h:$p_reset")
+        [[ -n "$s_reset" ]] && reset_parts+=("day:$s_reset")
+        if [[ ${#reset_parts[@]} -gt 0 ]]; then
+          resets="$(IFS=','; echo "${reset_parts[*]}")"
         fi
       fi
     fi
@@ -203,13 +160,15 @@ for auth_path in "${AUTH_FILES[@]}"; do
       --arg agent "$agent_name" \
       --arg profile "$pid" \
       --arg status "$status" \
-      --arg endpoint "$endpoint" \
-      --arg usageUsd "$amount" \
-      '{agent:$agent,profile:$profile,status:$status,usageUsd:$usageUsd,endpoint:$endpoint}' \
+      --arg primaryUsed "$p_used" \
+      --arg secondaryUsed "$s_used" \
+      --arg plan "$plan" \
+      --arg resets "$resets" \
+      '{agent:$agent,profile:$profile,status:$status,primaryUsedPercent:$primaryUsed,secondaryUsedPercent:$secondaryUsed,plan:$plan,resets:$resets}' \
       >> "$results_jsonl"
 
     if [[ "$JSON_OUT" != "1" ]]; then
-      printf "%-16s %-28s %-10s %-14s %-10s\n" "$agent_name" "$pid" "$status" "$amount" "$endpoint"
+      printf "%-16s %-28s %-10s %-8s %-8s %-16s %s\n" "$agent_name" "$pid" "$status" "$p_used" "$s_used" "$plan" "$resets"
     fi
   done
 done
