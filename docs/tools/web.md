@@ -184,7 +184,7 @@ SearXNG is a free, self-hosted metasearch engine that aggregates results from mu
            enabled: true,
            provider: "searxng",
            searxng: {
-             baseUrl: "http://127.0.0.1:8080",
+             baseUrl: "http://searxng:8080",
            },
          },
        },

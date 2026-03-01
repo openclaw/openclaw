@@ -289,7 +289,7 @@ export const ToolsWebSearchSchema = z
       .optional(),
     searxng: z
       .object({
-        baseUrl: z.string().optional().register(sensitive),
+        baseUrl: z.string().optional(),
       })
       .strict()
       .optional(),
