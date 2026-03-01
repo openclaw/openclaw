@@ -1,12 +1,14 @@
 import {
   ChannelType,
   type Client,
+  GuildMemberAddListener,
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
   PresenceUpdateListener,
   type User,
 } from "@buape/carbon";
+import { callGatewayLeastPrivilege } from "../../gateway/call.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -39,6 +41,16 @@ export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0]
 export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+
+type DiscordMemberAddEvent = Parameters<GuildMemberAddListener["handle"]>[0];
+
+type DiscordMemberAddListenerParams = {
+  cfg: LoadedConfig;
+  accountId: string;
+  botUserId?: string;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  logger: Logger;
+};
 
 type DiscordReactionListenerParams = {
   cfg: LoadedConfig;
@@ -628,6 +640,110 @@ async function handleDiscordReactionEvent(params: {
     emitReactionWithAuthor(message);
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
+  }
+}
+
+export class DiscordMemberAddListener extends GuildMemberAddListener {
+  constructor(private params: DiscordMemberAddListenerParams) {
+    super();
+  }
+
+  async handle(data: DiscordMemberAddEvent) {
+    const startedAt = Date.now();
+    try {
+      await handleDiscordMemberAddEvent({ data, ...this.params });
+    } finally {
+      logSlowDiscordListener({
+        logger: this.params.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+  }
+}
+
+async function handleDiscordMemberAddEvent(params: {
+  data: DiscordMemberAddEvent;
+  cfg: LoadedConfig;
+  accountId: string;
+  botUserId?: string;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
+  logger: Logger;
+}) {
+  try {
+    const { data, botUserId, guildEntries } = params;
+
+    // Skip bots
+    const user = data.member?.user;
+    if (!user || user.bot) {
+      return;
+    }
+    if (botUserId && user.id === botUserId) {
+      return;
+    }
+
+    const guildInfo = resolveDiscordGuildEntry({ guild: data.guild, guildEntries });
+
+    // Default is off — must be explicitly enabled per guild
+    const mode = guildInfo?.memberJoinNotifications ?? "off";
+    if (mode === "off") {
+      return;
+    }
+
+    const guildSlug =
+      guildInfo?.slug ||
+      (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : (data.guild?.id ?? "unknown"));
+
+    const memberRoleIds = Array.isArray(data.member.rawData?.roles)
+      ? data.member.rawData.roles.map((id: string) => String(id))
+      : [];
+
+    const userTag = formatDiscordUserTag(user);
+    const text = `Discord member joined: ${userTag} joined ${guildSlug}`;
+    const contextKey = `discord:member-add:${data.guild?.id}:${user.id}`;
+
+    const route = resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "discord",
+      accountId: params.accountId,
+      guildId: data.guild?.id,
+      memberRoleIds,
+      peer: null,
+    });
+
+    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+
+    // Resolve welcome channel: explicit config > Discord system channel
+    const welcomeChannelId =
+      guildInfo?.memberJoinChannel?.trim() ||
+      (typeof data.guild.systemChannelId === "string" ? data.guild.systemChannelId.trim() : null) ||
+      null;
+
+    if (welcomeChannelId) {
+      void callGatewayLeastPrivilege({
+        method: "agent",
+        params: {
+          sessionKey: route.sessionKey,
+          message: `Discord member joined: ${userTag} joined ${guildSlug}. Welcome them.`,
+          channel: "discord",
+          accountId: params.accountId,
+          to: `channel:${welcomeChannelId}`,
+          deliver: true,
+          idempotencyKey: contextKey,
+        },
+      }).catch((err: unknown) => {
+        params.logger.error(
+          danger(`discord member-add: failed to trigger welcome agent: ${String(err)}`),
+        );
+      });
+    } else {
+      params.logger.debug(
+        "discord member-add: no welcome channel configured, skipping agent trigger",
+      );
+    }
+  } catch (err) {
+    params.logger.error(danger(`discord member-add handler failed: ${String(err)}`));
   }
 }
 
