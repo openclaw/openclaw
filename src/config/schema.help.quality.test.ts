@@ -365,7 +365,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
   "models.mode": ['"merge"', '"replace"'],
-  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
+  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"', '"google-adc"'],
   "gateway.reload.mode": ['"off"', '"restart"', '"hot"', '"hybrid"'],
   "approvals.exec.mode": ['"session"', '"targets"', '"both"'],
   "bindings[].match.peer.kind": ['"direct"', '"group"', '"channel"', '"dm"'],

@@ -333,4 +333,89 @@ describe("getApiKeyForModel", () => {
       },
     );
   });
+
+  it("google-vertex: falls back to google-adc mode when no API key is configured", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_API_KEY: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+        GOOGLE_CLOUD_PROJECT: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.mode).toBe("google-adc");
+        expect(resolved.apiKey).toBeUndefined();
+        expect(resolved.source).toContain("google-adc");
+      },
+    );
+  });
+
+  it("google-vertex: reports GOOGLE_APPLICATION_CREDENTIALS as source when set", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_API_KEY: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: "/path/to/sa.json",
+        GOOGLE_CLOUD_PROJECT: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.mode).toBe("google-adc");
+        expect(resolved.apiKey).toBeUndefined();
+        expect(resolved.source).toContain("GOOGLE_APPLICATION_CREDENTIALS");
+      },
+    );
+  });
+
+  it("google-vertex: reports GOOGLE_CLOUD_PROJECT as source when credentials env is absent", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_API_KEY: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+        GOOGLE_CLOUD_PROJECT: "my-project",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          store: { version: 1, profiles: {} },
+        });
+        expect(resolved.mode).toBe("google-adc");
+        expect(resolved.source).toContain("GOOGLE_CLOUD_PROJECT");
+      },
+    );
+  });
+
+  it("google-vertex: explicit auth: 'google-adc' config override triggers ADC mode", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_API_KEY: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+        GOOGLE_CLOUD_PROJECT: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "google-vertex",
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                "google-vertex": {
+                  baseUrl: "https://us-central1-aiplatform.googleapis.com",
+                  auth: "google-adc",
+                  models: [],
+                },
+              },
+            },
+          } as never,
+        });
+        expect(resolved.mode).toBe("google-adc");
+        expect(resolved.apiKey).toBeUndefined();
+      },
+    );
+  });
 });
