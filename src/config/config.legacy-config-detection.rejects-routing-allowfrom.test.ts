@@ -377,6 +377,31 @@ describe("legacy config detection", () => {
       expect(validated.config.gateway?.bind).toBe("tailnet");
     }
   });
+  it("normalizes gateway.bind host aliases to supported bind modes", async () => {
+    const cases = [
+      { input: "0.0.0.0", expected: "lan" },
+      { input: "::", expected: "lan" },
+      { input: "127.0.0.1", expected: "loopback" },
+      { input: "localhost", expected: "loopback" },
+      { input: "::1", expected: "loopback" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const res = migrateLegacyConfig({
+        gateway: { bind: testCase.input },
+      });
+      expect(res.changes).toContain(
+        `Normalized gateway.bind "${testCase.input}" → "${testCase.expected}".`,
+      );
+      expect(res.config?.gateway?.bind).toBe(testCase.expected);
+
+      const validated = validateConfigObject(res.config);
+      expect(validated.ok).toBe(true);
+      if (validated.ok) {
+        expect(validated.config.gateway?.bind).toBe(testCase.expected);
+      }
+    }
+  });
   it('enforces dmPolicy="open" allowFrom wildcard for supported providers', async () => {
     const cases = [
       {

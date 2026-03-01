@@ -536,6 +536,46 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "gateway.bind.host-alias->bind-mode",
+    describe: "Normalize gateway.bind host aliases to supported bind modes",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bindRaw = gateway.bind;
+      if (typeof bindRaw !== "string") {
+        return;
+      }
+
+      const normalized = bindRaw.trim().toLowerCase();
+      let mapped: "lan" | "loopback" | undefined;
+      if (
+        normalized === "0.0.0.0" ||
+        normalized === "::" ||
+        normalized === "[::]" ||
+        normalized === "*"
+      ) {
+        mapped = "lan";
+      } else if (
+        normalized === "127.0.0.1" ||
+        normalized === "localhost" ||
+        normalized === "::1" ||
+        normalized === "[::1]"
+      ) {
+        mapped = "loopback";
+      }
+
+      if (!mapped || normalized === mapped) {
+        return;
+      }
+
+      gateway.bind = mapped;
+      raw.gateway = gateway;
+      changes.push(`Normalized gateway.bind "${bindRaw}" → "${mapped}".`);
+    },
+  },
+  {
     id: "telegram.requireMention->channels.telegram.groups.*.requireMention",
     describe: "Move telegram.requireMention to channels.telegram.groups.*.requireMention",
     apply: (raw, changes) => {
