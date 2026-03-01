@@ -110,8 +110,16 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/** Registry of hook handlers by event key - stored in globalThis to survive bundle chunk boundaries */
+const getGlobalHandlers = (): Map<string, InternalHookHandler[]> => {
+  if (!globalThis.__openclawHookHandlers) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).__openclawHookHandlers = new Map<string, InternalHookHandler[]>();
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (globalThis as any).__openclawHookHandlers;
+};
+
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -134,6 +142,7 @@ const log = createSubsystemLogger("internal-hooks");
  * ```
  */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
+  const handlers = getGlobalHandlers();
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
@@ -147,6 +156,7 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
  * @param handler - The handler function to remove
  */
 export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
+  const handlers = getGlobalHandlers();
   const eventHandlers = handlers.get(eventKey);
   if (!eventHandlers) {
     return;
@@ -167,14 +177,14 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
  * Clear all registered hooks (useful for testing)
  */
 export function clearInternalHooks(): void {
-  handlers.clear();
+  getGlobalHandlers().clear();
 }
 
 /**
  * Get all registered event keys (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  return Array.from(getGlobalHandlers().keys());
 }
 
 /**
@@ -190,6 +200,7 @@ export function getRegisteredEventKeys(): string[] {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  const handlers = getGlobalHandlers();
   const typeHandlers = handlers.get(event.type) ?? [];
   const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
 
