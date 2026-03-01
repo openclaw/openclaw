@@ -23,7 +23,6 @@ type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowMissingTarget?: boolean;
   allowedType?: SafeOpenSyncAllowedType;
 };
 
@@ -267,7 +266,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       allowedType: options.allowedType,
     });
     if (!guarded.ok) {
-      if (guarded.reason !== "path" || options.allowMissingTarget === false) {
+      if (guarded.reason !== "path") {
         throw guarded.error instanceof Error
           ? guarded.error
           : new Error(
