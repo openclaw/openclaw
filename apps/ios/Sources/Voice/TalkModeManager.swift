@@ -2248,6 +2248,7 @@ extension TalkModeManager {
             self.sttApiKey = nil
             self.sttModel = "whisper-1"
             self.sttLanguage = nil
+            self.pcmFormatUnavailable = false
         }
     }
 
