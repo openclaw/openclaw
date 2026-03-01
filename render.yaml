@@ -4,6 +4,7 @@ services:
     runtime: docker
     plan: starter
     healthCheckPath: /health
+    dockerCommand: ./scripts/docker-entrypoint.sh
     envVars:
       - key: PORT
         value: "8080"
@@ -15,6 +16,8 @@ services:
         value: /data/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
+      - key: ANTHROPIC_API_KEY
+        sync: false
     disk:
       name: openclaw-data
       mountPath: /data
