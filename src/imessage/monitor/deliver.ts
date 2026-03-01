@@ -2,6 +2,7 @@ import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { emitMessageSentHook } from "../../hooks/emit-message-sent.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
@@ -17,6 +18,7 @@ export async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
+  sessionKey?: string;
 }) {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
@@ -35,34 +37,65 @@ export async function deliverReplies(params: {
     if (!text && mediaList.length === 0) {
       continue;
     }
-    if (mediaList.length === 0) {
-      sentMessageCache?.remember(scope, { text });
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        const sent = await sendMessageIMessage(target, chunk, {
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+    const hookBase = {
+      to: target,
+      channelId: "imessage" as const,
+      accountId,
+      sessionKey: params.sessionKey,
+    };
+    let lastContent = text;
+    try {
+      if (mediaList.length === 0) {
+        sentMessageCache?.remember(scope, { text });
+        for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+          lastContent = chunk;
+          const sent = await sendMessageIMessage(target, chunk, {
+            maxBytes,
+            client,
+            accountId,
+            replyToId: payload.replyToId,
+          });
+          sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+          emitMessageSentHook({
+            ...hookBase,
+            content: chunk,
+            success: true,
+            messageId: sent.messageId,
+          });
+        }
+      } else {
+        let first = true;
+        for (const url of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          lastContent = caption || url;
+          const sent = await sendMessageIMessage(target, caption, {
+            mediaUrl: url,
+            maxBytes,
+            client,
+            accountId,
+            replyToId: payload.replyToId,
+          });
+          sentMessageCache?.remember(scope, {
+            text: caption || undefined,
+            messageId: sent.messageId,
+          });
+          emitMessageSentHook({
+            ...hookBase,
+            content: caption || url,
+            success: true,
+            messageId: sent.messageId,
+          });
+        }
       }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        const sent = await sendMessageIMessage(target, caption, {
-          mediaUrl: url,
-          maxBytes,
-          client,
-          accountId,
-          replyToId: payload.replyToId,
-        });
-        sentMessageCache?.remember(scope, {
-          text: caption || undefined,
-          messageId: sent.messageId,
-        });
-      }
+    } catch (err) {
+      emitMessageSentHook({
+        ...hookBase,
+        content: lastContent,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);
   }

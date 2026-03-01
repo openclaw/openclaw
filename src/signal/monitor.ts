@@ -9,6 +9,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import { emitMessageSentHook } from "../hooks/emit-message-sent.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -288,6 +289,7 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  sessionKey?: string;
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
@@ -297,28 +299,49 @@ async function deliverReplies(params: {
     if (!text && mediaList.length === 0) {
       continue;
     }
-    if (mediaList.length === 0) {
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageSignal(target, chunk, {
-          baseUrl,
-          account,
-          maxBytes,
-          accountId,
-        });
+    const hookBase = {
+      to: target,
+      channelId: "signal" as const,
+      accountId,
+      sessionKey: params.sessionKey,
+    };
+    let lastContent = text;
+    try {
+      if (mediaList.length === 0) {
+        for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
+          lastContent = chunk;
+          await sendMessageSignal(target, chunk, {
+            baseUrl,
+            account,
+            maxBytes,
+            accountId,
+          });
+          emitMessageSentHook({ ...hookBase, content: chunk, success: true });
+        }
+      } else {
+        let first = true;
+        for (const url of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          lastContent = caption || url;
+          await sendMessageSignal(target, caption, {
+            baseUrl,
+            account,
+            mediaUrl: url,
+            maxBytes,
+            accountId,
+          });
+          emitMessageSentHook({ ...hookBase, content: caption || url, success: true });
+        }
       }
-    } else {
-      let first = true;
-      for (const url of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSignal(target, caption, {
-          baseUrl,
-          account,
-          mediaUrl: url,
-          maxBytes,
-          accountId,
-        });
-      }
+    } catch (err) {
+      emitMessageSentHook({
+        ...hookBase,
+        content: lastContent,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
     runtime.log?.(`delivered reply to ${target}`);
   }

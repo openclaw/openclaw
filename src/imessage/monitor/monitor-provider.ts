@@ -372,6 +372,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           maxBytes: mediaMaxBytes,
           textLimit,
           sentMessageCache,
+          sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
         });
       },
       onError: (err, info) => {

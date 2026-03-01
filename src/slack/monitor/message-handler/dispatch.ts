@@ -203,6 +203,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       textLimit: ctx.textLimit,
       replyThreadTs,
       replyToMode: prepared.replyToMode,
+      sessionKey: prepared.ctxPayload.SessionKey ?? route.mainSessionKey,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     // Record the thread ts only after confirmed delivery success.

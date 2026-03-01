@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose, warn } from "../../globals.js";
+import { emitMessageSentHook } from "../../hooks/emit-message-sent.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -61,6 +62,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  sessionKey?: string;
+  accountId?: string;
 }): Promise<{ delivered: boolean }> {
   const {
     replies,
@@ -100,6 +103,12 @@ export async function deliverReplies(params: {
     }
     return chunks;
   };
+  const hookBase = {
+    to: chatId,
+    channelId: "telegram" as const,
+    sessionKey: params.sessionKey,
+    accountId: params.accountId,
+  };
   for (const reply of replies) {
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
@@ -132,15 +141,31 @@ export async function deliverReplies(params: {
         }
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
-        await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId: replyToMessageIdForPayload,
-          replyQuoteText,
-          thread,
-          textMode: "html",
-          plainText: chunk.text,
-          linkPreview,
-          replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
-        });
+        try {
+          const msgId = await sendTelegramText(bot, chatId, chunk.html, runtime, {
+            replyToMessageId: replyToMessageIdForPayload,
+            replyQuoteText,
+            thread,
+            textMode: "html",
+            plainText: chunk.text,
+            linkPreview,
+            replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
+          });
+          emitMessageSentHook({
+            ...hookBase,
+            content: chunk.text,
+            success: true,
+            messageId: String(msgId),
+          });
+        } catch (err) {
+          emitMessageSentHook({
+            ...hookBase,
+            content: chunk.text,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
         sentTextChunk = true;
         markDelivered();
       }
@@ -188,27 +213,76 @@ export async function deliverReplies(params: {
           thread,
         }),
       };
+      const mediaContent = caption || mediaUrl;
       if (isGif) {
-        await withTelegramApiErrorLogging({
-          operation: "sendAnimation",
-          runtime,
-          fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
-        });
-        markDelivered();
+        try {
+          const sent = await withTelegramApiErrorLogging({
+            operation: "sendAnimation",
+            runtime,
+            fn: () => bot.api.sendAnimation(chatId, file, { ...mediaParams }),
+          });
+          markDelivered();
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: true,
+            messageId: String(sent.message_id),
+          });
+        } catch (err) {
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
       } else if (kind === "image") {
-        await withTelegramApiErrorLogging({
-          operation: "sendPhoto",
-          runtime,
-          fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
-        });
-        markDelivered();
+        try {
+          const sent = await withTelegramApiErrorLogging({
+            operation: "sendPhoto",
+            runtime,
+            fn: () => bot.api.sendPhoto(chatId, file, { ...mediaParams }),
+          });
+          markDelivered();
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: true,
+            messageId: String(sent.message_id),
+          });
+        } catch (err) {
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
       } else if (kind === "video") {
-        await withTelegramApiErrorLogging({
-          operation: "sendVideo",
-          runtime,
-          fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
-        });
-        markDelivered();
+        try {
+          const sent = await withTelegramApiErrorLogging({
+            operation: "sendVideo",
+            runtime,
+            fn: () => bot.api.sendVideo(chatId, file, { ...mediaParams }),
+          });
+          markDelivered();
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: true,
+            messageId: String(sent.message_id),
+          });
+        } catch (err) {
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
       } else if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
           wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
@@ -221,13 +295,19 @@ export async function deliverReplies(params: {
           // Switch typing indicator to record_voice before sending.
           await params.onVoiceRecording?.();
           try {
-            await withTelegramApiErrorLogging({
+            const sent = await withTelegramApiErrorLogging({
               operation: "sendVoice",
               runtime,
               shouldLog: (err) => !isVoiceMessagesForbidden(err),
               fn: () => bot.api.sendVoice(chatId, file, { ...mediaParams }),
             });
             markDelivered();
+            emitMessageSentHook({
+              ...hookBase,
+              content: mediaContent,
+              success: true,
+              messageId: String(sent.message_id),
+            });
           } catch (voiceErr) {
             // Fall back to text if voice messages are forbidden in this chat.
             // This happens when the recipient has Telegram Premium privacy settings
@@ -235,48 +315,103 @@ export async function deliverReplies(params: {
             if (isVoiceMessagesForbidden(voiceErr)) {
               const fallbackText = reply.text;
               if (!fallbackText || !fallbackText.trim()) {
+                emitMessageSentHook({
+                  ...hookBase,
+                  content: mediaContent,
+                  success: false,
+                  error: voiceErr instanceof Error ? voiceErr.message : String(voiceErr),
+                });
                 throw voiceErr;
               }
               logVerbose(
                 "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
               );
-              await sendTelegramVoiceFallbackText({
-                bot,
-                chatId,
-                runtime,
-                text: fallbackText,
-                chunkText,
-                replyToId: replyToMessageIdForPayload,
-                thread,
-                linkPreview,
-                replyMarkup,
-                replyQuoteText,
-              });
-              if (replyToMessageIdForPayload && !hasReplied) {
-                hasReplied = true;
+              try {
+                await sendTelegramVoiceFallbackText({
+                  bot,
+                  chatId,
+                  runtime,
+                  text: fallbackText,
+                  chunkText,
+                  replyToId: replyToMessageIdForPayload,
+                  thread,
+                  linkPreview,
+                  replyMarkup,
+                  replyQuoteText,
+                });
+                if (replyToMessageIdForPayload && !hasReplied) {
+                  hasReplied = true;
+                }
+                markDelivered();
+                emitMessageSentHook({ ...hookBase, content: fallbackText, success: true });
+              } catch (fallbackErr) {
+                emitMessageSentHook({
+                  ...hookBase,
+                  content: fallbackText,
+                  success: false,
+                  error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+                });
+                throw fallbackErr;
               }
-              markDelivered();
               // Skip this media item; continue with next.
               continue;
             }
+            emitMessageSentHook({
+              ...hookBase,
+              content: mediaContent,
+              success: false,
+              error: voiceErr instanceof Error ? voiceErr.message : String(voiceErr),
+            });
             throw voiceErr;
           }
         } else {
           // Audio file - displays with metadata (title, duration) - DEFAULT
-          await withTelegramApiErrorLogging({
-            operation: "sendAudio",
-            runtime,
-            fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
-          });
-          markDelivered();
+          try {
+            const sent = await withTelegramApiErrorLogging({
+              operation: "sendAudio",
+              runtime,
+              fn: () => bot.api.sendAudio(chatId, file, { ...mediaParams }),
+            });
+            markDelivered();
+            emitMessageSentHook({
+              ...hookBase,
+              content: mediaContent,
+              success: true,
+              messageId: String(sent.message_id),
+            });
+          } catch (err) {
+            emitMessageSentHook({
+              ...hookBase,
+              content: mediaContent,
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
         }
       } else {
-        await withTelegramApiErrorLogging({
-          operation: "sendDocument",
-          runtime,
-          fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
-        });
-        markDelivered();
+        try {
+          const sent = await withTelegramApiErrorLogging({
+            operation: "sendDocument",
+            runtime,
+            fn: () => bot.api.sendDocument(chatId, file, { ...mediaParams }),
+          });
+          markDelivered();
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: true,
+            messageId: String(sent.message_id),
+          });
+        } catch (err) {
+          emitMessageSentHook({
+            ...hookBase,
+            content: mediaContent,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
       }
       if (replyToId && !hasReplied) {
         hasReplied = true;
@@ -287,15 +422,31 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
-          await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdForPayload,
-            thread,
-            textMode: "html",
-            plainText: chunk.text,
-            linkPreview,
-            replyMarkup: i === 0 ? replyMarkup : undefined,
-          });
-          markDelivered();
+          try {
+            const followUpMsgId = await sendTelegramText(bot, chatId, chunk.html, runtime, {
+              replyToMessageId: replyToMessageIdForPayload,
+              thread,
+              textMode: "html",
+              plainText: chunk.text,
+              linkPreview,
+              replyMarkup: i === 0 ? replyMarkup : undefined,
+            });
+            markDelivered();
+            emitMessageSentHook({
+              ...hookBase,
+              content: chunk.text,
+              success: true,
+              messageId: String(followUpMsgId),
+            });
+          } catch (err) {
+            emitMessageSentHook({
+              ...hookBase,
+              content: chunk.text,
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
         }
         pendingFollowUpText = undefined;
       }

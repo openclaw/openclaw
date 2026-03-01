@@ -4,6 +4,7 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { emitMessageSentHook } from "../../hooks/emit-message-sent.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
@@ -17,6 +18,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
+  sessionKey?: string;
   identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
@@ -30,30 +32,51 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    if (mediaList.length === 0) {
-      const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-        continue;
-      }
-      await sendMessageSlack(params.target, trimmed, {
-        token: params.token,
-        threadTs,
-        accountId: params.accountId,
-        ...(params.identity ? { identity: params.identity } : {}),
-      });
-    } else {
-      let first = true;
-      for (const mediaUrl of mediaList) {
-        const caption = first ? text : "";
-        first = false;
-        await sendMessageSlack(params.target, caption, {
+    const hookBase = {
+      to: params.target,
+      channelId: "slack" as const,
+      accountId: params.accountId,
+      sessionKey: params.sessionKey,
+    };
+    let lastContent = text;
+    try {
+      if (mediaList.length === 0) {
+        const trimmed = text.trim();
+        if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+          continue;
+        }
+        lastContent = trimmed;
+        await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          mediaUrl,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        emitMessageSentHook({ ...hookBase, content: trimmed, success: true });
+      } else {
+        let first = true;
+        for (const mediaUrl of mediaList) {
+          const caption = first ? text : "";
+          first = false;
+          lastContent = caption || mediaUrl;
+          await sendMessageSlack(params.target, caption, {
+            token: params.token,
+            mediaUrl,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+          });
+          emitMessageSentHook({ ...hookBase, content: caption || mediaUrl, success: true });
+        }
       }
+    } catch (err) {
+      emitMessageSentHook({
+        ...hookBase,
+        content: lastContent,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }

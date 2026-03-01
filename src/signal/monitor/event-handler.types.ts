@@ -104,6 +104,7 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
+    sessionKey?: string;
   }) => Promise<void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (
