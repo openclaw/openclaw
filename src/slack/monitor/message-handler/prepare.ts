@@ -181,10 +181,19 @@ export async function prepareSlackMessage(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+  // When replyToMode="all", every top-level message starts a new thread.
+  // Use its own ts as threadId so the initial message AND subsequent replies
+  // in that thread share an isolated session (instead of falling back to the
+  // base DM/channel session for the first message).
+  const autoThreadId =
+    !isThreadReply && replyToMode === "all" && threadContext.messageTs
+      ? threadContext.messageTs
+      : undefined;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
+    threadId: isThreadReply ? threadTs : autoThreadId,
+    parentSessionKey:
+      (isThreadReply || autoThreadId) && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
