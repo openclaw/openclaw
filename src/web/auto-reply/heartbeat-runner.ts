@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
 import { resolveHeartbeatReplyPayload } from "../../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -15,6 +16,7 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "../../infra/heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "../../infra/heartbeat-visibility.js";
 import { getChildLogger } from "../../logging.js";
@@ -78,7 +80,13 @@ export async function runWebHeartbeatOnce(opts: {
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  // Canonicalize so the written key matches what read paths produce (#29683).
+  const rawSessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentId(cfg),
+    sessionKey: rawSessionKey,
+  });
   if (sessionId) {
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);

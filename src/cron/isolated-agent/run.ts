@@ -143,7 +143,12 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: baseSessionKey,
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    cfg: params.cfg,
+  });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);
