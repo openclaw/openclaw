@@ -630,6 +630,47 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("keeps main session title stable when displayName contains transient metadata", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+        displayName: "Heartbeat",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Main Session");
+  });
+
+  test("keeps explicit main session label over transient displayName metadata", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+        displayName: "Heartbeat",
+        label: "Pinned Main",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Pinned Main");
+  });
+
   test("filters sessions across display metadata and key fields", () => {
     const cases = [
       { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },

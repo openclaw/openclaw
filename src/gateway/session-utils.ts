@@ -791,6 +791,7 @@ export function listSessionsFromStore(params: {
       const totalTokensFresh =
         typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
       const parsed = parseGroupKey(key);
+      const parsedAgentSessionKey = parseAgentSessionKey(key);
       const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
       const groupChannel = entry?.groupChannel;
@@ -798,23 +799,27 @@ export function listSessionsFromStore(params: {
       const id = parsed?.id;
       const origin = entry?.origin;
       const originLabel = origin?.label;
-      const displayName =
-        entry?.displayName ??
-        (channel
-          ? buildGroupDisplayName({
-              provider: channel,
-              subject,
-              groupChannel,
-              space,
-              id,
-              key,
-            })
-          : undefined) ??
-        entry?.label ??
-        originLabel;
+      const sessionLabel = entry?.label?.trim();
+      const isMainSession = key.toLowerCase() === "main" || parsedAgentSessionKey?.rest === "main";
+      const displayName = isMainSession
+        ? sessionLabel || "Main Session"
+        : (entry?.displayName ??
+          (channel
+            ? buildGroupDisplayName({
+                provider: channel,
+                subject,
+                groupChannel,
+                space,
+                id,
+                key,
+              })
+            : undefined) ??
+          entry?.label ??
+          originLabel);
       const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const parsedAgent = parseAgentSessionKey(key);
-      const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+      const sessionAgentId = normalizeAgentId(
+        parsedAgentSessionKey?.agentId ?? resolveDefaultAgentId(cfg),
+      );
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
