@@ -230,6 +230,56 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved.token).toBeUndefined();
   });
 
+  it("throws when remote token auth relies on an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "remote",
+            remote: {
+              url: "wss://gateway.example",
+              token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+            },
+            auth: {},
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+        remoteTokenFallback: "remote-only",
+      }),
+    ).toThrow("gateway.remote.token");
+  });
+
+  it("throws when remote password auth relies on an unresolved SecretRef", () => {
+    expect(() =>
+      resolveGatewayCredentialsFromConfig({
+        cfg: cfg({
+          gateway: {
+            mode: "remote",
+            remote: {
+              url: "wss://gateway.example",
+              password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
+            },
+            auth: {},
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        }),
+        env: {} as NodeJS.ProcessEnv,
+        includeLegacyEnv: false,
+        remotePasswordFallback: "remote-only",
+      }),
+    ).toThrow("gateway.remote.password");
+  });
+
   it("can disable legacy CLAWDBOT env fallback", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
