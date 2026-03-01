@@ -138,6 +138,19 @@ type ManagedCollection = {
 
 type QmdManagerMode = "full" | "status";
 
+export class QmdScopeDeniedError extends Error {
+  readonly sessionKey: string | undefined;
+  constructor(sessionKey?: string) {
+    const chatType = deriveQmdScopeChatType(sessionKey) ?? "unknown";
+    super(
+      `memory search is not available in ${chatType} chats by default. ` +
+        `To enable it, configure memory.qmd.scope in openclaw.json.`,
+    );
+    this.name = "QmdScopeDeniedError";
+    this.sessionKey = sessionKey;
+  }
+}
+
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
     cfg: OpenClawConfig;
@@ -611,7 +624,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
-      return [];
+      throw new QmdScopeDeniedError(opts?.sessionKey);
     }
     const trimmed = query.trim();
     if (!trimmed) {

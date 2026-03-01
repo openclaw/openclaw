@@ -1761,6 +1761,57 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("denies group/channel chats and allows direct when no scope is configured (secure default)", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          // no scope configured → default scope allows direct only
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    const isAllowed = (key?: string) =>
+      (manager as unknown as { isScopeAllowed: (key?: string) => boolean }).isScopeAllowed(key);
+
+    expect(isAllowed("agent:main:telegram:direct:u123")).toBe(true);
+    expect(isAllowed("agent:main:telegram:group:g123")).toBe(false);
+    expect(isAllowed("agent:main:discord:channel:c123")).toBe(false);
+    expect(isAllowed(undefined)).toBe(false); // no session key → no chat type → deny
+
+    await manager.close();
+  });
+
+  it("throws QmdScopeDeniedError on scope-denied search", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          scope: {
+            default: "deny",
+            rules: [{ action: "allow", match: { chatType: "direct" } }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("anything", { sessionKey: "agent:main:telegram:group:g123" }),
+    ).rejects.toThrow("memory search is not available");
+
+    await manager.close();
+  });
+
   it("scopes by channel for agent-prefixed session keys", async () => {
     cfg = {
       ...cfg,
@@ -1812,7 +1863,7 @@ describe("QmdMemoryManager", () => {
     const beforeCalls = spawnMock.mock.calls.length;
     await expect(
       manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow("memory search is not available");
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd search denied by scope"));

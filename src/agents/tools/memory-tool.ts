@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { QmdScopeDeniedError } from "../../memory/qmd-manager.js";
 import type { MemorySearchResult } from "../../memory/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -91,6 +92,9 @@ export function createMemorySearchTool(options: {
           mode: searchMode,
         });
       } catch (err) {
+        if (err instanceof QmdScopeDeniedError) {
+          return jsonResult(buildMemoryScopeDeniedResult(err.message));
+        }
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult(buildMemorySearchUnavailableResult(message));
       }
@@ -190,6 +194,16 @@ function clampResultsByInjectedChars(
     }
   }
   return clamped;
+}
+
+function buildMemoryScopeDeniedResult(reason: string) {
+  return {
+    results: [],
+    disabled: true,
+    scopeDenied: true,
+    warning: "Memory search is disabled for this chat context by the configured scope policy.",
+    action: reason,
+  };
 }
 
 function buildMemorySearchUnavailableResult(error: string | undefined) {
