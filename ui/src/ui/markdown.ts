@@ -9,10 +9,20 @@ const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColo
 // Custom renderer for code blocks with copy button
 const codeBlockRenderer = new marked.Renderer();
 codeBlockRenderer.code = ({ text, lang }: { text: string; lang?: string }): string => {
-  const langClass = lang ? ` language-${lang}` : "";
+  // Only allow safe characters in language class (prevent HTML injection)
+  const safeLang = lang ? lang.replace(/[^a-zA-Z0-9_+-]/g, "") : "";
+  const langClass = safeLang ? ` language-${safeLang}` : "";
   const escapedCode = escapeHtml(text);
+  // Handle malformed UTF-16 before URI encoding (prevent URIError on unpaired surrogates)
+  let encodedCode: string;
+  try {
+    encodedCode = encodeURIComponent(text);
+  } catch {
+    // Fallback: replace unpaired surrogates and retry
+    encodedCode = encodeURIComponent(text.replace(/[\uD800-\uDFFF]/g, "\uFFFD"));
+  }
   // Use a wrapper div with relative positioning for the copy button
-  return `<div class="code-block-wrapper"><pre class="code-block${langClass}"><code>${escapedCode}</code></pre><button class="code-block-copy-btn" type="button" data-code="${encodeURIComponent(text)}" title="Copy code">${COPY_ICON_SVG}<span class="code-block-copy-btn__check">${CHECK_ICON_SVG}</span></button></div>`;
+  return `<div class="code-block-wrapper"><pre class="code-block${langClass}"><code>${escapedCode}</code></pre><button class="code-block-copy-btn" type="button" data-code="${encodedCode}" title="Copy code">${COPY_ICON_SVG}<span class="code-block-copy-btn__check">${CHECK_ICON_SVG}</span></button></div>`;
 };
 
 marked.setOptions({
