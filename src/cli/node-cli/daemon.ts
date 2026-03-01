@@ -3,6 +3,7 @@ import {
   DEFAULT_NODE_DAEMON_RUNTIME,
   isNodeDaemonRuntime,
 } from "../../commands/node-daemon-runtime.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveNodeLaunchAgentLabel,
@@ -150,6 +151,15 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
+
+  // Resolve gateway token - needed for node to authenticate with gateway.
+  // Priority: environment variable > config file.
+  const cfg = loadConfig();
+  const token =
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+    cfg.gateway?.auth?.token;
+
   const { programArguments, workingDirectory, environment, description } =
     await buildNodeInstallPlan({
       env: process.env,
@@ -167,6 +177,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
           defaultRuntime.log(message);
         }
       },
+      token,
     });
 
   await installDaemonServiceAndEmit({

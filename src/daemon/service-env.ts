@@ -276,8 +276,9 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  token?: string;
 }): Record<string, string | undefined> {
-  const { env } = params;
+  const { env, token } = params;
   const platform = params.platform ?? process.platform;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -296,6 +297,7 @@ export function buildNodeServiceEnvironment(params: {
     NODE_EXTRA_CA_CERTS: nodeCaCerts,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_GATEWAY_TOKEN: token,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
