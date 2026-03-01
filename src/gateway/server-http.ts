@@ -1,4 +1,3 @@
-import { installOpenAiRateLimitShaper } from "../infra/net/rate-limit-shaping.js";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
@@ -17,6 +16,7 @@ import {
 } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
+import { installOpenAiRateLimitShaper } from "../infra/net/rate-limit-shaping.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
