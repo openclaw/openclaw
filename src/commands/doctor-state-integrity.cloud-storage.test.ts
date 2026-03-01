@@ -1,5 +1,6 @@
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { detectMacCloudSyncedStateDir } from "./doctor-state-integrity.js";
 
 describe("detectMacCloudSyncedStateDir", () => {
@@ -61,6 +62,30 @@ describe("detectMacCloudSyncedStateDir", () => {
       path: path.resolve(resolvedCloudPath),
       storage: "CloudStorage provider",
     });
+  });
+
+  it("anchors cloud detection to OS homedir when OPENCLAW_HOME is overridden", () => {
+    const stateDir = path.join(home, "Library", "CloudStorage", "iCloud Drive", ".openclaw");
+    const originalOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = "/tmp/openclaw-home-override";
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(home);
+    try {
+      const result = detectMacCloudSyncedStateDir(stateDir, {
+        platform: "darwin",
+      });
+
+      expect(result).toEqual({
+        path: path.resolve(stateDir),
+        storage: "CloudStorage provider",
+      });
+    } finally {
+      homedirSpy.mockRestore();
+      if (originalOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenClawHome;
+      }
+    }
   });
 
   it("returns null outside darwin", () => {
