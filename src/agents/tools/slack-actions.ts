@@ -17,6 +17,7 @@ import {
   unpinSlackMessage,
 } from "../../slack/actions.js";
 import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
+import { recordSlackThreadParticipation } from "../../slack/sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
@@ -63,7 +64,9 @@ function resolveThreadTsFromContext(
     return undefined;
   }
 
-  const parsedTarget = parseSlackTarget(targetChannel, { defaultKind: "channel" });
+  const parsedTarget = parseSlackTarget(targetChannel, {
+    defaultKind: "channel",
+  });
   if (!parsedTarget || parsedTarget.kind !== "channel") {
     return undefined;
   }
@@ -179,7 +182,9 @@ export async function handleSlackAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
-        const content = readStringParam(params, "content", { allowEmpty: true });
+        const content = readStringParam(params, "content", {
+          allowEmpty: true,
+        });
         const mediaUrl = readStringParam(params, "mediaUrl");
         const blocks = readSlackBlocksParam(params);
         if (!content && !mediaUrl && !blocks) {
@@ -200,6 +205,10 @@ export async function handleSlackAction(
           blocks,
         });
 
+        if (threadTs && result.channelId && account.accountId) {
+          recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
+        }
+
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
@@ -217,7 +226,9 @@ export async function handleSlackAction(
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
-        const content = readStringParam(params, "content", { allowEmpty: true });
+        const content = readStringParam(params, "content", {
+          allowEmpty: true,
+        });
         const blocks = readSlackBlocksParam(params);
         if (!content && !blocks) {
           throw new Error("Slack editMessage requires content or blocks.");
@@ -228,7 +239,9 @@ export async function handleSlackAction(
             blocks,
           });
         } else {
-          await editSlackMessage(channelId, messageId, content ?? "", { blocks });
+          await editSlackMessage(channelId, messageId, content ?? "", {
+            blocks,
+          });
         }
         return jsonResult({ ok: true });
       }
@@ -336,7 +349,10 @@ export async function handleSlackAction(
       if (entries.length > limit) {
         return jsonResult({
           ok: true,
-          emojis: { ...result, emoji: Object.fromEntries(entries.slice(0, limit)) },
+          emojis: {
+            ...result,
+            emoji: Object.fromEntries(entries.slice(0, limit)),
+          },
         });
       }
     }
