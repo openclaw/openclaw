@@ -246,6 +246,28 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   };
 }
 
+/**
+ * Best-effort last-resort TTY cleanup.  Called from the process 'exit'
+ * safety-net and from error-path shutdowns so the parent shell is never left
+ * with a corrupted raw-mode terminal (issue #30421).
+ */
+export function forceRestoreTty(): void {
+  try {
+    if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+      process.stdin.setRawMode(false);
+    }
+  } catch {
+    // nothing we can do
+  }
+  try {
+    // Re-enable cursor and disable bracketed-paste in case tui.stop() was
+    // interrupted before writing these sequences.
+    process.stdout.write("\x1b[?25h\x1b[?2004l");
+  } catch {
+    // nothing we can do
+  }
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -770,8 +792,14 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    tui.stop();
-    process.exit(0);
+    try {
+      tui.stop();
+    } finally {
+      // Guarantee process.exit(0) is always reached — even when tui.stop()
+      // throws — so the process never hangs and the parent shell is not left
+      // with a corrupted raw-mode terminal (#30421).
+      process.exit(0);
+    }
   };
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
@@ -924,6 +952,18 @@ export async function runTui(opts: TuiOptions) {
   const sigtermHandler = () => {
     requestExit();
   };
+  // Safety-net: ensure the terminal is always restored to a usable state even
+  // when the process exits unexpectedly (uncaught exception, unhandled promise
+  // rejection, SIGTERM received while /compact is running, etc.).
+  // Without this guard the parent shell is left in raw mode and OSC escape
+  // sequences queued in the kernel TTY input buffer get interpreted as shell
+  // commands, e.g.:
+  //   command not found: ^[]7 file://hostname/path^G   (issue #30421)
+  const tuiExitCleanup = () => {
+    forceRestoreTty();
+  };
+  process.once("exit", tuiExitCleanup);
+
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
   tui.start();
@@ -932,6 +972,7 @@ export async function runTui(opts: TuiOptions) {
     const finish = () => {
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
+      process.removeListener("exit", tuiExitCleanup);
       resolve();
     };
     process.once("exit", finish);

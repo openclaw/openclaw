@@ -444,6 +444,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "settings":
         openSettings();
         break;
+      case "compact":
+        // Forward /compact to the gateway as a control command.
+        // Show an explicit activity status while the (potentially long-running)
+        // compaction is in progress so the user knows the TUI hasn't frozen.
+        setActivityStatus("compacting…");
+        tui.requestRender();
+        await sendMessage(raw);
+        break;
       case "exit":
       case "quit":
         requestExit();

@@ -129,4 +129,25 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
   });
+
+  // Regression test for issue #30421: /compact must be forwarded to the gateway
+  // AND must show a "compacting…" status before sending so the user knows the
+  // TUI has not frozen during the (potentially long) compaction operation.
+  it("/compact forwards to gateway and shows compacting status first", async () => {
+    const { handleCommand, sendChat, addUser, requestRender, setActivityStatus } = createHarness();
+
+    await handleCommand("/compact");
+
+    // Must be forwarded as a chat message
+    expect(addUser).toHaveBeenCalledWith("/compact");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "/compact" }),
+    );
+    // "compacting…" must have appeared in the activity status calls
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statusValues = setActivityStatus.mock.calls.map((args: any[]) => args[0] as string);
+    expect(statusValues).toContain("compacting…");
+    // A render must have been requested
+    expect(requestRender).toHaveBeenCalled();
+  });
 });

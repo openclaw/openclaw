@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI//compact crash: prevent `/compact` from corrupting the parent shell (zsh/bash) with `command not found: ^[]7 file://...` OSC-escape errors when the TUI exits during or after compaction. Fixes: (1) wrap `tui.stop()` inside `requestExit` with `try/finally` so `process.exit(0)` is guaranteed even when `tui.stop()` throws; (2) add a `process.once('exit', ...)` safety-net that calls `setRawMode(false)` on every exit path — including uncaught exceptions and unhandled rejections — so the kernel TTY input buffer is never left in raw mode where subsequent shell prompts would be interpreted as commands; (3) add a dedicated `/compact` command case that shows "compacting…" activity status before forwarding to the gateway. (#30421) Thanks @Meisenburg.
 - Config/Memory: allow `"mistral"` in `agents.defaults.memorySearch.provider` and `agents.defaults.memorySearch.fallback` schema validation. (#14934) Thanks @ThomsenDrake.
 - Security/Feishu: enforce ID-only allowlist matching for DM/group sender authorization, normalize Feishu ID prefixes during checks, and ignore mutable display names so display-name collisions cannot satisfy allowlist entries. This ships in the next npm release. Thanks @jiseoung for reporting.
 - Feishu/Commands: in group chats, command authorization now falls back to top-level `channels.feishu.allowFrom` when per-group `allowFrom` is not set, so `/command` no longer gets blocked by an unintended empty allowlist. (#23756)

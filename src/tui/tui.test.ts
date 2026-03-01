@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  forceRestoreTty,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
@@ -148,5 +149,41 @@ describe("resolveCtrlCAction", () => {
       action: "warn",
       nextLastCtrlCAt: 3501,
     });
+  });
+});
+
+describe("TUI terminal safety (issue #30421)", () => {
+  // forceRestoreTty() is the last-resort safety net called from requestExit()
+  // and from the process 'exit' listener to ensure the parent shell is never
+  // left in raw mode after a /compact crash or any other unexpected exit.
+
+  it("forceRestoreTty does not throw when stdin has no setRawMode", () => {
+    // Simulate an environment where stdin.isTTY is false (e.g. piped input)
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    expect(() => forceRestoreTty()).not.toThrow();
+    Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+  });
+
+  it("forceRestoreTty does not throw when setRawMode throws", () => {
+    // Temporarily install a setRawMode that throws, simulating EBADF on a
+    // closed terminal fd.  forceRestoreTty must swallow the error.
+    const orig = process.stdin.isTTY;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const origSetRaw = (process.stdin as any).setRawMode;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdin, "setRawMode", {
+      value: () => { throw Object.assign(new Error("EBADF"), { code: "EBADF" }); },
+      configurable: true,
+      writable: true,
+    });
+    expect(() => forceRestoreTty()).not.toThrow();
+    // Restore original state
+    Object.defineProperty(process.stdin, "setRawMode", {
+      value: origSetRaw,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
   });
 });
