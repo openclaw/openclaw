@@ -2,6 +2,7 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { mergeAssistantTextBuffer, sanitizeAssistantText } from "./chat-response-text.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -95,6 +96,8 @@ export type ChatRunState = {
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Runs with an in-flight dispatch — defer empty-buffer finals. */
+  dispatchPending: Set<string>;
   clear: () => void;
 };
 
@@ -103,12 +106,14 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const dispatchPending = new Set<string>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
+    dispatchPending.clear();
   };
 
   return {
@@ -116,6 +121,7 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     abortedRuns,
+    dispatchPending,
     clear,
   };
 }
@@ -228,7 +234,13 @@ export function createAgentEventHandler({
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
-    chatRunState.buffers.set(clientRunId, text);
+    const cleanText = sanitizeAssistantText(text);
+    if (!cleanText.trim()) {
+      return;
+    }
+    const previous = chatRunState.buffers.get(clientRunId) ?? "";
+    const mergedText = mergeAssistantTextBuffer(previous, cleanText);
+    chatRunState.buffers.set(clientRunId, mergedText);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
@@ -242,7 +254,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: mergedText }],
         timestamp: now,
       },
     };
@@ -260,22 +272,36 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const rawText = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const text = sanitizeAssistantText(rawText).trim();
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      // When streaming buffer is empty and dispatch is still in-flight,
+      // defer the final — the dispatch .then() will send the actual text
+      // (e.g. error messages) instead of the generic fallback.
+      if (text.length === 0 && chatRunState.dispatchPending.has(clientRunId)) {
+        return;
+      }
+      // Streaming sent real text — mark dispatch as handled so .then()
+      // doesn't duplicate the final.
+      chatRunState.dispatchPending.delete(clientRunId);
       const payload = {
         runId: clientRunId,
         sessionKey,
         seq,
         state: "final" as const,
-        message: text
-          ? {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: Date.now(),
-            }
-          : undefined,
+        // Send message only when there is actual text. Empty-buffer completions
+        // (tool-only runs, heartbeats, delegated subagent runs) get
+        // message: undefined which the UI handles silently.
+        message:
+          text.length > 0
+            ? {
+                role: "assistant",
+                content: [{ type: "text", text }],
+                timestamp: Date.now(),
+              }
+            : undefined,
       };
       // Suppress webchat broadcast for heartbeat runs when showOk is false
       if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
@@ -330,6 +356,26 @@ export function createAgentEventHandler({
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     if (isToolEvent && toolVerbose === "off") {
       agentRunSeq.set(evt.runId, evt.seq);
+      // Still broadcast minimal tool summary for webchat thinking notes (name + phase only).
+      // Detailed tool results are suppressed; only start/end/error phase transitions are sent.
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+      if (phase === "start" || phase === "end" || phase === "error") {
+        const summaryData: Record<string, unknown> = { phase };
+        if (evt.data?.name) summaryData.name = evt.data.name;
+        if (evt.data?.toolCallId) summaryData.toolCallId = evt.data.toolCallId;
+        const summaryPayload = {
+          runId: evt.runId,
+          stream: evt.stream,
+          seq: evt.seq,
+          ts: evt.ts,
+          ...(sessionKey ? { sessionKey } : {}),
+          data: summaryData,
+        };
+        broadcast("agent", summaryPayload, { dropIfSlow: true });
+        if (sessionKey) {
+          nodeSendToSession(sessionKey, "agent", summaryPayload);
+        }
+      }
       return;
     }
     const toolPayload =

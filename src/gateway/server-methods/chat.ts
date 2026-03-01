@@ -18,7 +18,12 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatImageContent,
+  type ChatDocumentContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
+import { sanitizeAssistantText } from "../chat-response-text.js";
 import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
@@ -358,11 +363,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(p.message, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: 10_000_000,
           log: context.logGateway,
         });
         parsedMessage = parsed.message;
-        parsedImages = parsed.images;
+        // Combine images and documents (PDFs for OCR) into the images array
+        parsedImages = [
+          ...parsed.images,
+          ...parsed.documents.map((doc) => ({
+            type: "image" as const,
+            data: doc.data,
+            mimeType: doc.mimeType,
+          })),
+        ];
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
@@ -491,7 +504,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (info.kind !== "final") {
             return;
           }
-          const text = payload.text?.trim() ?? "";
+          const text = sanitizeAssistantText(payload.text ?? "").trim();
           if (!text) {
             return;
           }
@@ -500,6 +513,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      context.chatDispatchPending.add(clientRunId);
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -524,12 +538,18 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       })
         .then(() => {
+          // Check if emitChatFinal deferred the final (empty streaming buffer
+          // while dispatch was pending).  If so, we must send it now.
+          const finalWasDeferred = context.chatDispatchPending.has(clientRunId);
+          context.chatDispatchPending.delete(clientRunId);
+          const combinedReply = finalReplyParts
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
-              .filter(Boolean)
-              .join("\n\n")
-              .trim();
+            // Non-streaming path: dispatch completed without an agent run,
+            // so we must send the final ourselves.
             let message: Record<string, unknown> | undefined;
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
@@ -559,11 +579,34 @@ export const chatHandlers: GatewayRequestHandlers = {
                 };
               }
             }
+            // else: message stays undefined — dispatch produced nothing,
+            // which may be normal for command-only handlers.
             broadcastChatFinal({
               context,
               runId: clientRunId,
               sessionKey: p.sessionKey,
               message,
+            });
+          } else if (finalWasDeferred) {
+            // Streaming path produced no streamed text (agent ran via tool
+            // calls only, e.g. /delegate).  The lifecycle "end" event deferred
+            // the empty-buffer final, so send now.
+            // Only include a message when there's actual text (e.g. a context
+            // overflow error surfaced via finalReplyParts).  For clean tool-only
+            // completions, message: undefined signals success with no reply text.
+            broadcastChatFinal({
+              context,
+              runId: clientRunId,
+              sessionKey: p.sessionKey,
+              message: combinedReply
+                ? {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: Date.now(),
+                    stopReason: "injected",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  }
+                : undefined,
             });
           }
           context.dedupe.set(`chat:${clientRunId}`, {
@@ -573,6 +616,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
+          context.chatDispatchPending.delete(clientRunId);
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
