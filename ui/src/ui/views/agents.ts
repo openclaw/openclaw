@@ -5,7 +5,9 @@ import type {
   AgentsListResult,
   ChannelsStatusSnapshot,
   CronJob,
+  CronRunLogEntry,
   CronStatus,
+  SessionsListResult,
   SkillStatusReport,
   ToolsCatalogResult,
 } from "../types.ts";
@@ -15,6 +17,7 @@ import {
   renderAgentCron,
 } from "./agents-panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
+import { renderAgentsRunner } from "./agents-runner.ts";
 import {
   agentBadgeText,
   buildAgentContext,
@@ -48,6 +51,16 @@ export type AgentsProps = {
   cronLoading: boolean;
   cronStatus: CronStatus | null;
   cronJobs: CronJob[];
+  cronRunsJobId: string | null;
+  cronRuns: CronRunLogEntry[];
+  cronBusy: boolean;
+  sessions: SessionsListResult | null;
+  onOpenSession: (sessionKey: string) => void;
+  onQueueTask: (agentId: string, task: string) => void;
+  onCronRun: (job: CronJob) => void;
+  onCronDisable: (job: CronJob) => void;
+  onCronRemove: (job: CronJob) => void;
+  onCronLoadRuns: (jobId: string) => void;
   cronError: string | null;
   agentFilesLoading: boolean;
   agentFilesError: string | null;
@@ -169,22 +182,38 @@ export function renderAgents(props: AgentsProps) {
                 ${renderAgentTabs(props.activePanel, (panel) => props.onSelectPanel(panel))}
                 ${
                   props.activePanel === "overview"
-                    ? renderAgentOverview({
-                        agent: selectedAgent,
-                        defaultId,
-                        configForm: props.configForm,
-                        agentFilesList: props.agentFilesList,
-                        agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                        agentIdentityError: props.agentIdentityError,
-                        agentIdentityLoading: props.agentIdentityLoading,
-                        configLoading: props.configLoading,
-                        configSaving: props.configSaving,
-                        configDirty: props.configDirty,
-                        onConfigReload: props.onConfigReload,
-                        onConfigSave: props.onConfigSave,
-                        onModelChange: props.onModelChange,
-                        onModelFallbacksChange: props.onModelFallbacksChange,
-                      })
+                    ? html`
+                        ${renderAgentsRunner({
+                          agentsList: props.agentsList,
+                          sessions: props.sessions,
+                          cronJobs: props.cronJobs,
+                          cronRunsJobId: props.cronRunsJobId,
+                          cronRuns: props.cronRuns,
+                          busy: props.cronBusy,
+                          onQueueTask: props.onQueueTask,
+                          onRunJob: props.onCronRun,
+                          onDisableJob: props.onCronDisable,
+                          onRemoveJob: props.onCronRemove,
+                          onLoadRuns: props.onCronLoadRuns,
+                          onOpenSession: props.onOpenSession,
+                        })}
+                        ${renderAgentOverview({
+                          agent: selectedAgent,
+                          defaultId,
+                          configForm: props.configForm,
+                          agentFilesList: props.agentFilesList,
+                          agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+                          agentIdentityError: props.agentIdentityError,
+                          agentIdentityLoading: props.agentIdentityLoading,
+                          configLoading: props.configLoading,
+                          configSaving: props.configSaving,
+                          configDirty: props.configDirty,
+                          onConfigReload: props.onConfigReload,
+                          onConfigSave: props.onConfigSave,
+                          onModelChange: props.onModelChange,
+                          onModelFallbacksChange: props.onModelFallbacksChange,
+                        })}
+                      `
                     : nothing
                 }
                 ${
