@@ -593,12 +593,22 @@ export const MemorySearchSchema = z
       .optional(),
     store: z
       .object({
-        driver: z.literal("sqlite").optional(),
+        driver: z.union([z.literal("sqlite"), z.literal("qdrant")]).optional(),
         path: z.string().optional(),
         vector: z
           .object({
             enabled: z.boolean().optional(),
             extensionPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        qdrant: z
+          .object({
+            url: z.string().optional(),
+            collection: z.string().optional(),
+            apiKey: z.string().optional().register(sensitive),
+            dimensions: z.number().int().positive().optional(),
+            timeoutMs: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),
