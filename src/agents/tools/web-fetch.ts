@@ -60,6 +60,12 @@ const WebFetchSchema = Type.Object({
       minimum: 100,
     }),
   ),
+  timeoutSeconds: Type.Optional(
+    Type.Number({
+      description: "Per-call timeout in seconds (overrides tools.web.fetch.timeoutSeconds).",
+      minimum: 1,
+    }),
+  ),
 });
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -724,10 +730,6 @@ export function createWebFetchTool(options?: {
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
-  const firecrawlTimeoutSeconds = resolveTimeoutSeconds(
-    firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS,
-  );
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -743,7 +745,12 @@ export function createWebFetchTool(options?: {
       const url = readStringParam(params, "url", { required: true });
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
+      const timeoutSeconds = readNumberParam(params, "timeoutSeconds", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const resolvedTimeoutSeconds = resolveTimeoutSeconds(
+        timeoutSeconds ?? fetch?.timeoutSeconds,
+        DEFAULT_TIMEOUT_SECONDS,
+      );
       const result = await runWebFetch({
         url,
         extractMode,
@@ -754,7 +761,7 @@ export function createWebFetchTool(options?: {
         ),
         maxResponseBytes,
         maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+        timeoutSeconds: resolvedTimeoutSeconds,
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
@@ -765,7 +772,10 @@ export function createWebFetchTool(options?: {
         firecrawlMaxAgeMs,
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
-        firecrawlTimeoutSeconds,
+        firecrawlTimeoutSeconds: resolveTimeoutSeconds(
+          timeoutSeconds ?? firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        ),
       });
       return jsonResult(result);
     },
