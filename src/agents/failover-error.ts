@@ -157,15 +157,21 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
 
   const status = getStatusCode(err);
+  const message = getErrorMessage(err);
   if (status === 402) {
+    // Some providers (for example Anthropic Max plan tokens) can surface
+    // temporary usage/rate-limit failures as HTTP 402. Prefer explicit
+    // rate-limit semantics from the payload when available.
+    if (message && classifyFailoverReason(message) === "rate_limit") {
+      return "rate_limit";
+    }
     return "billing";
   }
   if (status === 429) {
     return "rate_limit";
   }
   if (status === 401 || status === 403) {
-    const msg = getErrorMessage(err);
-    if (msg && isAuthPermanentErrorMessage(msg)) {
+    if (message && isAuthPermanentErrorMessage(message)) {
       return "auth_permanent";
     }
     return "auth";
@@ -188,7 +194,6 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "timeout";
   }
 
-  const message = getErrorMessage(err);
   if (!message) {
     return null;
   }

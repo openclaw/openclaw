@@ -23,6 +23,8 @@ export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
+const ANTHROPIC_AMBIGUOUS_402_USER_MESSAGE =
+  "⚠️ Anthropic returned HTTP 402 (Payment Required). This can be a temporary Claude Max usage limit, not only depleted credits. Please retry later, and if it persists check your Anthropic usage and billing limits.";
 
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
@@ -32,6 +34,29 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
     return OVERLOADED_ERROR_USER_MESSAGE;
   }
   return undefined;
+}
+
+function isAnthropicAmbiguous402Error(raw: string, provider?: string): boolean {
+  const providerNormalized = provider?.trim().toLowerCase();
+  if (!providerNormalized || providerNormalized !== "anthropic") {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  if (!BILLING_ERROR_HARD_402_RE.test(lower)) {
+    return false;
+  }
+  // Keep explicit billing errors as billing.
+  if (
+    lower.includes("credit balance") ||
+    lower.includes("insufficient credit") ||
+    lower.includes("insufficient credits") ||
+    lower.includes("insufficient balance") ||
+    lower.includes("billing hard limit") ||
+    (lower.includes("billing") && lower.includes("disabled"))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -532,6 +557,10 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
+  }
+
+  if (isAnthropicAmbiguous402Error(raw, opts?.provider)) {
+    return ANTHROPIC_AMBIGUOUS_402_USER_MESSAGE;
   }
 
   if (isBillingErrorMessage(raw)) {

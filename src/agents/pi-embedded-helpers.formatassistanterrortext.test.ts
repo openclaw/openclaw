@@ -84,6 +84,13 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("uses a non-billing warning for ambiguous Anthropic HTTP 402 errors", () => {
+    const msg = makeAssistantError("HTTP 402 Payment Required");
+    const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
+    expect(result).toContain("Anthropic returned HTTP 402");
+    expect(result).toContain("temporary Claude Max usage limit");
+    expect(result).not.toContain("run out of credits");
+  });
   it("returns a friendly billing message for insufficient credits", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
