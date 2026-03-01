@@ -24,6 +24,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
   choices: AuthChoice[];
 }[] = [
   {
+    value: "auto",
+    label: "auto",
+    hint: "Auto-router (recommended)",
+    choices: ["auto-model"],
+  },
+  {
     value: "openai",
     label: "OpenAI",
     hint: "Codex OAuth + API key",
@@ -213,6 +219,11 @@ function buildProviderAuthChoiceOptions(): AuthChoiceOption[] {
 }
 
 const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
+  {
+    value: "auto-model",
+    label: "auto",
+    hint: "Auto-router (recommended) — picks model per prompt and asks auth only when needed.",
+  },
   {
     value: "token",
     label: "Anthropic token (paste setup-token)",

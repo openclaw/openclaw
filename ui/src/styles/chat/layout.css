@@ -59,6 +59,27 @@
   background: transparent;
 }
 
+.chat-running-ticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 146, 60, 0.45);
+  background: rgba(251, 146, 60, 0.14);
+  color: #ffb66e;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+:root[data-theme="light"] .chat-running-ticker {
+  border-color: rgba(194, 65, 12, 0.35);
+  background: rgba(251, 146, 60, 0.16);
+  color: #9a3412;
+}
+
 /* Focus mode exit button */
 .chat-focus-exit {
   position: absolute;
@@ -341,6 +362,23 @@
   align-items: center;
   gap: 6px;
   font-size: 13px;
+}
+
+.chat-controls__reasoning-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+:root[data-theme="light"] .chat-controls__reasoning-status {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(16, 24, 40, 0.15);
 }
 
 /* Icon button style */

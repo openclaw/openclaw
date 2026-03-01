@@ -1,9 +1,12 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { AUTO_MODEL, isAutoModel } from "../shared/model-constants.js";
 
 export type ModelOverrideSelection = {
   provider: string;
   model: string;
   isDefault?: boolean;
+  /** True when selection is AUTO_MODEL (auto routing). */
+  isAuto?: boolean;
 };
 
 export function applyModelOverrideToSessionEntry(params: {
@@ -25,6 +28,18 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverride;
       updated = true;
     }
+    delete entry.autoModelRoutingStatus;
+  } else if (selection.isAuto || isAutoModel(selection.model)) {
+    if (entry.modelOverride !== AUTO_MODEL) {
+      entry.modelOverride = AUTO_MODEL;
+      updated = true;
+    }
+    if (entry.providerOverride) {
+      delete entry.providerOverride;
+      updated = true;
+    }
+    delete entry.autoModelRoutingStatus;
+    // Preserve lastNonAutoModel* when switching to auto (don't overwrite).
   } else {
     if (entry.providerOverride !== selection.provider) {
       entry.providerOverride = selection.provider;
@@ -34,6 +49,10 @@ export function applyModelOverrideToSessionEntry(params: {
       entry.modelOverride = selection.model;
       updated = true;
     }
+    // Update last non-auto manual selection for restore when switching back to /model auto.
+    entry.lastNonAutoModelProvider = selection.provider;
+    entry.lastNonAutoModel = selection.model;
+    delete entry.autoModelRoutingStatus;
   }
 
   if (profileOverride) {

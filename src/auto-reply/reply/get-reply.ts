@@ -1,4 +1,5 @@
 import {
+  resolveAutoReasoningConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -73,6 +74,7 @@ export async function getReplyFromConfig(
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
+  const resolvedAutoReasoningConfig = resolveAutoReasoningConfig(cfg, agentId);
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
@@ -254,9 +256,12 @@ export async function getReplyFromConfig(
     elevatedFailures,
     defaultActivation,
     resolvedThinkLevel,
+    configuredThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    generatingSource,
+    autoReasoningEnabled,
     execOverrides,
     blockStreamingEnabled,
     blockReplyChunking,
@@ -363,9 +368,13 @@ export async function getReplyFromConfig(
     directives,
     defaultActivation,
     resolvedThinkLevel,
+    configuredThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    generatingSource,
+    autoReasoningEnabled,
+    autoReasoningConfig: resolvedAutoReasoningConfig,
     execOverrides,
     elevatedEnabled,
     elevatedAllowed,

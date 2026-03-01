@@ -224,4 +224,55 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("renders running ticker with auto reasoning + planning phase", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runActive: true,
+          runTickerReasoningLabel: "High",
+          runPhaseLabel: "planning",
+        }),
+      ),
+      container,
+    );
+    const ticker = container.querySelector(".chat-running-ticker");
+    expect(ticker).not.toBeNull();
+    expect(ticker?.textContent).toContain("Running... • Reasoning=High • planning");
+  });
+
+  it("renders running ticker with manual deep reasoning", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runActive: true,
+          runTickerReasoningLabel: "Deep",
+          runPhaseLabel: "reasoning",
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-running-ticker")?.textContent).toContain(
+      "Running... • Reasoning=Deep • reasoning",
+    );
+  });
+
+  it("falls back to processing ticker phase and default reasoning", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          runActive: true,
+          runTickerReasoningLabel: undefined,
+          runPhaseLabel: undefined,
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-running-ticker")?.textContent).toContain(
+      "Running... • Reasoning=Default • processing",
+    );
+  });
 });

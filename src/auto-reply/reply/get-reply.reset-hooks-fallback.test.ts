@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   handleInlineActions: vi.fn(),
   emitResetCommandHooks: vi.fn(),
   initSessionState: vi.fn(),
+  resolveAutoReasoningConfig: vi.fn(),
+  runPreparedReply: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -13,6 +15,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveAgentSkillsFilter: vi.fn(() => undefined),
+  resolveAutoReasoningConfig: (...args: unknown[]) => mocks.resolveAutoReasoningConfig(...args),
 }));
 vi.mock("../../agents/model-selection.js", () => ({
   resolveModelRefFromString: vi.fn(() => null),
@@ -59,7 +62,7 @@ vi.mock("./get-reply-inline-actions.js", () => ({
   handleInlineActions: (...args: unknown[]) => mocks.handleInlineActions(...args),
 }));
 vi.mock("./get-reply-run.js", () => ({
-  runPreparedReply: vi.fn(async () => undefined),
+  runPreparedReply: (...args: unknown[]) => mocks.runPreparedReply(...args),
 }));
 vi.mock("./inbound-context.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
@@ -111,6 +114,10 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     mocks.handleInlineActions.mockReset();
     mocks.emitResetCommandHooks.mockReset();
     mocks.initSessionState.mockReset();
+    mocks.resolveAutoReasoningConfig.mockReset();
+    mocks.runPreparedReply.mockReset();
+    mocks.resolveAutoReasoningConfig.mockReturnValue({ enabled: false });
+    mocks.runPreparedReply.mockResolvedValue(undefined);
 
     mocks.initSessionState.mockResolvedValue({
       sessionCtx: buildNativeResetContext(),
@@ -159,6 +166,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
         elevatedFailures: [],
         defaultActivation: "always",
         resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
         resolvedVerboseLevel: "off",
         resolvedReasoningLevel: "off",
         resolvedElevatedLevel: "off",
@@ -224,6 +232,7 @@ describe("getReplyFromConfig reset-hook fallback", () => {
         elevatedFailures: [],
         defaultActivation: "always",
         resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
         resolvedVerboseLevel: "off",
         resolvedReasoningLevel: "off",
         resolvedElevatedLevel: "off",
@@ -247,5 +256,29 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("passes resolved autoReasoningConfig into runPreparedReply", async () => {
+    mocks.handleInlineActions.mockResolvedValue({
+      kind: "continue",
+      directives: {},
+      abortedLastRun: false,
+    });
+    mocks.resolveAutoReasoningConfig.mockReturnValue({
+      enabled: true,
+      emitGeneratingField: false,
+    });
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.runPreparedReply).toHaveBeenCalledTimes(1);
+    expect(mocks.runPreparedReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autoReasoningConfig: {
+          enabled: true,
+          emitGeneratingField: false,
+        },
+      }),
+    );
   });
 });

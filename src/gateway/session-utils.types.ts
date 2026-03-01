@@ -26,6 +26,11 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  configuredThink?: string;
+  effectiveThink?: string;
+  lastEffectiveThink?: string;
+  currentRunId?: string;
+  lastRunId?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

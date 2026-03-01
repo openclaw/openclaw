@@ -8,13 +8,13 @@ import {
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
+  coerceThinkingLevelForModel,
   formatThinkingLevels,
-  formatXHighModelHint,
+  normalizeConfiguredThinkLevel,
   normalizeElevatedLevel,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  supportsXHighThinking,
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -27,6 +27,7 @@ import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-ov
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { isAutoModel } from "../shared/model-constants.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -155,15 +156,18 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       // Clear the override and fall back to model default
       delete next.thinkingLevel;
+      delete next.configuredThink;
     } else if (raw !== undefined) {
-      const normalized = normalizeThinkLevel(String(raw));
+      const rawValue = String(raw).trim().toLowerCase();
+      const normalized = rawValue === "auto" ? "auto" : normalizeThinkLevel(rawValue);
       if (!normalized) {
         const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
         const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
+          `invalid thinkingLevel (use auto|${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
       }
+      next.configuredThink = normalized;
       next.thinkingLevel = normalized;
     }
   }
@@ -291,45 +295,87 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
-        };
+      if (isAutoModel(trimmed)) {
+        applyModelOverrideToSessionEntry({
+          entry: next,
+          selection: {
+            provider: "",
+            model: trimmed,
+            isAuto: true,
+          },
+        });
+      } else {
+        if (!params.loadGatewayModelCatalog) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          };
+        }
+        const catalog = await params.loadGatewayModelCatalog();
+        const resolved = resolveAllowedModelRef({
+          cfg,
+          catalog,
+          raw: trimmed,
+          defaultProvider: resolvedDefault.provider,
+          defaultModel: subagentModelHint ?? resolvedDefault.model,
+        });
+        if ("error" in resolved) {
+          return invalid(resolved.error);
+        }
+        const isDefault =
+          resolved.ref.provider === resolvedDefault.provider &&
+          resolved.ref.model === resolvedDefault.model;
+        applyModelOverrideToSessionEntry({
+          entry: next,
+          selection: {
+            provider: resolved.ref.provider,
+            model: resolved.ref.model,
+            isDefault,
+          },
+        });
       }
-      const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
-        cfg,
-        catalog,
-        raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
-      });
-      if ("error" in resolved) {
-        return invalid(resolved.error);
-      }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
-        },
-      });
     }
   }
 
-  if (next.thinkingLevel === "xhigh") {
-    const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
-    const effectiveModel = next.modelOverride ?? resolvedDefault.model;
-    if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
-      if ("thinkingLevel" in patch) {
-        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
+  const configuredThinkLevel = normalizeConfiguredThinkLevel(
+    next.configuredThink ?? next.thinkingLevel,
+  );
+  if (configuredThinkLevel) {
+    if (configuredThinkLevel === "auto") {
+      next.configuredThink = "auto";
+      next.thinkingLevel = "auto";
+    } else {
+      const modelOverride = next.modelOverride?.trim();
+      const usingAutoModel = isAutoModel(modelOverride);
+      const effectiveProvider = usingAutoModel
+        ? (next.lastNonAutoModelProvider ?? resolvedDefault.provider)
+        : (next.providerOverride ?? resolvedDefault.provider);
+      const effectiveModel = usingAutoModel
+        ? (next.lastNonAutoModel ?? resolvedDefault.model)
+        : (next.modelOverride ?? resolvedDefault.model);
+      const normalizedThinkLevel = normalizeThinkLevel(configuredThinkLevel);
+      if (!normalizedThinkLevel) {
+        return invalid(
+          `invalid thinkingLevel (valid: ${formatThinkingLevels(effectiveProvider, effectiveModel)})`,
+        );
       }
-      next.thinkingLevel = "high";
+      const thinkLevelResolution = coerceThinkingLevelForModel({
+        level: normalizedThinkLevel,
+        provider: effectiveProvider,
+        model: effectiveModel,
+      });
+      if (thinkLevelResolution.coerced) {
+        if ("thinkingLevel" in patch) {
+          return invalid(
+            `thinkingLevel "${normalizedThinkLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (valid: ${formatThinkingLevels(effectiveProvider, effectiveModel)})`,
+          );
+        }
+        next.configuredThink = thinkLevelResolution.level;
+        next.thinkingLevel = thinkLevelResolution.level;
+      } else {
+        next.configuredThink = thinkLevelResolution.level;
+        next.thinkingLevel = thinkLevelResolution.level;
+      }
     }
   }
 

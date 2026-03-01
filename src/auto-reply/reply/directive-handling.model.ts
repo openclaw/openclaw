@@ -8,6 +8,7 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { AUTO_MODEL, isAutoModel } from "../../shared/model-constants.js";
 import { buildBrowseProvidersButton } from "../../telegram/model-buttons.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
@@ -255,7 +256,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           activeRuntimeLine,
           "",
           "Tap below to browse models, or use:",
-          "/model <provider/model> to switch",
+          "/model <provider/model> or /model auto to switch",
           "/model status for details",
         ]
           .filter(Boolean)
@@ -269,7 +270,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
         activeRuntimeLine,
         "",
-        "Switch: /model <provider/model>",
+        "Switch: /model <provider/model> or /model auto",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
       ]
@@ -378,13 +379,20 @@ export function resolveModelSelectionFromDirective(params: {
   const raw = params.directives.rawModelDirective.trim();
   let modelSelection: ModelDirectiveSelection | undefined;
 
-  if (/^[0-9]+$/.test(raw)) {
+  if (isAutoModel(raw)) {
+    modelSelection = {
+      provider: "",
+      model: AUTO_MODEL,
+      isDefault: false,
+      isAuto: true,
+    };
+  } else if (/^[0-9]+$/.test(raw)) {
     return {
       errorText: [
         "Numeric model selection is not supported in chat.",
         "",
         "Browse: /models or /models <provider>",
-        "Switch: /model <provider/model>",
+        "Switch: /model <provider/model> or /model auto",
       ].join("\n"),
     };
   }

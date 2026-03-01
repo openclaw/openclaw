@@ -1,4 +1,5 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ConfiguredThinkLevel = ThinkLevel | "auto";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -31,9 +32,25 @@ export const XHIGH_MODEL_REFS = [
   "github-copilot/gpt-5.2",
 ] as const;
 
+export const NO_MINIMAL_THINKING_MODEL_REFS = [
+  "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.3-codex-spark",
+  "openai-codex/gpt-5.2-codex",
+  "openai-codex/gpt-5.1-codex",
+  "github-copilot/gpt-5.2-codex",
+] as const;
+
 const XHIGH_MODEL_SET = new Set(XHIGH_MODEL_REFS.map((entry) => entry.toLowerCase()));
 const XHIGH_MODEL_IDS = new Set(
   XHIGH_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
+    (entry): entry is string => Boolean(entry),
+  ),
+);
+const NO_MINIMAL_THINKING_MODEL_SET = new Set(
+  NO_MINIMAL_THINKING_MODEL_REFS.map((entry) => entry.toLowerCase()),
+);
+const NO_MINIMAL_THINKING_MODEL_IDS = new Set(
+  NO_MINIMAL_THINKING_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
     (entry): entry is string => Boolean(entry),
   ),
 );
@@ -74,6 +91,19 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   return undefined;
 }
 
+export function normalizeConfiguredThinkLevel(
+  raw?: string | null,
+): ConfiguredThinkLevel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (key === "auto") {
+    return "auto";
+  }
+  return normalizeThinkLevel(key);
+}
+
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
   const modelKey = model?.trim().toLowerCase();
   if (!modelKey) {
@@ -86,12 +116,70 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return XHIGH_MODEL_IDS.has(modelKey);
 }
 
+export function supportsMinimalThinking(provider?: string | null, model?: string | null): boolean {
+  if (isBinaryThinkingProvider(provider)) {
+    return false;
+  }
+  const modelKey = model?.trim().toLowerCase();
+  if (!modelKey) {
+    return true;
+  }
+  const providerKey = provider?.trim().toLowerCase();
+  if (providerKey) {
+    return !NO_MINIMAL_THINKING_MODEL_SET.has(`${providerKey}/${modelKey}`);
+  }
+  return !NO_MINIMAL_THINKING_MODEL_IDS.has(modelKey);
+}
+
 export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
-  const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
+  const levels: ThinkLevel[] = isBinaryThinkingProvider(provider)
+    ? ["off", "low"]
+    : supportsMinimalThinking(provider, model)
+      ? ["off", "minimal", "low", "medium", "high"]
+      : ["off", "low", "medium", "high"];
   if (supportsXHighThinking(provider, model)) {
     levels.push("xhigh");
   }
   return levels;
+}
+
+export function coerceThinkingLevelForModel(params: {
+  level: ThinkLevel;
+  provider?: string | null;
+  model?: string | null;
+}): { level: ThinkLevel; coerced: boolean; available: ThinkLevel[] } {
+  const available = listThinkingLevels(params.provider, params.model);
+  if (available.includes(params.level)) {
+    return {
+      level: params.level,
+      coerced: false,
+      available,
+    };
+  }
+  const rank: Record<ThinkLevel, number> = {
+    off: 0,
+    minimal: 1,
+    low: 2,
+    medium: 3,
+    high: 4,
+    xhigh: 5,
+  };
+  const target = rank[params.level];
+  const fallback = available
+    .filter((candidate) => (params.level === "off" ? candidate === "off" : candidate !== "off"))
+    .toSorted((left, right) => {
+      const leftDelta = Math.abs(rank[left] - target);
+      const rightDelta = Math.abs(rank[right] - target);
+      if (leftDelta !== rightDelta) {
+        return leftDelta - rightDelta;
+      }
+      return rank[left] - rank[right];
+    })[0];
+  return {
+    level: fallback ?? "off",
+    coerced: true,
+    available,
+  };
 }
 
 export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {

@@ -141,4 +141,45 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
+
+  it("patches session to AUTO_MODEL when /model auto", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ ok: true });
+    const applySessionInfoFromPatch = vi.fn();
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const { addSystem } = createHarness();
+    const handlers = createCommandHandlers({
+      client: {
+        sendChat: vi.fn(),
+        resetSession: vi.fn(),
+        patchSession,
+        listModels: vi.fn(),
+      } as never,
+      chatLog: { addUser: vi.fn(), addSystem } as never,
+      tui: { requestRender: vi.fn() } as never,
+      opts: {},
+      state: { currentSessionKey: "agent:main:main", sessionInfo: {} } as never,
+      deliverDefault: false,
+      openOverlay: vi.fn(),
+      closeOverlay: vi.fn(),
+      refreshSessionInfo,
+      loadHistory: vi.fn(),
+      setSession: vi.fn(),
+      refreshAgents: vi.fn(),
+      abortActive: vi.fn(),
+      setActivityStatus: vi.fn(),
+      formatSessionKey: vi.fn(),
+      applySessionInfoFromPatch,
+      noteLocalRunId: vi.fn(),
+      forgetLocalRunId: vi.fn(),
+      requestExit: vi.fn(),
+    });
+
+    await handlers.handleCommand("/model auto");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "auto",
+    });
+    expect(addSystem).toHaveBeenCalledWith("model set to Auto (Recommended)");
+  });
 });

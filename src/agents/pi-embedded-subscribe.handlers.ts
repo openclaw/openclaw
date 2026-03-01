@@ -20,7 +20,9 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 
 export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeContext) {
-  return (evt: EmbeddedPiSubscribeEvent) => {
+  let sawAgentStart = false;
+  const pendingBeforeStart: EmbeddedPiSubscribeEvent[] = [];
+  const handleEvent = (evt: EmbeddedPiSubscribeEvent) => {
     switch (evt.type) {
       case "message_start":
         handleMessageStart(ctx, evt as never);
@@ -62,5 +64,40 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
       default:
         return;
     }
+  };
+
+  return (evt: EmbeddedPiSubscribeEvent) => {
+    if (!sawAgentStart && evt.type === "agent_start") {
+      sawAgentStart = true;
+      handleEvent(evt);
+      for (const pending of pendingBeforeStart.splice(0)) {
+        handleEvent(pending);
+      }
+      return;
+    }
+    if (!sawAgentStart && evt.type === "agent_end") {
+      sawAgentStart = true;
+      handleAgentStart(ctx);
+      for (const pending of pendingBeforeStart.splice(0)) {
+        handleEvent(pending);
+      }
+      handleEvent(evt);
+      return;
+    }
+
+    if (
+      !sawAgentStart &&
+      (evt.type === "message_start" ||
+        evt.type === "message_update" ||
+        evt.type === "message_end" ||
+        evt.type === "tool_execution_start" ||
+        evt.type === "tool_execution_update" ||
+        evt.type === "tool_execution_end")
+    ) {
+      pendingBeforeStart.push(evt);
+      return;
+    }
+
+    handleEvent(evt);
   };
 }

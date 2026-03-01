@@ -65,6 +65,11 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  formatTickerReasoningLabel,
+  resolveRunPhaseLabel,
+  resolveRunPhaseSuffixLabel,
+} from "./run-status.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -156,6 +161,12 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const runTickerReasoningLabel = formatTickerReasoningLabel({
+    configured: state.chatConfiguredThink,
+    effective: state.chatEffectiveThink,
+  });
+  const runPhaseLabel = resolveRunPhaseLabel(state.chatRunPhase);
+  const runPhaseSuffixLabel = resolveRunPhaseSuffixLabel(state.chatRunPhaseSuffix);
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -982,6 +993,10 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  state.chatConfiguredThink = null;
+                  state.chatEffectiveThink = null;
+                  state.chatRunPhase = null;
+                  state.chatRunPhaseSuffix = null;
                   state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
@@ -1005,6 +1020,10 @@ export function renderApp(state: AppViewState) {
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
+                runActive: Boolean(state.chatRunId),
+                runTickerReasoningLabel,
+                runPhaseLabel: state.chatRunId ? runPhaseLabel : undefined,
+                runPhaseSuffixLabel: state.chatRunId ? runPhaseSuffixLabel : undefined,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
                 connected: state.connected,

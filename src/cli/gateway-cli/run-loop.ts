@@ -1,4 +1,8 @@
 import type { startGatewayServer } from "../../gateway/server.js";
+import {
+  consumeRequestedGatewayStopReason,
+  persistGatewayShutdownState,
+} from "../../gateway/shutdown-state.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -129,8 +133,14 @@ export async function runGatewayLoop(params: {
           }
         }
 
+        const stopReason = isRestart
+          ? "gateway restarting"
+          : consumeRequestedGatewayStopReason("gateway stopping");
+        await persistGatewayShutdownState({ reason: stopReason }).catch((err) => {
+          gatewayLog.warn(`failed to persist shutdown reason: ${String(err)}`);
+        });
         await server?.close({
-          reason: isRestart ? "gateway restarting" : "gateway stopping",
+          reason: stopReason,
           restartExpectedMs: isRestart ? 1500 : null,
         });
       } catch (err) {

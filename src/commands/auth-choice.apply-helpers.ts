@@ -469,10 +469,17 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     }
   }
 
-  const key = await params.prompter.text({
-    message: params.promptMessage,
-    validate: params.validate,
-  });
+  const promptSecret = params.prompter.secret;
+  const key =
+    typeof promptSecret === "function"
+      ? await promptSecret({
+          message: params.promptMessage,
+          validate: params.validate,
+        })
+      : await params.prompter.text({
+          message: params.promptMessage,
+          validate: params.validate,
+        });
   const apiKey = params.normalize(String(key ?? ""));
   await params.setCredential(apiKey, selectedMode);
   return apiKey;

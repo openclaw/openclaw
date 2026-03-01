@@ -21,6 +21,37 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+export type AutoModelRouterConfig = {
+  /** TTL for in-flight dedupe key (ms). */
+  dedupeTtlMs?: number;
+  /** TTL for cache entries (ms). */
+  cacheTtlMs?: number;
+  /** Optional micro-batch window (ms). */
+  microBatchMs?: number;
+  /** Optional micro-batch size. */
+  microBatchSize?: number;
+};
+
+export type AutoModelRoutingConfig = {
+  /** Enable auto model routing when modelOverride is AUTO_MODEL (default: false). */
+  enabled?: boolean;
+  /** Per-tag model lists (provider/model). Tag keys use ROUTING_TAG constants. */
+  byTag?: Partial<Record<string, string | { primary?: string; fallbacks?: string[] }>>;
+  /** Router orchestration: dedupe, cache, micro-batching. */
+  router?: AutoModelRouterConfig;
+};
+
+export type AutoReasoningConfig = {
+  /** Enable auto-reasoning selector when no inline/session directive sets thinking level (default: false). */
+  enabled?: boolean;
+  /** Timeout in ms for selector LLM call when used (optional). */
+  selectorTimeoutMs?: number;
+  /** Max output tokens for selector LLM call when used (optional). */
+  selectorMaxOutputTokens?: number;
+  /** Emit generating field for typing/status when selector runs (default: true). */
+  emitGeneratingField?: boolean;
+};
+
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
@@ -172,6 +203,10 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** Auto-reasoning: automatically select thinking level per message when no directive is set. */
+  autoReasoning?: AutoReasoningConfig;
+  /** Auto model routing: select model per turn when modelOverride is "auto". */
+  autoModelRouting?: AutoModelRoutingConfig;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

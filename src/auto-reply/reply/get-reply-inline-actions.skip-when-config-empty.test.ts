@@ -71,6 +71,7 @@ const createHandleInlineActionsInput = (params: {
     elevatedFailures: [],
     defaultActivation: () => "always",
     resolvedThinkLevel: undefined,
+    configuredThinkLevel: "auto",
     resolvedVerboseLevel: undefined,
     resolvedReasoningLevel: "off",
     resolvedElevatedLevel: "off",

@@ -91,18 +91,65 @@ const extractSimpleDirective = (
 export function extractThinkDirective(body?: string): {
   cleaned: string;
   thinkLevel?: ThinkLevel;
+  thinkAuto?: boolean;
   rawLevel?: string;
   hasDirective: boolean;
 } {
   if (!body) {
     return { cleaned: "", hasDirective: false };
   }
-  const extracted = extractLevelDirective(body, ["thinking", "think", "t"], normalizeThinkLevel);
+
+  // Support "/thinking auto" and "/thinking level auto" as an explicit
+  // request to clear pinned session thinking and inherit auto/default behavior.
+  const match = body.match(new RegExp(String.raw`(?:^|\s)\/(?:thinking|think|t)(?=$|\s|:)`, "i"));
+  if (!match || match.index === undefined) {
+    return { cleaned: body.trim(), hasDirective: false };
+  }
+
+  const start = match.index;
+  let i = match.index + match[0].length;
+  while (i < body.length && /\s/.test(body[i])) {
+    i += 1;
+  }
+  if (body[i] === ":") {
+    i += 1;
+    while (i < body.length && /\s/.test(body[i])) {
+      i += 1;
+    }
+  }
+  // Optional "level" token (for slash-menu style "/thinking level <value>").
+  if (body.slice(i).match(/^level(?=$|\s|:)/i)) {
+    i += "level".length;
+    while (i < body.length && /\s/.test(body[i])) {
+      i += 1;
+    }
+    if (body[i] === ":") {
+      i += 1;
+      while (i < body.length && /\s/.test(body[i])) {
+        i += 1;
+      }
+    }
+  }
+  const argStart = i;
+  while (i < body.length && /[A-Za-z-]/.test(body[i])) {
+    i += 1;
+  }
+  const rawLevel = i > argStart ? body.slice(argStart, i) : undefined;
+  const thinkLevel = normalizeThinkLevel(rawLevel);
+  const thinkAuto = (rawLevel ?? "").toLowerCase() === "auto";
+  const cleaned = body
+    .slice(0, start)
+    .concat(" ")
+    .concat(body.slice(i))
+    .replace(/\s+/g, " ")
+    .trim();
+
   return {
-    cleaned: extracted.cleaned,
-    thinkLevel: extracted.level,
-    rawLevel: extracted.rawLevel,
-    hasDirective: extracted.hasDirective,
+    cleaned,
+    thinkLevel,
+    thinkAuto: thinkAuto || undefined,
+    rawLevel,
+    hasDirective: true,
   };
 }
 

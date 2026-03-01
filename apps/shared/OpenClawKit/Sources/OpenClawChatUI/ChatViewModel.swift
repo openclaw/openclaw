@@ -17,7 +17,15 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 public final class OpenClawChatViewModel {
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
-    public var thinkingLevel: String = "off"
+    public var thinkingLevel: String = "off" {
+        didSet {
+            self.configuredThink = Self.normalizeConfiguredThink(self.thinkingLevel)
+        }
+    }
+    public private(set) var configuredThink: String = "off"
+    public private(set) var effectiveThink: String?
+    public private(set) var lastEffectiveThink: String?
+    public private(set) var currentRunId: String?
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
@@ -151,6 +159,19 @@ public final class OpenClawChatViewModel {
         return !self.isSending && self.pendingRunCount == 0 && (!trimmed.isEmpty || !self.attachments.isEmpty)
     }
 
+    public var thinkingStatusLabel: String {
+        if self.configuredThink == "auto" {
+            if let current = self.effectiveThink, !current.isEmpty {
+                return "auto→\(current)"
+            }
+            if let last = self.lastEffectiveThink, !last.isEmpty {
+                return "auto→\(last)"
+            }
+            return "auto"
+        }
+        return self.configuredThink
+    }
+
     // MARK: - Internals
 
     private func bootstrap() async {
@@ -174,8 +195,21 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
-                self.thinkingLevel = level
+            if let configured = Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]) {
+                self.thinkingLevel = configured
+            }
+            if let effective = Self.firstNonEmpty([payload.effectiveThink]) {
+                self.effectiveThink = effective
+            } else {
+                self.effectiveThink = nil
+            }
+            if let lastEffective = Self.firstNonEmpty([payload.lastEffectiveThink]) {
+                self.lastEffectiveThink = lastEffective
+            }
+            if let currentRunId = Self.firstNonEmpty([payload.currentRunId]) {
+                self.currentRunId = currentRunId
+            } else {
+                self.currentRunId = nil
             }
             await self.pollHealthIfNeeded(force: true)
             await self.fetchSessions(limit: 50)
@@ -537,11 +571,50 @@ public final class OpenClawChatViewModel {
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        if let sessionId, evt.runId != sessionId {
+        let isCurrentSessionEvent = Self.matchesCurrentSessionEvent(
+            eventSessionKey: Self.firstNonEmpty([evt.sessionKey, Self.asString(evt.data["sessionKey"])]),
+            currentSessionKey: self.sessionKey)
+        let isPendingOrActiveRun = self.pendingRuns.contains(evt.runId) || self.currentRunId == evt.runId
+        let isLegacySessionScopedRun = (self.sessionId?.isEmpty == false) && evt.runId == self.sessionId
+        let shouldHandleRun =
+            isPendingOrActiveRun ||
+            isLegacySessionScopedRun ||
+            (evt.stream == "lifecycle" && isCurrentSessionEvent)
+        if !shouldHandleRun {
             return
         }
 
         switch evt.stream {
+        case "lifecycle":
+            let phase = Self.asString(evt.data["phase"])?.lowercased() ?? ""
+            let configuredThink = Self.asString(evt.data["configuredThink"])
+            let eventEffectiveThink = Self.firstNonEmpty([
+                Self.asString(evt.data["effectiveThink"]),
+                Self.extractGeneratingThinkingLevel(evt.data),
+            ])
+            if phase == "start" {
+                self.currentRunId = evt.runId
+                if !self.pendingRuns.contains(evt.runId) {
+                    self.pendingRuns.insert(evt.runId)
+                    self.armPendingRunTimeout(runId: evt.runId)
+                }
+                if let configuredThink {
+                    self.thinkingLevel = configuredThink
+                }
+                if let eventEffectiveThink {
+                    self.effectiveThink = eventEffectiveThink
+                    self.lastEffectiveThink = eventEffectiveThink
+                }
+            } else if phase == "end" || phase == "error" {
+                if let eventEffectiveThink {
+                    self.effectiveThink = eventEffectiveThink
+                    self.lastEffectiveThink = eventEffectiveThink
+                }
+                if self.currentRunId == evt.runId {
+                    self.currentRunId = nil
+                    self.effectiveThink = nil
+                }
+            }
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
                 self.streamingAssistantText = text
@@ -573,12 +646,69 @@ public final class OpenClawChatViewModel {
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
             self.sessionId = payload.sessionId
-            if let level = payload.thinkingLevel, !level.isEmpty {
-                self.thinkingLevel = level
+            if let configured = Self.firstNonEmpty([payload.configuredThink, payload.thinkingLevel]) {
+                self.thinkingLevel = configured
+            }
+            if let effective = Self.firstNonEmpty([payload.effectiveThink]) {
+                self.effectiveThink = effective
+            } else {
+                self.effectiveThink = nil
+            }
+            if let lastEffective = Self.firstNonEmpty([payload.lastEffectiveThink]) {
+                self.lastEffectiveThink = lastEffective
+            }
+            if let currentRunId = Self.firstNonEmpty([payload.currentRunId]) {
+                self.currentRunId = currentRunId
+            } else {
+                self.currentRunId = nil
             }
         } catch {
             chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private static func normalizeConfiguredThink(_ raw: String) -> String {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let allowed = ["auto", "off", "minimal", "low", "medium", "high", "xhigh"]
+        if allowed.contains(normalized) {
+            return normalized
+        }
+        return "off"
+    }
+
+    private static func asString(_ value: AnyCodable?) -> String? {
+        guard let raw = value?.value as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func firstNonEmpty(_ values: [String?]) -> String? {
+        for value in values {
+            guard let value else { continue }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
+    private static func matchesCurrentSessionEvent(eventSessionKey: String?, currentSessionKey: String) -> Bool {
+        guard let eventSessionKey else { return false }
+        return Self.matchesCurrentSessionKey(incoming: eventSessionKey, current: currentSessionKey)
+    }
+
+    private static func extractGeneratingThinkingLevel(_ data: [String: AnyCodable]) -> String? {
+        if let generating = data["generating"]?.value as? [String: Any],
+           let level = generating["thinkingLevel"] as? String
+        {
+            let trimmed = level.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let generating = data["generating"]?.value as? [String: AnyCodable] {
+            return Self.asString(generating["thinkingLevel"])
+        }
+        return nil
     }
 
     private func armPendingRunTimeout(runId: String) {

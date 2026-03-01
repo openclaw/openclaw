@@ -631,6 +631,8 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            generatingSource: params.generatingSource,
+            autoReasoningEnabled: params.autoReasoningEnabled,
           });
 
           const {
@@ -1064,6 +1066,7 @@ export async function runEmbeddedPiAgent(
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
+            effectiveThinkingLevel: thinkLevel,
             usage,
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,

@@ -1,13 +1,16 @@
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import {
   formatThreadBindingTtlLabel,
   getThreadBindingManager,
   setThreadBindingTtlBySessionKey,
 } from "../../discord/monitor/thread-bindings.js";
+import { USER_ARCHIVE_SHUTDOWN_REASON, requestGatewayStop } from "../../gateway/shutdown-state.js";
 import { logVerbose } from "../../globals.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { archiveAndTerminateCurrentSession } from "../../sessions/archive-service.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -18,6 +21,7 @@ import type { CommandHandler } from "./commands-types.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_TTL_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
+const archiveSessionInProgress = new Set<string>();
 
 function isDiscordSurface(params: Parameters<CommandHandler>[0]): boolean {
   const channel =
@@ -402,6 +406,88 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       text: `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
     },
   };
+};
+
+export const handleArchiveSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  if (params.command.commandBodyNormalized !== "/archive-session") {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /archive-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!params.sessionEntry?.sessionId) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Cannot archive this session because no active transcript was found.",
+      },
+    };
+  }
+  const lockKey = params.sessionKey || params.sessionEntry.sessionId;
+  if (archiveSessionInProgress.has(lockKey)) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "ℹ️ Archiving current session is already in progress.",
+      },
+    };
+  }
+  archiveSessionInProgress.add(lockKey);
+  try {
+    let shutdownReason = USER_ARCHIVE_SHUTDOWN_REASON;
+    await archiveAndTerminateCurrentSession({
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.sessionEntry.sessionFile,
+      agentId: params.agentId,
+      flush: async () => {
+        if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+          await persistSessionEntry(params);
+        }
+      },
+      terminate: (reason) => {
+        shutdownReason = reason;
+      },
+      log: {
+        info: (message) => logVerbose(message),
+        warn: (message) => logVerbose(message),
+      },
+    });
+    // Prevent transcript re-creation races by removing the archived session entry
+    // before shutdown. Any late mirror/persist attempt then sees no active key.
+    if (params.sessionKey) {
+      delete params.sessionStore?.[params.sessionKey];
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          delete store[params.sessionKey];
+        });
+      }
+    }
+    requestGatewayStop({ reason: shutdownReason, delayMs: 0 });
+    return {
+      shouldContinue: false,
+      // Do not emit a success chat reply here: sending an assistant reply after
+      // archiving can recreate a fresh transcript file for this same session key.
+      // UI clients should surface local status and exit immediately after dispatch.
+      reply: undefined,
+    };
+  } catch (err) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `❌ Archive failed: ${String(err)}\nSession was not terminated.`,
+      },
+    };
+  } finally {
+    archiveSessionInProgress.delete(lockKey);
+  }
 };
 
 export { handleAbortTrigger, handleStopCommand };

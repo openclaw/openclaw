@@ -8,6 +8,7 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { formatStatusBarReasoningLabel } from "./run-status.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -38,6 +39,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  state.chatConfiguredThink = null;
+  state.chatEffectiveThink = null;
+  state.chatRunPhase = null;
+  state.chatRunPhaseSuffix = null;
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({
@@ -93,6 +98,11 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const runReasoningLabel = formatStatusBarReasoningLabel({
+    configured: state.chatConfiguredThink,
+    effective: state.chatEffectiveThink,
+  });
+  const showRunReasoning = Boolean(state.chatRunId);
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -140,6 +150,10 @@ export function renderChatControls(state: AppViewState) {
             state.chatStream = null;
             (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
+            state.chatConfiguredThink = null;
+            state.chatEffectiveThink = null;
+            state.chatRunPhase = null;
+            state.chatRunPhaseSuffix = null;
             (state as unknown as OpenClawApp).resetToolStream();
             (state as unknown as OpenClawApp).resetChatScroll();
             state.applySettings({
@@ -226,6 +240,13 @@ export function renderChatControls(state: AppViewState) {
       >
         ${focusIcon}
       </button>
+      ${
+        showRunReasoning
+          ? html`<span class="chat-controls__reasoning-status">Reasoning: ${runReasoningLabel}</span>`
+          : html`
+              <span class="chat-controls__reasoning-status">Reasoning: Default</span>
+            `
+      }
     </div>
   `;
 }

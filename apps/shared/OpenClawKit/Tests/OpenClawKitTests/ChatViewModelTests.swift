@@ -215,6 +215,57 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
+    @Test func lifecycleStartPublishesEffectiveThinkBeforeAssistantStream() async throws {
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [],
+            thinkingLevel: "auto")
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
+
+        await MainActor.run {
+            vm.input = "2+2?"
+            vm.send()
+        }
+        try await waitUntil("chat send run id") { await transport.lastSentRunId() != nil }
+        let runId = try #require(await transport.lastSentRunId())
+
+        transport.emit(
+            .agent(
+                OpenClawAgentEventPayload(
+                    runId: runId,
+                    seq: 1,
+                    stream: "lifecycle",
+                    ts: Int(Date().timeIntervalSince1970 * 1000),
+                    data: [
+                        "phase": AnyCodable("start"),
+                        "sessionKey": AnyCodable("main"),
+                        "configuredThink": AnyCodable("auto"),
+                        "generating": AnyCodable(["thinkingLevel": "minimal"]),
+                    ])))
+
+        try await waitUntil("effective think updated on start") {
+            await MainActor.run { vm.thinkingStatusLabel == "auto→minimal" && vm.currentRunId == runId }
+        }
+
+        transport.emit(
+            .agent(
+                OpenClawAgentEventPayload(
+                    runId: runId,
+                    seq: 2,
+                    stream: "assistant",
+                    ts: Int(Date().timeIntervalSince1970 * 1000),
+                    data: ["text": AnyCodable("hello")])))
+
+        try await waitUntil("assistant stream visible") {
+            await MainActor.run { vm.streamingAssistantText == "hello" }
+        }
+    }
+
     @Test func acceptsCanonicalSessionKeyEventsForOwnPendingRun() async throws {
         let history1 = OpenClawChatHistoryPayload(
             sessionKey: "main",

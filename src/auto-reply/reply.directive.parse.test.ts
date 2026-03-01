@@ -98,6 +98,22 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("");
   });
 
+  it("matches /thinking auto", () => {
+    const res = extractThinkDirective("/thinking auto");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkAuto).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches /thinking level auto", () => {
+    const res = extractThinkDirective("/thinking level auto");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkAuto).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
   it("matches verbose with no argument", () => {
     const res = extractVerboseDirective("/verbose:");
     expect(res.hasDirective).toBe(true);

@@ -837,8 +837,9 @@ extension MenuSessionsInjector {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.showsStateColumn = true
-        let levels: [String] = ["off", "minimal", "low", "medium", "high"]
-        let current = levels.contains(row.thinkingLevel ?? "") ? row.thinkingLevel ?? "off" : "off"
+        let levels: [String] = ["auto", "off", "minimal", "low", "medium", "high", "xhigh"]
+        let currentCandidate = row.configuredThink ?? row.thinkingLevel ?? "off"
+        let current = levels.contains(currentCandidate) ? currentCandidate : "off"
         for level in levels {
             let title = level.capitalized
             let item = NSMenuItem(title: title, action: #selector(self.patchThinking(_:)), keyEquivalent: "")

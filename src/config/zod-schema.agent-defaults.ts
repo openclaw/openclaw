@@ -114,6 +114,44 @@ export const AgentDefaultsSchema = z
         z.literal("xhigh"),
       ])
       .optional(),
+    autoReasoning: z
+      .object({
+        enabled: z.boolean().optional(),
+        selectorTimeoutMs: z.number().int().positive().optional(),
+        selectorMaxOutputTokens: z.number().int().positive().optional(),
+        emitGeneratingField: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    autoModelRouting: z
+      .object({
+        enabled: z.boolean().optional(),
+        byTag: z
+          .record(
+            z.string(),
+            z.union([
+              z.string(),
+              z
+                .object({
+                  primary: z.string().optional(),
+                  fallbacks: z.array(z.string()).optional(),
+                })
+                .strict(),
+            ]),
+          )
+          .optional(),
+        router: z
+          .object({
+            dedupeTtlMs: z.number().int().positive().optional(),
+            cacheTtlMs: z.number().int().positive().optional(),
+            microBatchMs: z.number().int().positive().optional(),
+            microBatchSize: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

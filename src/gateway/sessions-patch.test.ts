@@ -87,6 +87,94 @@ describe("gateway sessions patch", () => {
     expect(res.entry.thinkingLevel).toBeUndefined();
   });
 
+  test("rejects unsupported thinking level for explicit patch", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: {
+        key: "agent:main:main",
+        model: "openai-codex/gpt-5.3-codex",
+        thinkingLevel: "minimal",
+      },
+      loadGatewayModelCatalog: async () => [
+        { provider: "openai-codex", id: "gpt-5.3-codex", name: "gpt-5.3-codex" },
+      ],
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.error.message).toContain('thinkingLevel "minimal" is not supported');
+  });
+
+  test("coerces persisted unsupported thinking level after model change", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        thinkingLevel: "minimal",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "openai-codex/gpt-5.3-codex" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "openai-codex", id: "gpt-5.3-codex", name: "gpt-5.3-codex" },
+      ],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.thinkingLevel).toBe("low");
+  });
+
+  test("accepts thinkingLevel=auto and persists configuredThink=auto", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", thinkingLevel: "auto" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.configuredThink).toBe("auto");
+    expect(res.entry.thinkingLevel).toBe("auto");
+  });
+
+  test("keeps auto thinking mode after model change", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess",
+        updatedAt: 1,
+        configuredThink: "auto",
+        thinkingLevel: "auto",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "openai-codex/gpt-5.3-codex" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "openai-codex", id: "gpt-5.3-codex", name: "gpt-5.3-codex" },
+      ],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.configuredThink).toBe("auto");
+    expect(res.entry.thinkingLevel).toBe("auto");
+  });
+
   test("persists reasoningLevel=off (does not clear)", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
@@ -209,6 +297,59 @@ describe("gateway sessions patch", () => {
     expect(res.entry.authProfileOverride).toBeUndefined();
     expect(res.entry.authProfileOverrideSource).toBeUndefined();
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  test("accepts model auto (AUTO_MODEL) from sessions.patch without catalog", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelOverride: "anthropic/claude-sonnet-4-6",
+        lastNonAutoModelProvider: "anthropic",
+        lastNonAutoModel: "claude-sonnet-4-6",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "auto" },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.modelOverride).toBe("auto");
+    expect(res.entry.providerOverride).toBeUndefined();
+    expect(res.entry.lastNonAutoModelProvider).toBe("anthropic");
+    expect(res.entry.lastNonAutoModel).toBe("claude-sonnet-4-6");
+  });
+
+  test("accepts model auto when thinking level is xhigh and last non-auto supports it", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelOverride: "openai/gpt-5.1-codex",
+        thinkingLevel: "xhigh",
+        lastNonAutoModelProvider: "openai",
+        lastNonAutoModel: "gpt-5.1-codex",
+      } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "auto" },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.modelOverride).toBe("auto");
+    expect(["high", "xhigh"]).toContain(res.entry.thinkingLevel);
   });
 
   test("accepts explicit allowlisted provider/model refs from sessions.patch", async () => {

@@ -52,6 +52,11 @@ export type GatewaySessionList = {
     Pick<
       SessionInfo,
       | "thinkingLevel"
+      | "configuredThink"
+      | "effectiveThink"
+      | "lastEffectiveThink"
+      | "currentRunId"
+      | "lastRunId"
       | "verboseLevel"
       | "reasoningLevel"
       | "model"

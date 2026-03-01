@@ -506,7 +506,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
-  const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
+  const configuredThink =
+    entry?.configuredThink ?? entry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "auto";
+  const inFlightEffectiveThink =
+    entry?.currentRunId && entry.currentRunId.trim().length > 0 ? entry?.effectiveThink : undefined;
+  const idleEffectiveThink = entry?.lastEffectiveThink ?? entry?.effectiveThink;
+  const effectiveThink =
+    inFlightEffectiveThink ?? idleEffectiveThink ?? args.resolvedThink ?? "low";
+  const thinkLevel =
+    configuredThink === "auto"
+      ? `auto→${effectiveThink === "off" ? "low" : effectiveThink}`
+      : configuredThink;
   const verboseLevel = args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
   const reasoningLevel = args.resolvedReasoning ?? "off";
   const elevatedLevel =

@@ -847,6 +847,33 @@ Time format in system prompt. Default: `auto` (OS preference).
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
 
+### `agents.defaults.autoReasoning`
+
+Auto-select thinking level per message when no inline or session directive sets it.
+
+```json5
+{
+  agents: {
+    defaults: {
+      autoReasoning: {
+        enabled: false,
+        selectorTimeoutMs: 5000,
+        selectorMaxOutputTokens: 64,
+        emitGeneratingField: true,
+      },
+    },
+  },
+}
+```
+
+- `enabled`: turn on auto-reasoning selector (default: false). When true, picks low/medium/high by message complexity when no directive is set.
+- `selectorTimeoutMs`: timeout for selector LLM call when used (optional).
+- `selectorMaxOutputTokens`: max output tokens for selector call (optional).
+- `emitGeneratingField`: emit `generating` metadata for typing/status when selector runs (default: true).
+- Per-agent override: `agents.list[].autoReasoning` (merges with defaults).
+
+**Generating metadata**: When a run starts, OpenClaw emits `generating` metadata with `thinkingLevel`, `reasoningLevel`, `source` (directive|session|default|inline), `autoReasoningEnabled`, and `availableThinkingLevels`. On selector timeout, heuristic fallback uses `source=auto-fallback`. When `xhigh` is unsupported, metadata reflects the effective level (e.g. `high`).
+
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
 | Alias          | Model                           |

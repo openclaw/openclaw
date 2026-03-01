@@ -8,6 +8,7 @@ import {
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { AUTO_MODEL } from "../shared/model-constants.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
@@ -73,6 +74,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
   };
+  let archiveSessionPending = false;
 
   const closeOverlayAndRender = () => {
     closeOverlay();
@@ -100,16 +102,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openModelSelector = async () => {
     try {
       const models = await client.listModels();
-      if (models.length === 0) {
-        chatLog.addSystem("no models available");
-        tui.requestRender();
-        return;
-      }
-      const items = models.map((model) => ({
+      const autoItem = {
+        value: AUTO_MODEL,
+        label: "Auto (Recommended)",
+        description: "Let GPT-5.2 choose the best model per prompt",
+      };
+      const modelItems = models.map((model) => ({
         value: `${model.provider}/${model.id}`,
         label: `${model.provider}/${model.id}`,
         description: model.name && model.name !== model.id ? model.name : "",
       }));
+      const items = [autoItem, ...modelItems];
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {
@@ -117,7 +120,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             key: state.currentSessionKey,
             model: value,
           });
-          chatLog.addSystem(`model set to ${value}`);
+          const displayLabel = value === AUTO_MODEL ? "Auto (Recommended)" : value;
+          chatLog.addSystem(`model set to ${displayLabel}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -290,11 +294,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await openModelSelector();
         } else {
           try {
+            const modelValue = args.trim().toLowerCase() === "auto" ? AUTO_MODEL : args;
             const result = await client.patchSession({
               key: state.currentSessionKey,
-              model: args,
+              model: modelValue,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            const displayLabel = modelValue === AUTO_MODEL ? "Auto (Recommended)" : args;
+            chatLog.addSystem(`model set to ${displayLabel}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
@@ -312,15 +318,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             state.sessionInfo.model,
             "|",
           );
-          chatLog.addSystem(`usage: /think <${levels}>`);
+          chatLog.addSystem(`usage: /think <auto|${levels}>`);
           break;
         }
         try {
+          const normalizedArgs = args.trim().toLowerCase();
+          const clearToAuto = normalizedArgs === "auto" || normalizedArgs === "level auto";
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            thinkingLevel: args,
+            thinkingLevel: clearToAuto ? "auto" : args,
           });
-          chatLog.addSystem(`thinking set to ${args}`);
+          chatLog.addSystem(
+            clearToAuto ? "thinking set to auto (inherit)" : `thinking set to ${args}`,
+          );
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -436,6 +446,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await loadHistory();
         } catch (err) {
           chatLog.addSystem(`reset failed: ${String(err)}`);
+        }
+        break;
+      case "archive-session":
+        if (archiveSessionPending) {
+          chatLog.addSystem("archive already in progress");
+          break;
+        }
+        archiveSessionPending = true;
+        try {
+          setActivityStatus("archiving current session...");
+          chatLog.addSystem("Archiving current session...");
+          await sendMessage("/archive-session");
+          chatLog.addSystem("Archived. Exiting now.");
+          requestExit();
+        } catch (err) {
+          archiveSessionPending = false;
+          chatLog.addSystem(`archive-session failed: ${String(err)}`);
         }
         break;
       case "abort":

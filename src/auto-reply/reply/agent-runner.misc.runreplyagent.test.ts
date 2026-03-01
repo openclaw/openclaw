@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
+import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -14,6 +15,7 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const resolveAutoThinkingLevelMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -66,6 +68,10 @@ vi.mock("./queue.js", async () => {
   };
 });
 
+vi.mock("./auto-reasoning.js", () => ({
+  resolveAutoThinkingLevel: (...args: unknown[]) => resolveAutoThinkingLevelMock(...args),
+}));
+
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -79,6 +85,16 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  resolveAutoThinkingLevelMock.mockClear();
+  resolveAutoThinkingLevelMock.mockResolvedValue({
+    thinkingLevel: "low",
+    source: "auto-meta",
+    selector: {
+      used: false,
+      provider: "openai",
+      model: "gpt-5.2",
+    },
+  });
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -86,6 +102,7 @@ beforeEach(() => {
       result: await run(provider, model),
       provider,
       model,
+      attempts: [],
     }),
   );
 });
@@ -692,7 +709,7 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
+  function createRun(optsOverride?: { opts?: GetReplyOptions }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "webchat",
@@ -746,6 +763,7 @@ describe("runReplyAgent claude-cli routing", () => {
       resolvedBlockStreamingBreak: "message_end",
       shouldInjectGroupIntro: false,
       typingMode: "instant",
+      opts: optsOverride?.opts,
     });
   }
 
@@ -775,7 +793,7 @@ describe("runReplyAgent claude-cli routing", () => {
       },
     });
 
-    const result = await createRun();
+    const result = await createRun({ opts: { runId } });
     unsubscribe();
     randomSpy.mockRestore();
 
@@ -1408,5 +1426,99 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
+  });
+});
+
+describe("runReplyAgent auto-model think auto recompute", () => {
+  it("recomputes thinking level after auto-model routing chooses a concrete model", async () => {
+    resolveAutoThinkingLevelMock.mockResolvedValueOnce({
+      thinkingLevel: "high",
+      source: "auto-meta",
+      selector: {
+        used: true,
+        provider: "openai",
+        model: "gpt-5.2",
+      },
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "debug this architecture",
+      summaryLine: "debug this architecture",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {
+          agents: {
+            defaults: {
+              autoModelRouting: { enabled: true },
+              model: { primary: "openai/gpt-5.2" },
+            },
+          },
+        },
+        skillsSnapshot: {},
+        provider: "openai",
+        model: "auto",
+        configuredThinkLevel: "auto",
+        thinkLevel: "minimal",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "debug this architecture",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "openai/gpt-5.2",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(resolveAutoThinkingLevelMock).toHaveBeenCalledWith({
+      provider: "openai",
+      model: "gpt-5.2",
+      messageBody: "debug this architecture",
+    });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.2",
+        thinkLevel: "high",
+      }),
+    );
   });
 });

@@ -4,10 +4,18 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { GeneratingSource } from "../../infra/generating-metadata.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  type ConfiguredThinkLevel,
+  normalizeConfiguredThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
@@ -37,9 +45,14 @@ export type ReplyDirectiveContinuation = {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: ReturnType<typeof defaultGroupActivation>;
   resolvedThinkLevel: ThinkLevel | undefined;
+  configuredThinkLevel: ConfiguredThinkLevel;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  /** Source for thinking/reasoning config (for generating metadata). */
+  generatingSource?: GeneratingSource;
+  /** True when reasoning was auto-enabled from model default. */
+  autoReasoningEnabled?: boolean;
   execOverrides?: ExecOverrides;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
@@ -338,10 +351,23 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
-  const resolvedThinkLevel =
-    directives.thinkLevel ??
-    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+  const inlineConfiguredThinkLevel = directives.thinkAuto
+    ? "auto"
+    : (directives.thinkLevel as ConfiguredThinkLevel | undefined);
+  const sessionConfiguredThinkLevel = normalizeConfiguredThinkLevel(
+    sessionEntry?.configuredThink ?? sessionEntry?.thinkingLevel,
+  );
+  const defaultConfiguredThinkLevel =
+    normalizeConfiguredThinkLevel(agentCfg?.thinkingDefault) ?? "auto";
+  const configuredThinkLevel =
+    inlineConfiguredThinkLevel ?? sessionConfiguredThinkLevel ?? defaultConfiguredThinkLevel;
+  const resolvedThinkLevel = configuredThinkLevel === "auto" ? undefined : configuredThinkLevel;
+
+  const thinkingSource: GeneratingSource = inlineConfiguredThinkLevel
+    ? "inline-directive"
+    : sessionConfiguredThinkLevel != null
+      ? "session-directive"
+      : "default";
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -399,8 +425,11 @@ export async function resolveReplyDirectives(params: {
     directives.reasoningLevel !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
   const effectiveThinkingForReasoning =
-    resolvedThinkLevel ?? (await modelState.resolveDefaultThinkingLevel());
+    configuredThinkLevel === "auto"
+      ? "minimal"
+      : (resolvedThinkLevel ?? (await modelState.resolveDefaultThinkingLevel()));
   const thinkingActive = effectiveThinkingForReasoning !== "off";
+  const autoReasoningEnabled = false;
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
@@ -478,9 +507,12 @@ export async function resolveReplyDirectives(params: {
       elevatedFailures,
       defaultActivation,
       resolvedThinkLevel,
+      configuredThinkLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,
+      generatingSource: thinkingSource,
+      autoReasoningEnabled,
       execOverrides,
       blockStreamingEnabled,
       blockReplyChunking,

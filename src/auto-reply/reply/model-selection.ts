@@ -22,6 +22,8 @@ export type ModelDirectiveSelection = {
   model: string;
   isDefault: boolean;
   alias?: string;
+  /** True when selection is AUTO_MODEL (auto routing). */
+  isAuto?: boolean;
 };
 
 type ModelCatalog = Awaited<ReturnType<typeof loadModelCatalog>>;

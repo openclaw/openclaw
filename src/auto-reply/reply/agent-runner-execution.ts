@@ -20,7 +20,9 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { buildGeneratingMetadata } from "../../infra/generating-metadata.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AUTO_MODEL } from "../../shared/model-constants.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -40,6 +42,9 @@ import {
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
+import type { RouterResult } from "./auto-model-router.js";
+import { resolveModelWithRouter } from "./auto-model-router.js";
+import { resolveAutoThinkingLevel } from "./auto-reasoning.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
@@ -70,6 +75,7 @@ export type AgentRunLoopResult =
   | { kind: "final"; payload: ReplyPayload };
 
 export async function runAgentTurnWithFallback(params: {
+  runId?: string;
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
@@ -103,7 +109,7 @@ export async function runAgentTurnWithFallback(params: {
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
 
-  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const runId = params.runId ?? params.opts?.runId ?? crypto.randomUUID();
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -112,11 +118,25 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+  const run = params.followupRun.run;
+  const initialGenerating =
+    run.emitGeneratingField === false
+      ? undefined
+      : buildGeneratingMetadata({
+          thinkingLevel: run.thinkLevel,
+          reasoningLevel: run.reasoningLevel ?? "off",
+          source: run.generatingSource,
+          autoReasoningEnabled: run.autoReasoningEnabled,
+          provider: run.provider,
+          model: run.model,
+          selector: run.generatingSelector,
+        });
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
+      ...(initialGenerating ? { generating: initialGenerating } : {}),
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
@@ -180,8 +200,142 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+
+      const modelNorm = String(run.model ?? "")
+        .trim()
+        .toLowerCase();
+      const isAutoModel = modelNorm === AUTO_MODEL;
+      const sessionEntry = params.getActiveSessionEntry();
+      const lastNonAutoProvider = sessionEntry?.lastNonAutoModelProvider?.trim();
+      const lastNonAutoModel = sessionEntry?.lastNonAutoModel?.trim();
+      const promptHash =
+        params.commandBody.length > 0
+          ? crypto.createHash("sha256").update(params.commandBody).digest("hex").slice(0, 16)
+          : undefined;
+
+      let effectiveProvider = run.provider;
+      let effectiveModel = run.model;
+      let routerResult: RouterResult | undefined;
+      const maybeRefreshAutoThinkingForResolvedModel = async () => {
+        if (run.configuredThinkLevel !== "auto") {
+          return;
+        }
+        if (
+          String(effectiveModel ?? "")
+            .trim()
+            .toLowerCase() === AUTO_MODEL
+        ) {
+          return;
+        }
+        const messageBody = params.commandBody.trim();
+        if (!messageBody) {
+          return;
+        }
+        const autoSelected = await resolveAutoThinkingLevel({
+          provider: effectiveProvider,
+          model: effectiveModel,
+          messageBody,
+        });
+        run.thinkLevel = autoSelected.thinkingLevel;
+        run.generatingSource = autoSelected.source;
+        run.generatingSelector = autoSelected.selector;
+        run.autoReasoningEnabled = true;
+      };
+
+      if (isAutoModel) {
+        try {
+          const resolved = await resolveModelWithRouter({
+            cfg: run.config,
+            provider: run.provider,
+            model: run.model,
+            promptText: params.commandBody,
+            sessionKey: params.sessionKey,
+            agentId: run.agentId,
+            promptHash,
+            lastNonAutoProvider: lastNonAutoProvider || undefined,
+            lastNonAutoModel: lastNonAutoModel || undefined,
+          });
+          if (resolved.routed) {
+            routerResult = resolved.result;
+            effectiveProvider = resolved.result.provider;
+            effectiveModel = resolved.result.model;
+            await maybeRefreshAutoThinkingForResolvedModel();
+            if (params.sessionKey && params.storePath) {
+              await updateSessionStore(params.storePath, (store) => {
+                const entry = store[params.sessionKey!];
+                if (!entry) {
+                  return;
+                }
+                entry.autoModelRoutingStatus = {
+                  tag: resolved.result.tag,
+                  selectedProvider: effectiveProvider,
+                  selectedModel: effectiveModel,
+                };
+                entry.updatedAt = Date.now();
+              });
+            }
+            const pass1Generating =
+              run.emitGeneratingField === false
+                ? undefined
+                : buildGeneratingMetadata({
+                    thinkingLevel: run.thinkLevel,
+                    reasoningLevel: run.reasoningLevel ?? "off",
+                    source: run.generatingSource,
+                    autoReasoningEnabled: run.autoReasoningEnabled,
+                    provider: effectiveProvider,
+                    model: effectiveModel,
+                    selector: run.generatingSelector,
+                    routingPass: {
+                      pass: 1,
+                      tag: resolved.result.tag,
+                      pass1TokenUsage: resolved.result.pass1TokenUsage,
+                    },
+                  });
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "router",
+                startedAt: Date.now(),
+                servedProvider: effectiveProvider,
+                servedModel: effectiveModel,
+                generating: pass1Generating,
+                router: {
+                  provider: effectiveProvider,
+                  model: effectiveModel,
+                  reason: resolved.result.reason,
+                  tag: resolved.result.tag,
+                },
+              },
+            });
+          }
+        } catch (routerErr) {
+          if (lastNonAutoProvider && lastNonAutoModel) {
+            effectiveProvider = lastNonAutoProvider;
+            effectiveModel = lastNonAutoModel;
+          } else {
+            const { resolveConfiguredModelRef } = await import("../../agents/model-selection.js");
+            const { DEFAULT_PROVIDER, DEFAULT_MODEL } = await import("../../agents/defaults.js");
+            const ref = resolveConfiguredModelRef({
+              cfg: run.config ?? {},
+              defaultProvider: DEFAULT_PROVIDER,
+              defaultModel: DEFAULT_MODEL,
+            });
+            effectiveProvider = ref.provider;
+            effectiveModel = ref.model;
+          }
+          await maybeRefreshAutoThinkingForResolvedModel();
+          defaultRuntime.error(
+            `Auto-model router failed, using fallback ${effectiveProvider}/${effectiveModel}: ${String(routerErr)}`,
+          );
+        }
+      }
+
+      const fallbackOptions = resolveModelFallbackOptions(params.followupRun.run);
       const fallbackResult = await runWithModelFallback({
-        ...resolveModelFallbackOptions(params.followupRun.run),
+        ...fallbackOptions,
+        provider: effectiveProvider,
+        model: effectiveModel,
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -200,6 +354,8 @@ export async function runAgentTurnWithFallback(params: {
               data: {
                 phase: "start",
                 startedAt,
+                servedProvider: provider,
+                servedModel: model,
               },
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
@@ -439,6 +595,42 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
+
+      const agentMeta = runResult?.meta?.agentMeta;
+      if (run.emitGeneratingField !== false) {
+        const effectiveGenerating = buildGeneratingMetadata({
+          thinkingLevel:
+            (agentMeta?.effectiveThinkingLevel as typeof run.thinkLevel) ?? run.thinkLevel,
+          reasoningLevel: run.reasoningLevel ?? "off",
+          source:
+            (agentMeta?.effectiveThinkingLevel as typeof run.thinkLevel) &&
+            agentMeta?.effectiveThinkingLevel !== run.thinkLevel &&
+            run.generatingSource === "auto-meta"
+              ? "auto-fallback"
+              : run.generatingSource,
+          autoReasoningEnabled: run.autoReasoningEnabled,
+          provider: fallbackProvider,
+          model: fallbackModel,
+          effectiveProvider: fallbackProvider,
+          effectiveModel: fallbackModel,
+          selector: run.generatingSelector,
+          selectorFallbackUsed: (fallbackResult.attempts?.length ?? 0) > 0,
+          ...(routerResult
+            ? {
+                routingPass: {
+                  pass: 2,
+                  tag: routerResult.tag,
+                  pass1TokenUsage: routerResult.pass1TokenUsage,
+                  pass2TokenUsage: {
+                    input: agentMeta?.usage?.input,
+                    output: agentMeta?.usage?.output,
+                  },
+                } as const,
+              }
+            : {}),
+        });
+        registerAgentRunContext(runId, { generating: effectiveGenerating });
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.

@@ -2,6 +2,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { AutoReasoningConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -38,6 +39,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  autoReasoning?: AutoReasoningConfig;
 };
 
 let defaultAgentWarned = false;
@@ -140,6 +142,23 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    autoReasoning: entry.autoReasoning,
+  };
+}
+
+/** Resolve merged auto-reasoning config: defaults + per-agent override. */
+export function resolveAutoReasoningConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AutoReasoningConfig | undefined {
+  const defaults = cfg.agents?.defaults?.autoReasoning;
+  const agentOverride = resolveAgentConfig(cfg, agentId)?.autoReasoning;
+  if (!defaults && !agentOverride) {
+    return undefined;
+  }
+  return {
+    ...defaults,
+    ...agentOverride,
   };
 }
 

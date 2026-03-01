@@ -1,6 +1,51 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
+export const GeneratingMetadataSchema = Type.Object(
+  {
+    thinkingLevel: Type.Optional(Type.String()),
+    reasoningLevel: Type.String(),
+    source: Type.Union([
+      Type.Literal("inline-directive"),
+      Type.Literal("session-directive"),
+      Type.Literal("auto-meta"),
+      Type.Literal("auto-fallback"),
+      Type.Literal("default"),
+    ]),
+    autoReasoningEnabled: Type.Boolean(),
+    availableThinkingLevels: Type.Array(Type.String()),
+    selector: Type.Optional(
+      Type.Object({
+        used: Type.Boolean(),
+        provider: Type.String(),
+        model: Type.String(),
+        timedOut: Type.Optional(Type.Boolean()),
+        fallbackUsed: Type.Optional(Type.Boolean()),
+      }),
+    ),
+    routingPass: Type.Optional(
+      Type.Object({
+        pass: Type.Union([Type.Literal(1), Type.Literal(2)]),
+        tag: Type.Optional(Type.Literal("expensive")),
+        pass1TokenUsage: Type.Optional(
+          Type.Object({
+            input: Type.Optional(Type.Number()),
+            output: Type.Optional(Type.Number()),
+            estimated: Type.Optional(Type.Boolean()),
+          }),
+        ),
+        pass2TokenUsage: Type.Optional(
+          Type.Object({
+            input: Type.Optional(Type.Number()),
+            output: Type.Optional(Type.Number()),
+          }),
+        ),
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const LogsTailParamsSchema = Type.Object(
   {
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -76,6 +121,8 @@ export const ChatEventSchema = Type.Object(
     errorMessage: Type.Optional(Type.String()),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
+    /** Optional generating metadata (thinking/reasoning levels, model selector). */
+    generating: Type.Optional(GeneratingMetadataSchema),
   },
   { additionalProperties: false },
 );

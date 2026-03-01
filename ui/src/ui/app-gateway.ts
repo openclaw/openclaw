@@ -34,6 +34,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { RunPhase } from "./run-status.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -71,6 +72,10 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatConfiguredThink: string | null;
+  chatEffectiveThink: string | null;
+  chatRunPhase: RunPhase | null;
+  chatRunPhaseSuffix: string | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -166,6 +171,10 @@ export function connectGateway(host: GatewayHost) {
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      host.chatConfiguredThink = null;
+      host.chatEffectiveThink = null;
+      host.chatRunPhase = null;
+      host.chatRunPhaseSuffix = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);

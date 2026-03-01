@@ -45,6 +45,10 @@ export type ChatProps = {
   toolMessages: unknown[];
   stream: string | null;
   streamStartedAt: number | null;
+  runActive?: boolean;
+  runTickerReasoningLabel?: string;
+  runPhaseLabel?: string;
+  runPhaseSuffixLabel?: string | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -250,6 +254,10 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const tickerPhase = (props.runPhaseLabel ?? "processing").trim().toLowerCase() || "processing";
+  const tickerReasoning = (props.runTickerReasoningLabel ?? "Default").trim() || "Default";
+  const showTicker = Boolean(props.runActive);
+  const tickerSuffix = props.runPhaseSuffixLabel?.trim().toLowerCase();
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -343,6 +351,17 @@ export function renderChat(props: ChatProps) {
           class="chat-main"
           style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
         >
+          ${
+            showTicker
+              ? html`
+                  <div class="chat-running-ticker" role="status" aria-live="polite">
+                    Running... • Reasoning=${tickerReasoning} • ${tickerPhase}${
+                      tickerSuffix ? html` • ${tickerSuffix}` : nothing
+                    }
+                  </div>
+                `
+              : nothing
+          }
           ${thread}
         </div>
 

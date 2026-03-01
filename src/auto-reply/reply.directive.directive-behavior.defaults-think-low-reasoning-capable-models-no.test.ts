@@ -301,6 +301,96 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
   });
+  it("session /think override overrides auto and config default", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+      mockEmbeddedTextResult("done");
+      mockReasoningCapableCatalog();
+
+      await getReplyFromConfig(
+        { Body: "/think:medium", From: "+1004", To: "+2000", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      mockEmbeddedTextResult("done");
+      mockReasoningCapableCatalog();
+
+      await getReplyFromConfig(
+        { Body: "hello", From: "+1004", To: "+2000" },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+      expect(call?.thinkLevel).toBe("medium");
+    });
+  });
+  it("supports /thinking auto and /thinking level auto to clear session think override", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      await getReplyFromConfig(
+        { Body: "/think:high", From: "+1004", To: "+2000", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+
+      const autoAck = await getReplyFromConfig(
+        { Body: "/thinking auto", From: "+1004", To: "+2000", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+      expect(replyText(autoAck)).toContain("Thinking mode set to auto (inherit).");
+
+      const storeAfterAuto = loadSessionStore(storePath);
+      const entryAfterAuto = Object.values(storeAfterAuto)[0];
+      expect(entryAfterAuto?.thinkingLevel).toBeUndefined();
+
+      await getReplyFromConfig(
+        { Body: "/think:medium", From: "+1004", To: "+2000", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+
+      const levelAutoAck = await getReplyFromConfig(
+        { Body: "/thinking level auto", From: "+1004", To: "+2000", CommandAuthorized: true },
+        {},
+        makeWhatsAppDirectiveConfig(
+          home,
+          { model: { primary: "anthropic/claude-opus-4-5" }, thinkingDefault: "low" },
+          { session: { store: storePath } },
+        ),
+      );
+      expect(replyText(levelAutoAck)).toContain("Thinking mode set to auto (inherit).");
+
+      const storeAfterLevelAuto = loadSessionStore(storePath);
+      const entryAfterLevelAuto = Object.values(storeAfterLevelAuto)[0];
+      expect(entryAfterLevelAuto?.thinkingLevel).toBeUndefined();
+    });
+  });
   it("passes elevated defaults when sender is approved", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedTextResult("done");

@@ -74,6 +74,10 @@ export type AppViewState = {
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
+  chatConfiguredThink: string | null;
+  chatEffectiveThink: string | null;
+  chatRunPhase: import("./run-status.ts").RunPhase | null;
+  chatRunPhaseSuffix: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;

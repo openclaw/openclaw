@@ -170,6 +170,23 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
+    if (entry?.configuredThink !== undefined) {
+      next.configuredThink = entry.configuredThink;
+    } else if (entry?.thinkingLevel !== undefined) {
+      next.configuredThink = entry.thinkingLevel;
+    }
+    if (entry?.effectiveThink !== undefined) {
+      next.effectiveThink = entry.effectiveThink;
+    }
+    if (entry?.lastEffectiveThink !== undefined) {
+      next.lastEffectiveThink = entry.lastEffectiveThink;
+    }
+    if (entry?.currentRunId !== undefined) {
+      next.currentRunId = entry.currentRunId;
+    }
+    if (entry?.lastRunId !== undefined) {
+      next.lastRunId = entry.lastRunId;
+    }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
     }
@@ -295,6 +312,10 @@ export function createSessionActions(context: SessionActionContext) {
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
+      state.sessionInfo.configuredThink =
+        record.thinkingLevel ??
+        state.sessionInfo.configuredThink ??
+        state.sessionInfo.thinkingLevel;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();

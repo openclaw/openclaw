@@ -66,6 +66,14 @@ vi.mock("./route-reply.js", () => ({
   routeReply: vi.fn(),
 }));
 
+vi.mock("./auto-reasoning.js", () => ({
+  resolveAutoThinkingLevel: vi.fn().mockResolvedValue({
+    thinkingLevel: "medium",
+    source: "auto-meta",
+    selector: { used: true, provider: "anthropic", model: "claude-opus-4-1" },
+  }),
+}));
+
 vi.mock("./session-updates.js", () => ({
   ensureSkillSnapshot: vi.fn().mockImplementation(async ({ sessionEntry, systemSent }) => ({
     sessionEntry,
@@ -80,6 +88,7 @@ vi.mock("./typing-mode.js", () => ({
 }));
 
 import { runReplyAgent } from "./agent-runner.js";
+import { resolveAutoThinkingLevel } from "./auto-reasoning.js";
 import { routeReply } from "./route-reply.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
@@ -126,6 +135,7 @@ function baseParams(
     } as never,
     defaultActivation: "always",
     resolvedThinkLevel: "high",
+    configuredThinkLevel: "high",
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
     resolvedElevatedLevel: "off",
@@ -293,5 +303,164 @@ describe("runPreparedReply media-only handling", () => {
       | { suppressTyping?: boolean }
       | undefined;
     expect(call?.suppressTyping).toBe(true);
+  });
+
+  it("maps autoReasoningConfig to follow-up run flags", async () => {
+    await runPreparedReply(
+      baseParams({
+        autoReasoningEnabled: false,
+        autoReasoningConfig: {
+          enabled: true,
+          emitGeneratingField: false,
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.autoReasoningEnabled).toBe(true);
+    expect(call?.followupRun.run.emitGeneratingField).toBe(false);
+  });
+
+  it("uses per-turn auto resolver when configured think is auto", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
+        ctx: {
+          Body: "debug this issue",
+          RawBody: "debug this issue",
+          CommandBody: "debug this issue",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "debug this issue",
+          BodyStripped: "debug this issue",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+
+    expect(vi.mocked(resolveAutoThinkingLevel)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.thinkLevel).toBe("medium");
+    expect(call?.followupRun.run.generatingSource).toBe("auto-meta");
+  });
+
+  it("does not overwrite auto session config when effective think is coerced", async () => {
+    vi.mocked(resolveAutoThinkingLevel).mockResolvedValueOnce({
+      thinkingLevel: "minimal",
+      source: "auto-meta",
+      selector: { used: false, provider: "openai-codex", model: "gpt-5.3-codex" },
+    });
+
+    const sessionEntry = {
+      sessionId: "session-id",
+      updatedAt: Date.now(),
+      configuredThink: "auto",
+      thinkingLevel: "auto",
+    } as const;
+    const sessionStore = { "session-key": { ...sessionEntry } };
+
+    await runPreparedReply(
+      baseParams({
+        resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        sessionEntry: sessionStore["session-key"],
+        sessionStore,
+        ctx: {
+          Body: "what is 2+2",
+          RawBody: "what is 2+2",
+          CommandBody: "what is 2+2",
+        },
+        sessionCtx: {
+          Body: "what is 2+2",
+          BodyStripped: "what is 2+2",
+          Provider: "slack",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.thinkLevel).toBe("low");
+    expect(sessionStore["session-key"]?.configuredThink).toBe("auto");
+    expect(sessionStore["session-key"]?.thinkingLevel).toBe("auto");
+  });
+
+  it("resolves non-off effective think per request and passes it to model invocation", async () => {
+    vi.mocked(resolveAutoThinkingLevel)
+      .mockResolvedValueOnce({
+        thinkingLevel: "minimal",
+        source: "auto-meta",
+        selector: { used: false, provider: "anthropic", model: "claude-opus-4-1" },
+      })
+      .mockResolvedValueOnce({
+        thinkingLevel: "high",
+        source: "auto-meta",
+        selector: { used: false, provider: "anthropic", model: "claude-opus-4-1" },
+      });
+
+    await runPreparedReply(
+      baseParams({
+        resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
+        ctx: {
+          Body: "what is 4+4",
+          RawBody: "what is 4+4",
+          CommandBody: "what is 4+4",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "what is 4+4",
+          BodyStripped: "what is 4+4",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+
+    await runPreparedReply(
+      baseParams({
+        resolvedThinkLevel: undefined,
+        configuredThinkLevel: "auto",
+        ctx: {
+          Body: "design a migration strategy for distributed DB failover across regions",
+          RawBody: "design a migration strategy for distributed DB failover across regions",
+          CommandBody: "design a migration strategy for distributed DB failover across regions",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "design a migration strategy for distributed DB failover across regions",
+          BodyStripped: "design a migration strategy for distributed DB failover across regions",
+          Provider: "slack",
+          ChatType: "group",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+      }),
+    );
+
+    const firstCall = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    const secondCall = vi.mocked(runReplyAgent).mock.calls[1]?.[0];
+    expect(firstCall?.followupRun.run.thinkLevel).toBe("minimal");
+    expect(secondCall?.followupRun.run.thinkLevel).toBe("high");
+    expect(firstCall?.followupRun.run.thinkLevel).not.toBe(secondCall?.followupRun.run.thinkLevel);
+    expect(firstCall?.followupRun.run.thinkLevel).not.toBe("off");
+    expect(secondCall?.followupRun.run.thinkLevel).not.toBe("off");
   });
 });

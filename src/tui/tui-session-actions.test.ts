@@ -81,6 +81,9 @@ describe("tui session actions", () => {
           key: "agent:main:main",
           model: "old",
           modelProvider: "anthropic",
+          configuredThink: "auto",
+          effectiveThink: "minimal",
+          lastEffectiveThink: "minimal",
         },
       ],
     });
@@ -100,6 +103,9 @@ describe("tui session actions", () => {
           key: "agent:main:main",
           model: "Minimax-M2.1",
           modelProvider: "minimax",
+          configuredThink: "auto",
+          effectiveThink: "high",
+          lastEffectiveThink: "high",
         },
       ],
     });
@@ -107,6 +113,9 @@ describe("tui session actions", () => {
     await second;
 
     expect(state.sessionInfo.model).toBe("Minimax-M2.1");
+    expect(state.sessionInfo.configuredThink).toBe("auto");
+    expect(state.sessionInfo.effectiveThink).toBe("high");
+    expect(state.sessionInfo.lastEffectiveThink).toBe("high");
     expect(updateAutocompleteProvider).toHaveBeenCalledTimes(2);
     expect(updateFooter).toHaveBeenCalledTimes(2);
     expect(requestRender).toHaveBeenCalledTimes(2);

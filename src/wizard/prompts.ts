@@ -24,6 +24,11 @@ export type WizardTextParams = {
   validate?: (value: string) => string | undefined;
 };
 
+export type WizardSecretParams = {
+  message: string;
+  validate?: (value: string) => string | undefined;
+};
+
 export type WizardConfirmParams = {
   message: string;
   initialValue?: boolean;
@@ -41,6 +46,7 @@ export type WizardPrompter = {
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;
   text: (params: WizardTextParams) => Promise<string>;
+  secret?: (params: WizardSecretParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
 };

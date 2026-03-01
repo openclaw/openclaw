@@ -233,6 +233,30 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let sessionId: String?
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
+    public let configuredThink: String?
+    public let effectiveThink: String?
+    public let lastEffectiveThink: String?
+    public let currentRunId: String?
+
+    public init(
+        sessionKey: String,
+        sessionId: String?,
+        messages: [AnyCodable]?,
+        thinkingLevel: String?,
+        configuredThink: String? = nil,
+        effectiveThink: String? = nil,
+        lastEffectiveThink: String? = nil,
+        currentRunId: String? = nil)
+    {
+        self.sessionKey = sessionKey
+        self.sessionId = sessionId
+        self.messages = messages
+        self.thinkingLevel = thinkingLevel
+        self.configuredThink = configuredThink
+        self.effectiveThink = effectiveThink
+        self.lastEffectiveThink = lastEffectiveThink
+        self.currentRunId = currentRunId
+    }
 }
 
 public struct OpenClawSessionPreviewItem: Codable, Hashable, Sendable {
@@ -275,7 +299,24 @@ public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public let seq: Int?
     public let stream: String
     public let ts: Int?
+    public let sessionKey: String?
     public let data: [String: AnyCodable]
+
+    public init(
+        runId: String,
+        seq: Int?,
+        stream: String,
+        ts: Int?,
+        sessionKey: String? = nil,
+        data: [String: AnyCodable])
+    {
+        self.runId = runId
+        self.seq = seq
+        self.stream = stream
+        self.ts = ts
+        self.sessionKey = sessionKey
+        self.data = data
+    }
 }
 
 public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {

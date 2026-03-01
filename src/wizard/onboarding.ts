@@ -349,6 +349,7 @@ export async function runOnboardingWizard(
   const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
     await import("../commands/auth-choice.js");
   const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+  const { AUTO_MODEL } = await import("../shared/model-constants.js");
 
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
@@ -370,6 +371,8 @@ export async function runOnboardingWizard(
       secretInputMode: opts.secretInputMode,
     });
     nextConfig = customResult.config;
+  } else if (authChoice === "auto-model") {
+    nextConfig = applyPrimaryModel(nextConfig, AUTO_MODEL);
   } else {
     const authResult = await applyAuthChoice({
       authChoice,
@@ -385,7 +388,7 @@ export async function runOnboardingWizard(
     nextConfig = authResult.config;
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  if (authChoiceFromPrompt && authChoice !== "custom-api-key" && authChoice !== "auto-model") {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,

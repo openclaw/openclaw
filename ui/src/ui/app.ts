@@ -149,6 +149,10 @@ export class OpenClawApp extends LitElement {
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatConfiguredThink: string | null = null;
+  @state() chatEffectiveThink: string | null = null;
+  @state() chatRunPhase: import("./run-status.ts").RunPhase | null = null;
+  @state() chatRunPhaseSuffix: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;

@@ -94,6 +94,11 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  configuredThink?: string;
+  effectiveThink?: string;
+  lastEffectiveThink?: string;
+  currentRunId?: string;
+  lastRunId?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -105,6 +110,25 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Last non-auto manual model selection (provider). Preserved when modelOverride
+   * is AUTO_MODEL so /model <provider/model> can restore it.
+   */
+  lastNonAutoModelProvider?: string;
+  /**
+   * Last non-auto manual model selection (model id). Preserved when modelOverride
+   * is AUTO_MODEL so /model <provider/model> can restore it.
+   */
+  lastNonAutoModel?: string;
+  /**
+   * Optional routing status for TUI/status when modelOverride is AUTO_MODEL.
+   * E.g. { tag: "coding", selectedProvider: "anthropic", selectedModel: "claude-sonnet-4-6" }.
+   */
+  autoModelRoutingStatus?: {
+    tag?: string;
+    selectedProvider?: string;
+    selectedModel?: string;
+  };
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

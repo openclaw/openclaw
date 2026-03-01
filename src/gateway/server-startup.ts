@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -12,6 +14,7 @@ import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { updateSessionStore } from "../config/sessions.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
@@ -22,14 +25,93 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
+import { isTranscriptEmptyShell } from "../sessions/archive-service.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { consumeGatewayShutdownState, USER_ARCHIVE_SHUTDOWN_REASON } from "./shutdown-state.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+const USER_ARCHIVE_EMPTY_SHELL_MAX_AGE_MS = 2 * 60 * 1000;
+
+async function pruneUserArchiveEmptySessionShells(params: {
+  sessionDirs: string[];
+  shutdownAt: number;
+  log: { warn: (msg: string) => void };
+}) {
+  const now = Date.now();
+  const deletedByDir = new Map<string, Set<string>>();
+  for (const sessionsDir of params.sessionDirs) {
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(sessionsDir);
+    } catch {
+      continue;
+    }
+    for (const entryName of entries) {
+      if (!entryName.endsWith(".jsonl")) {
+        continue;
+      }
+      if (
+        entryName.includes(".reset.") ||
+        entryName.includes(".deleted.") ||
+        entryName.includes(".bak.")
+      ) {
+        continue;
+      }
+      const transcriptPath = path.join(sessionsDir, entryName);
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(transcriptPath);
+      } catch {
+        continue;
+      }
+      if (!stat.isFile()) {
+        continue;
+      }
+      const ageMs = now - stat.mtimeMs;
+      const createdAfterArchive = stat.mtimeMs >= params.shutdownAt - 1000;
+      if (!createdAfterArchive || ageMs > USER_ARCHIVE_EMPTY_SHELL_MAX_AGE_MS) {
+        continue;
+      }
+      const isEmptyShell = await isTranscriptEmptyShell(transcriptPath);
+      if (!isEmptyShell) {
+        continue;
+      }
+      await fs.rm(transcriptPath, { force: true }).catch(() => undefined);
+      const deleted = deletedByDir.get(sessionsDir) ?? new Set<string>();
+      deleted.add(entryName);
+      deletedByDir.set(sessionsDir, deleted);
+    }
+  }
+  for (const [sessionsDir, deletedFiles] of deletedByDir) {
+    if (deletedFiles.size === 0) {
+      continue;
+    }
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await updateSessionStore(storePath, (store) => {
+      for (const [key, entry] of Object.entries(store)) {
+        const sessionFileName = entry.sessionFile
+          ? path.basename(entry.sessionFile)
+          : `${entry.sessionId}.jsonl`;
+        if (!deletedFiles.has(sessionFileName)) {
+          continue;
+        }
+        delete store[key];
+      }
+    }).catch(() => undefined);
+    params.log.warn(
+      `pruned ${deletedFiles.size} empty session shell${deletedFiles.size === 1 ? "" : "s"} after user-archive shutdown in ${sessionsDir}`,
+    );
+  }
+}
+
+export const __testing = {
+  pruneUserArchiveEmptySessionShells,
+};
 
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -55,6 +137,22 @@ export async function startGatewaySidecars(params: {
         staleMs: SESSION_LOCK_STALE_MS,
         removeStale: true,
         log: { warn: (message) => params.log.warn(message) },
+      });
+    }
+    const previousShutdown = await consumeGatewayShutdownState();
+    if (
+      previousShutdown?.reason === USER_ARCHIVE_SHUTDOWN_REASON &&
+      typeof previousShutdown.at === "number" &&
+      Number.isFinite(previousShutdown.at) &&
+      previousShutdown.at > 0
+    ) {
+      // user-archive intentionally ends the run; if startup briefly created a
+      // new session shell but it still has no user/assistant turns, we can
+      // remove it safely to avoid polluting session history with empty shells.
+      await pruneUserArchiveEmptySessionShells({
+        sessionDirs,
+        shutdownAt: previousShutdown.at,
+        log: params.log,
       });
     }
   } catch (err) {

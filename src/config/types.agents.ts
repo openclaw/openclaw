@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type {
+  AgentDefaultsConfig,
+  AutoModelRoutingConfig,
+  AutoReasoningConfig,
+} from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
@@ -32,6 +36,10 @@ export type AgentConfig = {
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
+  /** Optional per-agent auto-reasoning override (merges with agents.defaults.autoReasoning). */
+  autoReasoning?: AutoReasoningConfig;
+  /** Optional per-agent auto model routing override (merges with agents.defaults.autoModelRouting). */
+  autoModelRouting?: AutoModelRoutingConfig;
 };
 
 export type AgentsConfig = {

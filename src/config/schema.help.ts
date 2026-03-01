@@ -934,6 +934,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":
     'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
+  "agents.defaults.autoReasoning":
+    "Auto-reasoning selector: automatically choose thinking level per message when no inline or session directive is set. Disabled by default.",
+  "agents.defaults.autoReasoning.enabled":
+    "Enable auto-reasoning selector when no /think directive or session override applies (default: false).",
+  "agents.defaults.autoReasoning.selectorTimeoutMs":
+    "Timeout in ms for selector LLM call when used (optional).",
+  "agents.defaults.autoReasoning.selectorMaxOutputTokens":
+    "Max output tokens for selector LLM call when used (optional).",
+  "agents.defaults.autoReasoning.emitGeneratingField":
+    "Emit generating field for typing/status when selector runs (default: true).",
+  "agents.list[].autoReasoning":
+    "Per-agent auto-reasoning override (merges with agents.defaults.autoReasoning).",
+  "agents.defaults.autoModelRouting":
+    "Auto model routing: select model per turn when modelOverride is 'auto' (/model auto). Disabled by default.",
+  "agents.defaults.autoModelRouting.enabled":
+    "Enable auto model routing when modelOverride is AUTO_MODEL (default: false).",
+  "agents.defaults.autoModelRouting.byTag":
+    "Per-tag model lists (provider/model). Tag keys use routing constants (default, coding, reasoning, fast, image).",
+  "agents.list[].autoModelRouting":
+    "Per-agent auto model routing override (merges with agents.defaults.autoModelRouting).",
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

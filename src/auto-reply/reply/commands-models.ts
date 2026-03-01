@@ -242,7 +242,8 @@ export async function resolveModelsCommandReply(params: {
         count: byProvider.get(p)?.size ?? 0,
       }));
       const buttons = buildProviderKeyboard(providerInfos);
-      const text = "Select a provider:";
+      const text =
+        "Select a provider:\n\n/model auto — Auto (Recommended), let GPT-5.2 choose the best model per prompt.";
       return {
         text,
         channelData: { telegram: { buttons } },
@@ -256,8 +257,9 @@ export async function resolveModelsCommandReply(params: {
         formatProviderLine({ provider: p, count: byProvider.get(p)?.size ?? 0 }),
       ),
       "",
+      "Auto (Recommended): /model auto — let GPT-5.2 choose the best model per prompt.",
       "Use: /models <provider>",
-      "Switch: /model <provider/model>",
+      "Switch: /model <provider/model> or /model auto",
     ];
     return { text: lines.join("\n") };
   }
@@ -288,7 +290,7 @@ export async function resolveModelsCommandReply(params: {
       `Models (${providerLabel}) — none`,
       "",
       "Browse: /models",
-      "Switch: /model <provider/model>",
+      "Switch: /model <provider/model> or /model auto for recommended routing.",
     ];
     return { text: lines.join("\n") };
   }
@@ -347,7 +349,7 @@ export async function resolveModelsCommandReply(params: {
     lines.push(`- ${provider}/${id}`);
   }
 
-  lines.push("", "Switch: /model <provider/model>");
+  lines.push("", "Switch: /model <provider/model> or /model auto for recommended routing.");
   if (!all && safePage < pageCount) {
     lines.push(`More: /models ${provider} ${safePage + 1}`);
   }

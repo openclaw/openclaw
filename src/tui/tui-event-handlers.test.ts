@@ -111,6 +111,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { currentSessionId: "session-xyz", activeChatRunId: "run-123" },
     });
+    handleAgentEvent({ runId: "run-123", stream: "lifecycle", data: { phase: "start" } });
 
     const evt: AgentEvent = {
       runId: "run-123",
@@ -126,7 +127,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent(evt);
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
-    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalled();
   });
 
   it("ignores tool events when runId does not match activeChatRunId", () => {
@@ -162,8 +163,200 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     handleAgentEvent(evt);
 
-    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    expect(setActivityStatus).toHaveBeenCalledWith("running (think auto)");
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates effective think from lifecycle generating metadata", () => {
+    const { state, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-9",
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto", lastEffectiveThink: "xhigh" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-9",
+      stream: "lifecycle",
+      data: { phase: "start", generating: { thinkingLevel: "medium" } },
+    });
+
+    expect(state.sessionInfo.effectiveThink).toBe("medium");
+    expect(state.sessionInfo.lastEffectiveThink).toBe("medium");
+  });
+
+  it("prefers lifecycle effectiveThink when provided", () => {
+    const { state, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-9",
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto", lastEffectiveThink: "low" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-9",
+      stream: "lifecycle",
+      data: { phase: "start", effectiveThink: "high", generating: { thinkingLevel: "medium" } },
+    });
+
+    expect(state.sessionInfo.effectiveThink).toBe("high");
+    expect(state.sessionInfo.lastEffectiveThink).toBe("high");
+  });
+
+  it("extracts router and generation pass tokens from lifecycle generating.routingPass", () => {
+    const { state, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-tokens",
+        sessionInfo: { verboseLevel: "on" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-tokens",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        generating: {
+          thinkingLevel: "low",
+          routingPass: {
+            pass: 2,
+            pass1TokenUsage: { input: 100, output: 5 },
+            pass2TokenUsage: { input: 500, output: 120 },
+          },
+        },
+      },
+    });
+
+    expect(state.sessionInfo.routerPassTokens).toEqual({ input: 100, output: 5 });
+    expect(state.sessionInfo.generationPassTokens).toEqual({ input: 500, output: 120 });
+  });
+
+  it("shows resolved think status during router phase", () => {
+    const { state, handleAgentEvent, setActivityStatus } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-router-think",
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-router-think",
+      stream: "lifecycle",
+      data: {
+        phase: "router",
+        generating: {
+          thinkingLevel: "high",
+          routingPass: {
+            pass: 1,
+            pass1TokenUsage: { input: 120, output: 8 },
+          },
+        },
+      },
+    });
+
+    expect(state.sessionInfo.routerPassTokens).toEqual({ input: 120, output: 8 });
+    expect(setActivityStatus).toHaveBeenCalledWith("routing (think auto→high)");
+  });
+
+  it("shows served model in running status when lifecycle includes it", () => {
+    const { state, handleAgentEvent, setActivityStatus } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-served",
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-served",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        effectiveThink: "medium",
+        servedProvider: "openrouter",
+        servedModel: "openrouter/anthropic/claude-sonnet-4-6",
+      },
+    });
+
+    expect(state.sessionInfo.servedModelProvider).toBe("openrouter");
+    expect(state.sessionInfo.servedModel).toBe("openrouter/anthropic/claude-sonnet-4-6");
+    expect(setActivityStatus).toHaveBeenCalledWith(
+      "running (think auto→medium) · model openrouter/anthropic/claude-sonnet-4-6",
+    );
+  });
+
+  it("clears pass tokens on lifecycle end", () => {
+    const { state, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-clear",
+        sessionInfo: {
+          routerPassTokens: { input: 50, output: 2 },
+          generationPassTokens: { input: 200, output: 30 },
+        },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-clear",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(state.sessionInfo.routerPassTokens).toBeNull();
+    expect(state.sessionInfo.generationPassTokens).toBeNull();
+  });
+
+  it("sets generationPassTokens from chat final usage", () => {
+    const { state, handleChatEvent, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleAgentEvent({
+      runId: "run-usage",
+      stream: "lifecycle",
+      data: { phase: "start", sessionKey: state.currentSessionKey },
+    });
+
+    handleChatEvent({
+      runId: "run-usage",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+      usage: { input: 1000, output: 250 },
+    });
+
+    expect(state.sessionInfo.generationPassTokens).toEqual({ input: 1000, output: 250 });
+  });
+
+  it("buffers assistant delta until lifecycle start is processed", () => {
+    const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-11",
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto" },
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-11",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial before start" },
+    });
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+
+    handleAgentEvent({
+      runId: "run-11",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        configuredThink: "auto",
+        generating: { thinkingLevel: "medium" },
+      },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenCalled();
+    expect(state.sessionInfo.currentRunId).toBe("run-11");
+    expect(state.sessionInfo.configuredThink).toBe("auto");
+    expect(state.sessionInfo.effectiveThink).toBe("medium");
   });
 
   it("captures runId from chat events when activeChatRunId is unset", () => {
@@ -181,6 +374,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleChatEvent(chatEvt);
 
     expect(state.activeChatRunId).toBe("run-42");
+    handleAgentEvent({ runId: "run-42", stream: "lifecycle", data: { phase: "start" } });
 
     const agentEvt: AgentEvent = {
       runId: "run-42",
@@ -191,6 +385,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent(agentEvt);
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
+  });
+
+  it("accepts lifecycle start before chat delta for current session", () => {
+    const { state, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        sessionInfo: { verboseLevel: "on", configuredThink: "auto" },
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-early",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        sessionKey: state.currentSessionKey,
+        configuredThink: "auto",
+        generating: { thinkingLevel: "medium" },
+      },
+    });
+
+    expect(state.activeChatRunId).toBe("run-early");
+    expect(state.sessionInfo.currentRunId).toBe("run-early");
+    expect(state.sessionInfo.effectiveThink).toBe("medium");
+    expect(setActivityStatus).toHaveBeenCalledWith("running (think auto→medium)");
   });
 
   it("clears run mapping when the session changes", () => {
@@ -223,6 +442,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
+    handleAgentEvent({ runId: "run-final", stream: "lifecycle", data: { phase: "start" } });
 
     handleChatEvent({
       runId: "run-final",
@@ -273,6 +493,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         sessionInfo: { verboseLevel: "off" },
       },
     });
+    handleAgentEvent({ runId: "run-123", stream: "lifecycle", data: { phase: "start" } });
+    const rendersBeforeTool = tui.requestRender.mock.calls.length;
 
     handleAgentEvent({
       runId: "run-123",
@@ -281,7 +503,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.startTool).not.toHaveBeenCalled();
-    expect(tui.requestRender).not.toHaveBeenCalled();
+    expect(tui.requestRender.mock.calls.length).toBe(rendersBeforeTool);
   });
 
   it("omits tool output when verbose is on (non-full)", () => {
@@ -291,6 +513,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         sessionInfo: { verboseLevel: "on" },
       },
     });
+    handleAgentEvent({ runId: "run-123", stream: "lifecycle", data: { phase: "start" } });
 
     handleAgentEvent({
       runId: "run-123",
@@ -339,10 +562,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   function createConcurrentRunHarness(localContent = "partial") {
-    const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
+    const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent, handleAgentEvent } =
       createHandlersHarness({
         state: { activeChatRunId: "run-active" },
       });
+    handleAgentEvent({ runId: "run-active", stream: "lifecycle", data: { phase: "start" } });
 
     handleChatEvent({
       runId: "run-active",

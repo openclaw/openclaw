@@ -84,10 +84,13 @@ struct OpenClawChatComposer: View {
 
     private var thinkingPicker: some View {
         Picker("Thinking", selection: self.$viewModel.thinkingLevel) {
+            Text("Auto").tag("auto")
             Text("Off").tag("off")
+            Text("Minimal").tag("minimal")
             Text("Low").tag("low")
             Text("Medium").tag("medium")
             Text("High").tag("high")
+            Text("XHigh").tag("xhigh")
         }
         .labelsHidden()
         .pickerStyle(.menu)
@@ -214,6 +217,9 @@ struct OpenClawChatComposer: View {
             Text(self.activeSessionLabel)
                 .font(.caption2.weight(.semibold))
             Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text("think \(self.viewModel.thinkingStatusLabel)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

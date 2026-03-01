@@ -891,6 +891,14 @@ export async function runEmbeddedAttempt(
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        configuredThinkLevel: params.configuredThinkLevel,
+        thinkLevel: params.thinkLevel,
+        generatingSource: params.generatingSource,
+        autoReasoningEnabled: params.autoReasoningEnabled,
+        generatingSelector: params.generatingSelector,
+        emitGeneratingField: params.emitGeneratingField,
       });
 
       const {

@@ -1,6 +1,7 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GeneratingSelector, GeneratingSource } from "../infra/generating-metadata.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
@@ -31,6 +32,19 @@ export type SubscribeEmbeddedPiSessionParams = {
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** For generating metadata: provider/model/thinkLevel (from run params). */
+  provider?: string;
+  model?: string;
+  configuredThinkLevel?: string;
+  thinkLevel?: string;
+  /** For generating metadata: source of thinking/reasoning config. */
+  generatingSource?: GeneratingSource;
+  /** For generating metadata: true when reasoning was auto-enabled. */
+  autoReasoningEnabled?: boolean;
+  /** For generating metadata: selector call status/details. */
+  generatingSelector?: GeneratingSelector;
+  /** For generating metadata: emit switch (default true). */
+  emitGeneratingField?: boolean;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

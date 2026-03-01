@@ -1,5 +1,6 @@
 import { extractText } from "../chat/message-extract.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import type { RunPhase } from "../run-status.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 
@@ -16,6 +17,10 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatConfiguredThink: string | null;
+  chatEffectiveThink: string | null;
+  chatRunPhase: RunPhase | null;
+  chatRunPhaseSuffix: string | null;
   lastError: string | null;
 };
 
@@ -34,15 +39,19 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+      configuredThink?: string;
+      effectiveThink?: string;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+    });
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatConfiguredThink = res.configuredThink ?? res.thinkingLevel ?? null;
+    state.chatEffectiveThink = res.effectiveThink ?? null;
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -153,6 +162,8 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatRunPhase = null;
+  state.chatRunPhaseSuffix = null;
 
   // Convert attachments to API format
   const apiAttachments = hasAttachments
@@ -185,6 +196,7 @@ export async function sendChatMessage(
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatRunPhaseSuffix = "error";
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -240,6 +252,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   if (payload.state === "delta") {
+    state.chatRunPhase = "chat.delta";
+    state.chatRunPhaseSuffix = null;
     const next = extractText(payload.message);
     if (typeof next === "string") {
       const current = state.chatStream ?? "";
@@ -248,6 +262,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       }
     }
   } else if (payload.state === "final") {
+    state.chatRunPhase = "chat.final";
+    state.chatRunPhaseSuffix = null;
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage) {
       state.chatMessages = [...state.chatMessages, finalMessage];
@@ -256,6 +272,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
+    state.chatRunPhase = "chat.aborted";
+    state.chatRunPhaseSuffix = null;
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
@@ -276,6 +294,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    state.chatRunPhase = "chat.error";
+    state.chatRunPhaseSuffix = "error";
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

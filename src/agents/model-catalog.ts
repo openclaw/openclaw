@@ -1,6 +1,7 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { listLocalModelIds, resolveLocalModelsDir } from "./local-models.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -143,6 +144,36 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 }
 
+async function mergeLocalModelsDirectory(params: { models: ModelCatalogEntry[] }): Promise<void> {
+  const ids = await listLocalModelIds();
+  if (ids.length === 0) {
+    return;
+  }
+  const localDir = resolveLocalModelsDir();
+  const seen = new Set(
+    params.models.map(
+      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+    ),
+  );
+  for (const id of ids) {
+    const key = `ollama::${id.toLowerCase()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    params.models.push({
+      id,
+      name: `${id} (local)`,
+      provider: "ollama",
+      reasoning: false,
+      input: ["text"],
+      // Keep this generous; local runtime and model may vary.
+      contextWindow: 131072,
+    });
+    seen.add(key);
+  }
+  log.info(`Discovered ${ids.length} local models from ${localDir}`);
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -216,6 +247,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
+      await mergeLocalModelsDirectory({ models });
       applyOpenAICodexSparkFallback(models);
 
       if (models.length === 0) {

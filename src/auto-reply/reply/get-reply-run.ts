@@ -15,7 +15,9 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { AutoReasoningConfig } from "../../config/types.agent-defaults.js";
 import { logVerbose } from "../../globals.js";
+import type { GeneratingSelector, GeneratingSource } from "../../infra/generating-metadata.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -23,17 +25,20 @@ import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
+  coerceThinkingLevelForModel,
+  type ConfiguredThinkLevel,
   type ElevatedLevel,
-  formatXHighModelHint,
+  formatThinkingLevels,
+  normalizeConfiguredThinkLevel,
   normalizeThinkLevel,
   type ReasoningLevel,
-  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
+import { resolveAutoThinkingLevel } from "./auto-reasoning.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -138,9 +143,13 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  configuredThinkLevel: ConfiguredThinkLevel;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  generatingSource?: GeneratingSource;
+  autoReasoningEnabled?: boolean;
+  autoReasoningConfig?: AutoReasoningConfig;
   execOverrides?: ExecOverrides;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -222,6 +231,7 @@ export async function runPreparedReply(
   let {
     sessionEntry,
     resolvedThinkLevel,
+    configuredThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -366,28 +376,94 @@ export async function runPreparedReply(
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
+  let effectiveGeneratingSource = params.generatingSource ?? "default";
+  let generatingSelector: GeneratingSelector | undefined;
+  let autoReasonBucket: string | undefined;
+  const autoReasoningEnabled =
+    params.autoReasoningConfig?.enabled === true || params.autoReasoningEnabled === true;
+  const emitGeneratingField = params.autoReasoningConfig?.emitGeneratingField !== false;
+  const autoThinkTraceEnabled = process.env.OPENCLAW_TRACE_AUTO_THINK === "1";
+  const effectiveConfiguredThinkLevel: ConfiguredThinkLevel =
+    normalizeConfiguredThinkLevel(configuredThinkLevel) ??
+    normalizeConfiguredThinkLevel(sessionEntry?.configuredThink ?? sessionEntry?.thinkingLevel) ??
+    normalizeConfiguredThinkLevel(agentCfg?.thinkingDefault) ??
+    "auto";
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+    const inlineThinkSupport =
+      maybeLevel &&
+      !coerceThinkingLevelForModel({
+        level: maybeLevel,
+        provider,
+        model,
+      }).coerced;
+    if (inlineThinkSupport) {
       resolvedThinkLevel = maybeLevel;
+      effectiveGeneratingSource = "inline-directive";
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
   if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    if (effectiveConfiguredThinkLevel === "auto" && prefixedCommandBody.trim()) {
+      const autoSelected = await resolveAutoThinkingLevel({
+        provider,
+        model,
+        messageBody: prefixedCommandBody,
+      });
+      resolvedThinkLevel = autoSelected.thinkingLevel;
+      effectiveGeneratingSource = autoSelected.source;
+      generatingSelector = autoSelected.selector;
+      autoReasonBucket = autoSelected.reasonBucket;
+    } else if (effectiveConfiguredThinkLevel !== "auto") {
+      resolvedThinkLevel = effectiveConfiguredThinkLevel;
+      effectiveGeneratingSource =
+        params.generatingSource === "inline-directive" ||
+        params.generatingSource === "session-directive"
+          ? params.generatingSource
+          : "default";
+    } else {
+      const configuredDefault = normalizeThinkLevel(agentCfg?.thinkingDefault);
+      if (configuredDefault) {
+        resolvedThinkLevel = configuredDefault;
+        effectiveGeneratingSource = "default";
+      } else {
+        resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+        effectiveGeneratingSource = "default";
+      }
+    }
   }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+  if (autoThinkTraceEnabled) {
+    logVerbose(
+      `[think] configured=${effectiveConfiguredThinkLevel} effective=${resolvedThinkLevel} reason=${autoReasonBucket ?? effectiveGeneratingSource}`,
+    );
+  }
+  const resolvedThinkingLevel = coerceThinkingLevelForModel({
+    level: resolvedThinkLevel ?? "off",
+    provider,
+    model,
+  });
+  if (resolvedThinkingLevel.coerced) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+        text: `Thinking level "${resolvedThinkLevel ?? "off"}" is not supported for ${provider}/${model}. Valid levels: ${formatThinkingLevels(provider, model)}.`,
       };
     }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
+    resolvedThinkLevel = resolvedThinkingLevel.level;
+    if (effectiveGeneratingSource === "auto-meta") {
+      effectiveGeneratingSource = "auto-fallback";
+    }
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      effectiveConfiguredThinkLevel !== "auto" &&
+      sessionEntry.thinkingLevel === effectiveConfiguredThinkLevel
+    ) {
+      sessionEntry.thinkingLevel = resolvedThinkingLevel.level;
+      sessionEntry.configuredThink = resolvedThinkingLevel.level;
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
@@ -395,6 +471,24 @@ export async function runPreparedReply(
           store[sessionKey] = sessionEntry;
         });
       }
+    }
+  }
+  if (sessionEntry) {
+    const nextConfigured =
+      effectiveConfiguredThinkLevel === "auto" ? "auto" : (effectiveConfiguredThinkLevel as string);
+    sessionEntry.configuredThink = nextConfigured;
+    sessionEntry.effectiveThink = resolvedThinkLevel;
+    if (effectiveConfiguredThinkLevel === "auto" && sessionEntry.thinkingLevel !== "auto") {
+      sessionEntry.thinkingLevel = "auto";
+    }
+    sessionEntry.updatedAt = Date.now();
+    if (sessionStore && sessionKey) {
+      sessionStore[sessionKey] = sessionEntry;
+    }
+    if (storePath && sessionKey && sessionStore) {
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = sessionEntry;
+      });
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
@@ -491,10 +585,16 @@ export async function runPreparedReply(
       model,
       authProfileId,
       authProfileIdSource,
+      configuredThinkLevel:
+        effectiveConfiguredThinkLevel === "auto" ? "auto" : effectiveConfiguredThinkLevel,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      generatingSource: effectiveGeneratingSource,
+      autoReasoningEnabled: autoReasoningEnabled || effectiveConfiguredThinkLevel === "auto",
+      generatingSelector,
+      emitGeneratingField,
       execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,

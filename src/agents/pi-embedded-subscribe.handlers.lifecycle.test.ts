@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../markdown/code-spans.js";
-import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
+import { handleAgentEnd, handleAgentStart } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -56,13 +56,22 @@ describe("handleAgentEnd", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
     expect(warn.mock.calls[0]?.[0]).toContain("error=connection refused");
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: "connection refused",
-      },
-    });
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          error: "connection refused",
+          generating: expect.objectContaining({
+            thinkingLevel: "off",
+            reasoningLevel: "off",
+            source: "default",
+            autoReasoningEnabled: false,
+            availableThinkingLevels: expect.any(Array),
+          }),
+        }),
+      }),
+    );
   });
 
   it("keeps non-error run-end logging on debug only", () => {
@@ -72,5 +81,27 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+});
+
+describe("handleAgentStart", () => {
+  it("emits lifecycle start with configured/effective think", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.params.configuredThinkLevel = "auto";
+    ctx.params.thinkLevel = "medium";
+
+    handleAgentStart(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "start",
+          configuredThink: "auto",
+          effectiveThink: "medium",
+        }),
+      }),
+    );
   });
 });

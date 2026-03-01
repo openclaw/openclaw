@@ -549,6 +549,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "session",
     }),
     defineChatCommand({
+      key: "archive-session",
+      nativeName: "archive-session",
+      description: "Archive & End Session",
+      textAlias: "/archive-session",
+      category: "session",
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
@@ -572,9 +579,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "level",
-          description: "off, minimal, low, medium, high, xhigh",
+          description: "auto, off, minimal, low, medium, high, xhigh",
           type: "string",
-          choices: ({ provider, model }) => listThinkingLevels(provider, model),
+          choices: ({ provider, model }) => ["auto", ...listThinkingLevels(provider, model)],
         },
       ],
       argsMenu: "auto",

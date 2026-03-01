@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
+import type { RunPhase } from "./run-status.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type MutableHost = ToolStreamHost & {
@@ -13,6 +14,10 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
   return {
     sessionKey: "main",
     chatRunId: null,
+    chatConfiguredThink: null,
+    chatEffectiveThink: null,
+    chatRunPhase: null as RunPhase | null,
+    chatRunPhaseSuffix: null,
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [],
     chatToolMessages: [],
@@ -135,5 +140,59 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.phase).toBe("cleared");
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
+  });
+
+  it("publishes reasoning level at lifecycle start before assistant events", () => {
+    const host = createHost();
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        configuredThink: "auto",
+        generating: { thinkingLevel: "high" },
+      },
+    });
+    expect(host.chatRunId).toBe("run-2");
+    expect(host.chatConfiguredThink).toBe("auto");
+    expect(host.chatEffectiveThink).toBe("high");
+    expect(host.chatRunPhase).toBe("lifecycle.start");
+  });
+
+  it("transitions run phases from live stream milestones", () => {
+    const host = createHost({ chatRunId: "run-3" });
+    handleAgentEvent(host, {
+      runId: "run-3",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: {
+        phase: "start",
+        name: "search",
+        toolCallId: "t1",
+      },
+    });
+    expect(host.chatRunPhase).toBe("tool.start");
+
+    handleAgentEvent(host, {
+      runId: "run-3",
+      seq: 2,
+      stream: "reasoning",
+      ts: Date.now(),
+      data: { text: "thinking" },
+    });
+    expect(host.chatRunPhase).toBe("reasoning.stream");
+
+    handleAgentEvent(host, {
+      runId: "run-3",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "draft" },
+    });
+    expect(host.chatRunPhase).toBe("assistant.stream");
   });
 });

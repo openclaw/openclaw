@@ -283,6 +283,58 @@ export async function runReplyAgent(params: {
     defaultModel,
     agentCfgContextTokens,
   });
+  const runIdForTurn = opts?.runId ?? generateSecureUuid();
+  const configuredThinkForTurn = followupRun.run.configuredThinkLevel ?? "auto";
+  const effectiveThinkForTurn = followupRun.run.thinkLevel;
+  const persistRunThinkState = async (mode: "start" | "finish") => {
+    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
+      return;
+    }
+    if (mode === "start") {
+      activeSessionEntry.currentRunId = runIdForTurn;
+      activeSessionEntry.configuredThink = configuredThinkForTurn;
+      if (effectiveThinkForTurn) {
+        activeSessionEntry.effectiveThink = effectiveThinkForTurn;
+      }
+      activeSessionEntry.updatedAt = Date.now();
+      activeSessionStore[sessionKey] = activeSessionEntry;
+      if (storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            currentRunId: runIdForTurn,
+            configuredThink: configuredThinkForTurn,
+            effectiveThink: effectiveThinkForTurn,
+            updatedAt: Date.now(),
+          }),
+        });
+      }
+      return;
+    }
+    if (activeSessionEntry.currentRunId === runIdForTurn) {
+      delete activeSessionEntry.currentRunId;
+    }
+    activeSessionEntry.lastRunId = runIdForTurn;
+    if (activeSessionEntry.effectiveThink) {
+      activeSessionEntry.lastEffectiveThink = activeSessionEntry.effectiveThink;
+    }
+    activeSessionEntry.updatedAt = Date.now();
+    activeSessionStore[sessionKey] = activeSessionEntry;
+    if (storePath) {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async (entry) => ({
+          currentRunId: entry?.currentRunId === runIdForTurn ? undefined : entry?.currentRunId,
+          lastRunId: runIdForTurn,
+          lastEffectiveThink: entry?.effectiveThink ?? activeSessionEntry?.effectiveThink,
+          updatedAt: Date.now(),
+        }),
+      });
+    }
+  };
+  await persistRunThinkState("start");
 
   let responseUsageLine: string | undefined;
   type SessionResetOptions = {
@@ -373,6 +425,7 @@ export async function runReplyAgent(params: {
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
+      runId: runIdForTurn,
       commandBody,
       followupRun,
       sessionCtx,
@@ -397,6 +450,7 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      await persistRunThinkState("finish");
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -746,6 +800,7 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } finally {
+    await persistRunThinkState("finish");
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

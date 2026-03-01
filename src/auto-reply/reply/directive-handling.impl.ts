@@ -10,7 +10,11 @@ import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
+import {
+  coerceThinkingLevelForModel,
+  formatThinkingLevels,
+  listThinkingLevels,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
@@ -129,23 +133,28 @@ export async function handleDirectiveOnly(
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
 
-  const resolvedProvider = modelSelection?.provider ?? provider;
-  const resolvedModel = modelSelection?.model ?? model;
+  const resolvedProvider = modelSelection?.isAuto
+    ? defaultProvider
+    : (modelSelection?.provider ?? provider);
+  const resolvedModel = modelSelection?.isAuto ? defaultModel : (modelSelection?.model ?? model);
 
   if (directives.hasThinkDirective && !directives.thinkLevel) {
-    // If no argument was provided, show the current level
-    if (!directives.rawThinkLevel) {
+    if (directives.thinkAuto) {
+      // "auto" is handled in persistence below; no early error/status response.
+    } else if (!directives.rawThinkLevel) {
+      // If no argument was provided, show the current level.
       const level = currentThinkLevel ?? "off";
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          formatThinkingLevels(resolvedProvider, resolvedModel),
+          `auto, ${formatThinkingLevels(resolvedProvider, resolvedModel)}`,
         ),
       };
+    } else {
+      return {
+        text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+      };
     }
-    return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
-    };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
     if (!directives.rawVerboseLevel) {
@@ -250,23 +259,30 @@ export async function handleDirectiveOnly(
     return queueAck;
   }
 
+  const supportedThinkingLevels = new Set(listThinkingLevels(resolvedProvider, resolvedModel));
   if (
     directives.hasThinkDirective &&
-    directives.thinkLevel === "xhigh" &&
-    !supportsXHighThinking(resolvedProvider, resolvedModel)
+    directives.thinkLevel &&
+    !supportedThinkingLevels.has(directives.thinkLevel)
   ) {
     return {
-      text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
 
-  const nextThinkLevel = directives.hasThinkDirective
+  const requestedThinkLevel = directives.hasThinkDirective
     ? directives.thinkLevel
-    : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ?? currentThinkLevel);
-  const shouldDowngradeXHigh =
-    !directives.hasThinkDirective &&
-    nextThinkLevel === "xhigh" &&
-    !supportsXHighThinking(resolvedProvider, resolvedModel);
+    : (((sessionEntry?.configuredThink ?? sessionEntry?.thinkingLevel) as ThinkLevel | undefined) ??
+      currentThinkLevel);
+  const coercedThinkLevel =
+    !directives.hasThinkDirective && requestedThinkLevel
+      ? coerceThinkingLevelForModel({
+          level: requestedThinkLevel,
+          provider: resolvedProvider,
+          model: resolvedModel,
+        })
+      : null;
+  const shouldCoercePersistedThink = Boolean(coercedThinkLevel?.coerced);
 
   const prevElevatedLevel =
     currentElevatedLevel ??
@@ -281,11 +297,16 @@ export async function handleDirectiveOnly(
     elevatedAllowed;
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
-  if (directives.hasThinkDirective && directives.thinkLevel) {
+  if (directives.hasThinkDirective && directives.thinkAuto) {
+    sessionEntry.configuredThink = "auto";
+    sessionEntry.thinkingLevel = "auto";
+  } else if (directives.hasThinkDirective && directives.thinkLevel) {
+    sessionEntry.configuredThink = directives.thinkLevel;
     sessionEntry.thinkingLevel = directives.thinkLevel;
   }
-  if (shouldDowngradeXHigh) {
-    sessionEntry.thinkingLevel = "high";
+  if (shouldCoercePersistedThink && coercedThinkLevel && sessionEntry.configuredThink !== "auto") {
+    sessionEntry.configuredThink = coercedThinkLevel.level;
+    sessionEntry.thinkingLevel = coercedThinkLevel.level;
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
@@ -356,7 +377,9 @@ export async function handleDirectiveOnly(
     });
   }
   if (modelSelection) {
-    const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
+    const nextLabel = modelSelection.isAuto
+      ? "auto"
+      : `${modelSelection.provider}/${modelSelection.model}`;
     if (nextLabel !== initialModelLabel) {
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
         sessionKey,
@@ -379,6 +402,8 @@ export async function handleDirectiveOnly(
         ? "Thinking disabled."
         : `Thinking level set to ${directives.thinkLevel}.`,
     );
+  } else if (directives.hasThinkDirective && directives.thinkAuto) {
+    parts.push("Thinking mode set to auto (inherit).");
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
@@ -428,18 +453,22 @@ export async function handleDirectiveOnly(
       parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
     }
   }
-  if (shouldDowngradeXHigh) {
+  if (shouldCoercePersistedThink && coercedThinkLevel && requestedThinkLevel) {
     parts.push(
-      `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
+      `Thinking level set to ${coercedThinkLevel.level} (${requestedThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
   }
   if (modelSelection) {
-    const label = `${modelSelection.provider}/${modelSelection.model}`;
+    const label = modelSelection.isAuto
+      ? "auto"
+      : `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
     parts.push(
       modelSelection.isDefault
         ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias}.`,
+        : modelSelection.isAuto
+          ? `Model set to auto (routing).`
+          : `Model set to ${labelWithAlias}.`,
     );
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);

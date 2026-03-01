@@ -16,6 +16,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -38,6 +39,32 @@ import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
+
+const BUSY_ACTIVITY_PREFIXES = [
+  "sending",
+  "waiting",
+  "streaming",
+  "running",
+  "routing",
+  "generating",
+];
+
+export function isBusyActivityStatus(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return BUSY_ACTIVITY_PREFIXES.some((prefix) => {
+    if (normalized === prefix) {
+      return true;
+    }
+    // Match dynamic status text variants such as:
+    // - "running (think auto→medium)"
+    // - "routing: expensive-model"
+    // - "generating…"
+    return normalized.startsWith(`${prefix} `) || normalized.startsWith(`${prefix}(`);
+  });
+}
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -524,7 +551,6 @@ export async function runTui(opts: TuiOptions) {
     );
   };
 
-  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -568,6 +594,15 @@ export async function runTui(opts: TuiOptions) {
   let waitingTimer: NodeJS.Timeout | null = null;
   let waitingPhrase: string | null = null;
 
+  const formatPassTokens = (pass?: { input?: number; output?: number } | null): string => {
+    if (!pass || (pass.input == null && pass.output == null)) {
+      return "";
+    }
+    const inVal = pass.input ?? 0;
+    const outVal = pass.output ?? 0;
+    return `${formatTokenCount(inVal)} in / ${formatTokenCount(outVal)} out`;
+  };
+
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) {
       return;
@@ -588,7 +623,17 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
 
-    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
+    const passParts: string[] = [];
+    const router = formatPassTokens(sessionInfo.routerPassTokens);
+    const gen = formatPassTokens(sessionInfo.generationPassTokens);
+    if (router) {
+      passParts.push(`router: ${router}`);
+    }
+    if (gen) {
+      passParts.push(`gen: ${gen}`);
+    }
+    const passSuffix = passParts.length > 0 ? ` | ${passParts.join(" ")}` : "";
+    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}${passSuffix}`);
   };
 
   const startStatusTimer = () => {
@@ -596,7 +641,7 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     statusTimer = setInterval(() => {
-      if (!busyStates.has(activityStatus)) {
+      if (!isBusyActivityStatus(activityStatus)) {
         return;
       }
       updateBusyStatusMessage();
@@ -642,7 +687,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const renderStatus = () => {
-    const isBusy = busyStates.has(activityStatus);
+    const isBusy = isBusyActivityStatus(activityStatus);
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
@@ -694,22 +739,44 @@ export async function runTui(opts: TuiOptions) {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
+    const servedModelRaw = sessionInfo.servedModel?.trim();
+    const servedProviderRaw = sessionInfo.servedModelProvider?.trim();
+    const servedModelLabel = servedModelRaw
+      ? servedProviderRaw
+        ? servedModelRaw.toLowerCase().startsWith(`${servedProviderRaw.toLowerCase()}/`)
+          ? servedModelRaw
+          : `${servedProviderRaw}/${servedModelRaw}`
+        : servedModelRaw
+      : null;
+    const configuredModelLabel = sessionInfo.model
       ? sessionInfo.modelProvider
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
+    const configuredThink = sessionInfo.configuredThink ?? sessionInfo.thinkingLevel ?? "auto";
+    const isRunActive =
+      Boolean(activeChatRunId) ||
+      (typeof sessionInfo.currentRunId === "string" && sessionInfo.currentRunId.trim().length > 0);
+    const effectiveThink = isRunActive
+      ? (sessionInfo.effectiveThink ?? sessionInfo.lastEffectiveThink ?? sessionInfo.thinkingLevel)
+      : (sessionInfo.lastEffectiveThink ?? sessionInfo.effectiveThink ?? sessionInfo.thinkingLevel);
+    const thinkLabel =
+      configuredThink === "auto"
+        ? effectiveThink
+          ? `think auto→${effectiveThink}`
+          : "think auto"
+        : `think ${configuredThink}`;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
+    const modelLabel = isRunActive && servedModelLabel ? servedModelLabel : configuredModelLabel;
     const footerParts = [
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
-      think !== "off" ? `think ${think}` : null,
+      thinkLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,

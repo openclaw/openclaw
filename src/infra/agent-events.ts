@@ -1,4 +1,5 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import type { GeneratingMetadata } from "./generating-metadata.js";
 
 export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
 
@@ -15,6 +16,8 @@ export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
+  /** Metadata about thinking/reasoning levels and model selector for this run. */
+  generating?: GeneratingMetadata;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -39,6 +42,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.generating) {
+    existing.generating = context.generating;
   }
 }
 

@@ -173,6 +173,22 @@ describe("/model chat UX", () => {
     });
   });
 
+  it("resolves /model auto to AUTO_MODEL selection", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model auto",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "",
+      model: "auto",
+      isDefault: false,
+      isAuto: true,
+    });
+  });
+
   it("keeps cloudflare @cf model segments for exact selections", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model openai/@cf/openai/gpt-oss-20b",
@@ -267,6 +283,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
   });
 
+  it("persists /model auto as modelOverride=AUTO_MODEL and preserves lastNonAuto", async () => {
+    const sessionEntry = createSessionEntry({
+      modelOverride: "anthropic/claude-opus-4-5",
+      lastNonAutoModelProvider: "anthropic",
+      lastNonAutoModel: "claude-opus-4-5",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const directives = parseInlineDirectives("/model auto");
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text ?? "").toContain("Model set to auto");
+    expect(sessionEntry.modelOverride).toBe("auto");
+    expect(sessionEntry.lastNonAutoModelProvider).toBe("anthropic");
+    expect(sessionEntry.lastNonAutoModel).toBe("claude-opus-4-5");
+  });
+
   it("persists thinkingLevel=off (does not clear)", async () => {
     const directives = parseInlineDirectives("/think off");
     const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
@@ -282,5 +320,23 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("persists /think auto as configuredThink=auto", async () => {
+    const directives = parseInlineDirectives("/think auto");
+    const sessionEntry = createSessionEntry({ thinkingLevel: "low", configuredThink: "low" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text ?? "").not.toContain("failed");
+    expect(sessionEntry.configuredThink).toBe("auto");
+    expect(sessionEntry.thinkingLevel).toBe("auto");
+    expect(sessionStore["agent:main:dm:1"]?.configuredThink).toBe("auto");
   });
 });

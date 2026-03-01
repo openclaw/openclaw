@@ -3,6 +3,7 @@ import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import type { GeneratingMetadata } from "../infra/generating-metadata.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -323,6 +324,7 @@ export function createAgentEventHandler({
     seq: number,
     jobState: "done" | "error",
     error?: unknown,
+    generating?: GeneratingMetadata,
   ) => {
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
@@ -351,6 +353,7 @@ export function createAgentEventHandler({
                 timestamp: Date.now(),
               }
             : undefined,
+        ...(generating ? { generating } : {}),
       };
       broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
@@ -469,6 +472,7 @@ export function createAgentEventHandler({
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evt.data?.generating as GeneratingMetadata | undefined,
           );
         } else {
           emitChatFinal(
@@ -478,6 +482,7 @@ export function createAgentEventHandler({
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evt.data?.generating as GeneratingMetadata | undefined,
           );
         }
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {

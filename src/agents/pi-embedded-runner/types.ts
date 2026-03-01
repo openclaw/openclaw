@@ -5,6 +5,8 @@ export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
+  /** Effective thinking level used (may differ from requested after fallback). */
+  effectiveThinkingLevel?: string;
   compactionCount?: number;
   promptTokens?: number;
   usage?: {

@@ -40,6 +40,7 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
+import { hasLocalModels } from "./local-models.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
@@ -965,9 +966,14 @@ export async function resolveImplicitProviders(params: {
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
-  if (ollamaKey) {
+  const shouldEnableImplicitOllama = Boolean(ollamaKey) || (await hasLocalModels());
+  if (shouldEnableImplicitOllama) {
     const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
-    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+    providers.ollama = {
+      ...(await buildOllamaProvider(ollamaBaseUrl)),
+      // Local providers need a non-empty registry key marker even for local inference.
+      apiKey: ollamaKey || "ollama-local",
+    };
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).

@@ -20,13 +20,33 @@ title: "Thinking Levels"
   - `highest`, `max` map to `high`.
 - Provider notes:
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
+- When `xhigh` is requested but the model does not support it (e.g. GPT-4.1-mini), OpenClaw degrades to `high` and metadata reflects the effective level.
 
 ## Resolution order
 
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: low for reasoning-capable models; off otherwise.
+3. Auto-reasoning selector (when `agents.defaults.autoReasoning.enabled` is true): picks level per message using capability-aware heuristics.
+4. Global default (`agents.defaults.thinkingDefault` in config).
+5. Fallback: low for reasoning-capable models; off otherwise.
+
+## Auto-reasoning
+
+When `agents.defaults.autoReasoning.enabled` is true and no inline or session directive sets the level, the selector chooses a thinking level per message using:
+
+- Capability-aware available levels from the provider/model
+- Deterministic heuristic (message length, complexity hints) — picks low/medium/high by complexity class
+- Config default as fallback
+
+If the selector times out (when an LLM-based selector is used), a heuristic fallback runs and metadata uses `source=auto-fallback`. Generating metadata includes the chosen level on run start and in the final payload.
+
+Config: `agents.defaults.autoReasoning` with `enabled`, `selectorTimeoutMs`, `selectorMaxOutputTokens`, `emitGeneratingField`. Per-agent override: `agents.list[].autoReasoning`.
+
+Troubleshooting (auto-reasoning not activating):
+
+1. Ensure `agents.defaults.autoReasoning.enabled: true`.
+2. Ensure session thinking is inherit/unset (not pinned to `xhigh`/`high`/etc). You can set this with `/thinking auto` or `/thinking level auto`.
+3. Ensure runtime is linked to your updated source build (run the runtime sync flow).
 
 ## Setting a session default
 

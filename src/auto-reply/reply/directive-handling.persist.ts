@@ -17,6 +17,7 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { AUTO_MODEL, isAutoModel } from "../../shared/model-constants.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
@@ -139,48 +140,68 @@ export async function persistInlineDirectives(params: {
         ? params.effectiveModelDirective
         : undefined;
     if (modelDirective) {
-      const resolved = resolveModelRefFromString({
-        raw: modelDirective,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved) {
-        const key = modelKey(resolved.ref.provider, resolved.ref.model);
-        if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
-          let profileOverride: string | undefined;
-          if (directives.rawModelProfile) {
-            const profileResolved = resolveProfileOverride({
-              rawProfile: directives.rawModelProfile,
-              provider: resolved.ref.provider,
-              cfg,
-              agentDir,
-            });
-            if (profileResolved.error) {
-              throw new Error(profileResolved.error);
-            }
-            profileOverride = profileResolved.profileId;
-          }
-          const isDefault =
-            resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
-          const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
-            entry: sessionEntry,
-            selection: {
-              provider: resolved.ref.provider,
-              model: resolved.ref.model,
-              isDefault,
-            },
-            profileOverride,
+      if (isAutoModel(modelDirective)) {
+        const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+          entry: sessionEntry,
+          selection: {
+            provider: "",
+            model: AUTO_MODEL,
+            isAuto: true,
+          },
+        });
+        provider = defaultProvider;
+        model = defaultModel;
+        if (initialModelLabel !== "auto") {
+          enqueueSystemEvent(formatModelSwitchEvent("auto"), {
+            sessionKey,
+            contextKey: "model:auto",
           });
-          provider = resolved.ref.provider;
-          model = resolved.ref.model;
-          const nextLabel = `${provider}/${model}`;
-          if (nextLabel !== initialModelLabel) {
-            enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
+        }
+        updated = updated || modelUpdated;
+      } else {
+        const resolved = resolveModelRefFromString({
+          raw: modelDirective,
+          defaultProvider,
+          aliasIndex,
+        });
+        if (resolved) {
+          const key = modelKey(resolved.ref.provider, resolved.ref.model);
+          if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+            let profileOverride: string | undefined;
+            if (directives.rawModelProfile) {
+              const profileResolved = resolveProfileOverride({
+                rawProfile: directives.rawModelProfile,
+                provider: resolved.ref.provider,
+                cfg,
+                agentDir,
+              });
+              if (profileResolved.error) {
+                throw new Error(profileResolved.error);
+              }
+              profileOverride = profileResolved.profileId;
+            }
+            const isDefault =
+              resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel;
+            const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+              entry: sessionEntry,
+              selection: {
+                provider: resolved.ref.provider,
+                model: resolved.ref.model,
+                isDefault,
+              },
+              profileOverride,
             });
+            provider = resolved.ref.provider;
+            model = resolved.ref.model;
+            const nextLabel = `${provider}/${model}`;
+            if (nextLabel !== initialModelLabel) {
+              enqueueSystemEvent(formatModelSwitchEvent(nextLabel, resolved.alias), {
+                sessionKey,
+                contextKey: `model:${nextLabel}`,
+              });
+            }
+            updated = updated || modelUpdated;
           }
-          updated = updated || modelUpdated;
         }
       }
     }

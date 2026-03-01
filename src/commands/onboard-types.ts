@@ -11,6 +11,7 @@ export type AuthChoice =
   | "chutes"
   | "vllm"
   | "openai-codex"
+  | "auto-model"
   | "openai-api-key"
   | "openrouter-api-key"
   | "kilocode-api-key"
@@ -52,6 +53,7 @@ export type AuthChoice =
   | "custom-api-key"
   | "skip";
 export type AuthChoiceGroupId =
+  | "auto"
   | "openai"
   | "anthropic"
   | "chutes"

@@ -142,6 +142,7 @@ describe("promptModelAllowlist", () => {
 
     const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
+      "auto",
       "anthropic/claude-opus-4-5",
     ]);
   });

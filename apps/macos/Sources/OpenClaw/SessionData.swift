@@ -18,6 +18,10 @@ struct GatewaySessionEntryRecord: Codable {
     let systemSent: Bool?
     let abortedLastRun: Bool?
     let thinkingLevel: String?
+    let configuredThink: String?
+    let effectiveThink: String?
+    let lastEffectiveThink: String?
+    let currentRunId: String?
     let verboseLevel: String?
     let inputTokens: Int?
     let outputTokens: Int?
@@ -78,6 +82,10 @@ struct SessionRow: Identifiable {
     let updatedAt: Date?
     let sessionId: String?
     let thinkingLevel: String?
+    let configuredThink: String?
+    let effectiveThink: String?
+    let lastEffectiveThink: String?
+    let currentRunId: String?
     let verboseLevel: String?
     let systemSent: Bool
     let abortedLastRun: Bool
@@ -94,7 +102,20 @@ struct SessionRow: Identifiable {
 
     var flagLabels: [String] {
         var flags: [String] = []
-        if let thinkingLevel { flags.append("think \(thinkingLevel)") }
+        if let configuredThink {
+            if configuredThink == "auto" {
+                let effective = self.currentRunId.isNilOrEmpty ? self.lastEffectiveThink : self.effectiveThink
+                if let effective, !effective.isEmpty {
+                    flags.append("think auto→\(effective)")
+                } else {
+                    flags.append("think auto")
+                }
+            } else {
+                flags.append("think \(configuredThink)")
+            }
+        } else if let thinkingLevel {
+            flags.append("think \(thinkingLevel)")
+        }
         if let verboseLevel { flags.append("verbose \(verboseLevel)") }
         if self.systemSent { flags.append("system sent") }
         if self.abortedLastRun { flags.append("aborted") }
@@ -153,6 +174,10 @@ extension SessionRow {
                 updatedAt: Date().addingTimeInterval(-90),
                 sessionId: "sess-direct-1234",
                 thinkingLevel: "low",
+                configuredThink: "low",
+                effectiveThink: "low",
+                lastEffectiveThink: "low",
+                currentRunId: nil,
                 verboseLevel: "info",
                 systemSent: false,
                 abortedLastRun: false,
@@ -170,6 +195,10 @@ extension SessionRow {
                 updatedAt: Date().addingTimeInterval(-3600),
                 sessionId: "sess-group-4321",
                 thinkingLevel: "medium",
+                configuredThink: "auto",
+                effectiveThink: nil,
+                lastEffectiveThink: "medium",
+                currentRunId: nil,
                 verboseLevel: nil,
                 systemSent: true,
                 abortedLastRun: true,
@@ -187,6 +216,10 @@ extension SessionRow {
                 updatedAt: Date().addingTimeInterval(-86400),
                 sessionId: nil,
                 thinkingLevel: nil,
+                configuredThink: nil,
+                effectiveThink: nil,
+                lastEffectiveThink: nil,
+                currentRunId: nil,
                 verboseLevel: nil,
                 systemSent: false,
                 abortedLastRun: false,
@@ -310,6 +343,10 @@ enum SessionLoader {
                 updatedAt: updated,
                 sessionId: entry.sessionId,
                 thinkingLevel: entry.thinkingLevel,
+                configuredThink: entry.configuredThink,
+                effectiveThink: entry.effectiveThink,
+                lastEffectiveThink: entry.lastEffectiveThink,
+                currentRunId: entry.currentRunId,
                 verboseLevel: entry.verboseLevel,
                 systemSent: entry.systemSent ?? false,
                 abortedLastRun: entry.abortedLastRun ?? false,

@@ -115,6 +115,26 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("shows configured auto think and effective think level", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        thinkingLevel: "auto",
+        configuredThink: "auto",
+        effectiveThink: "medium",
+        currentRunId: "run-123",
+        lastEffectiveThink: "medium",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+    const result = await tool.execute("call-effective-think", {});
+    const details = result.details as { ok?: boolean; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.statusText).toContain("Think: auto→medium");
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },

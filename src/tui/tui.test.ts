@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  isBusyActivityStatus,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
@@ -87,6 +88,20 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
     expect(state.pairingHint).toBeUndefined();
+  });
+});
+
+describe("isBusyActivityStatus", () => {
+  it("treats dynamic running/routing labels as busy", () => {
+    expect(isBusyActivityStatus("running (think auto→medium)")).toBe(true);
+    expect(isBusyActivityStatus("routing (think auto→low)")).toBe(true);
+    expect(isBusyActivityStatus("generating output")).toBe(true);
+    expect(isBusyActivityStatus("running(think auto→high)")).toBe(true);
+  });
+
+  it("does not treat idle/error as busy", () => {
+    expect(isBusyActivityStatus("idle")).toBe(false);
+    expect(isBusyActivityStatus("error")).toBe(false);
   });
 });
 

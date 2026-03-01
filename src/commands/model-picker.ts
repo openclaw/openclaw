@@ -11,6 +11,7 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { AUTO_MODEL } from "../shared/model-constants.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
@@ -20,6 +21,7 @@ const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const VLLM_VALUE = "__vllm__";
 const PROVIDER_FILTER_THRESHOLD = 30;
+const AUTO_MODEL_PICK_VALUE = "__auto_model__";
 
 // Models that are internal routing features and should not be shown in selection lists.
 // These may be valid as defaults (e.g., set automatically during auth flow) but are not
@@ -283,6 +285,11 @@ export async function promptDefaultModel(
         configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
     });
   }
+  options.push({
+    value: AUTO_MODEL_PICK_VALUE,
+    label: "auto",
+    hint: "Auto-router (recommended): choose model per prompt",
+  });
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: "Enter model manually" });
   }
@@ -329,6 +336,9 @@ export async function promptDefaultModel(
 
   if (selection === KEEP_VALUE) {
     return {};
+  }
+  if (selection === AUTO_MODEL_PICK_VALUE) {
+    return { model: AUTO_MODEL };
   }
   if (selection === MANUAL_VALUE) {
     return promptManualModel({
@@ -409,6 +419,11 @@ export async function promptModelAllowlist(params: {
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
 
   const options: WizardSelectOption[] = [];
+  options.push({
+    value: AUTO_MODEL,
+    label: "auto",
+    hint: "Auto-router (recommended): choose model per prompt",
+  });
   const seen = new Set<string>();
 
   const filteredCatalog = allowedKeySet
