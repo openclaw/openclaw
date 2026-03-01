@@ -1,128 +1,63 @@
 import { describe, expect, it } from "vitest";
-import { PromptStreamProjector } from "./events.js";
+import { parsePromptEventLine } from "./events.js";
 
-function jsonLine(payload: unknown): string {
-  return JSON.stringify(payload);
-}
-
-function beginPrompt(projector: PromptStreamProjector, id = "req-1") {
-  projector.ingestLine(
-    jsonLine({
+describe("parsePromptEventLine", () => {
+  it("parses raw ACP session/update agent_message_chunk lines", () => {
+    const line = JSON.stringify({
       jsonrpc: "2.0",
-      id,
-      method: "session/prompt",
+      method: "session/update",
       params: {
-        sessionId: "session-1",
-        prompt: [{ type: "text", text: "hello" }],
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "hello" },
+        },
       },
-    }),
-  );
-}
-
-describe("PromptStreamProjector", () => {
-  it("maps agent message chunks to output deltas", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "hello world",
-            },
-          },
-        },
-      }),
-    );
-
-    expect(event).toEqual({
+    });
+    expect(parsePromptEventLine(line)).toEqual({
       type: "text_delta",
-      text: "hello world",
+      text: "hello",
       stream: "output",
       tag: "agent_message_chunk",
     });
   });
 
-  it("preserves leading spaces in streamed output chunks", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "  indented",
-            },
-          },
+  it("parses usage_update with stable metadata", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "usage_update",
+          used: 12,
+          size: 500,
         },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "text_delta",
-      text: "  indented",
-      stream: "output",
-      tag: "agent_message_chunk",
+      },
+    });
+    expect(parsePromptEventLine(line)).toEqual({
+      type: "status",
+      text: "usage updated: 12/500",
+      tag: "usage_update",
+      used: 12,
+      size: 500,
     });
   });
 
-  it("maps agent thought chunks to thought deltas", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_thought_chunk",
-            content: {
-              type: "text",
-              text: "thinking",
-            },
-          },
+  it("parses tool_call_update without using call ids as primary fallback label", () => {
+    const line = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s1",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call_ABC123",
+          status: "in_progress",
         },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "text_delta",
-      text: "thinking",
-      stream: "thought",
-      tag: "agent_thought_chunk",
+      },
     });
-  });
-
-  it("maps tool call updates with metadata and stable fallback title", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "tool_call_update",
-            toolCallId: "call_ABC123",
-            status: "in_progress",
-          },
-        },
-      }),
-    );
-
-    expect(event).toEqual({
+    expect(parsePromptEventLine(line)).toEqual({
       type: "tool_call",
       text: "tool call (in_progress)",
       tag: "tool_call_update",
@@ -132,159 +67,15 @@ describe("PromptStreamProjector", () => {
     });
   });
 
-  it("maps usage updates with numeric metadata", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "usage_update",
-            used: 12,
-            size: 500,
-          },
-        },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "status",
-      text: "usage updated: 12/500",
-      tag: "usage_update",
-      used: 12,
-      size: 500,
-    });
-  });
-
-  it("ignores replayed updates before current prompt starts", () => {
-    const projector = new PromptStreamProjector();
-    const replayed = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "old turn",
-            },
-          },
-        },
-      }),
-    );
-    beginPrompt(projector, "req-2");
-    const current = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: {
-              type: "text",
-              text: "new turn",
-            },
-          },
-        },
-      }),
-    );
-
-    expect(replayed).toBeNull();
-    expect(current).toEqual({
+  it("keeps compatibility with simplified text/done lines", () => {
+    expect(parsePromptEventLine(JSON.stringify({ type: "text", content: "alpha" }))).toEqual({
       type: "text_delta",
-      text: "new turn",
+      text: "alpha",
       stream: "output",
-      tag: "agent_message_chunk",
     });
-  });
-
-  it("maps prompt response stop reasons to done events", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: "req-1",
-        result: {
-          stopReason: "end_turn",
-        },
-      }),
-    );
-
-    expect(event).toEqual({
+    expect(parsePromptEventLine(JSON.stringify({ type: "done", stopReason: "end_turn" }))).toEqual({
       type: "done",
       stopReason: "end_turn",
     });
-  });
-
-  it("maps json-rpc errors to runtime errors", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector);
-    const event = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: "req-1",
-        error: {
-          code: -32000,
-          message: "adapter failed",
-        },
-      }),
-    );
-
-    expect(event).toEqual({
-      type: "error",
-      message: "adapter failed",
-      code: "-32000",
-    });
-  });
-
-  it("ignores non-prompt response errors", () => {
-    const projector = new PromptStreamProjector();
-    beginPrompt(projector, "3");
-    const loadError = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: 1,
-        error: {
-          code: -32002,
-          message: "Resource not found",
-        },
-      }),
-    );
-    const promptDone = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        id: 3,
-        result: {
-          stopReason: "end_turn",
-        },
-      }),
-    );
-    const trailingReplay = projector.ingestLine(
-      jsonLine({
-        jsonrpc: "2.0",
-        method: "session/update",
-        params: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "should be ignored" },
-          },
-        },
-      }),
-    );
-
-    expect(loadError).toBeNull();
-    expect(promptDone).toEqual({
-      type: "done",
-      stopReason: "end_turn",
-    });
-    expect(trailingReplay).toBeNull();
   });
 });
