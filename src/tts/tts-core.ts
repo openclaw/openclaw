@@ -423,16 +423,25 @@ export function parseTtsDirectives(
   });
 
   // Resolve deferred generic model now that provider= is known.
+  // Skip if a provider-specific model key (openai_model, elevenlabs_model,
+  // minimax_model) already set the model for the target provider — the
+  // specific key takes precedence over the generic one.
   if (deferredGenericModel) {
     if (overrides.provider === "openai") {
-      overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+      if (!overrides.openai?.model) {
+        overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+      }
     } else if (overrides.provider === "elevenlabs") {
-      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: deferredGenericModel };
+      if (!overrides.elevenlabs?.modelId) {
+        overrides.elevenlabs = { ...overrides.elevenlabs, modelId: deferredGenericModel };
+      }
     } else if (overrides.provider === "minimax") {
-      if (isValidMinimaxModel(deferredGenericModel)) {
-        overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
-      } else {
-        warnings.push(`invalid MiniMax model "${deferredGenericModel}"`);
+      if (!overrides.minimax?.model) {
+        if (isValidMinimaxModel(deferredGenericModel)) {
+          overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
+        } else {
+          warnings.push(`invalid MiniMax model "${deferredGenericModel}"`);
+        }
       }
     } else {
       // No explicit provider override — infer from model name.
@@ -440,10 +449,14 @@ export function parseTtsDirectives(
       // isValidOpenAIModel accepts any string when a custom endpoint is
       // configured, which would swallow MiniMax model names.
       if (isValidMinimaxModel(deferredGenericModel)) {
-        overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
+        if (!overrides.minimax?.model) {
+          overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
+        }
       } else if (isValidOpenAIModel(deferredGenericModel)) {
-        overrides.openai = { ...overrides.openai, model: deferredGenericModel };
-      } else {
+        if (!overrides.openai?.model) {
+          overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+        }
+      } else if (!overrides.elevenlabs?.modelId) {
         overrides.elevenlabs = { ...overrides.elevenlabs, modelId: deferredGenericModel };
       }
     }
