@@ -343,11 +343,11 @@ describe("cron controller", () => {
       deliveryMode: "webhook",
       deliveryTo: "ftp://bad",
     });
-    expect(errors.name).toBeDefined();
-    expect(errors.cronExpr).toBeDefined();
-    expect(errors.payloadText).toBeDefined();
-    expect(errors.timeoutSeconds).toBe("If set, timeout must be greater than 0 seconds.");
-    expect(errors.deliveryTo).toBeDefined();
+    expect(errors.name).toBe("cron.errors.nameRequired");
+    expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
+    expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
+    expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+    expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
   it("blocks add/update submit when validation errors exist", async () => {
