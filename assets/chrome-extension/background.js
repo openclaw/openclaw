@@ -896,7 +896,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // MV3 keepalive via chrome.alarms — more reliable than setInterval across
 // service worker restarts. Checks relay health and refreshes badges.
-chrome.alarms.create('relay-keepalive', { periodInMinutes: 1 / 3 })
+chrome.alarms.create('relay-keepalive', { periodInMinutes: 0.3 })
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'relay-keepalive') return
