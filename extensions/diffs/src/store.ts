@@ -7,6 +7,7 @@ import type { DiffArtifactMeta } from "./types.js";
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const VIEWER_PREFIX = "/plugins/diffs/view";
 
 type CreateArtifactParams = {
@@ -20,15 +21,21 @@ type CreateArtifactParams = {
 export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly logger?: PluginLogger;
+  private readonly cleanupIntervalMs: number;
+  private cleanupInFlight: Promise<void> | null = null;
+  private nextCleanupAt = 0;
 
-  constructor(params: { rootDir: string; logger?: PluginLogger }) {
+  constructor(params: { rootDir: string; logger?: PluginLogger; cleanupIntervalMs?: number }) {
     this.rootDir = params.rootDir;
     this.logger = params.logger;
+    this.cleanupIntervalMs =
+      params.cleanupIntervalMs === undefined
+        ? DEFAULT_CLEANUP_INTERVAL_MS
+        : Math.max(0, Math.floor(params.cleanupIntervalMs));
   }
 
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
     await this.ensureRoot();
-    await this.cleanupExpired();
 
     const id = crypto.randomBytes(10).toString("hex");
     const token = crypto.randomBytes(24).toString("hex");
@@ -52,6 +59,7 @@ export class DiffArtifactStore {
     await fs.mkdir(artifactDir, { recursive: true });
     await fs.writeFile(htmlPath, params.html, "utf8");
     await this.writeMeta(meta);
+    this.maybeCleanupExpired();
     return meta;
   }
 
@@ -95,6 +103,11 @@ export class DiffArtifactStore {
     return path.join(this.artifactDir(id), "preview.png");
   }
 
+  allocateStandaloneImagePath(): string {
+    const id = crypto.randomBytes(10).toString("hex");
+    return path.join(this.artifactDir(id), "preview.png");
+  }
+
   async cleanupExpired(): Promise<void> {
     await this.ensureRoot();
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
@@ -127,6 +140,27 @@ export class DiffArtifactStore {
 
   private async ensureRoot(): Promise<void> {
     await fs.mkdir(this.rootDir, { recursive: true });
+  }
+
+  private maybeCleanupExpired(): void {
+    const now = Date.now();
+    if (this.cleanupInFlight || now < this.nextCleanupAt) {
+      return;
+    }
+
+    this.nextCleanupAt = now + this.cleanupIntervalMs;
+    const cleanupPromise = this.cleanupExpired()
+      .catch((error) => {
+        this.nextCleanupAt = 0;
+        this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
+      })
+      .finally(() => {
+        if (this.cleanupInFlight === cleanupPromise) {
+          this.cleanupInFlight = null;
+        }
+      });
+
+    this.cleanupInFlight = cleanupPromise;
   }
 
   private artifactDir(id: string): string {
