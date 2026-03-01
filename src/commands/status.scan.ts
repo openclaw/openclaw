@@ -26,6 +26,22 @@ type MemoryPluginStatus = {
   reason?: string;
 };
 
+type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+function deferResult<T>(promise: Promise<T>): Promise<DeferredResult<T>> {
+  return promise.then(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error }),
+  );
+}
+
+function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
 function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
@@ -202,13 +218,15 @@ export async function scanStatus(
               runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
             ).catch(() => null);
       const updateTimeoutMs = opts.all ? 6500 : 2500;
-      const updatePromise = getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-      });
-      const agentStatusPromise = getAgentLocalStatuses();
-      const summaryPromise = getStatusSummary();
+      const updatePromise = deferResult(
+        getUpdateCheckResult({
+          timeoutMs: updateTimeoutMs,
+          fetchGit: true,
+          includeRegistry: true,
+        }),
+      );
+      const agentStatusPromise = deferResult(getAgentLocalStatuses());
+      const summaryPromise = deferResult(getStatusSummary());
       progress.tick();
 
       progress.setLabel("Checking Tailscale…");
@@ -220,11 +238,11 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Checking for updates…");
-      const update = await updatePromise;
+      const update = unwrapDeferredResult(await updatePromise);
       progress.tick();
 
       progress.setLabel("Resolving agents…");
-      const agentStatus = await agentStatusPromise;
+      const agentStatus = unwrapDeferredResult(await agentStatusPromise);
       progress.tick();
 
       progress.setLabel("Probing gateway…");
@@ -293,7 +311,7 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Reading sessions…");
-      const summary = await summaryPromise;
+      const summary = unwrapDeferredResult(await summaryPromise);
       progress.tick();
 
       progress.setLabel("Rendering…");
