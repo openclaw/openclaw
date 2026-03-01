@@ -236,6 +236,7 @@ export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export {
   runPluginCommandWithTimeout,
   type PluginCommandRunOptions,

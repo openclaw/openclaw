@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_WEB_INBOX_CONFIG,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
@@ -13,6 +14,12 @@ const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
 const DEFAULT_MESSAGES_CFG = {
   messagePrefix: undefined,
   responsePrefix: undefined,
+  channels: {
+    defaults: {
+      // Use branded mode for tests that expect pairing messages
+      unpairedResponse: "branded",
+    },
+  },
 } as const;
 const TIMESTAMP_OFF_MESSAGES_CFG = {
   ...DEFAULT_MESSAGES_CFG,
@@ -59,7 +66,14 @@ async function startWebInboxMonitor(params: {
   sendReadReceipts?: boolean;
 }) {
   if (params.config) {
-    mockLoadConfig.mockReturnValue(params.config);
+    // Merge with defaults to preserve default settings like unpairedResponse
+    const defaultChannels = DEFAULT_WEB_INBOX_CONFIG.channels;
+    const testChannels = params.config.channels as Record<string, unknown> | undefined;
+    mockLoadConfig.mockReturnValue({
+      ...DEFAULT_WEB_INBOX_CONFIG,
+      ...params.config,
+      channels: testChannels ? { ...defaultChannels, ...testChannels } : defaultChannels,
+    });
   }
   const onMessage = vi.fn();
   const base = {

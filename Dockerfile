@@ -46,6 +46,11 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
 
 USER node
 COPY --chown=node:node . .
+# Fix permissions on extensions and config directories to prevent security warnings.
+# Docker COPY preserves original permissions, which may be too permissive (e.g., 777 on directories).
+# OpenClaw blocks plugins from world-writable paths for security.
+RUN find /app/extensions /app/.agent /app/.agents -type d -exec chmod 755 {} \; 2>/dev/null || true && \
+    find /app/extensions /app/.agent /app/.agents -type f -exec chmod 644 {} \; 2>/dev/null || true
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1

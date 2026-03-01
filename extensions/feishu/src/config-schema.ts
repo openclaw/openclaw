@@ -213,6 +213,8 @@ export const FeishuConfigSchema = z
     resolveSenderNames: z.boolean().optional().default(true),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
+    // Default account ID for outbound messages without explicit accountId
+    defaultAccount: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
