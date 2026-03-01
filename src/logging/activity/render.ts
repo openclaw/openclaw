@@ -54,6 +54,9 @@ function renderStatus(activity: ActivityMeta): string {
   if (activity.status === "ok") {
     return "ok";
   }
+  if (activity.status === "warn") {
+    return "warn";
+  }
   if (activity.status === "blocked") {
     return "blocked";
   }

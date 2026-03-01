@@ -107,7 +107,7 @@ function drainLane(lane: string) {
               activity: buildActivityMeta({
                 kind: "queue",
                 summary: `lane ${lane} wait exceeded`,
-                status: "queued",
+                status: "warn",
                 durationMs: waitedMs,
                 extra: { lane, queueAhead: state.queue.length },
               }),

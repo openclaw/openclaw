@@ -11,6 +11,7 @@ export type ActivityKind =
 export type ActivityStatus =
   | "start"
   | "ok"
+  | "warn"
   | "error"
   | "skip"
   | "blocked"

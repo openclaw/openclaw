@@ -59,6 +59,19 @@ describe("activity rendering", () => {
     expect(normal).toContain("…");
     expect(full).toContain(`preview="${preview}"`);
   });
+
+  it("renders warn activity status", () => {
+    const rendered = renderActivityLine(
+      {
+        kind: "queue",
+        summary: "lane main wait exceeded",
+        status: "warn",
+      },
+      { mode: "normal" },
+    );
+
+    expect(rendered).toContain("status=warn");
+  });
 });
 
 describe("activity heuristics", () => {

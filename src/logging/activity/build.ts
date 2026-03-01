@@ -17,6 +17,7 @@ const ACTIVITY_KINDS = [
 const ACTIVITY_STATUS = [
   "start",
   "ok",
+  "warn",
   "error",
   "skip",
   "blocked",

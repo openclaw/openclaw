@@ -132,6 +132,15 @@ describe("command queue", () => {
       expect(waited).not.toBeNull();
       expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
+      expect(diagnosticMocks.diag.warn).toHaveBeenCalledWith(
+        expect.stringContaining("lane wait exceeded"),
+        expect.objectContaining({
+          activity: expect.objectContaining({
+            kind: "queue",
+            status: "warn",
+          }),
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }
