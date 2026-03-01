@@ -94,6 +94,45 @@
   font-size: 13px;
 }
 
+.sidebar-markdown .code-block--diff {
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  padding: 0;
+}
+
+.sidebar-markdown .code-block--diff code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sidebar-markdown .code-block--diff .diff-line {
+  display: block;
+  margin: 0;
+  padding: 2px 10px;
+  white-space: pre-wrap;
+}
+
+.sidebar-markdown .code-block--diff .diff-line--meta {
+  color: var(--muted);
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.sidebar-markdown .code-block--diff .diff-line--hunk {
+  color: var(--accent-2);
+  background: var(--accent-2-subtle);
+}
+
+.sidebar-markdown .code-block--diff .diff-line--add {
+  color: var(--ok);
+  background: var(--ok-subtle);
+}
+
+.sidebar-markdown .code-block--diff .diff-line--del {
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+
 /* Mobile: Full-screen modal */
 @media (max-width: 768px) {
   .chat-split-container--open {

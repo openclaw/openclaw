@@ -6,6 +6,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { buildToolCardOutputLookup, extractToolCards } from "../chat/tool-cards.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -36,6 +37,7 @@ export type ChatProps = {
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
   showThinking: boolean;
+  showInlineToolFlow: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -237,13 +239,14 @@ function renderAttachmentPreview(props: ChatProps) {
   `;
 }
 
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const showReasoning = (props.showThinking || props.showInlineToolFlow) && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
@@ -258,6 +261,7 @@ export function renderChat(props: ChatProps) {
 
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const toolOutputLookup = buildToolCardOutputLookup(props.toolMessages);
   const thread = html`
     <div
       class="chat-thread"
@@ -305,6 +309,7 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              toolOutputLookup,
             });
           }
 
@@ -526,6 +531,8 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const showInlineToolFlow = props.showInlineToolFlow;
+  const historyToolCallIds = showInlineToolFlow ? collectToolCallIds(history) : new Set<string>();
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -556,7 +563,8 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    const role = normalized.role.toLowerCase();
+    if (!showInlineToolFlow && (role === "toolresult" || role === "tool_result")) {
       continue;
     }
 
@@ -566,8 +574,16 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  if (props.showThinking) {
-    for (let i = 0; i < tools.length; i++) {
+
+  if (props.showInlineToolFlow) {
+    for (let i = 0; i < tools.length; i += 1) {
+      const liveIds = collectToolCallIds([tools[i]]);
+      const duplicateWithHistory = [...liveIds].some((toolCallId) =>
+        historyToolCallIds.has(toolCallId),
+      );
+      if (duplicateWithHistory) {
+        continue;
+      }
       items.push({
         kind: "message",
         key: messageKey(tools[i], i + history.length),
@@ -591,6 +607,32 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   }
 
   return groupMessages(items);
+}
+
+function collectToolCallIds(messages: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    const record = message as Record<string, unknown>;
+    const directToolCallId =
+      typeof record.toolCallId === "string"
+        ? record.toolCallId
+        : typeof record.tool_call_id === "string"
+          ? record.tool_call_id
+          : "";
+    const normalizedDirect = directToolCallId.trim();
+    if (normalizedDirect) {
+      ids.add(normalizedDirect);
+    }
+    const cards = extractToolCards(message);
+    for (const card of cards) {
+      const toolCallId = typeof card.toolCallId === "string" ? card.toolCallId.trim() : "";
+      if (!toolCallId) {
+        continue;
+      }
+      ids.add(toolCallId);
+    }
+  }
+  return ids;
 }
 
 function messageKey(message: unknown, index: number): string {

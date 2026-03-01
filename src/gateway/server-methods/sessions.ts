@@ -78,13 +78,25 @@ function resolveGatewaySessionTargetFromKey(key: string) {
   return { cfg, target, storePath: target.storePath };
 }
 
+function isWebchatClient(params: {
+  client: GatewayClient | null;
+  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
+}): boolean {
+  return Boolean(params.client?.connect && params.isWebchatConnect(params.client.connect));
+}
+
+function isLabelOnlyPatch(params: Record<string, unknown>): boolean {
+  const patchKeys = Object.keys(params).filter((key) => key !== "key");
+  return patchKeys.length === 1 && patchKeys[0] === "label";
+}
+
 function rejectWebchatSessionMutation(params: {
   action: "patch" | "delete";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;
 }): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+  if (!isWebchatClient({ client: params.client, isWebchatConnect: params.isWebchatConnect })) {
     return false;
   }
   if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
@@ -381,11 +393,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = requireSessionKey(p.key, respond);
-    if (!key) {
+    if (
+      isWebchatClient({ client, isWebchatConnect }) &&
+      !isLabelOnlyPatch(p as Record<string, unknown>)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "webchat clients can only patch session labels; use chat.send for session-scoped updates",
+        ),
+      );
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
       return;
     }
 

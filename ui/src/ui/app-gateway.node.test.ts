@@ -294,4 +294,148 @@ describe("connectGateway", () => {
 
     expect(host.chatToolMessages).toHaveLength(1);
   });
+
+  it("hydrates read tool output from final assistant message when tool result is empty", () => {
+    const host = createHost() as unknown as {
+      chatRunId: string | null;
+      chatToolMessages: Array<Record<string, unknown>>;
+    };
+    host.chatRunId = "run-1";
+
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "read-1",
+          name: "read",
+          phase: "start",
+          args: { path: "C:/mylog.log" },
+        },
+      },
+    });
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 2,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "read-1",
+          name: "read",
+          phase: "result",
+        },
+      },
+    });
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "读取到了，内容如下：\n```txt\n[InstallShield Silent]\nVersion=v7.00\n```",
+            },
+          ],
+        },
+      },
+    });
+
+    const toolMessage = host.chatToolMessages[0] as Record<string, unknown> | undefined;
+    const content = Array.isArray(toolMessage?.content)
+      ? (toolMessage?.content as Array<Record<string, unknown>>)
+      : [];
+    const toolResult = content.find((item) => item.type === "toolresult");
+    expect(typeof toolResult?.text).toBe("string");
+    expect(String(toolResult?.text)).toContain("[InstallShield Silent]");
+    expect(String(toolResult?.text)).toContain("Version=v7.00");
+  });
+
+  it("hydrates read output from latest assistant message fallback when final payload has no message", () => {
+    const host = createHost() as unknown as {
+      chatRunId: string | null;
+      chatMessages: unknown[];
+      chatToolMessages: Array<Record<string, unknown>>;
+    };
+    host.chatRunId = "run-1";
+    host.chatMessages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "已用 read 读取到 C:/RHDSetup.log。\n关键信息：ResultCode=0",
+          },
+        ],
+      },
+    ];
+
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "read-1",
+          name: "read",
+          phase: "start",
+          args: { path: "C:/RHDSetup.log" },
+        },
+      },
+    });
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 2,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "read-1",
+          name: "read",
+          phase: "result",
+        },
+      },
+    });
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "other-run",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    const toolMessage = host.chatToolMessages[0] as Record<string, unknown> | undefined;
+    const content = Array.isArray(toolMessage?.content)
+      ? (toolMessage?.content as Array<Record<string, unknown>>)
+      : [];
+    const toolResult = content.find((item) => item.type === "toolresult");
+    expect(typeof toolResult?.text).toBe("string");
+    expect(String(toolResult?.text)).toContain("ResultCode=0");
+  });
 });

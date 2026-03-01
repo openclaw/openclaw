@@ -10,9 +10,14 @@ import {
   refreshActiveTab,
   setLastActiveSessionKey,
 } from "./app-settings.ts";
-import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import {
+  handleAgentEvent,
+  hydrateReadToolOutputFromFinalMessage,
+  resetToolStream,
+  type AgentEventPayload,
+} from "./app-tool-stream.ts";
+import { extractText } from "./chat/message-extract.ts";
 import type { OpenClawApp } from "./app.ts";
-import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -242,6 +247,10 @@ function handleTerminalChatEvent(
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     });
   }
+  // Keep chat history aligned with transcript updates after terminal events.
+  // Some runs persist tool/result cards near completion, so an explicit reload
+  // avoids requiring a manual refresh in Webchat.
+  void loadChatHistory(host as unknown as OpenClawApp);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -252,10 +261,42 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
-  handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
-    void loadChatHistory(host as unknown as OpenClawApp);
+  if (state === "final") {
+    const payloadText =
+      payload && Object.prototype.hasOwnProperty.call(payload, "message") && payload.message
+        ? extractText(payload.message)
+        : null;
+    const fallbackText = (() => {
+      const messages = (host as unknown as { chatMessages?: unknown[] }).chatMessages;
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return null;
+      }
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const candidate = messages[index] as Record<string, unknown> | undefined;
+        if (!candidate || typeof candidate !== "object") {
+          continue;
+        }
+        const role = typeof candidate.role === "string" ? candidate.role.toLowerCase() : "";
+        if (role !== "assistant") {
+          continue;
+        }
+        const text = extractText(candidate);
+        if (typeof text === "string" && text.trim()) {
+          return text;
+        }
+      }
+      return null;
+    })();
+    hydrateReadToolOutputFromFinalMessage(
+      host as unknown as Parameters<typeof hydrateReadToolOutputFromFinalMessage>[0],
+      {
+        runId: payload?.runId,
+        sessionKey: payload?.sessionKey ?? host.sessionKey,
+        text: payloadText ?? fallbackText ?? undefined,
+      },
+    );
   }
+  handleTerminalChatEvent(host, payload, state);
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {

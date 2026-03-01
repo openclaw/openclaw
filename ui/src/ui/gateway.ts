@@ -1,5 +1,6 @@
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
@@ -241,7 +242,7 @@ export class GatewayBrowserClient {
       role,
       scopes,
       device,
-      caps: [],
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       auth,
       userAgent: navigator.userAgent,
       locale: navigator.language,

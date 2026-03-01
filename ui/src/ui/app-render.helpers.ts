@@ -135,8 +135,10 @@ export function renderChatControls(state: AppViewState) {
     hideCron,
   );
   const disableThinkingToggle = state.onboarding;
+  const disableInlineToolFlowToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const inlineToolFlowActive = state.onboarding ? false : state.settings.chatShowInlineToolFlow;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   // Refresh icon
   const refreshIcon = html`
@@ -244,15 +246,40 @@ export function renderChatControls(state: AppViewState) {
           if (disableThinkingToggle) {
             return;
           }
+          const nextThinking = !state.settings.chatShowThinking;
           state.applySettings({
             ...state.settings,
-            chatShowThinking: !state.settings.chatShowThinking,
+            chatShowThinking: nextThinking,
+            chatShowInlineToolFlow: nextThinking ? false : state.settings.chatShowInlineToolFlow,
           });
         }}
         aria-pressed=${showThinking}
         title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
       >
         ${icons.brain}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${inlineToolFlowActive ? "active" : ""}"
+        ?disabled=${disableInlineToolFlowToggle}
+        @click=${() => {
+          if (disableInlineToolFlowToggle) {
+            return;
+          }
+          const nextInlineFlow = !state.settings.chatShowInlineToolFlow;
+          state.applySettings({
+            ...state.settings,
+            chatShowInlineToolFlow: nextInlineFlow,
+            chatShowThinking: nextInlineFlow ? false : state.settings.chatShowThinking,
+          });
+        }}
+        aria-pressed=${inlineToolFlowActive}
+        title=${
+          disableInlineToolFlowToggle
+            ? t("chat.onboardingDisabled")
+            : t("chat.toolFlowToggle")
+        }
+      >
+        ${icons.fileCode}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
