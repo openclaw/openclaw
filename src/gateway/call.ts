@@ -67,6 +67,7 @@ export type GatewayConnectionDetails = {
   bindDetail?: string;
   remoteFallbackNote?: string;
   message: string;
+  bindMode?: import("../config/config.js").GatewayBindMode;
 };
 
 export type ExplicitGatewayAuth = {
@@ -143,7 +144,7 @@ export function buildGatewayConnectionDetails(
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  if (!isSecureWebSocketUrl(url, bindMode)) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
@@ -176,6 +177,7 @@ export function buildGatewayConnectionDetails(
     bindDetail,
     remoteFallbackNote,
     message,
+    bindMode,
   };
 }
 
@@ -333,6 +335,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       token,
       password,
       tlsFingerprint,
+      bindMode: params.connectionDetails.bindMode,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: opts.clientDisplayName,
