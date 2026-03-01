@@ -617,6 +617,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.ackReactionScope": "Ack Reaction Scope",
   "messages.removeAckAfterReply": "Remove Ack Reaction After Reply",
   "messages.statusReactions": "Status Reactions",
+  "messages.toolActivityStatus": "Tool Activity Status",
   "messages.statusReactions.enabled": "Enable Status Reactions",
   "messages.statusReactions.emojis": "Status Reaction Emojis",
   "messages.statusReactions.timing": "Status Reaction Timing",

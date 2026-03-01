@@ -13,6 +13,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import {
+  createToolActivityStatusController,
+  type ToolActivityLevel,
+} from "../channels/tool-activity-status.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -446,6 +450,54 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
+  // Tool activity status: editable message showing current tool execution.
+  const toolActivityLevel: ToolActivityLevel = cfg.messages?.toolActivityStatus ?? "minimal";
+  const toolActivityController =
+    toolActivityLevel !== "off"
+      ? createToolActivityStatusController({
+          adapter: {
+            sendMessage: async (text) => {
+              const threadParams = threadSpec?.id
+                ? { message_thread_id: threadSpec.id }
+                : undefined;
+              const sent = await bot.api.sendMessage(chatId, text, {
+                ...threadParams,
+                disable_notification: true,
+              });
+              return String(sent.message_id);
+            },
+            editMessage: async (messageId, text) => {
+              const parsedMessageId = Number(messageId);
+              if (!Number.isFinite(parsedMessageId)) {
+                return;
+              }
+              await bot.api.editMessageText(chatId, parsedMessageId, text);
+            },
+            deleteMessage: async (messageId) => {
+              const parsedMessageId = Number(messageId);
+              if (!Number.isFinite(parsedMessageId)) {
+                return;
+              }
+              await bot.api.deleteMessage(chatId, parsedMessageId);
+            },
+          },
+          level: toolActivityLevel,
+          onError: (err) => {
+            logVerbose(`telegram: tool activity status error: ${String(err)}`);
+          },
+        })
+      : undefined;
+  let toolActivityClearedForReply = false;
+  const clearToolActivityForReply = () => {
+    if (!toolActivityController || toolActivityClearedForReply) {
+      return;
+    }
+    toolActivityClearedForReply = true;
+    void toolActivityController.cleanup().catch((err) => {
+      logVerbose(`telegram: tool activity cleanup failed: ${String(err)}`);
+    });
+  };
+
   const typingCallbacks = createTypingCallbacks({
     start: sendTyping,
     onStartError: (err) => {
@@ -471,6 +523,9 @@ export const dispatchTelegramMessage = async ({
           )?.buttons;
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
+          if (segments.some((segment) => segment.text.trim().length > 0)) {
+            clearToolActivityForReply();
+          }
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
           const flushBufferedFinalAnswer = async () => {
@@ -575,7 +630,13 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onPartialReply:
           answerLane.stream || reasoningLane.stream
-            ? (payload) => ingestDraftLaneSegments(payload.text)
+            ? (payload) => {
+                const split = splitTextIntoLaneSegments(payload.text);
+                if (split.segments.some((segment) => segment.text.trim().length > 0)) {
+                  clearToolActivityForReply();
+                }
+                ingestDraftLaneSegments(payload.text);
+              }
             : undefined,
         onReasoningStream: reasoningLane.stream
           ? (payload) => {
@@ -586,6 +647,10 @@ export const dispatchTelegramMessage = async ({
                 reasoningLane.stream?.forceNewMessage();
                 resetDraftLaneState(reasoningLane);
                 splitReasoningOnNextStream = false;
+              }
+              const split = splitTextIntoLaneSegments(payload.text);
+              if (split.segments.some((segment) => segment.text.trim().length > 0)) {
+                clearToolActivityForReply();
               }
               ingestDraftLaneSegments(payload.text);
             }
@@ -617,11 +682,15 @@ export const dispatchTelegramMessage = async ({
               splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
             }
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
-            }
-          : undefined,
+        onToolStart: async (payload) => {
+          if (statusReactionController) {
+            await statusReactionController.setTool(payload.name);
+          }
+          toolActivityController?.onToolStart(payload.name ?? "tool");
+        },
+        onToolEnd: (payload) => {
+          toolActivityController?.onToolEnd(payload.name ?? "tool");
+        },
         onModelSelected,
       },
     }));
@@ -687,6 +756,13 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;
+
+  // Clean up tool activity status message.
+  if (toolActivityController) {
+    void toolActivityController.cleanup().catch((err) => {
+      logVerbose(`telegram: tool activity cleanup failed: ${String(err)}`);
+    });
+  }
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {

@@ -1337,6 +1337,8 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+  "messages.toolActivityStatus":
+    "Show real-time tool execution status as an editable message in the chat. off = disabled, minimal = tool names only (default), detailed = tool names with metadata.",
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":

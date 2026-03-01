@@ -117,6 +117,12 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Real-time tool activity status messages. Shows what tools the AI is executing.
+   * - "off": disabled
+   * - "minimal": show tool name only (default; e.g., "🔧 exec")
+   * - "detailed": show tool name + meta (e.g., "🔧 exec: `ls -la`")
+   */
+  toolActivityStatus?: "off" | "minimal" | "detailed";
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */

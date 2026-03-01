@@ -359,6 +359,9 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalToolStart();
                   await params.opts?.onToolStart?.({ name, phase });
                 }
+                if (phase === "end") {
+                  await params.opts?.onToolEnd?.({ name });
+                }
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {

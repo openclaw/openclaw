@@ -183,6 +183,7 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    toolActivityStatus: z.enum(["off", "minimal", "detailed"]).optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })
