@@ -160,6 +160,14 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        announceHeader: z
+          .union([z.string(), z.literal(false)])
+          .optional()
+          .describe(
+            'Custom header template for subagent announce messages. Use "{name}" as placeholder for the agent name. ' +
+              "Set to false to suppress the header entirely and deliver only the response body. " +
+              'Default: "✅ Subagent {name} finished".',
+          ),
       })
       .strict()
       .optional(),

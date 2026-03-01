@@ -1900,4 +1900,107 @@ describe("subagent announce formatting", () => {
       expect(call?.params?.channel, testCase.name).toBe(testCase.expectedChannel);
     }
   });
+
+  describe("announceHeader config", () => {
+    it("suppresses header when announceHeader is false", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: false } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("Here is your data");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-false",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).not.toContain("✅ Subagent");
+      expect(msg).not.toContain("finished");
+      expect(msg).toContain("Here is your data");
+    });
+
+    it("uses custom header template with {name} placeholder", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: "🎲 {name} says:" } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("movie results");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-custom",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).toContain("🎲 main says:");
+      expect(msg).not.toContain("✅ Subagent");
+    });
+
+    it("delivers body only when announceHeader is empty string", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: "" } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("clean response");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-empty",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).not.toContain("✅");
+      expect(msg).toContain("clean response");
+    });
+
+    it("preserves error/timeout headers even with custom announceHeader", async () => {
+      configOverride = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { subagents: { announceHeader: "Custom: {name}" } } },
+      } as typeof configOverride;
+      readLatestAssistantReplyMock.mockResolvedValue("error details");
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-header-error",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+        ...defaultOutcomeAnnounce,
+        outcome: { status: "error" },
+        expectsCompletionMessage: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+      const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+      expect(msg).toContain("❌ Subagent main failed");
+    });
+  });
 });
