@@ -891,6 +891,69 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]).toMatchObject({ channel: "telegram", messageId: "tg-1", chatId: "123" });
   });
 
+  it("chunks telegram direct-send fallback text and keeps buttons on the first chunk only", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "txt-1" });
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "med-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              chunker: (text, limit) => {
+                if (!text || limit <= 0 || text.length <= limit) {
+                  return [text];
+                }
+                return [text.slice(0, limit), text.slice(limit)];
+              },
+              textChunkLimit: 2,
+              sendText,
+              sendMedia,
+            },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const sendTelegram = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "123" })
+      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "123" });
+    const buttons = [
+      [{ text: "Allow once", callback_data: "/approve abc allow-once" }],
+      [{ text: "Deny", callback_data: "/approve abc deny" }],
+    ];
+
+    const results = await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "abcd", channelData: { telegram: { buttons } } }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      1,
+      "123",
+      "ab",
+      expect.objectContaining({ buttons, verbose: false }),
+    );
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      2,
+      "123",
+      "cd",
+      expect.not.objectContaining({ buttons: expect.anything() }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ channel: "telegram", messageId: "tg-1", chatId: "123" });
+    expect(results[1]).toMatchObject({ channel: "telegram", messageId: "tg-2", chatId: "123" });
+  });
+
   it("emits message_sent failure when delivery errors", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));

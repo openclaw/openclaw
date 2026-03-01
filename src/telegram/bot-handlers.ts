@@ -1243,12 +1243,17 @@ export const registerTelegramHandlers = ({
       const isApprovalCallback = /^\/approve\s+\S+\s+(allow-once|allow-always|deny)\s*$/i.test(
         data,
       );
-      await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
-        forceWasMentioned: true,
-        messageIdOverride: callback.id,
-        approvalCommandOrigin: "button",
-      });
-      if (isApprovalCallback) {
+      const result = await processMessage(
+        buildSyntheticContext(ctx, syntheticMessage),
+        [],
+        storeAllowFrom,
+        {
+          forceWasMentioned: true,
+          messageIdOverride: callback.id,
+          approvalCommandOrigin: "button",
+        },
+      );
+      if (isApprovalCallback && result.approvalCommandResolved) {
         const callbackText =
           typeof callbackMessage.text === "string"
             ? callbackMessage.text
@@ -1266,6 +1271,7 @@ export const registerTelegramHandlers = ({
           }
         }
       }
+      return;
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
     }

@@ -42,6 +42,8 @@ import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const APPROVAL_COMMAND_RE = /^\/approve\s+\S+\s+(allow-once|allow-always|deny)\s*$/i;
+const APPROVAL_SUCCESS_REPLY_RE = /\bExec approval\s+(allow-once|allow-always|deny)\s+submitted\b/i;
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -103,6 +105,10 @@ type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token">;
 };
 
+export type DispatchTelegramMessageResult = {
+  approvalCommandResolved: boolean;
+};
+
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 function resolveTelegramReasoningLevel(params: {
@@ -138,7 +144,7 @@ export const dispatchTelegramMessage = async ({
   textLimit,
   telegramCfg,
   opts,
-}: DispatchTelegramMessageParams) => {
+}: DispatchTelegramMessageParams): Promise<DispatchTelegramMessageResult> => {
   const {
     ctxPayload,
     msg,
@@ -159,6 +165,10 @@ export const dispatchTelegramMessage = async ({
   } = context;
 
   const draftMaxChars = Math.min(textLimit, 4096);
+  const inboundCommandText =
+    typeof msg.text === "string" ? msg.text : typeof msg.caption === "string" ? msg.caption : "";
+  const isApprovalCommand = APPROVAL_COMMAND_RE.test(inboundCommandText.trim());
+  let approvalCommandResolved = false;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -466,6 +476,14 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          if (
+            isApprovalCommand &&
+            info.kind === "final" &&
+            typeof payload.text === "string" &&
+            APPROVAL_SUCCESS_REPLY_RE.test(payload.text)
+          ) {
+            approvalCommandResolved = true;
+          }
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
@@ -696,7 +714,7 @@ export const dispatchTelegramMessage = async ({
 
   if (!hasFinalResponse) {
     clearGroupHistory();
-    return;
+    return { approvalCommandResolved };
   }
 
   if (statusReactionController) {
@@ -723,4 +741,5 @@ export const dispatchTelegramMessage = async ({
     });
   }
   clearGroupHistory();
+  return { approvalCommandResolved };
 };

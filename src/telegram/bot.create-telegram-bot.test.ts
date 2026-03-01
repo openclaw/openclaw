@@ -156,15 +156,17 @@ describe("createTelegramBot", () => {
       getTelegramSequentialKey({
         update: {
           callback_query: {
+            data: "mdl_sel_openai/gpt-4o",
             message: mockMessage({ chat: mockChat({ id: 555, type: "private" }) }),
           },
         },
       }),
-    ).toBe("telegram:555:control");
+    ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
         update: {
           callback_query: {
+            data: "mdl_sel_openai/gpt-4o",
             message: mockMessage({
               chat: mockChat({ id: 555, type: "supergroup", is_forum: true }),
               message_thread_id: 7,
@@ -172,7 +174,17 @@ describe("createTelegramBot", () => {
           },
         },
       }),
-    ).toBe("telegram:555:topic:7:control");
+    ).toBe("telegram:555:topic:7");
+    expect(
+      getTelegramSequentialKey({
+        update: {
+          callback_query: {
+            data: "/approve abc allow-once",
+            message: mockMessage({ chat: mockChat({ id: 555, type: "private" }) }),
+          },
+        },
+      }),
+    ).toBe("telegram:555:control");
     expect(
       getTelegramSequentialKey({
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),

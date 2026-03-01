@@ -63,6 +63,19 @@ export type TelegramBotOptions = {
   };
 };
 
+const APPROVAL_CALLBACK_COMMAND_RE = /^\/approve\s+\S+\s+(allow-once|allow-always|deny)\s*$/i;
+
+function isControlCallbackQueryData(data: string | undefined, botUsername?: string): boolean {
+  const normalized = data?.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (APPROVAL_CALLBACK_COMMAND_RE.test(normalized)) {
+    return true;
+  }
+  return isAbortRequestText(normalized, botUsername ? { botUsername } : undefined);
+}
+
 export function getTelegramSequentialKey(ctx: {
   chat?: { id?: number };
   me?: UserFromGetMe;
@@ -74,7 +87,7 @@ export function getTelegramSequentialKey(ctx: {
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
-    callback_query?: { message?: Message };
+    callback_query?: { data?: string; message?: Message };
     message_reaction?: { chat?: { id?: number } };
   };
 }): string {
@@ -85,6 +98,8 @@ export function getTelegramSequentialKey(ctx: {
   }
   const callbackMsg = ctx.update?.callback_query?.message;
   if (callbackMsg?.chat?.id) {
+    const callbackData = ctx.update?.callback_query?.data;
+    const isControlCallback = isControlCallbackQueryData(callbackData, ctx.me?.username);
     const callbackChatId = callbackMsg.chat.id;
     const callbackIsGroup =
       callbackMsg.chat.type === "group" || callbackMsg.chat.type === "supergroup";
@@ -94,9 +109,12 @@ export function getTelegramSequentialKey(ctx: {
           messageThreadId: callbackMsg.message_thread_id,
         })
       : callbackMsg.message_thread_id;
-    return callbackThreadId != null
-      ? `telegram:${callbackChatId}:topic:${callbackThreadId}:control`
-      : `telegram:${callbackChatId}:control`;
+    if (callbackThreadId != null) {
+      return isControlCallback
+        ? `telegram:${callbackChatId}:topic:${callbackThreadId}:control`
+        : `telegram:${callbackChatId}:topic:${callbackThreadId}`;
+    }
+    return isControlCallback ? `telegram:${callbackChatId}:control` : `telegram:${callbackChatId}`;
   }
   const msg =
     ctx.message ??

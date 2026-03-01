@@ -319,6 +319,74 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
+  it("removes approval inline buttons only after successful approval resolve", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValueOnce({
+      text: "✅ Exec approval allow-once submitted for abc.",
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-1",
+        data: "/approve abc allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 44,
+          text: "Approval requested",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 44, "Approval requested", {
+      reply_markup: { inline_keyboard: [] },
+    });
+  });
+
+  it("keeps approval inline buttons when approval resolve is rejected", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValueOnce({
+      text: "❌ Failed to submit approval: temporary gateway failure",
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-approve-2",
+        data: "/approve abc allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 45,
+          text: "Approval requested",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+  });
+
   it("includes sender identity in group envelope headers", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

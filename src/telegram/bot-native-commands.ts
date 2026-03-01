@@ -110,7 +110,7 @@ export type RegisterTelegramHandlerParams = {
       approvalCommandOrigin?: "typed" | "button";
     },
     replyMedia?: TelegramMediaRef[],
-  ) => Promise<void>;
+  ) => Promise<{ approvalCommandResolved: boolean }>;
   logger: ReturnType<typeof getChildLogger>;
 };
 

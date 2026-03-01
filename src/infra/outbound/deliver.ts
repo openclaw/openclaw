@@ -353,39 +353,38 @@ async function deliverOutboundPayloadsCore(
         accountId,
       })
     : undefined;
+  const splitTextChunks = (sourceText: string): string[] => {
+    if (!handler.chunker || textLimit === undefined) {
+      return [sourceText];
+    }
+    if (chunkMode === "newline") {
+      const mode = handler.chunkerMode ?? "text";
+      const blockChunks =
+        mode === "markdown"
+          ? chunkMarkdownTextWithMode(sourceText, textLimit, "newline")
+          : chunkByParagraph(sourceText, textLimit);
+      if (!blockChunks.length && sourceText) {
+        blockChunks.push(sourceText);
+      }
+      const nextChunks: string[] = [];
+      for (const blockChunk of blockChunks) {
+        const chunks = handler.chunker(blockChunk, textLimit);
+        if (!chunks.length && blockChunk) {
+          chunks.push(blockChunk);
+        }
+        nextChunks.push(...chunks);
+      }
+      return nextChunks;
+    }
+    return handler.chunker(sourceText, textLimit);
+  };
 
   const sendTextChunks = async (
     text: string,
     overrides?: { replyToId?: string | null; threadId?: string | number | null },
   ) => {
     throwIfAborted(abortSignal);
-    if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text, overrides));
-      return;
-    }
-    if (chunkMode === "newline") {
-      const mode = handler.chunkerMode ?? "text";
-      const blockChunks =
-        mode === "markdown"
-          ? chunkMarkdownTextWithMode(text, textLimit, "newline")
-          : chunkByParagraph(text, textLimit);
-
-      if (!blockChunks.length && text) {
-        blockChunks.push(text);
-      }
-      for (const blockChunk of blockChunks) {
-        const chunks = handler.chunker(blockChunk, textLimit);
-        if (!chunks.length && blockChunk) {
-          chunks.push(blockChunk);
-        }
-        for (const chunk of chunks) {
-          throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk, overrides));
-        }
-      }
-      return;
-    }
-    const chunks = handler.chunker(text, textLimit);
+    const chunks = splitTextChunks(text);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
       results.push(await handler.sendText(chunk, overrides));
@@ -585,19 +584,33 @@ async function deliverOutboundPayloadsCore(
         const hasButtons = Array.isArray(buttons) && buttons.length > 0;
         if (hasButtons) {
           const sendTelegram = params.deps?.sendTelegram ?? sendMessageTelegram;
-          const result = await sendTelegram(to, payloadSummary.text, {
-            verbose: false,
-            accountId: accountId ?? undefined,
-            messageThreadId: parseThreadIdForTelegram(params.threadId),
-            quoteText:
-              typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined,
-            buttons: buttons as Array<Array<{ text: string; callback_data: string }>>,
-          });
-          results.push({ channel: "telegram", ...result });
+          const chunks = splitTextChunks(payloadSummary.text);
+          if (chunks.length === 0) {
+            chunks.push(payloadSummary.text);
+          }
+          let lastMessageId: string | undefined;
+          for (let i = 0; i < chunks.length; i += 1) {
+            const chunk = chunks[i] ?? "";
+            const isFirstChunk = i === 0;
+            const result = await sendTelegram(to, chunk, {
+              verbose: false,
+              accountId: accountId ?? undefined,
+              messageThreadId: parseThreadIdForTelegram(params.threadId),
+              quoteText:
+                isFirstChunk && typeof telegramData?.quoteText === "string"
+                  ? telegramData.quoteText
+                  : undefined,
+              buttons: isFirstChunk
+                ? (buttons as Array<Array<{ text: string; callback_data: string }>>)
+                : undefined,
+            });
+            results.push({ channel: "telegram", ...result });
+            lastMessageId = result.messageId;
+          }
           emitMessageSent({
             success: true,
             content: payloadSummary.text,
-            messageId: result.messageId,
+            messageId: lastMessageId,
           });
           continue;
         }
