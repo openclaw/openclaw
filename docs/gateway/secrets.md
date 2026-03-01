@@ -37,6 +37,8 @@ Examples of inactive surfaces:
 - Disabled channel/account entries.
 - Top-level channel credentials that no enabled account inherits.
 - Disabled tool/feature surfaces.
+- Web search provider-specific keys that are not selected by `tools.web.search.provider`.
+  In auto mode (provider unset), only `tools.web.search.apiKey` is active.
 
 ## Onboarding reference preflight
 

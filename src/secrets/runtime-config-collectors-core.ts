@@ -279,6 +279,16 @@ function collectToolsWebSearchAssignments(params: {
   }
   const search = tools.web.search;
   const searchEnabled = search.enabled !== false;
+  const rawProvider =
+    typeof search.provider === "string" ? search.provider.trim().toLowerCase() : "";
+  const selectedProvider =
+    rawProvider === "brave" ||
+    rawProvider === "gemini" ||
+    rawProvider === "grok" ||
+    rawProvider === "kimi" ||
+    rawProvider === "perplexity"
+      ? rawProvider
+      : undefined;
   const paths = [
     "apiKey",
     "gemini.apiKey",
@@ -292,7 +302,20 @@ function collectToolsWebSearchAssignments(params: {
     if (!isRecord(target)) {
       continue;
     }
-    const active = scope ? searchEnabled && target.enabled !== false : searchEnabled;
+    const active = scope
+      ? searchEnabled && target.enabled !== false && selectedProvider === scope
+      : searchEnabled && (selectedProvider === undefined || selectedProvider === "brave");
+    const inactiveReason = !searchEnabled
+      ? "tools.web.search is disabled."
+      : scope
+        ? target.enabled === false
+          ? `tools.web.search.${scope} is disabled.`
+          : selectedProvider === undefined
+            ? "tools.web.search.provider is unset (auto mode); provider-specific key is inactive."
+            : `tools.web.search.provider is "${selectedProvider}".`
+        : selectedProvider === undefined
+          ? undefined
+          : `tools.web.search.provider is "${selectedProvider}".`;
     collectSecretInputAssignment({
       value: target[field],
       path: `tools.web.search.${path}`,
@@ -300,9 +323,7 @@ function collectToolsWebSearchAssignments(params: {
       defaults: params.defaults,
       context: params.context,
       active,
-      inactiveReason: scope
-        ? `tools.web.search.${scope} is disabled or parent search is disabled.`
-        : "tools.web.search is disabled.",
+      inactiveReason,
       apply: (value) => {
         target[field] = value;
       },

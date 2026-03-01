@@ -91,9 +91,6 @@ describe("secrets runtime snapshot", () => {
         web: {
           search: {
             apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-            gemini: {
-              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
-            },
           },
         },
       },
@@ -117,7 +114,6 @@ describe("secrets runtime snapshot", () => {
         SLACK_WORK_BOT_TOKEN_REF: "slack-work-bot-ref",
         SLACK_WORK_APP_TOKEN_REF: "slack-work-app-ref",
         WEB_SEARCH_API_KEY: "web-search-ref",
-        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
@@ -160,7 +156,6 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.config.channels?.slack?.accounts?.work?.botToken).toBe("slack-work-bot-ref");
     expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toBe("slack-work-app-ref");
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
     expect(snapshot.warnings).toHaveLength(3);
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
@@ -261,6 +256,84 @@ describe("secrets runtime snapshot", () => {
     expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "PRIMARY_KEY" });
     activateSecretsRuntimeSnapshot(snapshot);
     expect(profile.key).toBe("primary-key-value");
+  });
+
+  it("treats non-selected web search provider refs as inactive", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+              grok: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_GROK_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_API_KEY: "web-search-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
+    expect(snapshot.config.tools?.web?.search?.grok?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GROK_API_KEY",
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.grok.apiKey",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps provider-specific refs inactive in auto mode unless selected", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+              gemini: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_API_KEY: "web-search-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_GEMINI_API_KEY",
+    });
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "tools.web.search.gemini.apiKey",
+          message: expect.stringContaining("auto mode"),
+        }),
+      ]),
+    );
   });
 
   it("resolves file refs via configured file provider", async () => {

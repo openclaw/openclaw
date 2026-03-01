@@ -96,6 +96,9 @@ Notes:
 - Auth-profile plan targets require `agentId`.
 - Plan entries target `profiles.*.key` / `profiles.*.token` and write sibling refs (`keyRef` / `tokenRef`).
 - Auth-profile refs are included in runtime resolution and audit coverage.
+- For web search: provider-specific keys (`tools.web.search.<provider>.apiKey`) are active only when
+  that provider is selected via `tools.web.search.provider`. In auto mode (provider unset), only
+  `tools.web.search.apiKey` is active.
 
 ## Unsupported credentials
 

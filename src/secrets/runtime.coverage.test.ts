@@ -74,6 +74,18 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "webhook",
     );
   }
+  if (entry.id === "tools.web.search.gemini.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
+  }
+  if (entry.id === "tools.web.search.grok.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
+  }
+  if (entry.id === "tools.web.search.kimi.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "kimi");
+  }
+  if (entry.id === "tools.web.search.perplexity.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
+  }
   return config;
 }
 
