@@ -92,11 +92,13 @@ describe("parsePostContent", () => {
     expect(parsePostContent(wrappedByPost)).toEqual({
       textContent: "标题\n\n内容A",
       imageKeys: [],
+      mediaKeys: [],
       mentionedOpenIds: [],
     });
     expect(parsePostContent(wrappedByLocale)).toEqual({
       textContent: "标题\n\n内容B",
       imageKeys: [],
+      mediaKeys: [],
       mentionedOpenIds: [],
     });
   });
