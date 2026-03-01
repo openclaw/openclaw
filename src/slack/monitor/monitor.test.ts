@@ -119,6 +119,7 @@ const baseParams = () => ({
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
   removeAckAfterReply: false,
+  threadFollowMentionedThreads: false,
 });
 
 type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];

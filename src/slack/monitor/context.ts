@@ -90,6 +90,7 @@ export type SlackMonitorContext = {
   ackReactionScope: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
+  threadFollowMentionedThreads: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
   markMessageSeen: (channelId: string | undefined, ts?: string) => boolean;
@@ -152,6 +153,7 @@ export function createSlackMonitorContext(params: {
   ackReactionScope: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
+  threadFollowMentionedThreads: boolean;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
@@ -415,6 +417,7 @@ export function createSlackMonitorContext(params: {
     ackReactionScope: params.ackReactionScope,
     mediaMaxBytes: params.mediaMaxBytes,
     removeAckAfterReply: params.removeAckAfterReply,
+    threadFollowMentionedThreads: params.threadFollowMentionedThreads,
     logger,
     markMessageSeen,
     shouldDropMismatchedSlackEvent,

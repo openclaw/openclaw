@@ -82,6 +82,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ackReactionScope: "group-mentions",
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
+      threadFollowMentionedThreads: false,
     });
   }
 
@@ -333,6 +334,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ackReactionScope: "group-mentions",
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
+      threadFollowMentionedThreads: false,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
@@ -416,6 +418,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ackReactionScope: "group-mentions",
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
+      threadFollowMentionedThreads: false,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
@@ -657,6 +660,7 @@ describe("prepareSlackMessage sender prefix", () => {
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
       removeAckAfterReply: false,
+      threadFollowMentionedThreads: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       markMessageSeen: () => false,
       shouldDropMismatchedSlackEvent: () => false,
