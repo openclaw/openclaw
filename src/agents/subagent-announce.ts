@@ -1187,7 +1187,13 @@ export async function runSubagentAnnounceFlow(params: {
       return true;
     }
     if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-      return true;
+      // The subagent intentionally suppressed its channel reply (e.g. it already
+      // delivered results via tool calls and used NO_REPLY to avoid a duplicate
+      // message).  However, we must NOT skip the announce entirely: the parent
+      // session needs the completion signal to advance multi-agent workflows.
+      // Replace the silent token with a neutral placeholder so the announce flow
+      // continues and injects the completion event into the requester session.
+      reply = "(completed without additional output)";
     }
 
     if (!outcome) {

@@ -442,7 +442,11 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
+  it("still delivers completion announce when subagent reply is NO_REPLY (regression: #30642)", async () => {
+    // A subagent may reply NO_REPLY to suppress a redundant channel message (e.g. it
+    // already delivered results via a tool call).  The announce flow must NOT be
+    // skipped entirely: the parent session still needs the completion signal so
+    // multi-agent orchestration can advance past the finished subagent.
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-completion-no-reply",
@@ -455,7 +459,10 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    expect(sendSpy).not.toHaveBeenCalled();
+    // Completion signal delivered with neutral placeholder text (not suppressed)
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const sentCall = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } } | undefined;
+    expect(sentCall?.params?.message ?? "").toContain("(completed without additional output)");
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
