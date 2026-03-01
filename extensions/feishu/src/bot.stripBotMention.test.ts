@@ -36,14 +36,14 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("falls back to user_id when open_id is absent", () => {
+  it("falls back to @name when open_id is absent", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_user_1 hi", [
         { key: "@_user_1", name: "Alice", id: { user_id: "uid_alice" } },
       ]) as any,
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe('<at user_id="uid_alice">Alice</at> hi');
+    expect(ctx.content).toBe("@Alice hi");
   });
 
   it("falls back to plain @name when no id is present", () => {
