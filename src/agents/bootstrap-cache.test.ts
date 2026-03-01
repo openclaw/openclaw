@@ -25,15 +25,24 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
 
 describe("getOrLoadBootstrapFiles", () => {
   const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
+  let originalCacheTtl: string | undefined;
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad.mockResolvedValue(files);
+    originalCacheTtl = process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS;
+    delete process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS;
   });
 
   afterEach(() => {
     clearAllBootstrapSnapshots();
     vi.clearAllMocks();
+    if (originalCacheTtl === undefined) {
+      delete process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS;
+    } else {
+      process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS = originalCacheTtl;
+    }
+    vi.useRealTimers();
   });
 
   it("loads from disk on first call and caches", async () => {
@@ -63,6 +72,36 @@ describe("getOrLoadBootstrapFiles", () => {
 
     expect(r1).toBe(files);
     expect(r2).toBe(files2);
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads after cache TTL expires", async () => {
+    process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS = "10";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-02T00:00:00.000Z"));
+    const files2 = [makeFile("AGENTS.md", "# Agent v2")];
+    mockLoad.mockResolvedValueOnce(files).mockResolvedValueOnce(files2);
+
+    const first = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    expect(first).toBe(files);
+
+    vi.advanceTimersByTime(11);
+
+    const second = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    expect(second).toBe(files2);
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables caching when TTL is set to 0", async () => {
+    process.env.OPENCLAW_BOOTSTRAP_CACHE_TTL_MS = "0";
+    const files2 = [makeFile("AGENTS.md", "# Agent v2")];
+    mockLoad.mockResolvedValueOnce(files).mockResolvedValueOnce(files2);
+
+    const first = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    const second = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+
+    expect(first).toBe(files);
+    expect(second).toBe(files2);
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
 });
