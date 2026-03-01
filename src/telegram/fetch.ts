@@ -1,6 +1,6 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -39,6 +39,10 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // effect on it. Replace the global dispatcher with one that carries the
   // current autoSelectFamily setting so subsequent globalThis.fetch calls
   // inherit the same decision.
+  //
+  // Use EnvHttpProxyAgent instead of plain Agent so that HTTP_PROXY /
+  // HTTPS_PROXY / NO_PROXY env vars continue to be honoured. When no proxy
+  // env vars are set, EnvHttpProxyAgent behaves identically to Agent.
   // See: https://github.com/openclaw/openclaw/issues/25676
   if (
     autoSelectDecision.value !== null &&
@@ -46,7 +50,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   ) {
     try {
       setGlobalDispatcher(
-        new Agent({
+        new EnvHttpProxyAgent({
           connect: {
             autoSelectFamily: autoSelectDecision.value,
             autoSelectFamilyAttemptTimeout: 300,
