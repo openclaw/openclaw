@@ -169,6 +169,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaType: entry.mediaType,
       MediaUrl: entry.mediaPath,
       MediaPaths: entry.mediaPaths,
+      MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
