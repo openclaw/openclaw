@@ -1,7 +1,12 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { t } from "../../i18n/index.ts";
-import type { CronFieldErrors, CronFieldKey } from "../controllers/cron.ts";
+import type {
+  CronFieldErrors,
+  CronFieldKey,
+  CronJobsLastStatusFilter,
+  CronJobsScheduleKindFilter,
+} from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
@@ -27,6 +32,8 @@ export type CronProps = {
   jobsHasMore: boolean;
   jobsQuery: string;
   jobsEnabledFilter: CronJobsEnabledFilter;
+  jobsScheduleKindFilter: CronJobsScheduleKindFilter;
+  jobsLastStatusFilter: CronJobsLastStatusFilter;
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
@@ -68,9 +75,12 @@ export type CronProps = {
   onJobsFiltersChange: (patch: {
     cronJobsQuery?: string;
     cronJobsEnabledFilter?: CronJobsEnabledFilter;
+    cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
+    cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
     cronJobsSortBy?: CronJobsSortBy;
     cronJobsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
     cronRunsScope?: CronRunScope;
@@ -366,6 +376,13 @@ export function renderCron(props: CronProps) {
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
   const blockedByValidation = !props.busy && blockingFields.length > 0;
+  const hasActiveJobsFilters =
+    props.jobsQuery.trim().length > 0 ||
+    props.jobsEnabledFilter !== "all" ||
+    props.jobsScheduleKindFilter !== "all" ||
+    props.jobsLastStatusFilter !== "all" ||
+    props.jobsSortBy !== "nextRunAtMs" ||
+    props.jobsSortDir !== "asc";
   const submitDisabledReason =
     blockedByValidation && !props.canSubmit
       ? blockingFields.length === 1
@@ -447,6 +464,40 @@ export function renderCron(props: CronProps) {
               </select>
             </label>
             <label class="field">
+              <span>${t("cron.jobs.schedule")}</span>
+              <select
+                data-test-id="cron-jobs-schedule-filter"
+                .value=${props.jobsScheduleKindFilter}
+                @change=${(e: Event) =>
+                  props.onJobsFiltersChange({
+                    cronJobsScheduleKindFilter: (e.target as HTMLSelectElement)
+                      .value as CronJobsScheduleKindFilter,
+                  })}
+              >
+                <option value="all">${t("cron.jobs.all")}</option>
+                <option value="at">${t("cron.form.at")}</option>
+                <option value="every">${t("cron.form.every")}</option>
+                <option value="cron">${t("cron.form.cronOption")}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>${t("cron.jobs.lastRun")}</span>
+              <select
+                data-test-id="cron-jobs-last-status-filter"
+                .value=${props.jobsLastStatusFilter}
+                @change=${(e: Event) =>
+                  props.onJobsFiltersChange({
+                    cronJobsLastStatusFilter: (e.target as HTMLSelectElement)
+                      .value as CronJobsLastStatusFilter,
+                  })}
+              >
+                <option value="all">${t("cron.jobs.all")}</option>
+                <option value="ok">${t("cron.runs.runStatusOk")}</option>
+                <option value="error">${t("cron.runs.runStatusError")}</option>
+                <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+              </select>
+            </label>
+            <label class="field">
               <span>${t("cron.jobs.sort")}</span>
               <select
                 .value=${props.jobsSortBy}
@@ -472,6 +523,17 @@ export function renderCron(props: CronProps) {
                 <option value="asc">${t("cron.jobs.ascending")}</option>
                 <option value="desc">${t("cron.jobs.descending")}</option>
               </select>
+            </label>
+            <label class="field">
+              <span>${t("cron.jobs.reset")}</span>
+              <button
+                class="btn"
+                data-test-id="cron-jobs-filters-reset"
+                ?disabled=${!hasActiveJobsFilters}
+                @click=${props.onJobsFiltersReset}
+              >
+                ${t("cron.jobs.reset")}
+              </button>
             </label>
           </div>
           ${
