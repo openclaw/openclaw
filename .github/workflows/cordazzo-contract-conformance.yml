@@ -1,0 +1,56 @@
+name: Cordazzo Contract Conformance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/agents/tool-permission-contracts*.ts"
+      - "src/agents/pi-tools.before-tool-call.ts"
+      - "src/agents/tools/message-tool.ts"
+      - "src/agents/tools/sessions-send-tool.ts"
+      - "src/agents/openclaw-tools.ts"
+      - ".github/workflows/cordazzo-contract-conformance.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/agents/tool-permission-contracts*.ts"
+      - "src/agents/pi-tools.before-tool-call.ts"
+      - "src/agents/tools/message-tool.ts"
+      - "src/agents/tools/sessions-send-tool.ts"
+      - "src/agents/openclaw-tools.ts"
+      - ".github/workflows/cordazzo-contract-conformance.yml"
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout openclaw/app
+        uses: actions/checkout@v4
+
+      - name: Checkout cordazzo-brain contracts
+        uses: actions/checkout@v4
+        with:
+          repository: cordazzopy/cordazzo-brain
+          path: _contracts/cordazzo-brain
+          token: ${{ secrets.CORDAZZO_BRAIN_CHECKOUT_TOKEN || github.token }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run cordazzo contract conformance test
+        env:
+          OPENCLAW_CONTRACTS_DIR: ${{ github.workspace }}/_contracts/cordazzo-brain
+        run: pnpm test:contracts:cordazzo

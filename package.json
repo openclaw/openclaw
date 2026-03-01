@@ -131,6 +131,7 @@
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:channels": "vitest run --config vitest.channels.config.ts",
+    "test:contracts:cordazzo": "vitest run src/agents/tool-permission-contracts.cordazzo-conformance.test.ts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
