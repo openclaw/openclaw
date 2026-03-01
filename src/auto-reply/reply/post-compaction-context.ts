@@ -4,39 +4,114 @@ import path from "node:path";
 const MAX_CONTEXT_CHARS = 3000;
 
 /**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
- * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
+ * Well-known workspace bootstrap files that agents may rely on.
+ * Order matters — higher-priority files are listed first.
+ */
+const BOOTSTRAP_FILENAMES = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CLAUDE.local.md",
+  "SOUL.md",
+  "IDENTITY.md",
+  "USER.md",
+  "MEMORY.md",
+  "memory.md",
+  "HEARTBEAT.md",
+  "TOOLS.md",
+];
+
+/**
+ * Scan workspace for existing bootstrap files.
+ * Returns the list of filenames that exist on disk.
+ */
+export async function detectBootstrapFiles(workspaceDir: string): Promise<string[]> {
+  const found: string[] = [];
+  const seenInodes = new Set<string>();
+  for (const name of BOOTSTRAP_FILENAMES) {
+    const filePath = path.join(workspaceDir, name);
+    try {
+      const stat = await fs.promises.stat(filePath);
+      // Deduplicate on inode to handle case-insensitive filesystems
+      // where e.g. MEMORY.md and memory.md resolve to the same file.
+      const inodeKey = `${stat.dev}:${stat.ino}`;
+      if (seenInodes.has(inodeKey)) {
+        continue;
+      }
+      seenInodes.add(inodeKey);
+      found.push(name);
+    } catch {
+      // File doesn't exist — skip
+    }
+  }
+
+  // Also check for recent daily memory files (memory/YYYY-MM-DD.md)
+  const memoryDir = path.join(workspaceDir, "memory");
+  try {
+    const entries = await fs.promises.readdir(memoryDir);
+    const dailyFiles = entries
+      .filter((e) => /^\d{4}-\d{2}-\d{2}\.md$/.test(e))
+      .toSorted()
+      .toReversed()
+      .slice(0, 2); // Most recent 2 days
+    for (const daily of dailyFiles) {
+      found.push(`memory/${daily}`);
+    }
+  } catch {
+    // No memory directory — skip
+  }
+
+  return found;
+}
+
+/**
+ * Build post-compaction context for injection as a system event.
+ *
+ * Two layers:
+ * 1. Workspace-aware file inventory — tells the agent which bootstrap files
+ *    exist so it can re-read them after compaction.
+ * 2. Critical AGENTS.md sections — inlines "Session Startup" and "Red Lines"
+ *    sections directly (preserving the original behaviour).
  */
 export async function readPostCompactionContext(workspaceDir: string): Promise<string | null> {
-  const agentsPath = path.join(workspaceDir, "AGENTS.md");
-
   try {
-    if (!fs.existsSync(agentsPath)) {
-      return null;
+    const parts: string[] = [];
+
+    // Layer 1: Detect and list all bootstrap files in the workspace
+    const bootstrapFiles = await detectBootstrapFiles(workspaceDir);
+
+    if (bootstrapFiles.length > 0) {
+      parts.push(
+        "Your workspace contains these bootstrap files — re-read them now before responding:\n" +
+          bootstrapFiles.map((f) => `  - ${f}`).join("\n"),
+      );
     }
 
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    // Layer 2: Inline critical AGENTS.md sections (if they exist)
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    if (fs.existsSync(agentsPath)) {
+      const content = await fs.promises.readFile(agentsPath, "utf-8");
+      const sections = extractSections(content, ["Session Startup", "Red Lines", "Every Session"]);
 
-    // Extract "## Session Startup" and "## Red Lines" sections
-    // Each section ends at the next "## " heading or end of file
-    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
-
-    if (sections.length === 0) {
-      return null;
+      if (sections.length > 0) {
+        const combined = sections.join("\n\n");
+        const safeContent =
+          combined.length > MAX_CONTEXT_CHARS
+            ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
+            : combined;
+        parts.push("Critical rules from AGENTS.md:\n\n" + safeContent);
+      }
     }
 
-    const combined = sections.join("\n\n");
-    const safeContent =
-      combined.length > MAX_CONTEXT_CHARS
-        ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
+    if (parts.length === 0) {
+      return null;
+    }
 
     return (
       "[Post-compaction context refresh]\n\n" +
-      "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-      "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
-      "Critical rules from AGENTS.md:\n\n" +
-      safeContent
+      "Session was just compacted. The conversation summary above is a condensed hint, " +
+      "NOT a substitute for your workspace files. " +
+      "Re-read your bootstrap files before responding to the user.\n\n" +
+      parts.join("\n\n")
     );
   } catch {
     return null;
