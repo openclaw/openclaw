@@ -157,7 +157,7 @@ async function promptSlackAllowFrom(params: {
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
   });
   const resolved = resolveSlackAccount({ cfg: params.cfg, accountId });
-  const token = resolved.config.userToken ?? resolved.config.botToken ?? "";
+  const token = resolved.userToken ?? resolved.botToken ?? "";
   const existing =
     params.cfg.channels?.slack?.allowFrom ?? params.cfg.channels?.slack?.dm?.allowFrom ?? [];
   const parseId = (value: string) =>
