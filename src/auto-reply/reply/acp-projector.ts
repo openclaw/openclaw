@@ -14,6 +14,10 @@ import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
+const ACP_LIVE_IDLE_FLUSH_FLOOR_MS = 750;
+const ACP_LIVE_IDLE_MIN_CHARS = 80;
+const ACP_LIVE_SOFT_FLUSH_CHARS = 220;
+const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
@@ -99,6 +103,41 @@ function shouldInsertSeparator(params: {
   return true;
 }
 
+function shouldFlushLiveBufferOnBoundary(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  if (text.length >= ACP_LIVE_HARD_FLUSH_CHARS) {
+    return true;
+  }
+  if (text.endsWith("\n\n")) {
+    return true;
+  }
+  if (/[.!?][)"'`]*\s$/.test(text)) {
+    return true;
+  }
+  if (text.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function shouldFlushLiveBufferOnIdle(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  if (text.length >= ACP_LIVE_IDLE_MIN_CHARS) {
+    return true;
+  }
+  if (/[.!?][)"'`]*$/.test(text.trimEnd())) {
+    return true;
+  }
+  if (text.includes("\n")) {
+    return true;
+  }
+  return false;
+}
+
 function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
   const detailParts: string[] = [];
   const title = event.title?.trim();
@@ -148,9 +187,10 @@ export function createAcpReplyProjector(params: {
       await params.deliver("block", payload);
     },
     timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
-    coalescing: streaming.coalescing,
+    coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
   });
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
+  const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
 
   let emittedTurnChars = 0;
   let emittedMetaEvents = 0;
@@ -160,10 +200,65 @@ export function createAcpReplyProjector(params: {
   let lastUsageTuple: string | undefined;
   let lastVisibleOutputTail: string | undefined;
   let pendingHiddenBoundary = false;
+  let liveBufferText = "";
+  let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
 
+  const clearLiveIdleTimer = () => {
+    if (!liveIdleTimer) {
+      return;
+    }
+    clearTimeout(liveIdleTimer);
+    liveIdleTimer = undefined;
+  };
+
+  const drainChunker = (force: boolean) => {
+    if (settings.deliveryMode === "final_only" && !force) {
+      return;
+    }
+    chunker.drain({
+      force,
+      emit: (chunk) => {
+        blockReplyPipeline.enqueue({ text: chunk });
+      },
+    });
+  };
+
+  const flushLiveBuffer = (opts?: { force?: boolean; idle?: boolean }) => {
+    if (settings.deliveryMode !== "live") {
+      return;
+    }
+    if (!liveBufferText) {
+      return;
+    }
+    if (opts?.idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
+      return;
+    }
+    const text = liveBufferText;
+    liveBufferText = "";
+    chunker.append(text);
+    drainChunker(opts?.force === true);
+  };
+
+  const scheduleLiveIdleFlush = () => {
+    if (settings.deliveryMode !== "live") {
+      return;
+    }
+    if (liveIdleFlushMs <= 0 || !liveBufferText) {
+      return;
+    }
+    clearLiveIdleTimer();
+    liveIdleTimer = setTimeout(() => {
+      flushLiveBuffer({ force: true, idle: true });
+      if (liveBufferText) {
+        scheduleLiveIdleFlush();
+      }
+    }, liveIdleFlushMs);
+  };
+
   const resetTurnState = () => {
+    clearLiveIdleTimer();
     emittedTurnChars = 0;
     emittedMetaEvents = 0;
     truncationNoticeEmitted = false;
@@ -172,21 +267,9 @@ export function createAcpReplyProjector(params: {
     lastUsageTuple = undefined;
     lastVisibleOutputTail = undefined;
     pendingHiddenBoundary = false;
+    liveBufferText = "";
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
-  };
-
-  const drainChunker = (force: boolean) => {
-    if (settings.deliveryMode === "final_only" && !force) {
-      return;
-    }
-    const effectiveForce = settings.deliveryMode === "live" ? true : force;
-    chunker.drain({
-      force: effectiveForce,
-      emit: (chunk) => {
-        blockReplyPipeline.enqueue({ text: chunk });
-      },
-    });
   };
 
   const flushBufferedToolDeliveries = async (force: boolean) => {
@@ -199,6 +282,10 @@ export function createAcpReplyProjector(params: {
   };
 
   const flush = async (force = false): Promise<void> => {
+    if (settings.deliveryMode === "live") {
+      clearLiveIdleTimer();
+      flushLiveBuffer({ force: true });
+    }
     await flushBufferedToolDeliveries(force);
     drainChunker(force);
     await blockReplyPipeline.flush({ force });
@@ -362,10 +449,20 @@ export function createAcpReplyProjector(params: {
       const remaining = settings.maxTurnChars - emittedTurnChars;
       const accepted = remaining < text.length ? text.slice(0, remaining) : text;
       if (accepted.length > 0) {
-        chunker.append(accepted);
         emittedTurnChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
-        drainChunker(false);
+        if (settings.deliveryMode === "live") {
+          liveBufferText += accepted;
+          if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {
+            clearLiveIdleTimer();
+            flushLiveBuffer({ force: true });
+          } else {
+            scheduleLiveIdleFlush();
+          }
+        } else {
+          chunker.append(accepted);
+          drainChunker(false);
+        }
       }
       if (accepted.length < text.length) {
         await emitTruncationNotice();
@@ -396,7 +493,9 @@ export function createAcpReplyProjector(params: {
     if (event.type === "tool_call") {
       if (!isAcpTagVisible(settings, event.tag)) {
         if (event.tag && HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
-          pendingHiddenBoundary = true;
+          const status = normalizeToolStatus(event.status);
+          const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
+          pendingHiddenBoundary = event.tag === "tool_call" || isTerminal;
         }
         return;
       }
