@@ -33,6 +33,7 @@ describe("resolveTotalTokens", () => {
     });
 
     it("returns totalTokens when present and valid", () => {
+      expect(resolveTotalTokens({ totalTokens: 0 })).toBe(0);
       expect(resolveTotalTokens({ totalTokens: 123 })).toBe(123);
       expect(resolveTotalTokens({ totalTokens: 1000 })).toBe(1000);
       expect(resolveTotalTokens({ totalTokens: Infinity })).toBeUndefined(); // Not finite

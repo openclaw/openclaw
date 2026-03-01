@@ -55,7 +55,7 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
     if (
       typeof entry.totalTokens === "number" &&
       Number.isFinite(entry.totalTokens) &&
-      entry.totalTokens > 0
+      entry.totalTokens >= 0
     ) {
       return entry.totalTokens;
     }
