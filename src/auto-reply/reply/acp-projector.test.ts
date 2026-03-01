@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 
 function createCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
@@ -8,7 +9,7 @@ function createCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
       enabled: true,
       stream: {
         coalesceIdleMs: 0,
-        maxChunkChars: 50,
+        maxChunkChars: 64,
       },
     },
     ...overrides,
@@ -29,71 +30,123 @@ describe("createAcpReplyProjector", () => {
 
     await projector.onEvent({
       type: "text_delta",
-      text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      text: "a".repeat(70),
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(deliveries).toEqual([
+      { kind: "block", text: "a".repeat(64) },
+      { kind: "block", text: "a".repeat(6) },
+    ]);
+  });
+
+  it("supports deliveryMode=final_only by buffering deltas until done", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 512,
+            deliveryMode: "final_only",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "What",
+      tag: "agent_message_chunk",
     });
     await projector.onEvent({
       type: "text_delta",
-      text: "bbbbbbbbbb",
+      text: " now?",
+      tag: "agent_message_chunk",
     });
-    await projector.flush(true);
-
-    expect(deliveries).toEqual([
-      {
-        kind: "block",
-        text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      },
-      { kind: "block", text: "aabbbbbbbbbb" },
-    ]);
-  });
-
-  it("buffers tiny token deltas and flushes once at turn end", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-          },
-        },
-      }),
-      shouldSendToolSummaries: true,
-      provider: "discord",
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
-      },
-    });
-
-    await projector.onEvent({ type: "text_delta", text: "What" });
-    await projector.onEvent({ type: "text_delta", text: " do" });
-    await projector.onEvent({ type: "text_delta", text: " you want to work on?" });
-
     expect(deliveries).toEqual([]);
 
-    await projector.flush(true);
-
-    expect(deliveries).toEqual([{ kind: "block", text: "What do you want to work on?" }]);
+    await projector.onEvent({ type: "done" });
+    expect(deliveries).toEqual([{ kind: "block", text: "What now?" }]);
   });
 
-  it("filters thought stream text and suppresses tool summaries when disabled", async () => {
-    const deliver = vi.fn(async () => true);
-    const projector = createAcpReplyProjector({
+  it("suppresses usage_update by default and allows deduped usage when enabled", async () => {
+    const hidden: Array<{ kind: string; text?: string }> = [];
+    const hiddenProjector = createAcpReplyProjector({
       cfg: createCfg(),
-      shouldSendToolSummaries: false,
-      deliver,
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        hidden.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+    await hiddenProjector.onEvent({
+      type: "status",
+      text: "usage updated: 10/100",
+      tag: "usage_update",
+      used: 10,
+      size: 100,
+    });
+    expect(hidden).toEqual([]);
+
+    const shown: Array<{ kind: string; text?: string }> = [];
+    const shownProjector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 64,
+            showUsage: true,
+            tagVisibility: {
+              usage_update: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        shown.push({ kind, text: payload.text });
+        return true;
+      },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "internal", stream: "thought" });
-    await projector.onEvent({ type: "status", text: "running tool" });
-    await projector.onEvent({ type: "tool_call", text: "ls" });
-    await projector.flush(true);
+    await shownProjector.onEvent({
+      type: "status",
+      text: "usage updated: 10/100",
+      tag: "usage_update",
+      used: 10,
+      size: 100,
+    });
+    await shownProjector.onEvent({
+      type: "status",
+      text: "usage updated: 10/100",
+      tag: "usage_update",
+      used: 10,
+      size: 100,
+    });
+    await shownProjector.onEvent({
+      type: "status",
+      text: "usage updated: 11/100",
+      tag: "usage_update",
+      used: 11,
+      size: 100,
+    });
 
-    expect(deliver).not.toHaveBeenCalled();
+    expect(shown).toEqual([
+      { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
+      { kind: "tool", text: prefixSystemMessage("usage updated: 11/100") },
+    ]);
   });
 
-  it("emits status and tool_call summaries when enabled", async () => {
+  it("dedupes repeated tool lifecycle updates in minimal mode", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg(),
@@ -104,16 +157,70 @@ describe("createAcpReplyProjector", () => {
       },
     });
 
-    await projector.onEvent({ type: "status", text: "planning" });
-    await projector.onEvent({ type: "tool_call", text: "exec ls" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_1",
+      status: "in_progress",
+      title: "List files",
+      text: "List files (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "call_1",
+      status: "in_progress",
+      title: "List files",
+      text: "List files (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "call_1",
+      status: "completed",
+      title: "List files",
+      text: "List files (completed)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "call_1",
+      status: "completed",
+      title: "List files",
+      text: "List files (completed)",
+    });
 
-    expect(deliveries).toEqual([
-      { kind: "tool", text: "⚙️ planning" },
-      { kind: "tool", text: "🧰 exec ls" },
-    ]);
+    expect(deliveries.length).toBe(2);
+    expect(deliveries[0]?.kind).toBe("tool");
+    expect(deliveries[0]?.text).toContain("Tool Call");
+    expect(deliveries[1]?.kind).toBe("tool");
+    expect(deliveries[1]?.text).toContain("Tool Call");
   });
 
-  it("flushes pending streamed text before tool/status updates", async () => {
+  it("renders fallback tool labels without leaking call ids as primary label", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg(),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_ABC123",
+      status: "in_progress",
+      text: "call_ABC123 (in_progress)",
+    });
+
+    expect(deliveries[0]?.text).toContain("Tool Call");
+    expect(deliveries[0]?.text).not.toContain("call_ABC123 (");
+  });
+
+  it("respects metaMode=off and still streams assistant text", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
       cfg: createCfg({
@@ -122,24 +229,118 @@ describe("createAcpReplyProjector", () => {
           stream: {
             coalesceIdleMs: 0,
             maxChunkChars: 256,
+            metaMode: "off",
           },
         },
       }),
       shouldSendToolSummaries: true,
-      provider: "discord",
       deliver: async (kind, payload) => {
         deliveries.push({ kind, text: payload.text });
         return true;
       },
     });
 
-    await projector.onEvent({ type: "text_delta", text: "Hello" });
-    await projector.onEvent({ type: "text_delta", text: " world" });
-    await projector.onEvent({ type: "status", text: "running tool" });
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      text: "tool call",
+      tag: "tool_call",
+      toolCallId: "x",
+      status: "in_progress",
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "hello",
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(deliveries).toEqual([{ kind: "block", text: "hello" }]);
+  });
+
+  it("truncates oversized turns once and emits one truncation notice", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            maxTurnChars: 5,
+            metaMode: "minimal",
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "hello world",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "ignored tail",
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
 
     expect(deliveries).toEqual([
-      { kind: "block", text: "Hello world" },
-      { kind: "tool", text: "⚙️ running tool" },
+      { kind: "block", text: "hello" },
+      { kind: "tool", text: prefixSystemMessage("output truncated") },
     ]);
+  });
+
+  it("supports tagVisibility overrides for tool updates", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            tagVisibility: {
+              tool_call_update: false,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "c1",
+      status: "in_progress",
+      title: "Run tests",
+      text: "Run tests (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "c1",
+      status: "completed",
+      title: "Run tests",
+      text: "Run tests (completed)",
+    });
+
+    expect(deliveries.length).toBe(1);
+    expect(deliveries[0]?.text).toContain("Tool Call");
   });
 });
