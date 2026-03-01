@@ -88,6 +88,11 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const envHelpRaw = metadataObj.envHelp;
+  const envHelp =
+    envHelpRaw && typeof envHelpRaw === "object" && !Array.isArray(envHelpRaw)
+      ? (envHelpRaw as Record<string, { howToGet?: string; label?: string }>)
+      : undefined;
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -97,6 +102,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    envHelp,
   };
 }
 
