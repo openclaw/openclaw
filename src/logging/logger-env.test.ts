@@ -79,3 +79,26 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
   });
 });
+
+describe("logging.file tilde expansion", () => {
+  beforeEach(() => {
+    resetLogger();
+    setLoggerOverride(null);
+  });
+
+  afterEach(() => {
+    resetLogger();
+    setLoggerOverride(null);
+  });
+
+  it("expands ~ in logging.file to the home directory", () => {
+    setLoggerOverride({
+      level: "info",
+      file: "~/.openclaw/logs/gateway.log",
+    });
+
+    const settings = getResolvedLoggerSettings();
+    expect(settings.file).toBe(path.join(os.homedir(), ".openclaw", "logs", "gateway.log"));
+    expect(settings.file).not.toContain("~");
+  });
+});
