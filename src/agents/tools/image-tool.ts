@@ -5,6 +5,7 @@ import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { FailoverError } from "../failover-error.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
@@ -249,10 +250,18 @@ async function runImagePrompt(params: {
     run: async (provider, modelId) => {
       const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
       if (!model) {
-        throw new Error(`Unknown model: ${provider}/${modelId}`);
+        throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
       if (!model.input?.includes("image")) {
-        throw new Error(`Model does not support images: ${provider}/${modelId}`);
+        throw new FailoverError(`Model does not support images: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+        });
       }
       const apiKeyInfo = await getApiKeyForModel({
         model,
