@@ -58,11 +58,25 @@ function parseApiAppIdFromAppToken(raw?: string) {
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   let account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
   });
+
+  if (!account.enabled) {
+    runtime.log?.(`[${account.accountId}] slack account disabled; monitor startup skipped`);
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      opts.abortSignal?.addEventListener("abort", () => resolve(), {
+        once: true,
+      });
+    });
+    return;
+  }
 
   const historyLimit = Math.max(
     0,
@@ -92,8 +106,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
     );
   }
-
-  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const slackCfg = account.config;
   const dmConfig = slackCfg.dm;
