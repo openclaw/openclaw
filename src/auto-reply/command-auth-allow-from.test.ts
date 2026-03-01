@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { resolveCommandsAllowFromList } from "./command-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCommandsAllowFromList } from "./command-auth.js";
 
 function makeConfig(commandsAllowFrom?: Record<string, Array<string | number>>): OpenClawConfig {
   return {

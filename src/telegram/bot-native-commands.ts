@@ -1,5 +1,6 @@
 import type { Bot, Context } from "grammy";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { resolveCommandsAllowFromList } from "../auto-reply/command-auth.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
   buildCommandTextFromArgs,
@@ -12,7 +13,6 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-import { resolveCommandsAllowFromList } from "../auto-reply/command-auth.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
 import { getChannelDock } from "../channels/dock.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
