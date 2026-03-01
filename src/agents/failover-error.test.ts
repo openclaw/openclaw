@@ -100,6 +100,26 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
+  it("treats Anthropic 402 as rate_limit instead of billing (#30484)", () => {
+    expect(
+      resolveFailoverReasonFromError({ status: 402 }, { provider: "anthropic" }),
+    ).toBe("rate_limit");
+    // Non-Anthropic 402 should still be billing
+    expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({ status: 402 }, { provider: "openai" }),
+    ).toBe("billing");
+  });
+
+  it("coerces Anthropic 402 to rate_limit failover error", () => {
+    const err = coerceToFailoverError(
+      { status: 402, message: "Payment Required" },
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("rate_limit");
+    expect(err?.provider).toBe("anthropic");
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
