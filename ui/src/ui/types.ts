@@ -491,6 +491,7 @@ export type CronDelivery = {
   to?: string;
   accountId?: string;
   bestEffort?: boolean;
+  failureDestination?: CronFailureAlert;
 };
 
 export type CronFailureAlert = {
@@ -498,6 +499,8 @@ export type CronFailureAlert = {
   channel?: string;
   to?: string;
   cooldownMs?: number;
+  mode?: "announce" | "webhook";
+  accountId?: string;
 };
 
 export type CronJobState = {

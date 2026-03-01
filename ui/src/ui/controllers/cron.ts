@@ -481,6 +481,12 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
         ? (failureAlert.channel ?? CRON_CHANNEL_LAST)
         : CRON_CHANNEL_LAST,
     failureAlertTo: failureAlert && typeof failureAlert === "object" ? (failureAlert.to ?? "") : "",
+    failureAlertDeliveryMode:
+      failureAlert && typeof failureAlert === "object"
+        ? (failureAlert.mode ?? "announce")
+        : "announce",
+    failureAlertAccountId:
+      failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
       job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
         ? String(job.payload.timeoutSeconds)
@@ -593,11 +599,15 @@ function buildFailureAlert(form: CronFormState) {
     cooldownSeconds !== undefined && Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
       ? Math.floor(cooldownSeconds * 1000)
       : undefined;
+  const deliveryMode = form.failureAlertDeliveryMode;
+  const accountId = form.failureAlertAccountId.trim();
   return {
     after: after > 0 ? Math.floor(after) : undefined,
     channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    ...(deliveryMode ? { mode: deliveryMode } : {}),
+    ...(accountId ? { accountId } : {}),
   };
 }
 

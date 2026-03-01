@@ -188,7 +188,14 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
 function resolveFailureAlert(
   state: CronServiceState,
   job: CronJob,
-): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
+): {
+  after: number;
+  cooldownMs: number;
+  channel: CronMessageChannel;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+} | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
@@ -210,6 +217,8 @@ function resolveFailureAlert(
       normalizeCronMessageChannel(job.delivery?.channel) ??
       "last",
     to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
+    mode: jobConfig?.mode ?? globalConfig?.mode,
+    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
   };
 }
 
@@ -221,6 +230,8 @@ function emitFailureAlert(
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
@@ -237,6 +248,8 @@ function emitFailureAlert(
         text,
         channel: params.channel,
         to: params.to,
+        mode: params.mode,
+        accountId: params.accountId,
       })
       .catch((err) => {
         state.deps.log.warn(
@@ -287,19 +300,26 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const now = state.deps.nowMs();
-      const lastAlert = job.state.lastFailureAlertAtMs;
-      const inCooldown =
-        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-      if (!inCooldown) {
-        emitFailureAlert(state, {
-          job,
-          error: result.error,
-          consecutiveErrors: job.state.consecutiveErrors,
-          channel: alertConfig.channel,
-          to: alertConfig.to,
-        });
-        job.state.lastFailureAlertAtMs = now;
+      const isBestEffort =
+        job.delivery?.bestEffort === true ||
+        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+      if (!isBestEffort) {
+        const now = state.deps.nowMs();
+        const lastAlert = job.state.lastFailureAlertAtMs;
+        const inCooldown =
+          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+        if (!inCooldown) {
+          emitFailureAlert(state, {
+            job,
+            error: result.error,
+            consecutiveErrors: job.state.consecutiveErrors,
+            channel: alertConfig.channel,
+            to: alertConfig.to,
+            mode: alertConfig.mode,
+            accountId: alertConfig.accountId,
+          });
+          job.state.lastFailureAlertAtMs = now;
+        }
       }
     }
   } else {

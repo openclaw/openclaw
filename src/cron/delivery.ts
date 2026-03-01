@@ -1,4 +1,14 @@
-import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import type { CliDeps } from "../cli/deps.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { loadConfig } from "../config/config.js";
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { getChildLogger } from "../logging.js";
+import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
+import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
@@ -89,4 +99,165 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     source: "payload",
     requested,
   };
+}
+
+export type CronFailureDeliveryPlan = {
+  mode: "announce" | "webhook";
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+};
+
+export type CronFailureDestinationInput = {
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
+};
+
+function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === "announce" || trimmed === "webhook") {
+    return trimmed;
+  }
+  return undefined;
+}
+
+export function resolveFailureDestination(
+  job: CronJob,
+  globalConfig?: CronFailureDestinationConfig,
+): CronFailureDeliveryPlan | null {
+  const delivery = job.delivery;
+  const jobFailureDest = delivery?.failureDestination as CronFailureDestinationInput | undefined;
+  const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
+
+  let channel: CronMessageChannel | undefined;
+  let to: string | undefined;
+  let accountId: string | undefined;
+  let mode: "announce" | "webhook" | undefined;
+
+  if (hasJobFailureDest) {
+    channel = normalizeChannel(jobFailureDest.channel);
+    to = normalizeTo(jobFailureDest.to);
+    accountId = normalizeAccountId(jobFailureDest.accountId);
+    mode = normalizeFailureMode(jobFailureDest.mode);
+  } else if (globalConfig) {
+    channel = normalizeChannel(globalConfig.channel);
+    to = normalizeTo(globalConfig.to);
+    accountId = normalizeAccountId(globalConfig.accountId);
+    mode = normalizeFailureMode(globalConfig.mode);
+  }
+
+  if (!channel && !to && !accountId && !mode) {
+    return null;
+  }
+
+  const resolvedMode = mode ?? "announce";
+  const result: CronFailureDeliveryPlan = {
+    mode: resolvedMode,
+    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
+    to,
+    accountId,
+  };
+
+  if (delivery && isSameDeliveryTarget(delivery, result)) {
+    return null;
+  }
+
+  return result;
+}
+
+function isSameDeliveryTarget(
+  delivery: CronDelivery,
+  failurePlan: CronFailureDeliveryPlan,
+): boolean {
+  const primaryMode = delivery.mode ?? "none";
+  if (primaryMode === "none") {
+    return false;
+  }
+
+  const primaryChannel = delivery.channel;
+  const primaryTo = delivery.to;
+  const primaryAccountId = delivery.accountId;
+
+  if (failurePlan.mode === "webhook") {
+    return primaryMode === "webhook" && primaryTo === failurePlan.to;
+  }
+
+  const primaryChannelNormalized = primaryChannel ?? "last";
+  const failureChannelNormalized = failurePlan.channel ?? "last";
+
+  return (
+    failureChannelNormalized === primaryChannelNormalized &&
+    failurePlan.to === primaryTo &&
+    failurePlan.accountId === primaryAccountId
+  );
+}
+
+const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
+const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+
+export async function sendFailureNotificationAnnounce(
+  deps: CliDeps,
+  agentId: string,
+  jobId: string,
+  target: { channel?: string; to?: string; accountId?: string },
+  message: string,
+): Promise<void> {
+  const cfg = loadConfig();
+  const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
+    channel: target.channel as "last" | undefined,
+    to: target.to,
+    accountId: target.accountId,
+  });
+
+  if (!resolvedTarget.ok) {
+    cronDeliveryLogger.warn(
+      { error: resolvedTarget.error.message },
+      "cron: failed to resolve failure destination target",
+    );
+    return;
+  }
+
+  const identity = resolveAgentOutboundIdentity(cfg, agentId);
+  const session = buildOutboundSessionContext({
+    cfg,
+    agentId,
+    sessionKey: `cron:${jobId}:failure`,
+  });
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, FAILURE_NOTIFICATION_TIMEOUT_MS);
+
+  try {
+    await deliverOutboundPayloads({
+      cfg,
+      channel: resolvedTarget.channel,
+      to: resolvedTarget.to,
+      accountId: resolvedTarget.accountId,
+      threadId: resolvedTarget.threadId,
+      payloads: [{ text: message }],
+      session,
+      identity,
+      bestEffort: false,
+      deps: createOutboundSendDeps(deps),
+      abortSignal: abortController.signal,
+    });
+  } catch (err) {
+    cronDeliveryLogger.warn(
+      {
+        err: formatErrorMessage(err),
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
+      },
+      "cron: failure destination announce failed",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }
