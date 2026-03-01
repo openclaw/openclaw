@@ -7,11 +7,13 @@ set -euo pipefail
 # - FORCE agent=main
 # - REQUIRE provider/model receipt: openai-codex / gpt-5.3-codex
 
-TMP_PREFIX="/tmp/cc-echo"
+TMP_PREFIX_BASE="/tmp/cc-echo"
 ERR_PATTERNS='rate limit|FailoverError|INVALID_REQUEST|No session found|cooldown'
 MAX_PARALLEL="${MAX_PARALLEL:-2}"
 
 RUN_ID="$(date +%H%M%S)-$$"
+
+TMP_PREFIX="${TMP_PREFIX_BASE}-${RUN_ID}"
 
 SESSIONS=()
 for i in $(seq 1 10); do
