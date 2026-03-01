@@ -15,6 +15,9 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const CODEX_JWT_AUTH_CLAIM = "https://api.openai.com/auth";
+const CODEX_ACCOUNT_ID_HEADER = "chatgpt-account-id";
+const CODEX_FALLBACK_ACCOUNT_ID = "compat";
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -317,6 +320,105 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
       ...options,
       transport: options?.transport ?? "auto",
     });
+}
+
+function getHeaderCaseInsensitive(
+  headers: Record<string, string> | undefined,
+  headerName: string,
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const normalized = headerName.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === normalized) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+  const parts = token.split(".");
+  if (parts.length !== 3 || !parts[1]) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(parts[1], "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractCodexAccountIdFromToken(token: string): string | undefined {
+  const payload = decodeJwtPayload(token);
+  if (!payload) {
+    return undefined;
+  }
+  const authClaim = payload[CODEX_JWT_AUTH_CLAIM];
+  if (!authClaim || typeof authClaim !== "object" || Array.isArray(authClaim)) {
+    return undefined;
+  }
+  const accountId = (authClaim as Record<string, unknown>).chatgpt_account_id;
+  if (typeof accountId !== "string" || !accountId.trim()) {
+    return undefined;
+  }
+  return accountId;
+}
+
+function createCodexCompatJwt(accountId: string): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" }), "utf8").toString(
+    "base64url",
+  );
+  const payload = Buffer.from(
+    JSON.stringify({ [CODEX_JWT_AUTH_CLAIM]: { chatgpt_account_id: accountId } }),
+    "utf8",
+  ).toString("base64url");
+  return `${header}.${payload}.`;
+}
+
+function shouldApplyCodexOpaqueTokenCompat(model: { api?: unknown; provider?: unknown }): boolean {
+  return model.api === "openai-codex-responses" && model.provider === "openai-codex";
+}
+
+function createCodexOpaqueTokenCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldApplyCodexOpaqueTokenCompat(model)) {
+      return underlying(model, context, options);
+    }
+
+    const rawApiKey = options?.apiKey;
+    if (typeof rawApiKey !== "string" || !rawApiKey.trim()) {
+      return underlying(model, context, options);
+    }
+
+    // Native JWT account-id claim already present: keep upstream behavior unchanged.
+    if (extractCodexAccountIdFromToken(rawApiKey)) {
+      return underlying(model, context, options);
+    }
+
+    const headerAccountId = getHeaderCaseInsensitive(options?.headers, CODEX_ACCOUNT_ID_HEADER);
+    const accountId = headerAccountId?.trim() || CODEX_FALLBACK_ACCOUNT_ID;
+
+    return underlying(model, context, {
+      ...options,
+      // Feed pi-ai's extractAccountId() path with a minimal JWT that carries
+      // only the account-id claim it expects.
+      apiKey: createCodexCompatJwt(accountId),
+      headers: {
+        ...options?.headers,
+        // Preserve the real opaque member token for upstream auth.
+        Authorization: `Bearer ${rawApiKey}`,
+        [CODEX_ACCOUNT_ID_HEADER]: accountId,
+      },
+    });
+  };
 }
 
 function isAnthropic1MModel(modelId: string): boolean {
@@ -740,6 +842,10 @@ export function applyExtraParamsToAgent(
   if (provider === "openai-codex") {
     // Default Codex to WebSocket-first when nothing else specifies transport.
     agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+    // pi-ai currently expects a JWT token for account-id extraction on Codex
+    // responses. For opaque member tokens, provide a compat JWT while keeping
+    // the original token in Authorization headers.
+    agent.streamFn = createCodexOpaqueTokenCompatWrapper(agent.streamFn);
   }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
