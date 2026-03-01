@@ -93,6 +93,24 @@ describe("runCommandWithTimeout", () => {
     ).not.toThrow();
   });
 
+  it("allows semver range specs when Windows shell mode is required", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["pack", "@openclaw/voice-call@^1.2.0"],
+        platform: "win32",
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows quoted JSON args when Windows shell mode is required", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["dlx", "mcporter", "--args", '{"query":"openclaw docs"}'],
+        platform: "win32",
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects unsafe args when Windows shell mode is required", () => {
     expect(() =>
       assertSafeWindowsShellArgs({
