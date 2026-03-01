@@ -48,7 +48,7 @@ export function installOpenAiRateLimitShaper(): void {
   const jitter = (ms: number) => Math.max(0, Math.floor(ms * (0.9 + Math.random() * 0.2)));
   const now = () => Date.now();
 
-  const origFetch: typeof fetch | undefined = (globalThis as any).fetch;
+  const origFetch: typeof fetch | undefined = (globalThis as unknown as { fetch?: typeof fetch }).fetch;
   if (!origFetch) {
     return;
   }
@@ -66,7 +66,7 @@ export function installOpenAiRateLimitShaper(): void {
     }
     // Last resort (should be rare)
     try {
-      return String(input);
+      return "[object RequestInfo]";
     } catch {
       return "[object RequestInfo]";
     }
