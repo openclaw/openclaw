@@ -12,6 +12,7 @@ import {
   optimizeImageToPng,
   resizeToJpeg,
 } from "../media/image-ops.js";
+import { isInboundPathAllowed } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime, extensionForMime, kindFromMime } from "../media/mime.js";
 import { resolveUserPath } from "../utils.js";
@@ -114,7 +115,21 @@ async function assertLocalMediaAllowed(
       }
     }
   }
+  // Separate wildcard roots (e.g. "/Users/*/Library/Messages/Attachments") from
+  // concrete roots.  Wildcard roots come from channel attachment configs (iMessage)
+  // and are validated using the same matching logic as inbound-path-policy.
+  const wildcardRoots = roots.filter((r) => r.includes("*"));
+  if (
+    wildcardRoots.length > 0 &&
+    isInboundPathAllowed({ filePath: resolved, roots: wildcardRoots })
+  ) {
+    return;
+  }
+
   for (const root of roots) {
+    if (root.includes("*")) {
+      continue; // already checked above via isInboundPathAllowed
+    }
     let resolvedRoot: string;
     try {
       resolvedRoot = await fs.realpath(root);

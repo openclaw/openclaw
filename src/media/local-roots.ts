@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveIMessageAttachmentRoots } from "./inbound-path-policy.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
@@ -45,12 +46,21 @@ export function getAgentScopedMediaLocalRoots(
     return roots;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  if (!workspaceDir) {
-    return roots;
+  if (workspaceDir) {
+    const normalizedWorkspaceDir = path.resolve(workspaceDir);
+    if (!roots.includes(normalizedWorkspaceDir)) {
+      roots.push(normalizedWorkspaceDir);
+    }
   }
-  const normalizedWorkspaceDir = path.resolve(workspaceDir);
-  if (!roots.includes(normalizedWorkspaceDir)) {
-    roots.push(normalizedWorkspaceDir);
+
+  // Merge iMessage attachment roots so tools (e.g. image) can read
+  // attachments that were already validated by the iMessage channel.
+  const iMessageRoots = resolveIMessageAttachmentRoots({ cfg });
+  for (const root of iMessageRoots) {
+    if (!roots.includes(root)) {
+      roots.push(root);
+    }
   }
+
   return roots;
 }
