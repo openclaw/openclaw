@@ -24,10 +24,12 @@
 
 <!-- 형식: | YYYY-MM-DD | 프로젝트 | 유형 | 설명 | 링크 | 점수 | -->
 
-| 날짜       | 프로젝트                     | 유형        | 설명                                                                   | 링크                                                       | 점수 |
-| ---------- | ---------------------------- | ----------- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | ---- |
-| 2026-03-01 | openclaw/openclaw            | OSS_PR_OPEN | fix(discord): bare numeric ID → channel default + permanent error 분류 | https://github.com/openclaw/openclaw/pull/30198            | 3    |
-| 2026-02-25 | obsidianmd/obsidian-releases | OSS_PR_OPEN | Mnemo 플러그인 PR #10406 재제출                                        | https://github.com/obsidianmd/obsidian-releases/pull/10406 | 3    |
+| 날짜       | 프로젝트                     | 유형            | 설명                                                                   | 링크                                                       | 점수 |
+| ---------- | ---------------------------- | --------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | ---- |
+| 2026-03-01 | openclaw/openclaw            | OSS_PR_OPEN     | fix(discord): bare numeric ID → channel default + permanent error 분류 | https://github.com/openclaw/openclaw/pull/30198            | 3    |
+| 2026-03-01 | clawhub/expo-appstore-deploy | SKILL_PUBLISHED | Expo App Store Deploy v1.0.1 ClawHub 배포                              | https://clawhub.ai/skills/expo-appstore-deploy             | 5    |
+| 2026-03-01 | clawhub/advisory-committee   | SKILL_PUBLISHED | Advisory Committee v1.1.0 ClawHub 배포                                 | https://clawhub.ai/skills/advisory-committee               | 5    |
+| 2026-02-25 | obsidianmd/obsidian-releases | OSS_PR_OPEN     | Mnemo 플러그인 PR #10406 재제출                                        | https://github.com/obsidianmd/obsidian-releases/pull/10406 | 3    |
 
 ---
 
