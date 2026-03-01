@@ -12,6 +12,30 @@ import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./typ
 
 const log = createSubsystemLogger("plugins");
 
+/**
+ * Use globalThis to store the hook runner and registry.
+ * This ensures all bundled chunks share the same instance,
+ * even when code is split across multiple entry points.
+ */
+const GLOBAL_KEY = "openclaw:pluginHookRunner";
+const GLOBAL_REGISTRY_KEY = "openclaw:pluginRegistry";
+
+function getStoredHookRunner(): HookRunner | null {
+  return (globalThis as Record<string, unknown>)[GLOBAL_KEY] as HookRunner | null;
+}
+
+function setStoredHookRunner(runner: HookRunner | null): void {
+  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = runner;
+}
+
+function getStoredRegistry(): PluginRegistry | null {
+  return (globalThis as Record<string, unknown>)[GLOBAL_REGISTRY_KEY] as PluginRegistry | null;
+}
+
+function setStoredRegistry(registry: PluginRegistry | null): void {
+  (globalThis as Record<string, unknown>)[GLOBAL_REGISTRY_KEY] = registry;
+}
+
 let globalHookRunner: HookRunner | null = null;
 let globalRegistry: PluginRegistry | null = null;
 
@@ -30,6 +54,10 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
     catchErrors: true,
   });
 
+  // Also store in globalThis for cross-chunk access in bundled builds
+  setStoredRegistry(registry);
+  setStoredHookRunner(globalHookRunner);
+
   const hookCount = registry.typedHooks.length;
   if (hookCount > 0) {
     log.info(`hook runner initialized with ${hookCount} registered hooks`);
@@ -41,7 +69,12 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalHookRunner(): HookRunner | null {
-  return globalHookRunner;
+  // First try the module-level variable (works in non-bundled builds)
+  if (globalHookRunner) {
+    return globalHookRunner;
+  }
+  // Fall back to globalThis (required for bundled builds with code splitting)
+  return getStoredHookRunner();
 }
 
 /**
@@ -49,7 +82,12 @@ export function getGlobalHookRunner(): HookRunner | null {
  * Returns null if plugins haven't been loaded yet.
  */
 export function getGlobalPluginRegistry(): PluginRegistry | null {
-  return globalRegistry;
+  // First try the module-level variable (works in non-bundled builds)
+  if (globalRegistry) {
+    return globalRegistry;
+  }
+  // Fall back to globalThis (required for bundled builds with code splitting)
+  return getStoredRegistry();
 }
 
 /**
@@ -85,4 +123,6 @@ export async function runGlobalGatewayStopSafely(params: {
 export function resetGlobalHookRunner(): void {
   globalHookRunner = null;
   globalRegistry = null;
+  setStoredHookRunner(null);
+  setStoredRegistry(null);
 }

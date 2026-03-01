@@ -288,6 +288,8 @@ export function buildNodeServiceEnvironment(params: {
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
     env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+  // Read gateway token from environment for node service (needed for remote gateway connections)
+  const gatewayToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim();
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
@@ -296,6 +298,7 @@ export function buildNodeServiceEnvironment(params: {
     NODE_EXTRA_CA_CERTS: nodeCaCerts,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
