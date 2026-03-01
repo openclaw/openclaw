@@ -314,7 +314,7 @@ describe("startGatewayConfigReloader", () => {
     expect(onRestart).not.toHaveBeenCalled();
     // The warning should have been logged exactly once
     const warnCalls = log.warn.mock.calls.filter(
-      ([msg]: [string]) => typeof msg === "string" && msg.includes("invalid config"),
+      ([msg]: unknown[]) => typeof msg === "string" && msg.includes("invalid config"),
     );
     expect(warnCalls).toHaveLength(1);
     expect(warnCalls[0][0]).toContain("gateway.port: must be a number");
@@ -356,7 +356,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(3);
     const warnCalls = log.warn.mock.calls.filter(
-      ([msg]: [string]) => typeof msg === "string" && msg.includes("invalid config"),
+      ([msg]: unknown[]) => typeof msg === "string" && msg.includes("invalid config"),
     );
     expect(warnCalls).toHaveLength(2);
     expect(onHotReload).toHaveBeenCalledTimes(1); // the valid snapshot triggers hot reload
