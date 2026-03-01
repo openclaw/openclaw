@@ -110,18 +110,18 @@ describe("announce loop guard (#18264)", () => {
     {
       name: "expired entries with high retry count are skipped by resumeSubagentRun",
       createEntry: (now: number) => ({
-        // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
+        // Ended 70 minutes ago (well past ANNOUNCE_EXPIRY_MS of 60 min).
         runId: "test-expired-loop",
         childSessionKey: "agent:main:subagent:expired-child",
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "agent:main:main",
         task: "expired test task",
         cleanup: "keep" as const,
-        createdAt: now - 15 * 60_000,
-        startedAt: now - 14 * 60_000,
-        endedAt: now - 10 * 60_000,
+        createdAt: now - 80 * 60_000,
+        startedAt: now - 75 * 60_000,
+        endedAt: now - 70 * 60_000,
         announceRetryCount: 3,
-        lastAnnounceRetryAt: now - 9 * 60_000,
+        lastAnnounceRetryAt: now - 65 * 60_000,
       }),
     },
     {

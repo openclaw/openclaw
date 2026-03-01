@@ -837,7 +837,7 @@ describe("sessions tools", () => {
       cleanup: "keep",
       createdAt: now - 15 * 60_000,
       startedAt: now - 14 * 60_000,
-      endedAt: now - 5 * 60_000,
+      endedAt: now - 10 * 60_000,
       outcome: { status: "ok" },
     });
     addSubagentRunForTests({
@@ -847,9 +847,9 @@ describe("sessions tools", () => {
       requesterDisplayKey: "main",
       task: "old completed run",
       cleanup: "keep",
-      createdAt: now - 90 * 60_000,
-      startedAt: now - 89 * 60_000,
-      endedAt: now - 80 * 60_000,
+      createdAt: now - 120 * 60_000,
+      startedAt: now - 110 * 60_000,
+      endedAt: now - 100 * 60_000,
       outcome: { status: "ok" },
     });
 

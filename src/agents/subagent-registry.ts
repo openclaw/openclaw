@@ -60,11 +60,19 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
  * returns `false` due to stale state or transient conditions (#18264).
  */
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
+
 /**
- * Announce entries older than this are force-expired even if delivery never
- * succeeded. Guards against stale registry entries surviving gateway restarts.
+ * Resolves the announce expiry duration from config (in ms).
+ * Falls back to 60 minutes if not configured.
  */
-const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+function resolveAnnounceExpiryMs(cfg?: ReturnType<typeof loadConfig>): number {
+  const config = cfg ?? loadConfig();
+  const minutes = config.agents?.defaults?.subagents?.announceExpiryMinutes ?? 60;
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return 60 * 60_000; // 60 minutes fallback
+  }
+  return Math.max(1, Math.floor(minutes)) * 60_000;
+}
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
@@ -443,7 +451,7 @@ function resumeSubagentRun(runId: string) {
     persistSubagentRuns();
     return;
   }
-  if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
+  if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > resolveAnnounceExpiryMs()) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
@@ -663,7 +671,7 @@ async function finalizeSubagentCleanup(
     entry,
     now,
     activeDescendantRuns: Math.max(0, countActiveDescendantRuns(entry.childSessionKey)),
-    announceExpiryMs: ANNOUNCE_EXPIRY_MS,
+    announceExpiryMs: resolveAnnounceExpiryMs(),
     maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
     resolveAnnounceRetryDelayMs,
@@ -764,7 +772,7 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     }
     // Force-expire announces that have been pending too long (#18264).
     const endedAgo = now - (entry.endedAt ?? now);
-    if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+    if (endedAgo > resolveAnnounceExpiryMs()) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
       persistSubagentRuns();

@@ -563,8 +563,8 @@ describe("subagent registry steer restarts", () => {
       runId: "run-parent-expiry",
       data: {
         phase: "end",
-        startedAt: Date.now() - 7 * 60_000,
-        endedAt: Date.now() - 6 * 60_000,
+        startedAt: Date.now() - 75 * 60_000,
+        endedAt: Date.now() - 70 * 60_000,
       },
     });
 
