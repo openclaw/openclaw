@@ -380,6 +380,47 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("retries voice without caption and sends text when caption is too long", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: message caption is too long)",
+        ),
+      )
+      .mockResolvedValueOnce({
+        message_id: 8,
+        chat: { id: "123" },
+      });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 9,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVoice, sendMessage });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "<".repeat(300), audioAsVoice: true },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(2);
+    const firstOptions = sendVoice.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(firstOptions).toMatchObject({
+      caption: expect.any(String),
+      parse_mode: "HTML",
+    });
+    const retryOptions = sendVoice.mock.calls[1]?.[2] as Record<string, unknown>;
+    expect(retryOptions).not.toHaveProperty("caption");
+    expect(retryOptions).not.toHaveProperty("parse_mode");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),

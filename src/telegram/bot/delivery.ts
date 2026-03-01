@@ -35,6 +35,7 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const VOICE_CAPTION_TOO_LONG_RE = /caption is too long/i;
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_MEDIA_SSRF_POLICY = {
   // Telegram file downloads should trust api.telegram.org even when DNS/proxy
@@ -259,6 +260,48 @@ export async function deliverReplies(params: {
               // Skip this media item; continue with next.
               continue;
             }
+            // If Telegram rejects the voice caption, retry voice without caption
+            // and deliver the full text as a separate message.
+            if (isVoiceCaptionTooLong(voiceErr)) {
+              const fallbackText = reply.text;
+              logVerbose(
+                "telegram sendVoice caption exceeded Telegram limit; retrying without caption and sending text separately",
+              );
+              await withTelegramApiErrorLogging({
+                operation: "sendVoice",
+                runtime,
+                fn: () =>
+                  bot.api.sendVoice(
+                    chatId,
+                    file,
+                    buildTelegramSendParams({
+                      replyToMessageId: replyToMessageIdForPayload,
+                      thread,
+                    }),
+                  ),
+              });
+              markDelivered();
+              if (fallbackText && fallbackText.trim()) {
+                await sendTelegramVoiceFallbackText({
+                  bot,
+                  chatId,
+                  runtime,
+                  text: fallbackText,
+                  chunkText,
+                  replyToId: replyToMessageIdForPayload,
+                  thread,
+                  linkPreview,
+                  replyMarkup,
+                  replyQuoteText,
+                });
+                if (replyToMessageIdForPayload && !hasReplied) {
+                  hasReplied = true;
+                }
+                markDelivered();
+              }
+              // Skip this media item; continue with next.
+              continue;
+            }
             throw voiceErr;
           }
         } else {
@@ -461,6 +504,13 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
     return VOICE_FORBIDDEN_RE.test(err.description);
   }
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+}
+
+function isVoiceCaptionTooLong(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return VOICE_CAPTION_TOO_LONG_RE.test(err.description);
+  }
+  return VOICE_CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
 /**
