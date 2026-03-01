@@ -55,4 +55,28 @@ describe("gateway ws log helpers", () => {
       call: "call-1",
     });
   });
+
+  test("summarizeAgentEventForWsLog omits text for NO_REPLY assistant events", () => {
+    const summary = summarizeAgentEventForWsLog({
+      stream: "assistant",
+      data: { text: "NO_REPLY" },
+    });
+    expect(summary).not.toHaveProperty("text");
+  });
+
+  test("summarizeAgentEventForWsLog omits text for NO_REPLY with whitespace", () => {
+    const summary = summarizeAgentEventForWsLog({
+      stream: "assistant",
+      data: { text: "  NO_REPLY\n" },
+    });
+    expect(summary).not.toHaveProperty("text");
+  });
+
+  test("summarizeAgentEventForWsLog keeps substantive text containing NO_REPLY", () => {
+    const summary = summarizeAgentEventForWsLog({
+      stream: "assistant",
+      data: { text: "The result is NO_REPLY in this context" },
+    });
+    expect(summary).toHaveProperty("text");
+  });
 });

@@ -1154,6 +1154,32 @@ describe("formatOutboundPayloadLog", () => {
       ).toBe(testCase.expected);
     }
   });
+
+  it("suppresses NO_REPLY text from log output", () => {
+    const result = formatOutboundPayloadLog({ text: "NO_REPLY", mediaUrls: [] });
+    expect(result).toBe("");
+  });
+
+  it("suppresses NO_REPLY with surrounding whitespace", () => {
+    const result = formatOutboundPayloadLog({ text: "  NO_REPLY  ", mediaUrls: [] });
+    expect(result).toBe("");
+  });
+
+  it("keeps media lines when text is NO_REPLY", () => {
+    const result = formatOutboundPayloadLog({
+      text: "NO_REPLY",
+      mediaUrls: ["https://x.test/a.png"],
+    });
+    expect(result).toBe("MEDIA:https://x.test/a.png");
+  });
+
+  it("does not suppress substantive text containing NO_REPLY", () => {
+    const result = formatOutboundPayloadLog({
+      text: "The answer is NO_REPLY for that case",
+      mediaUrls: [],
+    });
+    expect(result).toBe("The answer is NO_REPLY for that case");
+  });
 });
 
 runResolveOutboundTargetCoreTests();
