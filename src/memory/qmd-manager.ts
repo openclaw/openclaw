@@ -1118,9 +1118,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (this.isSqliteBusyError(err)) {
       return true;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    const normalized = message.toLowerCase();
-    return normalized.includes("timed out");
+    return err instanceof Error && (err as Error & { timedOut?: boolean }).timedOut === true;
   }
 
   private shouldRunEmbed(force?: boolean): boolean {
@@ -1259,7 +1257,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
-            reject(new Error(`qmd ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
+            const err = new Error(`qmd ${args.join(" ")} timed out after ${opts.timeoutMs}ms`);
+            (err as Error & { timedOut: boolean }).timedOut = true;
+            reject(err);
           }, opts.timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
@@ -1363,7 +1363,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         const timer = opts?.timeoutMs
           ? setTimeout(() => {
               child.kill("SIGKILL");
-              reject(new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
+              const err = new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`);
+              (err as Error & { timedOut: boolean }).timedOut = true;
+              reject(err);
             }, opts.timeoutMs)
           : null;
         child.stdout.on("data", (data) => {

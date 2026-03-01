@@ -744,6 +744,37 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not treat non-timeout errors containing 'timed out' as retryable", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stderr.emit("data", "search query timed out unexpectedly");
+          child.closeWith(1);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "status" });
+    // The error message contains "timed out" but lacks the timedOut property,
+    // so it should NOT be retried and should propagate immediately.
+    await expect(manager.sync({ reason: "manual" })).rejects.toThrow("timed out");
+    await manager.close();
+  });
+
   it("rebuilds managed collections once when qmd update fails with null-byte ENOTDIR", async () => {
     cfg = {
       ...cfg,
