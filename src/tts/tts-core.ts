@@ -125,6 +125,9 @@ export function parseTtsDirectives(
   const warnings: string[] = [];
   let cleanedText = text;
   let hasDirective = false;
+  // Deferred generic model value — resolved after all tokens so provider=
+  // directives (which may appear in any order) are available for routing.
+  let deferredGenericModel: string | undefined;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
   cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
@@ -216,16 +219,9 @@ export function parseTtsDirectives(
             if (!policy.allowModelId) {
               break;
             }
-            // Check MiniMax first: its model set is finite and known, while
-            // isValidOpenAIModel accepts any string when a custom endpoint is
-            // configured, which would swallow MiniMax model names.
-            if (isValidMinimaxModel(rawValue)) {
-              overrides.minimax = { ...overrides.minimax, model: rawValue };
-            } else if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
-              overrides.openai = { ...overrides.openai, model: rawValue };
-            } else {
-              overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
-            }
+            // Defer routing: provider= may appear later in the same directive
+            // block, so we resolve the target after all tokens are parsed.
+            deferredGenericModel = rawValue;
             break;
           case "stability":
             if (!policy.allowVoiceSettings) {
@@ -425,6 +421,33 @@ export function parseTtsDirectives(
     }
     return "";
   });
+
+  // Resolve deferred generic model now that provider= is known.
+  if (deferredGenericModel) {
+    if (overrides.provider === "openai") {
+      overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+    } else if (overrides.provider === "elevenlabs") {
+      overrides.elevenlabs = { ...overrides.elevenlabs, modelId: deferredGenericModel };
+    } else if (overrides.provider === "minimax") {
+      if (isValidMinimaxModel(deferredGenericModel)) {
+        overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
+      } else {
+        warnings.push(`invalid MiniMax model "${deferredGenericModel}"`);
+      }
+    } else {
+      // No explicit provider override — infer from model name.
+      // Check MiniMax first: its model set is finite and known, while
+      // isValidOpenAIModel accepts any string when a custom endpoint is
+      // configured, which would swallow MiniMax model names.
+      if (isValidMinimaxModel(deferredGenericModel)) {
+        overrides.minimax = { ...overrides.minimax, model: deferredGenericModel };
+      } else if (isValidOpenAIModel(deferredGenericModel)) {
+        overrides.openai = { ...overrides.openai, model: deferredGenericModel };
+      } else {
+        overrides.elevenlabs = { ...overrides.elevenlabs, modelId: deferredGenericModel };
+      }
+    }
+  }
 
   return {
     cleanedText,
