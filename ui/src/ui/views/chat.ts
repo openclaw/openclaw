@@ -76,6 +76,7 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onNewSessionTab?: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -463,8 +464,20 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected || (!canAbort && props.sending)}
               @click=${canAbort ? props.onAbort : props.onNewSession}
             >
-              ${canAbort ? "Stop" : "New session"}
+              ${canAbort ? "Stop" : "New"}
             </button>
+            ${
+              !canAbort && props.onNewSessionTab
+                ? html`<button
+                    class="btn"
+                    title="Open a new session in a new browser tab"
+                    ?disabled=${!props.connected}
+                    @click=${props.onNewSessionTab}
+                  >
+                    New tab ↗
+                  </button>`
+                : nothing
+            }
             <button
               class="btn primary"
               ?disabled=${!props.connected}
