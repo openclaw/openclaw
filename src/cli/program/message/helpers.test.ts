@@ -83,11 +83,11 @@ function expectNoAccountFieldInPassedOptions() {
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    messageCommandMock.mockReset().mockResolvedValue(undefined);
-    hasHooksMock.mockReset().mockReturnValue(false);
-    runGatewayStopMock.mockReset().mockResolvedValue(undefined);
+    messageCommandMock.mockClear().mockResolvedValue(undefined);
+    hasHooksMock.mockClear().mockReturnValue(false);
+    runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
-    exitMock.mockReset().mockImplementation((): never => {
+    exitMock.mockClear().mockImplementation((): never => {
       throw new Error("exit");
     });
   });
@@ -156,7 +156,7 @@ describe("runMessageAction", () => {
 
   it("does not call exit(0) if the error path returns", async () => {
     messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    exitMock.mockReset().mockImplementation(() => undefined as never);
+    exitMock.mockClear().mockImplementation(() => undefined as never);
     const runMessageAction = createRunMessageAction();
     await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
 

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 
 const tempDirs: string[] = [];
@@ -15,24 +16,14 @@ function makeTempDir() {
 }
 
 async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
-  const prev = process.env.OPENCLAW_STATE_DIR;
-  const prevBundled = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-  try {
-    return await fn();
-  } finally {
-    if (prev === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = prev;
-    }
-    if (prevBundled === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundled;
-    }
-  }
+  return await withEnvAsync(
+    {
+      OPENCLAW_STATE_DIR: stateDir,
+      CLAWDBOT_STATE_DIR: undefined,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    },
+    fn,
+  );
 }
 
 afterEach(() => {
@@ -65,6 +56,38 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("alpha");
     expect(ids).toContain("beta");
+  });
+
+  it("ignores backup and disabled plugin directories in scanned roots", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    fs.mkdirSync(globalExt, { recursive: true });
+
+    const backupDir = path.join(globalExt, "feishu.backup-20260222");
+    fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
+    fs.mkdirSync(disabledDir, { recursive: true });
+    fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const bakDir = path.join(globalExt, "discord.bak");
+    fs.mkdirSync(bakDir, { recursive: true });
+    fs.writeFileSync(path.join(bakDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const liveDir = path.join(globalExt, "live");
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const ids = candidates.map((candidate) => candidate.idHint);
+    expect(ids).toContain("live");
+    expect(ids).not.toContain("feishu.backup-20260222");
+    expect(ids).not.toContain("telegram.disabled.20260222");
+    expect(ids).not.toContain("discord.bak");
   });
 
   it("loads package extension packs", async () => {
@@ -206,6 +229,82 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
       true,
     );
+  });
+
+  it("rejects package extension entries that are hardlinked aliases", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideFile = path.join(outsideDir, "escape.ts");
+    const linkedFile = path.join(globalExt, "escape.ts");
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+    try {
+      fs.linkSync(outsideFile, linkedFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    fs.writeFileSync(
+      path.join(globalExt, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/pack",
+        openclaw: { extensions: ["./escape.ts"] },
+      }),
+      "utf-8",
+    );
+
+    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
+      true,
+    );
+  });
+
+  it("ignores package manifests that are hardlinked aliases", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideManifest = path.join(outsideDir, "package.json");
+    const linkedManifest = path.join(globalExt, "package.json");
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(globalExt, "entry.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({
+        name: "@openclaw/pack",
+        openclaw: { extensions: ["./entry.ts"] },
+      }),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {

@@ -85,9 +85,9 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
-    // When false, the connection omits the signed device identity payload.
-    // This is useful for secondary "operator" connections where the shared gateway token
-    // should authorize without triggering device pairing flows.
+    // When false, the connection omits the signed device identity payload and cannot use
+    // device-scoped auth (role/scope upgrades will require pairing). Keep this true for
+    // role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
 
     public init(
@@ -127,6 +127,14 @@ private enum ConnectChallengeError: Error {
     case timeout
 }
 
+private let defaultOperatorConnectScopes: [String] = [
+    "operator.admin",
+    "operator.read",
+    "operator.write",
+    "operator.approvals",
+    "operator.pairing",
+]
+
 public actor GatewayChannelActor {
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
     private var task: WebSocketTaskBox?
@@ -146,8 +154,8 @@ public actor GatewayChannelActor {
     private var lastAuthSource: GatewayAuthSource = .none
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    // Remote gateways (tailscale/wan) can take a bit longer to deliver the connect.challenge event,
-    // and we must include the nonce once the gateway requires v2 signing.
+    // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
+    // Connect now requires this nonce before we send device-auth.
     private let connectTimeoutSeconds: Double = 12
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
@@ -318,7 +326,7 @@ public actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+            scopes: defaultOperatorConnectScopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -390,33 +398,27 @@ public actor GatewayChannelActor {
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
-        let scopesValue = scopes.joined(separator: ",")
-        var payloadParts = [
-            connectNonce == nil ? "v1" : "v2",
-            identity?.deviceId ?? "",
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            authToken ?? "",
-        ]
-        if let connectNonce {
-            payloadParts.append(connectNonce)
-        }
-        let payload = payloadParts.joined(separator: "|")
         if includeDeviceIdentity, let identity {
+            let payload = GatewayDeviceAuthPayload.buildV3(
+                deviceId: identity.deviceId,
+                clientId: clientId,
+                clientMode: clientMode,
+                role: role,
+                scopes: scopes,
+                signedAtMs: signedAtMs,
+                token: authToken,
+                nonce: connectNonce,
+                platform: platform,
+                deviceFamily: InstanceIdentity.deviceFamily)
             if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
                let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-                var device: [String: ProtoAnyCodable] = [
+                let device: [String: ProtoAnyCodable] = [
                     "id": ProtoAnyCodable(identity.deviceId),
                     "publicKey": ProtoAnyCodable(publicKey),
                     "signature": ProtoAnyCodable(signature),
                     "signedAt": ProtoAnyCodable(signedAtMs),
+                    "nonce": ProtoAnyCodable(connectNonce),
                 ]
-                if let connectNonce {
-                    device["nonce"] = ProtoAnyCodable(connectNonce)
-                }
                 params["device"] = ProtoAnyCodable(device)
             }
         }
@@ -545,33 +547,26 @@ public actor GatewayChannelActor {
         }
     }
 
-    private func waitForConnectChallenge() async throws -> String? {
-        guard let task = self.task else { return nil }
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: self.connectChallengeTimeoutSeconds,
-                onTimeout: { ConnectChallengeError.timeout },
-                operation: { [weak self] in
-                    guard let self else { return nil }
-                    while true {
-                        let msg = try await task.receive()
-                        guard let data = self.decodeMessageData(msg) else { continue }
-                        guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
-                        if case let .event(evt) = frame, evt.event == "connect.challenge" {
-                            if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                               let nonce = payload["nonce"]?.value as? String {
-                                return nonce
-                            }
-                        }
+    private func waitForConnectChallenge() async throws -> String {
+        guard let task = self.task else { throw ConnectChallengeError.timeout }
+        return try await AsyncTimeout.withTimeout(
+            seconds: self.connectChallengeTimeoutSeconds,
+            onTimeout: { ConnectChallengeError.timeout },
+            operation: { [weak self] in
+                guard let self else { throw ConnectChallengeError.timeout }
+                while true {
+                    let msg = try await task.receive()
+                    guard let data = self.decodeMessageData(msg) else { continue }
+                    guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
+                    if case let .event(evt) = frame, evt.event == "connect.challenge",
+                       let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                       let nonce = payload["nonce"]?.value as? String,
+                       nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    {
+                        return nonce
                     }
-                })
-        } catch {
-            if error is ConnectChallengeError {
-                self.logger.warning("gateway connect challenge timed out")
-                return nil
-            }
-            throw error
-        }
+                }
+            })
     }
 
     private func waitForConnectResponse(reqId: String) async throws -> ResponseFrame {

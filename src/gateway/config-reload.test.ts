@@ -1,12 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import chokidar from "chokidar";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ConfigFileSnapshot } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
+  startGatewayConfigReloader,
 } from "./config-reload.js";
 
 describe("diffConfigPaths", () => {
@@ -22,6 +25,48 @@ describe("diffConfigPaths", () => {
     const next = { messages: { groupChat: { mentionPatterns: ["b"] } } };
     const paths = diffConfigPaths(prev, next);
     expect(paths).toContain("messages.groupChat.mentionPatterns");
+  });
+
+  it("does not report unchanged arrays of objects as changed", () => {
+    const prev = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+          scope: {
+            rules: [{ when: { channel: "slack" }, include: ["docs"] }],
+          },
+        },
+      },
+    };
+    const next = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+          scope: {
+            rules: [{ when: { channel: "slack" }, include: ["docs"] }],
+          },
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toEqual([]);
+  });
+
+  it("reports changed arrays of objects", () => {
+    const prev = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.md", name: "docs" }],
+        },
+      },
+    };
+    const next = {
+      memory: {
+        qmd: {
+          paths: [{ path: "~/docs", pattern: "**/*.txt", name: "docs" }],
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
   });
 });
 
@@ -108,6 +153,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("gateway.remote.url");
   });
 
+  it("treats secrets config changes as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("secrets.providers.default.path");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
@@ -119,5 +170,169 @@ describe("resolveGatewayReloadSettings", () => {
     const settings = resolveGatewayReloadSettings({});
     expect(settings.mode).toBe("hybrid");
     expect(settings.debounceMs).toBe(300);
+  });
+});
+
+type WatcherHandler = () => void;
+type WatcherEvent = "add" | "change" | "unlink" | "error";
+
+function createWatcherMock() {
+  const handlers = new Map<WatcherEvent, WatcherHandler[]>();
+  return {
+    on(event: WatcherEvent, handler: WatcherHandler) {
+      const existing = handlers.get(event) ?? [];
+      existing.push(handler);
+      handlers.set(event, existing);
+      return this;
+    },
+    emit(event: WatcherEvent) {
+      for (const handler of handlers.get(event) ?? []) {
+        handler();
+      }
+    },
+    close: vi.fn(async () => {}),
+  };
+}
+
+function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
+  return {
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: {},
+    valid: true,
+    config: {},
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+    ...partial,
+  };
+}
+
+function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) {
+  const watcher = createWatcherMock();
+  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const onHotReload = vi.fn(async () => {});
+  const onRestart = vi.fn();
+  const log = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+  const reloader = startGatewayConfigReloader({
+    initialConfig: { gateway: { reload: { debounceMs: 0 } } },
+    readSnapshot,
+    onHotReload,
+    onRestart,
+    log,
+    watchPath: "/tmp/openclaw.json",
+  });
+  return { watcher, onHotReload, onRestart, log, reloader };
+}
+
+describe("startGatewayConfigReloader", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("retries missing snapshots and reloads once config file reappears", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ exists: false, raw: null, hash: "missing-1" }))
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "next-1",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("unlink");
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("config reload retry (1/2): config file not found");
+    expect(log.warn).not.toHaveBeenCalledWith("config reload skipped (config file not found)");
+
+    await reloader.stop();
+  });
+
+  it("caps missing-file retries and skips reload after retry budget is exhausted", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot({ exists: false, raw: null, hash: "missing" }));
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("unlink");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(onHotReload).not.toHaveBeenCalled();
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith("config reload skipped (config file not found)");
+
+    await reloader.stop();
+  });
+
+  it("contains restart callback failures and retries on subsequent changes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18790 },
+          },
+          hash: "restart-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18791 },
+          },
+          hash: "restart-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
+    onRestart.mockResolvedValueOnce(undefined);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onHotReload).not.toHaveBeenCalled();
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(unhandled).toEqual([]);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
   });
 });
