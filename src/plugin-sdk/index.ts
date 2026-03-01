@@ -449,6 +449,7 @@ export type {
 } from "../infra/diagnostic-events.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
+export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 
 // Channel: Discord
 export {

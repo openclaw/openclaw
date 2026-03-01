@@ -26,6 +26,7 @@ import {
   resolveChannelMediaMaxBytes,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
+  getAgentScopedMediaLocalRoots,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -747,6 +748,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,
@@ -771,6 +773,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               await sendMessageMattermost(to, caption, {
                 accountId: account.accountId,
                 mediaUrl,
+                mediaLocalRoots,
                 replyToId: threadRootId,
               });
             }
