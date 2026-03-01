@@ -11,7 +11,7 @@ export type TelegramStreamMode = "off" | "partial" | "block";
 export type TelegramContext = {
   message: Message;
   me?: UserFromGetMe;
-  getFile: () => Promise<{ file_path?: string }>;
+  getFile: (fileId?: string) => Promise<{ file_path?: string }>;
 };
 
 /** Telegram sticker metadata for context enrichment and caching. */

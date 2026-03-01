@@ -31,7 +31,7 @@ const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";
 
 function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video",
+  mediaField: "voice" | "audio" | "photo" | "video" | "document",
   getFile: TelegramContext["getFile"],
 ): TelegramContext {
   const msg: Record<string, unknown> = {
@@ -50,6 +50,14 @@ function makeCtx(
   }
   if (mediaField === "video") {
     msg.video = { file_id: "vid1", duration: 10, file_unique_id: "u3" };
+  }
+  if (mediaField === "document") {
+    msg.document = {
+      file_id: "d1",
+      file_unique_id: "u4",
+      file_name: "report.pdf",
+      mime_type: "application/pdf",
+    };
   }
   return {
     message: msg as unknown as Message,
@@ -202,5 +210,29 @@ describe("resolveMedia getFile retry", () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
     expect(result).not.toBeNull();
+  });
+
+  it("passes document file_id into getFile and keeps document placeholder", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/report.pdf" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("%PDF-1.4\n"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/report.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(getFile).toHaveBeenCalledWith("d1");
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/tmp/report.pdf",
+        contentType: "application/pdf",
+        placeholder: "<media:document>",
+      }),
+    );
   });
 });

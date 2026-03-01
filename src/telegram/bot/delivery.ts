@@ -419,7 +419,7 @@ export async function resolveMedia(
 
   let file: { file_path?: string };
   try {
-    file = await retryAsync(() => ctx.getFile(), {
+    file = await retryAsync(() => ctx.getFile(m.file_id), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,

@@ -82,6 +82,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/Document media resolution: pass the inbound media `file_id` into `getFile` during media fetch so document attachments resolve against the intended file and preserve `<media:document>` handling in media-only turns. (#7116)
 - Slack/Bot attachment-only messages: when `allowBots: true`, bot messages with empty `text` now include non-forwarded attachment `text`/`fallback` content so webhook alerts are not silently dropped. (#27616)
 - Slack/Security ingress mismatch guard: drop slash-command and interaction payloads when app/team identifiers do not match the active Slack account context (including nested `team.id` interaction payloads), preventing cross-app or cross-workspace payload injection into system-event handling. (#29091) Thanks @Solvely-Colin.
 - Cron/Failure alerts: add configurable repeated-failure alerting with per-job overrides and Web UI cron editor support (`inherit|disabled|custom` with threshold/cooldown/channel/target fields). (#24789) Thanks xbrak.
