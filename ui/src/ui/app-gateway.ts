@@ -19,6 +19,7 @@ import {
 import { extractText } from "./chat/message-extract.ts";
 import type { OpenClawApp } from "./app.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { loadAgentIdentities } from "./controllers/agent-identity.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
@@ -173,7 +174,13 @@ export function connectGateway(host: GatewayHost) {
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
-      void loadAgents(host as unknown as OpenClawApp);
+      void (async () => {
+        await loadAgents(host as unknown as OpenClawApp);
+        const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+        if (agentIds.length > 0) {
+          void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+        }
+      })();
       void loadToolsCatalog(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
