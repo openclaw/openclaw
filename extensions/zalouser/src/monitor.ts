@@ -61,11 +61,14 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   }
 }
 
-function isSenderAllowed(senderId: string, allowFrom: string[]): boolean {
+function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boolean {
   if (allowFrom.includes("*")) {
     return true;
   }
-  const normalizedSenderId = senderId.toLowerCase();
+  const normalizedSenderId = senderId?.trim().toLowerCase();
+  if (!normalizedSenderId) {
+    return false;
+  }
   return allowFrom.some((entry) => {
     const normalized = entry.toLowerCase().replace(/^(zalouser|zlu):/i, "");
     return normalized === normalizedSenderId;
@@ -133,7 +136,11 @@ async function processMessage(
   }
 
   const isGroup = message.isGroup;
-  const senderId = message.senderId;
+  const senderId = message.senderId?.trim();
+  if (!senderId) {
+    logVerbose(core, runtime, `zalouser: drop message ${chatId} (missing senderId)`);
+    return;
+  }
   const senderName = message.senderName ?? "";
   const groupName = message.groupName ?? "";
   const chatId = message.threadId;
