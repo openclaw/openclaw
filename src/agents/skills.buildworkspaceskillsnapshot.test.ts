@@ -13,7 +13,10 @@ afterEach(async () => {
 });
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withEnv({ HOME: workspaceDir, PATH: "" }, cb);
+  return withEnv(
+    { HOME: workspaceDir, PATH: "", OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent" },
+    cb,
+  );
 }
 
 describe("buildWorkspaceSkillSnapshot", () => {

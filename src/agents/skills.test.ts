@@ -52,6 +52,7 @@ const withClearedEnv = <T>(
 };
 
 beforeAll(async () => {
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent";
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
     recursive: true,
@@ -59,6 +60,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   if (tempHome) {
     await tempHome.restore();
     tempHome = null;

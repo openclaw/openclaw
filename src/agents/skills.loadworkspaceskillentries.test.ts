@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 
 const tempDirs: string[] = [];
@@ -12,7 +12,19 @@ async function createTempWorkspaceDir() {
   return workspaceDir;
 }
 
+let savedBundledDir: string | undefined;
+
+beforeEach(() => {
+  savedBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent";
+});
+
 afterEach(async () => {
+  if (savedBundledDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = savedBundledDir;
+  }
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
