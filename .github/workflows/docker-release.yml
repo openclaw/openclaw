@@ -178,8 +178,8 @@ jobs:
         run: |
           curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl
-          mv kubectl /usr/local/bin/kubectl
-          kubectl version --client
+          echo "${PWD}" >> "$GITHUB_PATH"
+          ./kubectl version --client
 
       - name: Deploy to K8s
         run: |
