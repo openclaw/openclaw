@@ -9,6 +9,7 @@ import { buildOutboundSessionContext } from "../infra/outbound/session-context.j
 import { getChildLogger } from "../logging.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import { normalizeHttpWebhookUrl } from "./webhook-url.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
@@ -71,12 +72,24 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
   const channel = deliveryChannel ?? payloadChannel ?? "last";
-  const to = deliveryTo ?? payloadTo;
+  let to = deliveryTo ?? payloadTo;
   const deliveryAccountId = normalizeAccountId(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
+
+    // Validate webhook URLs
+    if (resolvedMode === "webhook" && to) {
+      const validatedUrl = normalizeHttpWebhookUrl(to);
+      if (!validatedUrl) {
+        // Invalid webhook URL - clear it
+        to = undefined;
+      } else {
+        to = validatedUrl;
+      }
+    }
+
     return {
       mode: resolvedMode,
       channel: resolvedMode === "announce" ? channel : undefined,
@@ -189,9 +202,18 @@ export function resolveFailureDestination(
 
   const resolvedMode = mode ?? "announce";
 
-  // Webhook mode requires a URL
-  if (resolvedMode === "webhook" && !to) {
-    return null;
+  // Webhook mode requires a valid URL
+  if (resolvedMode === "webhook") {
+    if (!to) {
+      return null;
+    }
+    // Validate webhook URL format and protocol
+    const validatedUrl = normalizeHttpWebhookUrl(to);
+    if (!validatedUrl) {
+      return null;
+    }
+    // Use validated URL (normalized)
+    to = validatedUrl;
   }
 
   const result: CronFailureDeliveryPlan = {
