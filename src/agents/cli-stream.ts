@@ -296,6 +296,20 @@ export function createCliStreamFn(params: CliStreamFnParams): StreamFunction {
             break;
           }
           case "tool_start": {
+            // Close the current text block before tool execution so
+            // block streaming can flush pre-tool narration text as a
+            // separate message instead of concatenating it with the
+            // next text segment.
+            if (textStarted) {
+              stream.push({
+                type: "text_end",
+                contentIndex,
+                content: textParts.join(""),
+                partial: buildPartialMessage(textParts, undefined),
+              });
+              contentIndex++;
+              textStarted = false;
+            }
             // Track name so we can include it in the result event
             toolNameByCallId.set(event.toolCallId, event.toolName);
             // Forward tool events for UI feedback but don't push
