@@ -48,6 +48,8 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
+  /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
+  cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */

@@ -55,6 +55,22 @@ describe("browser config", () => {
     });
   });
 
+  it("supports overriding the local CDP auto-allocation range start", () => {
+    const resolved = resolveBrowserConfig({
+      cdpPortRangeStart: 19000,
+    });
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(resolved.cdpPortRangeStart).toBe(19000);
+    expect(openclaw?.cdpPort).toBe(19000);
+    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19000");
+  });
+
+  it("rejects cdpPortRangeStart values that overflow the CDP range window", () => {
+    expect(() => resolveBrowserConfig({ cdpPortRangeStart: 65535 })).toThrow(
+      /cdpPortRangeStart .* too high/i,
+    );
+  });
+
   it("normalizes hex colors", () => {
     const resolved = resolveBrowserConfig({
       color: "ff4500",
