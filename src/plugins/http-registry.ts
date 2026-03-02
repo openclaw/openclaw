@@ -17,6 +17,8 @@ export function registerPluginHttpRoute(params: {
   accountId?: string;
   log?: (message: string) => void;
   registry?: PluginRegistry;
+  /** When true, skip gateway-level auth enforcement for this route. */
+  noGatewayAuth?: boolean;
 }): () => void {
   const registry = params.registry ?? requireActivePluginRegistry();
   const routes = registry.httpRoutes ?? [];
@@ -41,6 +43,7 @@ export function registerPluginHttpRoute(params: {
     handler: params.handler,
     pluginId: params.pluginId,
     source: params.source,
+    noGatewayAuth: params.noGatewayAuth,
   };
   routes.push(entry);
 

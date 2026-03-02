@@ -477,6 +477,40 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("allows POST to webhook routes with noGatewayAuth without auth token", async () => {
+    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/line/webhook") {
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ ok: true, route: "line-webhook" }));
+        return true;
+      }
+      return false;
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-auth-webhook-noauth-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        // Simulate a predicate that exempts noGatewayAuth routes (like the real one)
+        shouldEnforcePluginGatewayAuth: (requestPath) =>
+          requestPath.startsWith("/api/channels") || requestPath === "/managed/route",
+      },
+      run: async (server) => {
+        // POST to /line/webhook without auth should reach the plugin handler
+        const postResponse = await sendRequest(server, {
+          path: "/line/webhook",
+          method: "POST",
+        });
+        expect(postResponse.res.statusCode).toBe(200);
+        expect(postResponse.getBody()).toContain('"route":"line-webhook"');
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;

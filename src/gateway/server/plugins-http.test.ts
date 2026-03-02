@@ -152,4 +152,17 @@ describe("plugin HTTP registry helpers", () => {
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });
+
+  it("skips auth enforcement for routes with noGatewayAuth", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        { ...createRoute({ path: "/line/webhook" }), noGatewayAuth: true },
+        createRoute({ path: "/api/managed" }),
+      ],
+    });
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/line/webhook")).toBe(false);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/managed")).toBe(true);
+    // Protected prefix routes are always gated regardless of noGatewayAuth
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
+  });
 });

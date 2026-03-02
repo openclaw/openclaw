@@ -60,6 +60,10 @@ export type PluginHttpRouteRegistration = {
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
   source?: string;
+  /** When true, skip gateway-level auth enforcement for this route.
+   *  Webhook routes that implement their own signature-based auth
+   *  (e.g., LINE webhook) should set this to true. */
+  noGatewayAuth?: boolean;
 };
 
 export type PluginChannelRegistration = {

@@ -36,9 +36,15 @@ export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathname: string,
 ): boolean {
-  return (
-    isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
-  );
+  if (isProtectedPluginRoutePath(pathname)) {
+    return true;
+  }
+  // Only enforce gateway auth on registered plugin routes that have NOT
+  // opted out via noGatewayAuth.  Channel webhook routes (e.g. LINE)
+  // implement their own signature-based auth and must remain reachable
+  // without a gateway token.
+  const route = findRegisteredPluginHttpRoute(registry, pathname);
+  return route !== undefined && !route.noGatewayAuth;
 }
 
 export function createGatewayPluginRequestHandler(params: {

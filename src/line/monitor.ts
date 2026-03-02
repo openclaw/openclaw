@@ -292,6 +292,7 @@ export async function monitorLineProvider(
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
     handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
+    noGatewayAuth: true,
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
