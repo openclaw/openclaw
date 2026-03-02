@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { canonicalizePathVariant } from "../security-path.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -8,6 +9,18 @@ export type PluginHttpRequestHandler = (
   req: IncomingMessage,
   res: ServerResponse,
 ) => Promise<boolean>;
+
+// Only checks specific routes registered via registerHttpRoute, not wildcard handlers
+// registered via registerHttpHandler. Wildcard handlers (e.g., webhooks) implement
+// their own signature-based auth and are handled separately in the auth enforcement logic.
+export function isRegisteredPluginHttpRoutePath(
+  registry: PluginRegistry,
+  pathname: string,
+): boolean {
+  const canonicalPath = canonicalizePathVariant(pathname);
+  const routes = registry.httpRoutes ?? [];
+  return routes.some((entry) => canonicalizePathVariant(entry.path) === canonicalPath);
+}
 
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;

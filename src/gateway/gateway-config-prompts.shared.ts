@@ -1,3 +1,5 @@
+import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
+
 export const TAILSCALE_EXPOSURE_OPTIONS = [
   { value: "off", label: "Off", hint: "No Tailscale exposure" },
   {
@@ -25,3 +27,36 @@ export const TAILSCALE_DOCS_LINES = [
   "https://docs.openclaw.ai/gateway/tailscale",
   "https://docs.openclaw.ai/web",
 ] as const;
+
+function normalizeTailnetHostForUrl(rawHost: string): string | null {
+  const trimmed = rawHost.trim().replace(/\.$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = parseCanonicalIpAddress(trimmed);
+  if (parsed && isIpv6Address(parsed)) {
+    return `[${parsed.toString().toLowerCase()}]`;
+  }
+  return trimmed;
+}
+
+export function buildTailnetHttpsOrigin(rawHost: string): string | null {
+  const normalizedHost = normalizeTailnetHostForUrl(rawHost);
+  if (!normalizedHost) {
+    return null;
+  }
+  try {
+    return new URL(`https://${normalizedHost}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
+  const current = existing ?? [];
+  const normalized = origin.toLowerCase();
+  if (current.some((entry) => entry.toLowerCase() === normalized)) {
+    return current;
+  }
+  return [...current, origin];
+}
