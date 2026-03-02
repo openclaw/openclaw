@@ -36,9 +36,15 @@ export function applyImageModelConfigDefaults(
   };
 }
 
-export function resolveMediaToolLocalRoots(workspaceDirRaw: string | undefined): string[] {
-  const roots = getDefaultLocalRoots();
+export function resolveMediaToolLocalRoots(
+  workspaceDirRaw: string | undefined,
+  options?: { workspaceOnly?: boolean },
+): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
+  if (options?.workspaceOnly) {
+    return workspaceDir ? [workspaceDir] : [];
+  }
+  const roots = getDefaultLocalRoots();
   if (!workspaceDir) {
     return [...roots];
   }
