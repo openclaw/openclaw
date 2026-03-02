@@ -12,6 +12,9 @@ const sessionMocks = vi.hoisted(() => ({
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => undefined),
 }));
+const typingMocks = vi.hoisted(() => ({
+  sendChatAction: vi.fn(async () => undefined),
+}));
 
 vi.mock("../config/sessions.js", () => ({
   recordSessionMetaFromInbound: sessionMocks.recordSessionMetaFromInbound,
@@ -79,6 +82,11 @@ function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHa
       } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
       cfg,
       allowFrom: ["*"],
+      sendChatActionHandler: {
+        sendChatAction: typingMocks.sendChatAction,
+        isSuspended: () => false,
+        reset: () => {},
+      },
     }),
   });
 
@@ -92,6 +100,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
+    typingMocks.sendChatAction.mockClear().mockResolvedValue(undefined);
   });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
@@ -127,5 +136,30 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires typing callbacks into native slash command replies", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({
+        dispatcherOptions,
+      }: {
+        dispatcherOptions?: { typingCallbacks?: { onReplyStart?: () => Promise<void> } };
+      }) => {
+        await dispatcherOptions?.typingCallbacks?.onReplyStart?.();
+        return undefined;
+      },
+    );
+
+    const handler = registerAndResolveStatusHandler({});
+    await handler(buildStatusCommandContext());
+
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          typingCallbacks: expect.any(Object),
+        }),
+      }),
+    );
+    expect(typingMocks.sendChatAction).toHaveBeenCalledWith(100, "typing", undefined);
   });
 });
