@@ -7,9 +7,32 @@ import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
+let truncationWorkspaceTemplateDir = "";
+let nestedRepoTemplateDir = "";
 
 beforeAll(async () => {
   await fixtureSuite.setup();
+  truncationWorkspaceTemplateDir = await fixtureSuite.createCaseDir(
+    "template-truncation-workspace",
+  );
+  for (let i = 0; i < 8; i += 1) {
+    const name = `skill-${String(i).padStart(2, "0")}`;
+    await writeSkill({
+      dir: path.join(truncationWorkspaceTemplateDir, "skills", name),
+      name,
+      description: "x".repeat(800),
+    });
+  }
+
+  nestedRepoTemplateDir = await fixtureSuite.createCaseDir("template-skills-repo");
+  for (let i = 0; i < 8; i += 1) {
+    const name = `repo-skill-${String(i).padStart(2, "0")}`;
+    await writeSkill({
+      dir: path.join(nestedRepoTemplateDir, "skills", name),
+      name,
+      description: `Desc ${i}`,
+    });
+  }
 });
 
 afterAll(async () => {
@@ -18,6 +41,12 @@ afterAll(async () => {
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
   return withEnv({ HOME: workspaceDir, PATH: "" }, cb);
+}
+
+async function cloneTemplateDir(templateDir: string, prefix: string): Promise<string> {
+  const cloned = await fixtureSuite.createCaseDir(prefix);
+  await fs.cp(templateDir, cloned, { recursive: true });
+  return cloned;
 }
 
 describe("buildWorkspaceSkillSnapshot", () => {
@@ -110,17 +139,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-
-    // Keep fixture size modest while still forcing truncation logic.
-    for (let i = 0; i < 8; i += 1) {
-      const name = `skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(workspaceDir, "skills", name),
-        name,
-        description: "x".repeat(800),
-      });
-    }
+    const workspaceDir = await cloneTemplateDir(truncationWorkspaceTemplateDir, "workspace");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -143,16 +162,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    const repoDir = await fixtureSuite.createCaseDir("skills-repo");
-
-    for (let i = 0; i < 8; i += 1) {
-      const name = `repo-skill-${String(i).padStart(2, "0")}`;
-      await writeSkill({
-        dir: path.join(repoDir, "skills", name),
-        name,
-        description: `Desc ${i}`,
-      });
-    }
+    const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
 
     const snapshot = withWorkspaceHome(workspaceDir, () =>
       buildWorkspaceSkillSnapshot(workspaceDir, {
