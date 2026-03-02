@@ -394,7 +394,10 @@ export const buildTelegramMessageContext = async ({
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
 
   const disableAudioPreflight =
-    firstDefined(topicConfig?.disableAudioPreflight, groupConfig?.disableAudioPreflight) === true;
+    firstDefined(
+      topicConfig?.disableAudioPreflight,
+      (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight,
+    ) === true;
 
   // Preflight audio transcription for mention detection in groups
   // This allows voice notes to be checked for mentions before being dropped
