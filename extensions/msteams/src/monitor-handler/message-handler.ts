@@ -495,13 +495,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             timestamp: entry.timestamp,
           }))
         : undefined;
+    const commandBody = text.trim();
 
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: rawBody,
       InboundHistory: inboundHistory,
       RawBody: rawBody,
-      CommandBody: rawBody,
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
       From: teamsFrom,
       To: teamsTo,
       SessionKey: route.sessionKey,

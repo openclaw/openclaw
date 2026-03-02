@@ -15,6 +15,11 @@ import {
   stripMarkdown,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
+import type {
+  BlueBubblesCoreRuntime,
+  BlueBubblesRuntimeEnv,
+  WebhookTarget,
+} from "./monitor-shared.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -36,11 +41,6 @@ import {
   resolveBlueBubblesMessageId,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
-import type {
-  BlueBubblesCoreRuntime,
-  BlueBubblesRuntimeEnv,
-  WebhookTarget,
-} from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -1098,14 +1098,15 @@ export async function processMessage(
       });
     }
   }
+  const commandBody = messageText.trim();
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: rawBody,
     InboundHistory: inboundHistory,
     RawBody: rawBody,
-    CommandBody: rawBody,
-    BodyForCommands: rawBody,
+    CommandBody: commandBody,
+    BodyForCommands: commandBody,
     MediaUrl: mediaUrls[0],
     MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
     MediaPath: mediaPaths[0],

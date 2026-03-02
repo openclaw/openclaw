@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -9,7 +10,6 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
-import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 
@@ -609,16 +609,6 @@ export function discoverOpenClawPlugins(params: {
     }
   }
 
-  const globalDir = path.join(resolveConfigDir(), "extensions");
-  discoverInDirectory({
-    dir: globalDir,
-    origin: "global",
-    ownershipUid: params.ownershipUid,
-    candidates,
-    diagnostics,
-    seen,
-  });
-
   const bundledDir = resolveBundledPluginsDir();
   if (bundledDir) {
     discoverInDirectory({
@@ -630,6 +620,18 @@ export function discoverOpenClawPlugins(params: {
       seen,
     });
   }
+
+  // Keep auto-discovered global extensions behind bundled plugins.
+  // Users can still intentionally override via plugins.load.paths (origin=config).
+  const globalDir = path.join(resolveConfigDir(), "extensions");
+  discoverInDirectory({
+    dir: globalDir,
+    origin: "global",
+    ownershipUid: params.ownershipUid,
+    candidates,
+    diagnostics,
+    seen,
+  });
 
   return { candidates, diagnostics };
 }

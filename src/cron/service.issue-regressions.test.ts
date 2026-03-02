@@ -1325,7 +1325,6 @@ describe("Cron issue regressions", () => {
   });
 
   it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
-    vi.useRealTimers();
     const abortController = new AbortController();
     const runHeartbeatOnce = vi.fn(
       async (): Promise<HeartbeatRunResult> => ({
@@ -1364,7 +1363,10 @@ describe("Cron issue regressions", () => {
       abortController.abort();
     }, 10);
 
-    const result = await executeJobCore(state, mainJob, abortController.signal);
+    const resultPromise = executeJobCore(state, mainJob, abortController.signal);
+    // Advance virtual time so the abort fires before the busy-wait fallback window expires.
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await resultPromise;
 
     expect(result.status).toBe("error");
     expect(result.error).toContain("timed out");

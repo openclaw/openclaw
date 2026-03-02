@@ -1,3 +1,9 @@
+import type {
+  SignalEnvelope,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -45,12 +51,6 @@ import {
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
-import type {
-  SignalEnvelope,
-  SignalEventHandlerDeps,
-  SignalReactionMessage,
-  SignalReceivePayload,
-} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -64,6 +64,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    commandBody: string;
     timestamp?: number;
     messageId?: string;
     mediaPath?: string;
@@ -147,7 +148,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       BodyForAgent: entry.bodyText,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
-      CommandBody: entry.bodyText,
+      CommandBody: entry.commandBody,
+      BodyForCommands: entry.commandBody,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -691,6 +693,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      commandBody: messageText,
       timestamp: envelope.timestamp ?? undefined,
       messageId,
       mediaPath,

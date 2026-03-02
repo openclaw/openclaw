@@ -272,6 +272,7 @@ export async function createMockRuntimeFixture(params?: {
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
+    strictWindowsCmdWrapper: false,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
   };
 
