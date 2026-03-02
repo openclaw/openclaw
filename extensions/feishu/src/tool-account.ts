@@ -12,6 +12,15 @@ function normalizeOptionalAccountId(value: string | undefined): string | undefin
   return trimmed ? trimmed : undefined;
 }
 
+function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
+  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
+    ?.defaultAccount;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeOptionalAccountId(value);
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
@@ -24,6 +33,7 @@ export function resolveFeishuToolAccount(params: {
     cfg: params.api.config,
     accountId:
       normalizeOptionalAccountId(params.executeParams?.accountId) ??
+      readConfiguredDefaultAccountId(params.api.config) ??
       normalizeOptionalAccountId(params.defaultAccountId),
   });
 }
