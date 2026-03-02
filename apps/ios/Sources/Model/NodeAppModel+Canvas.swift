@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OpenClawKit
 import os
 
 extension NodeAppModel {
@@ -11,22 +12,10 @@ extension NodeAppModel {
         guard let raw = await self.gatewaySession.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
-        if let host = base.host, Self.isLoopbackHost(host) {
+        if let host = base.host, LoopbackHost.isLoopback(host) {
             return nil
         }
         return base.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=ios"
-    }
-
-    private static func isLoopbackHost(_ host: String) -> Bool {
-        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized.isEmpty { return true }
-        if normalized == "localhost" || normalized == "::1" || normalized == "0.0.0.0" {
-            return true
-        }
-        if normalized == "127.0.0.1" || normalized.hasPrefix("127.") {
-            return true
-        }
-        return false
     }
 
     func showA2UIOnConnectIfNeeded() async {
