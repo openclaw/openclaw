@@ -44,14 +44,21 @@ vi.mock("../agents/skills.js", () => {
   return {
     buildWorkspaceSkillCommandSpecs: (
       workspaceDir: string,
-      opts?: { reservedNames?: Set<string> },
+      opts?: { reservedNames?: Set<string>; skillFilter?: string[] },
     ) => {
       const used = new Set<string>();
       for (const reserved of opts?.reservedNames ?? []) {
         used.add(String(reserved).toLowerCase());
       }
+      const filter = opts?.skillFilter;
+      const entries =
+        filter === undefined
+          ? resolveWorkspaceSkills(workspaceDir)
+          : resolveWorkspaceSkills(workspaceDir).filter((entry) =>
+              filter.some((skillName) => skillName === entry.skillName),
+            );
 
-      return resolveWorkspaceSkills(workspaceDir).map((entry) => {
+      return entries.map((entry) => {
         const base = entry.skillName.replace(/-/g, "_");
         const name = resolveUniqueName(base, used);
         return { name, skillName: entry.skillName, description: entry.description };
@@ -60,11 +67,12 @@ vi.mock("../agents/skills.js", () => {
   };
 });
 
-let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
+let listSkillCommandsForAllAgents: typeof import("./skill-commands.js").listSkillCommandsForAllAgents;
+let listSkillCommandsForAgentIds: typeof import("./skill-commands.js").listSkillCommandsForAgentIds;
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
 
 beforeAll(async () => {
-  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation } =
+  ({ listSkillCommandsForAllAgents, listSkillCommandsForAgentIds, resolveSkillCommandInvocation } =
     await import("./skill-commands.js"));
 });
 
@@ -105,7 +113,7 @@ describe("resolveSkillCommandInvocation", () => {
   });
 });
 
-describe("listSkillCommandsForAgents", () => {
+describe("listSkillCommandsForAllAgents/listSkillCommandsForAgentIds", () => {
   it("merges command names across agents and de-duplicates", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
@@ -113,7 +121,7 @@ describe("listSkillCommandsForAgents", () => {
     await fs.mkdir(mainWorkspace, { recursive: true });
     await fs.mkdir(researchWorkspace, { recursive: true });
 
-    const commands = listSkillCommandsForAgents({
+    const commands = listSkillCommandsForAllAgents({
       cfg: {
         agents: {
           list: [
@@ -127,5 +135,67 @@ describe("listSkillCommandsForAgents", () => {
     expect(names).toContain("demo_skill");
     expect(names).toContain("demo_skill_2");
     expect(names).toContain("extra_skill");
+  });
+
+  it("applies per-agent skills allowlist when listing commands", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-filter-"));
+    const researchWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(researchWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgentIds({
+      cfg: {
+        agents: {
+          list: [{ id: "research", workspace: researchWorkspace, skills: ["extra-skill"] }],
+        },
+      },
+      agentIds: ["research"],
+    });
+
+    expect(commands.map((entry) => entry.name)).toEqual(["extra_skill"]);
+    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+  });
+
+  it("prevents cross-agent skill leakage when each agent has a skills allowlist", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-leak-"));
+    const mainWorkspace = path.join(baseDir, "main");
+    const researchWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(mainWorkspace, { recursive: true });
+    await fs.mkdir(researchWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgentIds({
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", workspace: mainWorkspace, skills: ["demo-skill"] },
+            { id: "research", workspace: researchWorkspace, skills: ["extra-skill"] },
+          ],
+        },
+      },
+      agentIds: ["main", "research"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
+    expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
+  });
+
+  it("merges allowlists for agents that share one workspace", async () => {
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-shared-"));
+    const sharedWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgentIds({
+      cfg: {
+        agents: {
+          list: [
+            { id: "main", workspace: sharedWorkspace, skills: ["demo-skill"] },
+            { id: "research", workspace: sharedWorkspace, skills: ["extra-skill"] },
+          ],
+        },
+      },
+      agentIds: ["main", "research"],
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
+    expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
   });
 });

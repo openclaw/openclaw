@@ -74,12 +74,15 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 const skillCommandsHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAllAgents: vi.fn(() => []),
+  listSkillCommandsForAgentIds: vi.fn(() => []),
 }));
-export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
+export const listSkillCommandsForAllAgents = skillCommandsHoisted.listSkillCommandsForAllAgents;
+export const listSkillCommandsForAgentIds = skillCommandsHoisted.listSkillCommandsForAgentIds;
 
 vi.mock("../auto-reply/skill-commands.js", () => ({
-  listSkillCommandsForAgents,
+  listSkillCommandsForAllAgents,
+  listSkillCommandsForAgentIds,
 }));
 
 const systemEventsHoisted = vi.hoisted(() => ({
@@ -314,8 +317,10 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
-  listSkillCommandsForAgents.mockReset();
-  listSkillCommandsForAgents.mockReturnValue([]);
+  listSkillCommandsForAllAgents.mockReset();
+  listSkillCommandsForAllAgents.mockReturnValue([]);
+  listSkillCommandsForAgentIds.mockReset();
+  listSkillCommandsForAgentIds.mockReturnValue([]);
   middlewareUseSpy.mockReset();
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();

@@ -31,7 +31,7 @@ vi.mock("../channels/reply-prefix.js", () => ({
 }));
 vi.mock("../auto-reply/skill-commands.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../auto-reply/skill-commands.js")>();
-  return { ...actual, listSkillCommandsForAgents: vi.fn(() => []) };
+  return { ...actual, listSkillCommandsForAgentIds: vi.fn(() => []) };
 });
 vi.mock("../plugins/commands.js", () => ({
   getPluginCommandSpecs: vi.fn(() => []),
