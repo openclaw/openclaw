@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- CLI/Config validation: add `openclaw config validate` (with `--json`) to validate config files before gateway startup, and include detailed invalid-key paths in startup invalid-config errors. (#31220) thanks @Sid-Qin.
 - Sessions/Attachments: add inline file attachment support for `sessions_spawn` (subagent runtime only) with base64/utf8 encoding, transcript content redaction, lifecycle cleanup, and configurable limits via `tools.sessions_spawn.attachments`. (#16761) Thanks @napetrov.
 - Agents/Thinking defaults: set `adaptive` as the default thinking level for Anthropic Claude 4.6 models (including Bedrock Claude 4.6 refs) while keeping other reasoning-capable models at `low` unless explicitly configured.
 - Gateway/Container probes: add built-in HTTP liveness/readiness endpoints (`/health`, `/healthz`, `/ready`, `/readyz`) for Docker/Kubernetes health checks, with fallback routing so existing handlers on those paths are not shadowed. (#31272) Thanks @vincentkoc.
@@ -38,6 +39,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Docker/Image health checks: add Dockerfile `HEALTHCHECK` that probes gateway `GET /healthz` so container runtimes can mark unhealthy instances without requiring auth credentials in the probe command. (#11478) Thanks @U-C4N and @vincentkoc.
+- Daemon/systemd checks in containers: treat missing `systemctl` invocations (including `spawn systemctl ENOENT`/`EACCES`) as unavailable service state during `is-enabled` checks, preventing container flows from failing with `Gateway service check failed` before install/status handling can continue. (#26089) Thanks @sahilsatralkar and @vincentkoc.
 - Android/Nodes reliability: reject `facing=both` when `deviceId` is set to avoid mislabeled duplicate captures, allow notification `open`/`reply` on non-clearable entries while still gating dismiss, trigger listener rebind before notification actions, and scale invoke-result ack timeout to invoke budget for large clip payloads. (#28260) Thanks @obviyus.
 - Windows/Plugin install: avoid `spawn EINVAL` on Windows npm/npx invocations by resolving to `node` + npm CLI scripts instead of spawning `.cmd` directly. Landed from contributor PR #31147 by @codertony. Thanks @codertony.
 - LINE/Voice transcription: classify M4A voice media as `audio/mp4` (not `video/mp4`) by checking the MPEG-4 `ftyp` major brand (`M4A ` / `M4B `), restoring voice transcription for LINE voice messages. Landed from contributor PR #31151 by @scoootscooob. Thanks @scoootscooob.
@@ -55,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/Probe status caching: cache successful `probeFeishu()` bot-info results for 10 minutes (bounded cache with per-account keying) to reduce repeated status/onboarding probe API calls, while bypassing cache for failures and exceptions. (#28907) Thanks @Glucksberg.
 - Feishu/Opus media send type: send `.opus` attachments with `msg_type: "audio"` (instead of `"media"`) so Feishu voice messages deliver correctly while `.mp4` remains `msg_type: "media"` and documents remain `msg_type: "file"`. (#28269) Thanks @Glucksberg.
 - Gateway/WS security: keep plaintext `ws://` loopback-only by default, with explicit break-glass private-network opt-in via `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; align onboarding/client/call validation and tests to this strict-default policy. (#28670) Thanks @dashed, @vincentkoc.
+- Gateway/Subagent TLS pairing: allow authenticated local `gateway-client` backend self-connections to skip device pairing while still requiring pairing for non-local/direct-host paths, restoring `sessions_spawn` with `gateway.tls.enabled=true` in Docker/LAN setups. Fixes #30740. Thanks @Sid-Qin and @vincentkoc.
 - Feishu/Mobile video media type: treat inbound `message_type: "media"` as video-equivalent for media key extraction, placeholder inference, and media download resolution so mobile-app video sends ingest correctly. (#25502) Thanks @4ier.
 - Feishu/Inbound sender fallback: fall back to `sender_id.user_id` when `sender_id.open_id` is missing on inbound events, and use ID-type-aware sender lookup so mobile-delivered messages keep stable sender identity/routing. (#26703) Thanks @NewdlDewdl.
 - Feishu/Reply context metadata: include inbound `parent_id` and `root_id` as `ReplyToId`/`RootMessageId` in inbound context, and parse interactive-card quote bodies into readable text when fetching replied messages. (#18529) Thanks @qiangu.
@@ -75,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Android/Gateway canvas capability refresh: send `node.canvas.capability.refresh` with object `params` (`{}`) from Android node runtime so gateway object-schema validation accepts refresh retries and A2UI host recovery works after scoped capability expiry. (#28413) Thanks @obviyus.
 - Gateway/Control UI origins: honor `gateway.controlUi.allowedOrigins: ["*"]` wildcard entries (including trimmed values) and lock behavior with regression tests. Landed from contributor PR #31058 by @byungsker. Thanks @byungsker.
 - Agents/Sessions list transcript paths: handle missing/non-string/relative `sessions.list.path` values and per-agent `{agentId}` templates when deriving `transcriptPath`, so cross-agent session listings resolve to concrete agent session files instead of workspace-relative paths. (#24775) Thanks @martinfrancois.
+- Sessions/Lock recovery: detect recycled Linux PIDs by comparing lock-file `starttime` with `/proc/<pid>/stat` starttime, so stale `.jsonl.lock` files are reclaimed immediately in containerized PID-reuse scenarios while preserving compatibility for older lock files. (#26443) Fixes #27252. Thanks @HirokiKobayashi-R and @vincentkoc.
 - Gateway/Control UI CSP: allow required Google Fonts origins in Control UI CSP. (#29279) Thanks @Glucksberg and @vincentkoc.
 - CLI/Install: add an npm-link fallback to fix CLI startup `Permission denied` failures (`exit 127`) on affected installs. (#17151) Thanks @sskyu and @vincentkoc.
 - Onboarding/Custom providers: improve verification reliability for slower local endpoints (for example Ollama) during setup. (#27380) Thanks @Sid-Qin.
