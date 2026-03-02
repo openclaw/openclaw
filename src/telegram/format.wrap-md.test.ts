@@ -158,6 +158,22 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks[0].html).toContain("<code>README.md</code>");
     expect(chunks[0].html).toContain("<code>backup.sh</code>");
   });
+
+  it("keeps rendered html chunks within the provided limit", () => {
+    const input = "<".repeat(1500);
+    const chunks = markdownToTelegramChunks(input, 512);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks.every((chunk) => chunk.html.length <= 512)).toBe(true);
+  });
+
+  it("preserves whitespace when html-limit retry splitting runs", () => {
+    const input = "a < b";
+    const chunks = markdownToTelegramChunks(input, 5);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
+  });
 });
 
 describe("edge cases", () => {

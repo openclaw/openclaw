@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
+import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
@@ -9,27 +10,13 @@ export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc
 export type CommandResolution = {
   rawExecutable: string;
   resolvedPath?: string;
+  resolvedRealPath?: string;
   executableName: string;
   effectiveArgv?: string[];
   wrapperChain?: string[];
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function isExecutableFile(filePath: string): boolean {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform !== "win32") {
-      fs.accessSync(filePath, fs.constants.X_OK);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -48,42 +35,15 @@ function parseFirstToken(command: string): string | null {
   return match ? match[0] : null;
 }
 
-function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
-  if (expanded.includes("/") || expanded.includes("\\")) {
-    if (path.isAbsolute(expanded)) {
-      return isExecutableFile(expanded) ? expanded : undefined;
-    }
-    const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-    const candidate = path.resolve(base, expanded);
-    return isExecutableFile(candidate) ? candidate : undefined;
+function tryResolveRealpath(filePath: string | undefined): string | undefined {
+  if (!filePath) {
+    return undefined;
   }
-  const envPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const entries = envPath.split(path.delimiter).filter(Boolean);
-  const hasExtension = process.platform === "win32" && path.extname(expanded).length > 0;
-  const extensions =
-    process.platform === "win32"
-      ? hasExtension
-        ? [""]
-        : (
-            env?.PATHEXT ??
-            env?.Pathext ??
-            process.env.PATHEXT ??
-            process.env.Pathext ??
-            ".EXE;.CMD;.BAT;.COM"
-          )
-            .split(";")
-            .map((ext) => ext.toLowerCase())
-      : [""];
-  for (const entry of entries) {
-    for (const ext of extensions) {
-      const candidate = path.join(entry, expanded + ext);
-      if (isExecutableFile(candidate)) {
-        return candidate;
-      }
-    }
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 export function resolveCommandResolution(
@@ -95,11 +55,13 @@ export function resolveCommandResolution(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
+    resolvedRealPath,
     executableName,
     effectiveArgv: [rawExecutable],
     wrapperChain: [],
@@ -118,11 +80,13 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
+  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
     rawExecutable,
     resolvedPath,
+    resolvedRealPath,
     executableName,
     effectiveArgv,
     wrapperChain: plan.wrappers,

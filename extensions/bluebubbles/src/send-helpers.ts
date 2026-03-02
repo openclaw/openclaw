@@ -23,31 +23,43 @@ export function extractBlueBubblesMessageId(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "unknown";
   }
-  const record = payload as Record<string, unknown>;
-  const data =
-    record.data && typeof record.data === "object"
-      ? (record.data as Record<string, unknown>)
+
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
       : null;
-  const candidates = [
-    record.messageId,
-    record.messageGuid,
-    record.message_guid,
-    record.guid,
-    record.id,
-    data?.messageId,
-    data?.messageGuid,
-    data?.message_guid,
-    data?.message_id,
-    data?.guid,
-    data?.id,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
+
+  const record = payload as Record<string, unknown>;
+  const dataRecord = asRecord(record.data);
+  const resultRecord = asRecord(record.result);
+  const payloadRecord = asRecord(record.payload);
+  const messageRecord = asRecord(record.message);
+  const dataArrayFirst = Array.isArray(record.data) ? asRecord(record.data[0]) : null;
+
+  const roots = [record, dataRecord, resultRecord, payloadRecord, messageRecord, dataArrayFirst];
+
+  for (const root of roots) {
+    if (!root) {
+      continue;
     }
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return String(candidate);
+    const candidates = [
+      root.message_id,
+      root.messageId,
+      root.messageGuid,
+      root.message_guid,
+      root.guid,
+      root.id,
+      root.uuid,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return String(candidate);
+      }
     }
   }
+
   return "unknown";
 }

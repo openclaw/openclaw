@@ -122,204 +122,221 @@ export async function runCliAgent(params: {
     agentId: sessionAgentId,
   });
 
-  const { sessionId: cliSessionIdToSend, isNew } = resolveSessionIdToSend({
-    backend,
-    cliSessionId: params.cliSessionId,
-  });
-  const useResume = Boolean(
-    params.cliSessionId &&
-    cliSessionIdToSend &&
-    backend.resumeArgs &&
-    backend.resumeArgs.length > 0,
-  );
-  const sessionIdSent = cliSessionIdToSend
-    ? useResume || Boolean(backend.sessionArg) || Boolean(backend.sessionArgs?.length)
-      ? cliSessionIdToSend
-      : undefined
-    : undefined;
-  const systemPromptArg = resolveSystemPromptUsage({
-    backend,
-    isNewSession: isNew,
-    systemPrompt,
-  });
-
-  let imagePaths: string[] | undefined;
-  let cleanupImages: (() => Promise<void>) | undefined;
-  let prompt = params.prompt;
-  if (params.images && params.images.length > 0) {
-    const imagePayload = await writeCliImages(params.images);
-    imagePaths = imagePayload.paths;
-    cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
-      prompt = appendImagePathsToPrompt(prompt, imagePaths);
-    }
-  }
-
-  const { argsPrompt, stdin } = resolvePromptInput({
-    backend,
-    prompt,
-  });
-  const stdinPayload = stdin ?? "";
-  const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
-  const resolvedArgs = useResume
-    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""))
-    : baseArgs;
-  const args = buildCliArgs({
-    backend,
-    baseArgs: resolvedArgs,
-    modelId: normalizedModel,
-    sessionId: cliSessionIdToSend,
-    systemPrompt: systemPromptArg,
-    imagePaths,
-    promptArg: argsPrompt,
-    useResume,
-  });
-
-  const serialize = backend.serialize ?? true;
-  const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
-
-  try {
-    const output = await enqueueCliRun(queueKey, async () => {
-      log.info(
-        `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
-      );
-      const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
-      if (logOutputText) {
-        const logArgs: string[] = [];
-        for (let i = 0; i < args.length; i += 1) {
-          const arg = args[i] ?? "";
-          if (arg === backend.systemPromptArg) {
-            const systemPromptValue = args[i + 1] ?? "";
-            logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-            i += 1;
-            continue;
-          }
-          if (arg === backend.sessionArg) {
-            logArgs.push(arg, args[i + 1] ?? "");
-            i += 1;
-            continue;
-          }
-          if (arg === backend.modelArg) {
-            logArgs.push(arg, args[i + 1] ?? "");
-            i += 1;
-            continue;
-          }
-          if (arg === backend.imageArg) {
-            logArgs.push(arg, "<image>");
-            i += 1;
-            continue;
-          }
-          logArgs.push(arg);
-        }
-        if (argsPrompt) {
-          const promptIndex = logArgs.indexOf(argsPrompt);
-          if (promptIndex >= 0) {
-            logArgs[promptIndex] = `<prompt:${argsPrompt.length} chars>`;
-          }
-        }
-        log.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
-      }
-
-      const env = (() => {
-        const next = { ...process.env, ...backend.env };
-        for (const key of backend.clearEnv ?? []) {
-          delete next[key];
-        }
-        return next;
-      })();
-      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
-        backend,
-        timeoutMs: params.timeoutMs,
-        useResume,
-      });
-      const supervisor = getProcessSupervisor();
-      const scopeKey = buildCliSupervisorScopeKey({
-        backend,
-        backendId: backendResolved.id,
-        cliSessionId: useResume ? cliSessionIdToSend : undefined,
-      });
-
-      const managedRun = await supervisor.spawn({
-        sessionId: params.sessionId,
-        backendId: backendResolved.id,
-        scopeKey,
-        replaceExistingScope: Boolean(useResume && scopeKey),
-        mode: "child",
-        argv: [backend.command, ...args],
-        timeoutMs: params.timeoutMs,
-        noOutputTimeoutMs,
-        cwd: workspaceDir,
-        env,
-        input: stdinPayload,
-      });
-      const result = await managedRun.wait();
-
-      const stdout = result.stdout.trim();
-      const stderr = result.stderr.trim();
-      if (logOutputText) {
-        if (stdout) {
-          log.info(`cli stdout:\n${stdout}`);
-        }
-        if (stderr) {
-          log.info(`cli stderr:\n${stderr}`);
-        }
-      }
-      if (shouldLogVerbose()) {
-        if (stdout) {
-          log.debug(`cli stdout:\n${stdout}`);
-        }
-        if (stderr) {
-          log.debug(`cli stderr:\n${stderr}`);
-        }
-      }
-
-      if (result.exitCode !== 0 || result.reason !== "exit") {
-        if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
-          log.warn(
-            `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${cliSessionIdToSend ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
-          );
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
-        if (result.reason === "overall-timeout") {
-          const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
-          throw new FailoverError(timeoutReason, {
-            reason: "timeout",
-            provider: params.provider,
-            model: modelId,
-            status: resolveFailoverStatus("timeout"),
-          });
-        }
-        const err = stderr || stdout || "CLI failed.";
-        const reason = classifyFailoverReason(err) ?? "unknown";
-        const status = resolveFailoverStatus(reason);
-        throw new FailoverError(err, {
-          reason,
-          provider: params.provider,
-          model: modelId,
-          status,
-        });
-      }
-
-      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
-
-      if (outputMode === "text") {
-        return { text: stdout, sessionId: undefined };
-      }
-      if (outputMode === "jsonl") {
-        const parsed = parseCliJsonl(stdout, backend);
-        return parsed ?? { text: stdout };
-      }
-
-      const parsed = parseCliJson(stdout, backend);
-      return parsed ?? { text: stdout };
+  // Helper function to execute CLI with given session ID
+  const executeCliWithSession = async (
+    cliSessionIdToUse?: string,
+  ): Promise<{
+    text: string;
+    sessionId?: string;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      total?: number;
+    };
+  }> => {
+    const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
+      backend,
+      cliSessionId: cliSessionIdToUse,
+    });
+    const useResume = Boolean(
+      cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
+    );
+    const systemPromptArg = resolveSystemPromptUsage({
+      backend,
+      isNewSession: isNew,
+      systemPrompt,
     });
 
+    let imagePaths: string[] | undefined;
+    let cleanupImages: (() => Promise<void>) | undefined;
+    let prompt = params.prompt;
+    if (params.images && params.images.length > 0) {
+      const imagePayload = await writeCliImages(params.images);
+      imagePaths = imagePayload.paths;
+      cleanupImages = imagePayload.cleanup;
+      if (!backend.imageArg) {
+        prompt = appendImagePathsToPrompt(prompt, imagePaths);
+      }
+    }
+
+    const { argsPrompt, stdin } = resolvePromptInput({
+      backend,
+      prompt,
+    });
+    const stdinPayload = stdin ?? "";
+    const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
+    const resolvedArgs = useResume
+      ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
+      : baseArgs;
+    const args = buildCliArgs({
+      backend,
+      baseArgs: resolvedArgs,
+      modelId: normalizedModel,
+      sessionId: resolvedSessionId,
+      systemPrompt: systemPromptArg,
+      imagePaths,
+      promptArg: argsPrompt,
+      useResume,
+    });
+
+    const serialize = backend.serialize ?? true;
+    const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
+
+    try {
+      const output = await enqueueCliRun(queueKey, async () => {
+        log.info(
+          `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
+        );
+        const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
+        if (logOutputText) {
+          const logArgs: string[] = [];
+          for (let i = 0; i < args.length; i += 1) {
+            const arg = args[i] ?? "";
+            if (arg === backend.systemPromptArg) {
+              const systemPromptValue = args[i + 1] ?? "";
+              logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
+              i += 1;
+              continue;
+            }
+            if (arg === backend.sessionArg) {
+              logArgs.push(arg, args[i + 1] ?? "");
+              i += 1;
+              continue;
+            }
+            if (arg === backend.modelArg) {
+              logArgs.push(arg, args[i + 1] ?? "");
+              i += 1;
+              continue;
+            }
+            if (arg === backend.imageArg) {
+              logArgs.push(arg, "<image>");
+              i += 1;
+              continue;
+            }
+            logArgs.push(arg);
+          }
+          if (argsPrompt) {
+            const promptIndex = logArgs.indexOf(argsPrompt);
+            if (promptIndex >= 0) {
+              logArgs[promptIndex] = `<prompt:${argsPrompt.length} chars>`;
+            }
+          }
+          log.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
+        }
+
+        const env = (() => {
+          const next = { ...process.env, ...backend.env };
+          for (const key of backend.clearEnv ?? []) {
+            delete next[key];
+          }
+          return next;
+        })();
+        const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+          backend,
+          timeoutMs: params.timeoutMs,
+          useResume,
+        });
+        const supervisor = getProcessSupervisor();
+        const scopeKey = buildCliSupervisorScopeKey({
+          backend,
+          backendId: backendResolved.id,
+          cliSessionId: useResume ? resolvedSessionId : undefined,
+        });
+
+        const managedRun = await supervisor.spawn({
+          sessionId: params.sessionId,
+          backendId: backendResolved.id,
+          scopeKey,
+          replaceExistingScope: Boolean(useResume && scopeKey),
+          mode: "child",
+          argv: [backend.command, ...args],
+          timeoutMs: params.timeoutMs,
+          noOutputTimeoutMs,
+          cwd: workspaceDir,
+          env,
+          input: stdinPayload,
+        });
+        const result = await managedRun.wait();
+
+        const stdout = result.stdout.trim();
+        const stderr = result.stderr.trim();
+        if (logOutputText) {
+          if (stdout) {
+            log.info(`cli stdout:\n${stdout}`);
+          }
+          if (stderr) {
+            log.info(`cli stderr:\n${stderr}`);
+          }
+        }
+        if (shouldLogVerbose()) {
+          if (stdout) {
+            log.debug(`cli stdout:\n${stdout}`);
+          }
+          if (stderr) {
+            log.debug(`cli stderr:\n${stderr}`);
+          }
+        }
+
+        if (result.exitCode !== 0 || result.reason !== "exit") {
+          if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
+            const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+            log.warn(
+              `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+            );
+            throw new FailoverError(timeoutReason, {
+              reason: "timeout",
+              provider: params.provider,
+              model: modelId,
+              status: resolveFailoverStatus("timeout"),
+            });
+          }
+          if (result.reason === "overall-timeout") {
+            const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
+            throw new FailoverError(timeoutReason, {
+              reason: "timeout",
+              provider: params.provider,
+              model: modelId,
+              status: resolveFailoverStatus("timeout"),
+            });
+          }
+          const err = stderr || stdout || "CLI failed.";
+          const reason = classifyFailoverReason(err) ?? "unknown";
+          const status = resolveFailoverStatus(reason);
+          throw new FailoverError(err, {
+            reason,
+            provider: params.provider,
+            model: modelId,
+            status,
+          });
+        }
+
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+
+        if (outputMode === "text") {
+          return { text: stdout, sessionId: undefined };
+        }
+        if (outputMode === "jsonl") {
+          const parsed = parseCliJsonl(stdout, backend);
+          return parsed ?? { text: stdout };
+        }
+
+        const parsed = parseCliJson(stdout, backend);
+        return parsed ?? { text: stdout };
+      });
+
+      return output;
+    } finally {
+      if (cleanupImages) {
+        await cleanupImages();
+      }
+    }
+  };
+
+  // Try with the provided CLI session ID first
+  try {
+    const output = await executeCliWithSession(params.cliSessionId);
     const text = output.text?.trim();
     const payloads = text ? [{ text }] : undefined;
 
@@ -328,7 +345,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId ?? "",
+          sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
           provider: params.provider,
           model: modelId,
           usage: output.usage,
@@ -337,6 +354,34 @@ export async function runCliAgent(params: {
     };
   } catch (err) {
     if (err instanceof FailoverError) {
+      // Check if this is a session expired error and we have a session to clear
+      if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
+        log.warn(
+          `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
+        );
+
+        // Clear the expired session ID from the session entry
+        // This requires access to the session store, which we don't have here
+        // We'll need to modify the caller to handle this case
+
+        // For now, retry without the session ID to create a new session
+        const output = await executeCliWithSession(undefined);
+        const text = output.text?.trim();
+        const payloads = text ? [{ text }] : undefined;
+
+        return {
+          payloads,
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              sessionId: output.sessionId ?? params.sessionId ?? "",
+              provider: params.provider,
+              model: modelId,
+              usage: output.usage,
+            },
+          },
+        };
+      }
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
@@ -351,10 +396,6 @@ export async function runCliAgent(params: {
       });
     }
     throw err;
-  } finally {
-    if (cleanupImages) {
-      await cleanupImages();
-    }
   }
 }
 

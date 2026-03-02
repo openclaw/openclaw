@@ -111,6 +111,7 @@ export const botCtorSpy: AnyMock = vi.fn();
 export const answerCallbackQuerySpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const sendChatActionSpy: AnyMock = vi.fn();
 export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 88 }));
+export const sendMessageDraftSpy: AnyAsyncMock = vi.fn(async () => true);
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
@@ -120,18 +121,21 @@ export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
 export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
 export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
 export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
+export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({ file_path: "media/file.jpg" }));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   answerCallbackQuery: typeof answerCallbackQuerySpy;
   sendChatAction: typeof sendChatActionSpy;
   editMessageText: typeof editMessageTextSpy;
+  sendMessageDraft: typeof sendMessageDraftSpy;
   setMessageReaction: typeof setMessageReactionSpy;
   setMyCommands: typeof setMyCommandsSpy;
   getMe: typeof getMeSpy;
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
+  getFile: typeof getFileSpy;
 };
 
 const apiStub: ApiStub = {
@@ -139,12 +143,14 @@ const apiStub: ApiStub = {
   answerCallbackQuery: answerCallbackQuerySpy,
   sendChatAction: sendChatActionSpy,
   editMessageText: editMessageTextSpy,
+  sendMessageDraft: sendMessageDraftSpy,
   setMessageReaction: setMessageReactionSpy,
   setMyCommands: setMyCommandsSpy,
   getMe: getMeSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
+  getFile: getFileSpy,
 };
 
 vi.mock("grammy", () => ({
@@ -290,6 +296,8 @@ beforeEach(() => {
   sendPhotoSpy.mockResolvedValue({ message_id: 79 });
   sendMessageSpy.mockReset();
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
+  getFileSpy.mockReset();
+  getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);
@@ -306,6 +314,8 @@ beforeEach(() => {
   });
   editMessageTextSpy.mockReset();
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
+  sendMessageDraftSpy.mockReset();
+  sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

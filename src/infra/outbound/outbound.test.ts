@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -11,6 +11,7 @@ import {
   type DeliverFn,
   enqueueDelivery,
   failDelivery,
+  isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
@@ -40,13 +41,24 @@ import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
   });
 
   describe("enqueue + ack lifecycle", () => {
@@ -183,6 +195,25 @@ describe("delivery-queue", () => {
       const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(2);
     });
+
+    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "legacy" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const legacyEntry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      legacyEntry.retryCount = 2;
+      delete legacyEntry.lastAttemptAt;
+      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
+
+      const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
+    });
   });
 
   describe("computeBackoffMs", () => {
@@ -202,6 +233,45 @@ describe("delivery-queue", () => {
           testCase.expected,
         );
       }
+    });
+  });
+
+  describe("isEntryEligibleForRecoveryRetry", () => {
+    it("allows first replay after crash for retryCount=0 without lastAttemptAt", () => {
+      const now = Date.now();
+      const result = isEntryEligibleForRecoveryRetry(
+        {
+          id: "entry-1",
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "a" }],
+          enqueuedAt: now,
+          retryCount: 0,
+        },
+        now,
+      );
+      expect(result).toEqual({ eligible: true });
+    });
+
+    it("defers retry entries until backoff window elapses", () => {
+      const now = Date.now();
+      const result = isEntryEligibleForRecoveryRetry(
+        {
+          id: "entry-2",
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "a" }],
+          enqueuedAt: now - 30_000,
+          retryCount: 3,
+          lastAttemptAt: now,
+        },
+        now,
+      );
+      expect(result.eligible).toBe(false);
+      if (result.eligible) {
+        throw new Error("Expected ineligible retry entry");
+      }
+      expect(result.remainingBackoffMs).toBeGreaterThan(0);
     });
   });
 
@@ -257,7 +327,8 @@ describe("delivery-queue", () => {
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
       expect(result.failed).toBe(0);
-      expect(result.skipped).toBe(0);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.deferredBackoff).toBe(0);
 
       // Queue should be empty after recovery.
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -276,7 +347,8 @@ describe("delivery-queue", () => {
       const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(result.skipped).toBe(1);
+      expect(result.skippedMaxRetries).toBe(1);
+      expect(result.deferredBackoff).toBe(0);
 
       // Entry should be in failed/ directory.
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
@@ -376,7 +448,8 @@ describe("delivery-queue", () => {
       expect(deliver).not.toHaveBeenCalled();
       expect(result.recovered).toBe(0);
       expect(result.failed).toBe(0);
-      expect(result.skipped).toBe(0);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.deferredBackoff).toBe(0);
 
       // All entries should still be in the queue.
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -400,7 +473,12 @@ describe("delivery-queue", () => {
       });
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
 
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
@@ -425,7 +503,12 @@ describe("delivery-queue", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
 
-      expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
@@ -449,13 +532,23 @@ describe("delivery-queue", () => {
 
       const firstDeliver = vi.fn().mockResolvedValue([]);
       const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
-      expect(firstRun.result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(firstRun.result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
       expect(firstDeliver).not.toHaveBeenCalled();
 
       vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
       const secondDeliver = vi.fn().mockResolvedValue([]);
       const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
-      expect(secondRun.result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+      expect(secondRun.result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
       expect(secondDeliver).toHaveBeenCalledTimes(1);
 
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -468,7 +561,12 @@ describe("delivery-queue", () => {
       const deliver = vi.fn();
       const { result } = await runRecovery({ deliver });
 
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
       expect(deliver).not.toHaveBeenCalled();
     });
   });
@@ -804,6 +902,7 @@ describe("resolveOutboundSessionRoute", () => {
       channel: string;
       target: string;
       replyToId?: string;
+      threadId?: string;
       expected: {
         sessionKey: string;
         from?: string;
@@ -838,12 +937,39 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
         name: "Telegram unresolved username DM",
         cfg: perChannelPeerCfg,
         channel: "telegram",
         target: "@alice",
         expected: {
           sessionKey: "agent:main:telegram:direct:@alice",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Telegram DM scoped threadId fallback",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "12345",
+        threadId: "12345:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:12345:thread:99",
+          from: "telegram:12345:topic:99",
+          to: "telegram:12345",
+          threadId: 99,
           chatType: "direct",
         },
       },
@@ -886,6 +1012,42 @@ describe("resolveOutboundSessionRoute", () => {
           from: "slack:group:G123",
         },
       },
+      {
+        name: "Feishu explicit group prefix keeps group routing",
+        cfg: baseConfig,
+        channel: "feishu",
+        target: "group:oc_group_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:group:oc_group_chat",
+          from: "feishu:group:oc_group_chat",
+          to: "oc_group_chat",
+          chatType: "group",
+        },
+      },
+      {
+        name: "Feishu explicit dm prefix keeps direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "dm:oc_dm_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_dm_chat",
+          from: "feishu:oc_dm_chat",
+          to: "oc_dm_chat",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Feishu bare oc_ target defaults to direct routing",
+        cfg: perChannelPeerCfg,
+        channel: "feishu",
+        target: "oc_ambiguous_chat",
+        expected: {
+          sessionKey: "agent:main:feishu:direct:oc_ambiguous_chat",
+          from: "feishu:oc_ambiguous_chat",
+          to: "oc_ambiguous_chat",
+          chatType: "direct",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -895,6 +1057,7 @@ describe("resolveOutboundSessionRoute", () => {
         agentId: "main",
         target: testCase.target,
         replyToId: testCase.replyToId,
+        threadId: testCase.threadId,
       });
       expect(route?.sessionKey, testCase.name).toBe(testCase.expected.sessionKey);
       if (testCase.expected.from !== undefined) {
