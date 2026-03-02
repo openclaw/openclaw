@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +122,17 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
     dirs.push(path.dirname(argv1));
+    // Resolve symlinks so npm/yarn/pnpm global bin/ symlinks (e.g.
+    // ~/.npm-global/bin/openclaw → ../lib/node_modules/openclaw/openclaw.mjs)
+    // are followed to the actual package directory.
+    try {
+      const resolved = fsSync.realpathSync(argv1);
+      if (path.resolve(resolved) !== path.resolve(argv1)) {
+        dirs.push(path.dirname(resolved));
+      }
+    } catch {
+      // realpathSync throws if the path doesn't exist — keep original candidates
+    }
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);

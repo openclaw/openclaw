@@ -491,6 +491,67 @@ describe("runGatewayUpdate", () => {
     });
   });
 
+  it("resolves global npm install root via argv1 bin symlink", async () => {
+    // Simulate npm global install layout:
+    //   ~/.npm-global/bin/openclaw  (symlink → ../lib/node_modules/openclaw/openclaw.mjs)
+    //   ~/.npm-global/lib/node_modules/openclaw/  (actual package)
+    // The process cwd is a different git-tracked workspace (e.g. ~/clawd).
+    const binDir = path.join(tempDir, "bin");
+    const nodeModulesDir = path.join(tempDir, "lib", "node_modules");
+    const pkgRoot = path.join(nodeModulesDir, "openclaw");
+    const binScript = path.join(pkgRoot, "openclaw.mjs");
+    const binLink = path.join(binDir, "openclaw");
+
+    await fs.mkdir(binDir, { recursive: true });
+    await seedGlobalPackageRoot(pkgRoot);
+    await fs.writeFile(binScript, "export {};\n", "utf-8");
+    // bin/openclaw → ../lib/node_modules/openclaw/openclaw.mjs
+    await fs.symlink(binScript, binLink);
+
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+
+    const calls: string[] = [];
+    const installCommand = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      // Workspace looks like a git repo (different project, not openclaw)
+      if (key === `git -C ${workspaceDir} rev-parse --show-toplevel`) {
+        return { stdout: workspaceDir, stderr: "", code: 0 as const };
+      }
+      // npm global root detection
+      if (key === "npm root -g") {
+        return { stdout: nodeModulesDir, stderr: "", code: 0 as const };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 as const };
+      }
+      if (key === installCommand) {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 as const };
+      }
+      return { stdout: "", stderr: "", code: 0 as const };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: workspaceDir,
+      argv1: binLink,
+      runCommand: async (argv) => runCommand(argv),
+      timeoutMs: 5000,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(result.before?.version).toBe("1.0.0");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(calls.some((call) => call === installCommand)).toBe(true);
+  });
+
   it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
