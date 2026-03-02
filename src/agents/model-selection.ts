@@ -58,6 +58,15 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
   }
+  // Provider groups that share authentication credentials.
+  // For auth purposes, volcengine-plan uses the same credentials as volcengine,
+  // and byteplus-plan uses the same credentials as byteplus.
+  if (normalized === "volcengine-plan") {
+    return "volcengine";
+  }
+  if (normalized === "byteplus-plan") {
+    return "byteplus";
+  }
   return normalized;
 }
 

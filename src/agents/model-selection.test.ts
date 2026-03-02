@@ -62,6 +62,18 @@ describe("model-selection", () => {
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
     });
+
+    it("should handle provider groups that share auth credentials", () => {
+      // Volcano Engine general and coding plans share the same auth
+      expect(normalizeProviderId("volcengine")).toBe("volcengine");
+      expect(normalizeProviderId("volcengine-plan")).toBe("volcengine");
+      expect(normalizeProviderId("bytedance")).toBe("volcengine");
+      expect(normalizeProviderId("doubao")).toBe("volcengine");
+
+      // BytePlus general and coding plans share the same auth
+      expect(normalizeProviderId("byteplus")).toBe("byteplus");
+      expect(normalizeProviderId("byteplus-plan")).toBe("byteplus");
+    });
   });
 
   describe("parseModelRef", () => {
