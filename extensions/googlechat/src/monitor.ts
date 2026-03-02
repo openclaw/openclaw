@@ -875,7 +875,7 @@ async function deliverGoogleChatReply(params: {
           filename: loaded.fileName ?? "attachment",
         });
         if (!upload.attachmentUploadToken) {
-          throw new Error("missing attachment upload token");
+          throw new Error("Missing attachment upload token");
         }
         await sendGoogleChatMessage({
           account,

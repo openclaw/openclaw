@@ -56,7 +56,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     notifyApproval: async ({ id }) => {
       const target = normalizePairingTarget(id);
       if (!target) {
-        throw new Error(`invalid IRC pairing id: ${id}`);
+        throw new Error(`Invalid IRC pairing id: ${id}`);
       }
       await sendMessageIrc(target, PAIRING_APPROVED_MESSAGE);
     },
