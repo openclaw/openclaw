@@ -1279,6 +1279,36 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to deterministic cron completion message when sanitized findings are empty", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-cron-direct",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-cron-direct",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-direct-fallback",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      announceType: "cron job",
+      expectsCompletionMessage: true,
+      roundOneReply:
+        "[Subagent Context] You are running as a subagent.\n\n[Subagent Task]: do thing",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledTimes(0);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    expect(call?.params?.message).toBe("Task completed.");
+  });
+
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);

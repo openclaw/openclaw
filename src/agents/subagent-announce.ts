@@ -78,7 +78,18 @@ function buildCompletionDeliveryMessage(params: {
   }
   // Cron completions are standalone messages.
   if (params.announceType === "cron job") {
-    return sanitizeCompletionFindings(findingsText);
+    const cronCleanedFindings = sanitizeCompletionFindings(findingsText);
+    if (cronCleanedFindings) {
+      return cronCleanedFindings;
+    }
+    if (params.outcome?.status === "timeout") {
+      return "Task timed out.";
+    }
+    if (params.outcome?.status === "error") {
+      const reason = params.outcome.error?.trim();
+      return reason ? `Task failed: ${reason}` : "Task failed.";
+    }
+    return "Task completed.";
   }
   const cleanedFindings = sanitizeCompletionFindings(findingsText);
   if (cleanedFindings) {
