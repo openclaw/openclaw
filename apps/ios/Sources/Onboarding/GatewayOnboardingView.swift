@@ -309,6 +309,7 @@ private func gatewayConnectionStatusLines(
     ConnectionStatusBox.defaultLines(appModel: appModel, gatewayController: gatewayController)
 }
 
+@MainActor
 private func resetGatewayConnectionState(
     appModel: NodeAppModel,
     connectStatusText: inout String?,
