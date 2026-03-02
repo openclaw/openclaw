@@ -34,6 +34,14 @@ Open a PR that adds your plugin to this page with:
 We prefer plugins that are useful, documented, and safe to operate.
 Low-effort wrappers, unclear ownership, or unmaintained packages may be declined.
 
+## Security expectations for LMS integrations
+
+- Use the official Canvas API and avoid scraping.
+- Do not ask users for Canvas username or password.
+- Prefer OAuth2 with a Developer Key and minimum required scopes.
+- Store tokens securely and never log or expose them in errors or UI.
+- Document required scopes, data access boundaries, and any admin setup.
+
 ## Candidate format
 
 Use this format when adding entries:
