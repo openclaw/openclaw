@@ -157,6 +157,26 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      const deliveryTarget = resolveRunDeliveryTarget({
+        relayMode: queued.relayMode,
+        relayOutput: queued.relayOutput,
+        originatingChannel: queued.originatingChannel,
+        originatingTo: queued.originatingTo,
+        originatingAccountId: queued.originatingAccountId,
+        originatingThreadId: queued.originatingThreadId,
+      });
+      const useRelayRunRouting =
+        deliveryTarget.relayMode === "read-only" && deliveryTarget.viaRelayOutput;
+      const runMessageProvider = useRelayRunRouting
+        ? deliveryTarget.channel
+        : queued.run.messageProvider;
+      const runMessageTo = useRelayRunRouting ? deliveryTarget.to : queued.originatingTo;
+      const runAgentAccountId = useRelayRunRouting
+        ? (deliveryTarget.accountId ?? queued.run.agentAccountId)
+        : queued.run.agentAccountId;
+      const runMessageThreadId = useRelayRunRouting
+        ? (deliveryTarget.threadId ?? queued.originatingThreadId)
+        : queued.originatingThreadId;
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -174,13 +194,13 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
-              messageProvider: queued.run.messageProvider,
-              agentAccountId: queued.run.agentAccountId,
-              messageTo: queued.originatingTo,
-              messageThreadId: queued.originatingThreadId,
-              currentChannelId: queued.originatingTo,
+              messageProvider: runMessageProvider,
+              agentAccountId: runAgentAccountId,
+              messageTo: runMessageTo,
+              messageThreadId: runMessageThreadId,
+              currentChannelId: runMessageTo,
               currentThreadTs:
-                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
+                runMessageThreadId != null ? String(runMessageThreadId) : undefined,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
@@ -269,14 +289,6 @@ export function createFollowupRunner(params: {
           return [];
         }
         return [{ ...payload, text: stripped.text }];
-      });
-      const deliveryTarget = resolveRunDeliveryTarget({
-        relayMode: queued.relayMode,
-        relayOutput: queued.relayOutput,
-        originatingChannel: queued.originatingChannel,
-        originatingTo: queued.originatingTo,
-        originatingAccountId: queued.originatingAccountId,
-        originatingThreadId: queued.originatingThreadId,
       });
       const replyToChannel = resolveOriginMessageProvider({
         originatingChannel: deliveryTarget.channel ?? queued.originatingChannel,
