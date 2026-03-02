@@ -321,6 +321,7 @@ export async function openWritableFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   mkdir?: boolean;
+  mode?: number;
 }): Promise<SafeWritableOpenResult> {
   const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
@@ -352,16 +353,18 @@ export async function openWritableFileWithinRoot(params: {
     }
   }
 
+  const fileMode = params.mode ?? 0o600;
+
   let handle: FileHandle;
   let createdForWrite = false;
   try {
     try {
-      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, 0o600);
+      handle = await fs.open(ioPath, OPEN_WRITE_EXISTING_FLAGS, fileMode);
     } catch (err) {
       if (!isNotFoundPathError(err)) {
         throw err;
       }
-      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, 0o600);
+      handle = await fs.open(ioPath, OPEN_WRITE_CREATE_FLAGS, fileMode);
       createdForWrite = true;
     }
   } catch (err) {
