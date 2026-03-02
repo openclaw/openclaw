@@ -339,8 +339,9 @@ describe("runCronIsolatedAgentTurn", () => {
       // Announce delivery failure should not mark a successful agent execution
       // as error. The execution succeeded; only delivery failed.
       expect(res.status).toBe("ok");
-      expect(res.delivered).not.toBe(true);
+      expect(res.delivered).toBe(false);
       expect(res.deliveryAttempted).toBe(true);
+      expect(res.error).toBe("cron announce delivery failed");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
@@ -378,8 +379,9 @@ describe("runCronIsolatedAgentTurn", () => {
       // Even when announce throws (e.g. "pairing required"), the agent
       // execution succeeded so the job status should be ok.
       expect(res.status).toBe("ok");
-      expect(res.delivered).not.toBe(true);
+      expect(res.delivered).toBe(false);
       expect(res.deliveryAttempted).toBe(true);
+      expect(res.error).toContain("pairing required");
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });

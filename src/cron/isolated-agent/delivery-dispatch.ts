@@ -337,6 +337,8 @@ export async function dispatchCronDelivery(
             status: "ok",
             summary,
             outputText,
+            error: message,
+            delivered: false,
             deliveryAttempted,
             ...params.telemetry,
           });
@@ -351,6 +353,8 @@ export async function dispatchCronDelivery(
           status: "ok",
           summary,
           outputText,
+          error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });
