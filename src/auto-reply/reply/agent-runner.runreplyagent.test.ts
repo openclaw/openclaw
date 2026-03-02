@@ -738,6 +738,128 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("inlines model fallback notice for Telegram when verbose is off", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementation(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/minimax-m2p5",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const typing = createMockTypingController();
+      const sessionCtx = {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext;
+      const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+      const followupRun = {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          sessionId: "session",
+          sessionKey: "main",
+          messageProvider: "telegram",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          provider: "anthropic",
+          model: "claude",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun;
+
+      const runReplyAgent = await getRunReplyAgent();
+      const first = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        sessionCtx,
+        defaultModel: "anthropic/claude-opus-4-5",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+      const second = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        sessionCtx,
+        defaultModel: "anthropic/claude-opus-4-5",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+
+      expect(firstText).toContain("Model Fallback:");
+      expect(firstText).toContain("deepinfra/moonshotai/Kimi-K2.5");
+      expect(firstText).toContain("final");
+      expect(secondText).not.toContain("Model Fallback:");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("announces model fallback only once per active fallback state", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
