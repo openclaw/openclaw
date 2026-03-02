@@ -211,4 +211,39 @@ describe("subagent registry nested agent tracking", () => {
     });
     expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
   });
+
+  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {
+    const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
+
+    addSubagentRunForTests({
+      runId: "run-self",
+      childSessionKey: "agent:main:subagent:worker",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "self",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    addSubagentRunForTests({
+      runId: "run-sibling",
+      childSessionKey: "agent:main:subagent:sibling",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sibling",
+      cleanup: "keep",
+      createdAt: 1,
+      startedAt: 1,
+      endedAt: 2,
+      cleanupHandled: false,
+      cleanupCompletedAt: undefined,
+    });
+
+    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-self")).toBe(1);
+    expect(countPendingDescendantRunsExcludingRun("agent:main:main", "run-sibling")).toBe(1);
+  });
 });

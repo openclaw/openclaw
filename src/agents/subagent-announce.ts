@@ -728,6 +728,7 @@ async function sendSubagentAnnounceDirectly(params: {
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
+  currentRunId?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterIsSubagent: boolean;
@@ -772,14 +773,27 @@ async function sendSubagentAnnounceDirectly(params: {
       if (!forceBoundSessionDirectDelivery) {
         let pendingDescendantRuns = 0;
         try {
-          const { countPendingDescendantRuns, countActiveDescendantRuns } =
-            await import("./subagent-registry.js");
-          pendingDescendantRuns = Math.max(
-            0,
-            typeof countPendingDescendantRuns === "function"
-              ? countPendingDescendantRuns(canonicalRequesterSessionKey)
-              : countActiveDescendantRuns(canonicalRequesterSessionKey),
-          );
+          const {
+            countPendingDescendantRuns,
+            countPendingDescendantRunsExcludingRun,
+            countActiveDescendantRuns,
+          } = await import("./subagent-registry.js");
+          if (params.currentRunId && typeof countPendingDescendantRunsExcludingRun === "function") {
+            pendingDescendantRuns = Math.max(
+              0,
+              countPendingDescendantRunsExcludingRun(
+                canonicalRequesterSessionKey,
+                params.currentRunId,
+              ),
+            );
+          } else {
+            pendingDescendantRuns = Math.max(
+              0,
+              typeof countPendingDescendantRuns === "function"
+                ? countPendingDescendantRuns(canonicalRequesterSessionKey)
+                : countActiveDescendantRuns(canonicalRequesterSessionKey),
+            );
+          }
         } catch {
           // Best-effort only; when unavailable keep historical direct-send behavior.
         }
@@ -902,6 +916,7 @@ async function deliverSubagentAnnouncement(params: {
   completionRouteMode?: "bound" | "fallback" | "hook";
   spawnMode?: SpawnSubagentMode;
   directIdempotencyKey: string;
+  currentRunId?: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
@@ -925,6 +940,7 @@ async function deliverSubagentAnnouncement(params: {
         completionMessage: params.completionMessage,
         internalEvents: params.internalEvents,
         directIdempotencyKey: params.directIdempotencyKey,
+        currentRunId: params.currentRunId,
         completionDirectOrigin: params.completionDirectOrigin,
         completionRouteMode: params.completionRouteMode,
         spawnMode: params.spawnMode,
@@ -1393,6 +1409,7 @@ export async function runSubagentAnnounceFlow(params: {
       completionRouteMode: completionResolution.routeMode,
       spawnMode: params.spawnMode,
       directIdempotencyKey,
+      currentRunId: params.childRunId,
       signal: params.signal,
     });
     // Cron delivery state should only be marked as delivered when we have a
