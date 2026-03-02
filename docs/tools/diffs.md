@@ -88,7 +88,7 @@ All fields are optional unless noted:
 - `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
 - `theme` (`"light" | "dark"`): viewer theme. Defaults to plugin default `defaults.theme`.
 - `layout` (`"unified" | "split"`): diff layout. Defaults to plugin default `defaults.layout`.
-- `expandUnchanged` (`boolean`): expand unchanged sections.
+- `expandUnchanged` (`boolean`): expand unchanged sections when full context is available. Per-call option only (not a plugin default key).
 - `fileFormat` (`"png" | "pdf"`): rendered file format. Defaults to plugin default `defaults.fileFormat`.
 - `fileQuality` (`"standard" | "hq" | "print"`): quality preset for PNG or PDF rendering.
 - `fileScale` (`number`): device scale override (`1`-`4`).
@@ -136,6 +136,14 @@ Mode behavior summary:
 - `mode: "view"`: viewer fields only.
 - `mode: "file"`: file fields only, no viewer artifact.
 - `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`.
+
+## Collapsed unchanged sections
+
+- The viewer can show rows like `N unmodified lines`.
+- Expand controls on those rows are conditional and not guaranteed for every input kind.
+- Expand controls appear when the rendered diff has expandable context data, which is typical for before and after input.
+- For many unified patch inputs, omitted context bodies are not available in the parsed patch hunks, so the row can appear without expand controls. This is expected behavior.
+- `expandUnchanged` applies only when expandable context exists.
 
 ## Plugin defaults
 
@@ -313,6 +321,11 @@ Viewer accessibility issues:
   - pass `baseUrl` per tool call, or
   - use `gateway.bind=custom` and `gateway.customBindHost`
 - Enable `security.allowRemoteViewer` only when you intend external viewer access.
+
+Unmodified-lines row has no expand button:
+
+- This can happen for patch input when the patch does not carry expandable context.
+- This is expected and does not indicate a viewer failure.
 
 Artifact not found:
 

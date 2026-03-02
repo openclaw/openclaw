@@ -53,7 +53,7 @@ Useful options:
 - `fileQuality`: `standard`, `hq`, or `print`
 - `fileScale`: device scale override (`1`-`4`)
 - `fileMaxWidth`: max width override in CSS pixels (`640`-`2400`)
-- `expandUnchanged`: expand unchanged sections
+- `expandUnchanged`: expand unchanged sections (per-call option only, not a plugin default key)
 - `path`: display name for before and after input
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime
@@ -128,7 +128,7 @@ This is version two.
 Render a file (PNG or PDF):
 
 ```text
-Use the `diffs` tool in `file` mode for this before and after input. After it returns `details.filePath`, use the `message` tool with `path` or `filePath` to send me the rendered diff image.
+Use the `diffs` tool in `file` mode for this before and after input. After it returns `details.filePath`, use the `message` tool with `path` or `filePath` to send me the rendered diff file.
 
 Path: README.md
 
@@ -176,4 +176,5 @@ diff --git a/src/example.ts b/src/example.ts
 - Remote viewer misses are throttled to reduce token-guess abuse.
 - PNG or PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
 - If your delivery channel compresses images heavily (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve readability.
+- `N unmodified lines` rows may not always include expand controls for patch input, because many patch hunks do not carry full expandable context data.
 - Diff rendering is powered by [Diffs](https://diffs.com).
