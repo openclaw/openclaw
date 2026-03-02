@@ -755,7 +755,7 @@ See [Models](/cli/models), [OAuth](/concepts/oauth), and
 
 ### Is AWS Bedrock supported
 
-Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
 
 ### How does Codex auth work
 
