@@ -175,7 +175,9 @@ export function renderApp(state: AppViewState) {
           .filter(Boolean),
       ].filter(Boolean),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
+  )
+    .slice()
+    .toSorted((a, b) => a.localeCompare(b));
   const cronModelSuggestions = Array.from(
     new Set(
       [
@@ -191,7 +193,9 @@ export function renderApp(state: AppViewState) {
           .filter(Boolean),
       ].filter(Boolean),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
+  )
+    .slice()
+    .toSorted((a, b) => a.localeCompare(b));
   const visibleCronJobs = getVisibleCronJobs(state);
   const selectedDeliveryChannel =
     state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
