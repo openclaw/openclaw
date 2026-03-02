@@ -28,6 +28,9 @@ function isAllowedSlackAngleToken(token: string): boolean {
 }
 
 function escapeSlackMrkdwnContent(text: string): string {
+  if (!text) {
+    return "";
+  }
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
@@ -53,6 +56,9 @@ function escapeSlackMrkdwnContent(text: string): string {
 }
 
 function escapeSlackMrkdwnText(text: string): string {
+  if (!text) {
+    return "";
+  }
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }

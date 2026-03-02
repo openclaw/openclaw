@@ -111,6 +111,9 @@ export function matchesMentionWithExplicit(params: {
 }
 
 export function stripStructuralPrefixes(text: string): string {
+  if (!text) {
+    return "";
+  }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
   const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
