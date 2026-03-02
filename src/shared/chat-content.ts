@@ -37,8 +37,11 @@ export function extractTextFromChatContent(
       }
     } else if (blockType === "thinking") {
       const thinking = (block as { thinking?: unknown }).thinking;
-      if (typeof thinking === "string" && thinking.trim()) {
-        thinkingChunks.push(thinking);
+      if (typeof thinking === "string") {
+        const value = opts?.sanitizeText ? opts.sanitizeText(thinking) : thinking;
+        if (value.trim()) {
+          thinkingChunks.push(value);
+        }
       }
     }
   }
