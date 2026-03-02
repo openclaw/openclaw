@@ -22,6 +22,14 @@ describe("sanitizeUserFacingText", () => {
     },
   );
 
+  it("sanitizes developer role unsupported errors", () => {
+    const result = sanitizeUserFacingText(
+      'ValidationException: messages: Unexpected role "developer". Allowed roles are "user" or "assistant"',
+    );
+    expect(result).toContain("compat.supportsDeveloperRole=false");
+    expect(result).not.toContain("Message ordering conflict");
+  });
+
   it("sanitizes role ordering errors", () => {
     const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });
     expect(result).toContain("Message ordering conflict");

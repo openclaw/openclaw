@@ -162,6 +162,17 @@ describe("normalizeModelCompat", () => {
     ).toBe(false);
   });
 
+  it("forces supportsDeveloperRole off for vectortara OpenAI-compatible models", () => {
+    const model = {
+      ...baseModel(),
+      provider: "vectortara",
+      baseUrl: "https://api.vectortara.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
   it("leaves non-zai models untouched", () => {
     const model = {
       ...baseModel(),
@@ -225,5 +236,16 @@ describe("resolveForwardCompatModel", () => {
     });
     const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
     expect(model).toBeUndefined();
+  });
+
+  it("does not override explicit vectortara compat false", () => {
+    const model = {
+      ...baseModel(),
+      provider: "vectortara",
+      baseUrl: "https://api.vectortara.com/v1",
+      compat: { supportsDeveloperRole: false },
+    };
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
 });

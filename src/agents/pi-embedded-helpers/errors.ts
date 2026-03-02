@@ -156,6 +156,28 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   return lower.includes("context overflow");
 }
 
+export function isDeveloperRoleUnsupportedErrorMessage(raw?: string): boolean {
+  if (!raw) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+
+  const lower = trimmed.toLowerCase();
+
+  // Bedrock-style validation when a request includes the "developer" role.
+  // Example:
+  //   ValidationException: messages: Unexpected role "developer". Allowed roles are "user" or "assistant"
+  if (lower.includes("unexpected role") && lower.includes("developer")) {
+    if (lower.includes("allowed roles") && lower.includes("user") && lower.includes("assistant")) return true;
+    // Some gateways omit the "Allowed roles" suffix.
+    return true;
+  }
+
+  // Some gateways collapse this into a generic role error but still mention developer.
+  if (lower.includes("incorrect role information") && lower.includes("developer")) return true;
+
+  return false;
+}
+
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
@@ -504,6 +526,20 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isDeveloperRoleUnsupportedErrorMessage(raw)) {
+    const provider = typeof msg.provider === "string" ? msg.provider.trim() : "";
+    const model = typeof msg.model === "string" ? msg.model.trim() : "";
+    const diagParts = [provider ? `provider=${provider}` : null, model ? `model=${model}` : null]
+      .filter(Boolean)
+      .join(" ");
+    const diag = diagParts ? ` (${diagParts})` : "";
+
+    return (
+      `Provider rejected the "developer" role (only supports "user"/"assistant").${diag} ` +
+      "Set compat.supportsDeveloperRole=false for this model (or switch to a compatible API) and try again."
+    );
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -567,6 +603,13 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
+    if (isDeveloperRoleUnsupportedErrorMessage(trimmed)) {
+      return (
+        'Provider rejected the "developer" role (only supports "user"/"assistant"). ' +
+        "Set compat.supportsDeveloperRole=false for this model (or switch to a compatible API) and try again."
+      );
+    }
+
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +

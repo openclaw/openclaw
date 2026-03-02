@@ -29,12 +29,14 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+
   it("returns context overflow for Kimi 'model token limit' errors", () => {
     const msg = makeAssistantError(
       "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+
   it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -43,6 +45,23 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Reasoning is required");
     expect(result).toContain("/think minimal");
     expect(result).not.toContain("Context overflow");
+  });
+
+  it("returns a friendly message for Bedrock-style developer role rejection", () => {
+    const msg = {
+      ...makeAssistantError(
+        'ValidationException: messages: Unexpected role "developer". Allowed roles are "user" or "assistant"',
+      ),
+      provider: "vectortara",
+      model: "claude-opus-4-1-20250805",
+    } as AssistantMessage;
+
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("developer");
+    expect(result).toContain("compat.supportsDeveloperRole=false");
+    expect(result).toContain("provider=vectortara");
+    expect(result).toContain("model=claude-opus-4-1-20250805");
+    expect(result).not.toContain("Message ordering conflict");
   });
   it("returns a friendly message for Anthropic role ordering", () => {
     const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');

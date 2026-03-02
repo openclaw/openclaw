@@ -38,6 +38,7 @@ import {
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
+  isDeveloperRoleUnsupportedErrorMessage,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
@@ -996,6 +997,30 @@ export async function runEmbeddedPiAgent(
               authRetryPending = true;
               continue;
             }
+            if (isDeveloperRoleUnsupportedErrorMessage(errorText)) {
+              const diag = ` (provider=${provider} model=${model.id})`;
+              return {
+                payloads: [
+                  {
+                    text:
+                      `Provider rejected the "developer" role (only supports "user"/"assistant").${diag} ` +
+                      "Set compat.supportsDeveloperRole=false for this model (or switch to a compatible API) and try again.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "developer_role_unsupported", message: errorText },
+                },
+              };
+            }
+
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
