@@ -1,3 +1,5 @@
+export type SandboxBackend = "docker" | "seatbelt";
+
 export type SandboxDockerSettings = {
   /** Docker image to use for sandbox containers. */
   image?: string;
@@ -57,6 +59,15 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+};
+
+export type SandboxSeatbeltSettings = {
+  /** Directory containing seatbelt profiles. */
+  profileDir?: string;
+  /** Logical profile name ("<name>.sb" resolved automatically). */
+  profile?: string;
+  /** Extra sandbox-exec -D params. */
+  params?: Record<string, string>;
 };
 
 export type SandboxBrowserSettings = {

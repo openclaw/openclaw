@@ -8,6 +8,7 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
+import { ensureConfiguredSeatbeltDemoProfiles } from "../agents/sandbox/seatbelt-profiles.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
@@ -59,6 +60,15 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  try {
+    await ensureConfiguredSeatbeltDemoProfiles({
+      cfg: params.cfg,
+      onWarn: (message) => params.log.warn(message),
+    });
+  } catch (err) {
+    params.log.warn(`seatbelt demo profile install failed on startup: ${String(err)}`);
   }
 
   // Start OpenClaw browser control server (unless disabled via config).

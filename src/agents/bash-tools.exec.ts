@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecHost,
+  buildEnforcedShellCommand,
+  evaluateShellAllowlist,
+  maxAsk,
+  minSecurity,
+  recordAllowlistUse,
+  resolveExecApprovals,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -377,6 +386,7 @@ export function createExecTool(
             paramsEnv: params.env,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            homeOverride: sandbox.backend === "seatbelt" ? homedir() : undefined,
           })
         : mergedEnv;
 
@@ -453,6 +463,59 @@ export function createExecTool(
           return gatewayResult.pendingResult;
         }
         execCommandOverride = gatewayResult.execCommandOverride;
+      }
+
+      // Seatbelt host-sandbox runs execute on the host via sandbox-exec, so we must
+      // enforce exec allowlist/safeBins here (same policy posture as gateway/node).
+      // Docker parity is intentionally deferred: container-aware command/path resolution
+      // needs a follow-up pass to avoid false negatives across container mount mappings.
+      if (host === "sandbox" && sandbox?.backend === "seatbelt") {
+        const approvals = resolveExecApprovals(agentId, {
+          security,
+          ask,
+        });
+        const hostSecurity = minSecurity(security, approvals.agent.security);
+        if (hostSecurity === "deny") {
+          throw new Error("exec denied: host=sandbox backend=seatbelt security=deny");
+        }
+
+        if (hostSecurity === "allowlist") {
+          const allowlistEval = evaluateShellAllowlist({
+            command: params.command,
+            allowlist: approvals.allowlist,
+            safeBins,
+            safeBinProfiles,
+            cwd: workdir,
+            env,
+            platform: process.platform,
+            trustedSafeBinDirs,
+          });
+          if (!allowlistEval.analysisOk || !allowlistEval.allowlistSatisfied) {
+            throw new Error("exec denied: host=sandbox backend=seatbelt allowlist-miss");
+          }
+
+          const enforced = buildEnforcedShellCommand({
+            command: params.command,
+            segments: allowlistEval.segments,
+            platform: process.platform,
+          });
+          if (!enforced.ok || !enforced.command) {
+            throw new Error(
+              `exec denied: allowlist execution plan unavailable (${enforced.reason})`,
+            );
+          }
+          execCommandOverride = enforced.command;
+
+          const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
+          const seen = new Set<string>();
+          for (const match of allowlistEval.allowlistMatches) {
+            if (seen.has(match.pattern)) {
+              continue;
+            }
+            seen.add(match.pattern);
+            recordAllowlistUse(approvals.file, agentId, match, params.command, resolvedPath);
+          }
+        }
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;

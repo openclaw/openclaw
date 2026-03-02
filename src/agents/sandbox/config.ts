@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
+  DEFAULT_SANDBOX_BACKEND,
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
   DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -12,6 +14,7 @@ import {
   DEFAULT_SANDBOX_IDLE_HOURS,
   DEFAULT_SANDBOX_IMAGE,
   DEFAULT_SANDBOX_MAX_AGE_DAYS,
+  DEFAULT_SANDBOX_SEATBELT_PROFILE_DIR,
   DEFAULT_SANDBOX_WORKDIR,
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
@@ -22,6 +25,7 @@ import type {
   SandboxDockerConfig,
   SandboxPruneConfig,
   SandboxScope,
+  SandboxSeatbeltConfig,
 } from "./types.js";
 
 export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
@@ -119,6 +123,28 @@ export function resolveSandboxDockerConfig(params: {
   };
 }
 
+export function resolveSandboxSeatbeltConfig(params: {
+  scope: SandboxScope;
+  globalSeatbelt?: Partial<SandboxSeatbeltConfig>;
+  agentSeatbelt?: Partial<SandboxSeatbeltConfig>;
+}): SandboxSeatbeltConfig {
+  const agentSeatbelt = params.scope === "shared" ? undefined : params.agentSeatbelt;
+  const globalSeatbelt = params.globalSeatbelt;
+  const profileDir = resolveUserPath(
+    agentSeatbelt?.profileDir ?? globalSeatbelt?.profileDir ?? DEFAULT_SANDBOX_SEATBELT_PROFILE_DIR,
+  );
+
+  const paramsMerged = agentSeatbelt?.params
+    ? { ...(globalSeatbelt?.params ?? {}), ...agentSeatbelt.params }
+    : globalSeatbelt?.params;
+
+  return {
+    profileDir,
+    profile: agentSeatbelt?.profile ?? globalSeatbelt?.profile,
+    params: paramsMerged,
+  };
+}
+
 export function resolveSandboxBrowserConfig(params: {
   scope: SandboxScope;
   globalBrowser?: Partial<SandboxBrowserConfig>;
@@ -187,12 +213,18 @@ export function resolveSandboxConfigForAgent(
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
-  return {
+  const resolved: SandboxConfig = {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
+    backend: agentSandbox?.backend ?? agent?.backend ?? DEFAULT_SANDBOX_BACKEND,
     scope,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    seatbelt: resolveSandboxSeatbeltConfig({
+      scope,
+      globalSeatbelt: agent?.seatbelt,
+      agentSeatbelt: agentSandbox?.seatbelt,
+    }),
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,
@@ -213,4 +245,13 @@ export function resolveSandboxConfigForAgent(
       agentPrune: agentSandbox?.prune,
     }),
   };
+
+  if (resolved.backend === "seatbelt" && !resolved.seatbelt?.profile?.trim()) {
+    const scopedAgentId = agentId?.trim() || "main";
+    throw new Error(
+      `Seatbelt sandbox requires sandbox.seatbelt.profile after defaults/agent merge for agent "${scopedAgentId}". Set agents.defaults.sandbox.seatbelt.profile or an agent-specific override.`,
+    );
+  }
+
+  return resolved;
 }

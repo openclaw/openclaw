@@ -1,7 +1,10 @@
+import type { SandboxBackend } from "../../config/types.sandbox.js";
 import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
+import type { SandboxSeatbeltConfig, SandboxSeatbeltContext } from "./types.seatbelt.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
+export type { SandboxSeatbeltConfig, SandboxSeatbeltContext } from "./types.seatbelt.js";
 
 export type SandboxToolPolicy = {
   allow?: string[];
@@ -54,9 +57,11 @@ export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
+  backend: SandboxBackend;
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  seatbelt: SandboxSeatbeltConfig;
   docker: SandboxDockerConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
@@ -71,6 +76,7 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  backend: SandboxBackend;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -78,6 +84,7 @@ export type SandboxContext = {
   containerName: string;
   containerWorkdir: string;
   docker: SandboxDockerConfig;
+  seatbelt?: SandboxSeatbeltContext;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
@@ -85,6 +92,7 @@ export type SandboxContext = {
 };
 
 export type SandboxWorkspaceInfo = {
+  backend: SandboxBackend;
   workspaceDir: string;
   containerWorkdir: string;
 };

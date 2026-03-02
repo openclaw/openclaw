@@ -28,6 +28,7 @@ export function createSandboxTestContext(params?: {
 
   return {
     enabled: true,
+    backend: "docker",
     sessionKey: "sandbox:test",
     workspaceDir: "/tmp/workspace",
     agentWorkspaceDir: "/tmp/workspace",

@@ -399,12 +399,24 @@ export function createOpenClawCodingTools(options?: {
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
     sandbox: sandbox
-      ? {
-          containerName: sandbox.containerName,
-          workspaceDir: sandbox.workspaceDir,
-          containerWorkdir: sandbox.containerWorkdir,
-          env: sandbox.docker.env,
-        }
+      ? sandbox.backend === "seatbelt"
+        ? {
+            backend: "seatbelt",
+            workspaceDir: sandbox.workspaceDir,
+            containerWorkdir: sandbox.containerWorkdir,
+            env: sandbox.docker.env,
+            seatbelt: {
+              profilePath: sandbox.seatbelt?.profilePath ?? "",
+              params: sandbox.seatbelt?.params ?? {},
+            },
+          }
+        : {
+            backend: "docker",
+            containerName: sandbox.containerName,
+            workspaceDir: sandbox.workspaceDir,
+            containerWorkdir: sandbox.containerWorkdir,
+            env: sandbox.docker.env,
+          }
       : undefined,
   });
   const processTool = createProcessTool({

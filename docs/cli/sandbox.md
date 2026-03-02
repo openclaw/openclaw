@@ -7,11 +7,11 @@ status: active
 
 # Sandbox CLI
 
-Manage Docker-based sandbox containers for isolated agent execution.
+Manage sandbox runtimes (Docker and seatbelt) for isolated agent execution.
 
 ## Overview
 
-OpenClaw can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
+OpenClaw can run agents in isolated sandboxes for security. Docker remains the default backend, and macOS hosts can also use the seatbelt backend. The `sandbox` commands help you inspect effective policy and manage runtime containers where applicable.
 
 ## Commands
 
@@ -119,6 +119,16 @@ openclaw sandbox recreate --agent alfred
 Tip: prefer `openclaw sandbox recreate` over manual `docker rm`. It uses the
 Gateway’s container naming and avoids mismatches when scope/session keys change.
 
+## Seatbelt backend notes
+
+For macOS-native sandboxing with `sandbox-exec`, set `sandbox.backend: "seatbelt"`.
+
+See: [Seatbelt Sandbox Backend](/sandbox/seatbelt) for:
+
+- demo profiles (`demo-open`, `demo-websearch`, `demo-restricted`)
+- profile parameter wiring
+- allowlist/safeBins enforcement behavior for seatbelt
+
 ## Configuration
 
 Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
@@ -148,5 +158,6 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 ## See Also
 
 - [Sandbox Documentation](/gateway/sandboxing)
+- [Seatbelt Sandbox Backend](/sandbox/seatbelt)
 - [Agent Configuration](/concepts/agent-workspace)
 - [Doctor Command](/gateway/doctor) - Check sandbox setup

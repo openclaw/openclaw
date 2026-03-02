@@ -1,8 +1,10 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, STATE_DIR } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
@@ -13,9 +15,28 @@ import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { createSeatbeltFsBridge } from "./seatbelt-fs-bridge.js";
+import { ensureSeatbeltDemoProfiles, SEATBELT_DEMO_PROFILE_NAMES } from "./seatbelt-profiles.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
+import type {
+  SandboxContext,
+  SandboxDockerConfig,
+  SandboxSeatbeltContext,
+  SandboxWorkspaceInfo,
+} from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
+
+const SEATBELT_PROFILE_NAME_PATTERN = /^[a-zA-Z0-9_-]+(?:\.sb)?$/;
+
+const RESERVED_SEATBELT_PARAM_KEYS = new Set([
+  "PROJECT_DIR",
+  "WORKSPACE_DIR",
+  "STATE_DIR",
+  "AGENT_ID",
+  "SEATBELT_PROFILE_DIR",
+  "WORKSPACE_ACCESS",
+  "TMPDIR",
+]);
 
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
@@ -105,6 +126,117 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   return { rawSessionKey, runtime, cfg };
 }
 
+async function resolveSeatbeltContextConfig(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  agentId: string;
+}): Promise<SandboxSeatbeltContext | undefined> {
+  if (params.cfg.backend !== "seatbelt") {
+    return undefined;
+  }
+  const rawProfile = params.cfg.seatbelt.profile?.trim();
+  if (!rawProfile) {
+    return undefined;
+  }
+  if (
+    rawProfile.includes("/") ||
+    rawProfile.includes("\\") ||
+    rawProfile.includes("..") ||
+    !SEATBELT_PROFILE_NAME_PATTERN.test(rawProfile)
+  ) {
+    throw new Error(
+      `Invalid seatbelt profile "${rawProfile}". Profile names must not contain path separators or ".." segments.`,
+    );
+  }
+  const profile = rawProfile.endsWith(".sb") ? rawProfile.slice(0, -3) : rawProfile;
+  const profileFile = `${profile}.sb`;
+  const profilePath = path.join(params.cfg.seatbelt.profileDir, profileFile);
+
+  const getProfileState = async (): Promise<"ok" | "missing" | "unreadable"> => {
+    try {
+      await fs.access(profilePath, fsConstants.R_OK);
+      return "ok";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      return code === "ENOENT" ? "missing" : "unreadable";
+    }
+  };
+
+  const unreadableMessage =
+    `Seatbelt profile "${profile}" exists but is not readable at ${profilePath}. ` +
+    "Check file ownership and permissions.";
+
+  const initialState = await getProfileState();
+  if (initialState !== "ok") {
+    if (initialState === "unreadable") {
+      throw new Error(unreadableMessage);
+    }
+
+    const isDemoProfile = SEATBELT_DEMO_PROFILE_NAMES.includes(
+      profile as (typeof SEATBELT_DEMO_PROFILE_NAMES)[number],
+    );
+    let ensureError: unknown;
+
+    if (isDemoProfile) {
+      try {
+        await ensureSeatbeltDemoProfiles({
+          profileDir: params.cfg.seatbelt.profileDir,
+        });
+      } catch (error) {
+        ensureError = error;
+      }
+    }
+
+    const finalState = await getProfileState();
+    if (finalState !== "ok") {
+      if (finalState === "unreadable") {
+        throw new Error(unreadableMessage);
+      }
+
+      const help =
+        `Seatbelt profile "${profile}" not found at ${profilePath}. ` +
+        "Set sandbox.seatbelt.profile/profileDir to an existing profile, or run `openclaw doctor`.";
+      if (ensureError) {
+        const message = ensureError instanceof Error ? ensureError.message : String(ensureError);
+        const wrapped = new Error(help + ` Auto-install attempt failed: ${message}.`);
+        (wrapped as Error & { cause?: unknown }).cause = ensureError;
+        throw wrapped;
+      }
+      if (isDemoProfile) {
+        throw new Error(help + " Demo profile auto-install was attempted but profile is still missing.");
+      }
+      throw new Error(help);
+    }
+  }
+
+  const defaults = {
+    PROJECT_DIR: params.workspaceDir,
+    WORKSPACE_DIR: params.agentWorkspaceDir,
+    STATE_DIR,
+    AGENT_ID: params.agentId,
+    SEATBELT_PROFILE_DIR: params.cfg.seatbelt.profileDir,
+    WORKSPACE_ACCESS: params.cfg.workspaceAccess,
+    TMPDIR: "/tmp",
+  };
+
+  const userParams = Object.fromEntries(
+    Object.entries(params.cfg.seatbelt.params ?? {}).filter(
+      ([key]) => !RESERVED_SEATBELT_PARAM_KEYS.has(key),
+    ),
+  );
+
+  return {
+    profileDir: params.cfg.seatbelt.profileDir,
+    profile,
+    profilePath,
+    params: {
+      ...userParams,
+      ...defaults,
+    },
+  };
+}
+
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -114,9 +246,11 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, cfg, runtime } = resolved;
 
-  await maybePruneSandboxes(cfg);
+  if (cfg.backend === "docker") {
+    await maybePruneSandboxes(cfg);
+  }
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
@@ -124,6 +258,34 @@ export async function resolveSandboxContext(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+
+  const seatbelt = await resolveSeatbeltContextConfig({
+    cfg,
+    workspaceDir,
+    agentWorkspaceDir,
+    agentId: runtime.agentId,
+  });
+
+  if (cfg.backend === "seatbelt") {
+    const sandboxContext: SandboxContext = {
+      enabled: true,
+      backend: "seatbelt",
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      workspaceAccess: cfg.workspaceAccess,
+      containerName: "",
+      containerWorkdir: workspaceDir,
+      docker: cfg.docker,
+      seatbelt,
+      tools: cfg.tools,
+      browserAllowHostControl: cfg.browser.allowHostControl,
+    };
+
+    sandboxContext.fsBridge = createSeatbeltFsBridge({ sandbox: sandboxContext });
+
+    return sandboxContext;
+  }
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -168,6 +330,7 @@ export async function resolveSandboxContext(params: {
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    backend: "docker",
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
@@ -175,6 +338,7 @@ export async function resolveSandboxContext(params: {
     containerName,
     containerWorkdir: resolvedCfg.docker.workdir,
     docker: resolvedCfg.docker,
+    seatbelt,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
@@ -204,7 +368,8 @@ export async function ensureSandboxWorkspaceForSession(params: {
   });
 
   return {
+    backend: cfg.backend,
     workspaceDir,
-    containerWorkdir: cfg.docker.workdir,
+    containerWorkdir: cfg.backend === "seatbelt" ? workspaceDir : cfg.docker.workdir,
   };
 }

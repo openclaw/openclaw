@@ -18,6 +18,7 @@ export function createPiToolsSandboxContext(params: PiToolsSandboxContextParams)
   const workspaceDir = params.workspaceDir;
   return {
     enabled: true,
+    backend: "docker",
     sessionKey: params.sessionKey ?? "sandbox:test",
     workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir ?? workspaceDir,
