@@ -322,6 +322,15 @@ export async function recoverPendingDeliveries(opts: {
 
     const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
     if (!retryEligibility.eligible) {
+      // Check if backoff would exceed the recovery budget
+      const backoff = retryEligibility.remainingBackoffMs;
+      if (now + backoff >= deadline) {
+        opts.log.info(
+          `Backoff ${backoff}ms exceeds budget for ${entry.id} — skipping to next entry`,
+        );
+        deferredBackoff += 1;
+        continue;
+      }
       deferredBackoff += 1;
       opts.log.info(
         `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
