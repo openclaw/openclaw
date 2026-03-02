@@ -287,10 +287,13 @@ export async function launchOpenClawChrome(
   const proc = spawnOnce();
 
   // Collect stderr for diagnostics in case Chrome fails to start.
+  // The listener is removed on success to avoid unbounded memory growth
+  // from a long-lived Chrome process that emits periodic warnings.
   const stderrChunks: Buffer[] = [];
-  proc.stderr?.on("data", (chunk: Buffer) => {
+  const onStderr = (chunk: Buffer) => {
     stderrChunks.push(chunk);
-  });
+  };
+  proc.stderr?.on("data", onStderr);
 
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
@@ -317,6 +320,10 @@ export async function launchOpenClawChrome(
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
     );
   }
+
+  // Chrome started successfully — detach the stderr listener and release the buffer.
+  proc.stderr?.off("data", onStderr);
+  stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
   log.info(
