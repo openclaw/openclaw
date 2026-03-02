@@ -20,11 +20,11 @@ import {
 import type { CronJob, CronJobState } from "./types.js";
 
 const noopLogger = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  debug: vi.fn(),
-  trace: vi.fn(),
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  debug: () => {},
+  trace: () => {},
 };
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
 const FAST_TIMEOUT_SECONDS = 0.0025;
@@ -447,7 +447,7 @@ describe("Cron issue regressions", () => {
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const state = createRunningCronServiceState({
       storePath: store.storePath,
-      log: noopLogger,
+      log: noopLogger as unknown as Parameters<typeof createRunningCronServiceState>[0]["log"],
       nowMs: () => now,
       jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
     });
