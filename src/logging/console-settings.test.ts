@@ -26,6 +26,7 @@ type ConsoleSnapshot = {
 };
 
 let originalIsTty: boolean | undefined;
+let originalOpenClawTestConsole: string | undefined;
 let snapshot: ConsoleSnapshot;
 let logging: typeof import("../logging.js");
 let state: typeof import("./state.js");
@@ -46,6 +47,8 @@ beforeEach(() => {
     trace: console.trace,
   };
   originalIsTty = process.stdout.isTTY;
+  originalOpenClawTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
+  process.env.OPENCLAW_TEST_CONSOLE = "1";
   Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
 });
 
@@ -56,6 +59,11 @@ afterEach(() => {
   console.error = snapshot.error;
   console.debug = snapshot.debug;
   console.trace = snapshot.trace;
+  if (originalOpenClawTestConsole === undefined) {
+    delete process.env.OPENCLAW_TEST_CONSOLE;
+  } else {
+    process.env.OPENCLAW_TEST_CONSOLE = originalOpenClawTestConsole;
+  }
   Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
   logging.setConsoleConfigLoaderForTests();
   vi.restoreAllMocks();
