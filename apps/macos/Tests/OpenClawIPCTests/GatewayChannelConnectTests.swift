@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -66,7 +66,6 @@ import Testing
             // Tests only need the handshake receive; keep the loop idle.
             self.pendingReceiveHandler.withLock { $0 = completionHandler }
         }
-
     }
 
     private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
@@ -77,7 +76,9 @@ import Testing
             self.response = response
         }
 
-        func snapshotMakeCount() -> Int { self.makeCount.withLock { $0 } }
+        func snapshotMakeCount() -> Int {
+            self.makeCount.withLock { $0 }
+        }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
             _ = url
@@ -89,8 +90,8 @@ import Testing
 
     @Test func concurrentConnectIsSingleFlightOnSuccess() async throws {
         let session = FakeWebSocketSession(response: .helloOk(delayMs: 200))
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 
@@ -103,10 +104,10 @@ import Testing
         #expect(session.snapshotMakeCount() == 1)
     }
 
-    @Test func concurrentConnectSharesFailure() async {
+    @Test func concurrentConnectSharesFailure() async throws {
         let session = FakeWebSocketSession(response: .invalid(delayMs: 200))
-        let channel = GatewayChannelActor(
-            url: URL(string: "ws://example.invalid")!,
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session))
 

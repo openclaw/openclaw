@@ -588,6 +588,87 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("isolates inbound debounce by DM topic thread id", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "topic-100",
+          date: 1736380800,
+          message_id: 201,
+          message_thread_id: 100,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "topic-200",
+          date: 1736380801,
+          message_id: 202,
+          message_thread_id: 200,
+          from: { id: 42, first_name: "Ada" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const debounceTimerIndexes = setTimeoutSpy.mock.calls
+        .map((call, index) => ({ index, delay: call[1] }))
+        .filter((entry) => entry.delay === DEBOUNCE_MS)
+        .map((entry) => entry.index);
+      expect(debounceTimerIndexes.length).toBeGreaterThanOrEqual(2);
+
+      for (const index of debounceTimerIndexes) {
+        clearTimeout(setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>);
+      }
+      for (const index of debounceTimerIndexes) {
+        const flushTimer = setTimeoutSpy.mock.calls[index]?.[0] as (() => unknown) | undefined;
+        await flushTimer?.();
+      }
+
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(2);
+      });
+      const threadIds = replySpy.mock.calls
+        .map((call) => (call[0] as { MessageThreadId?: number }).MessageThreadId)
+        .toSorted((a, b) => (a ?? 0) - (b ?? 0));
+      expect(threadIds).toEqual([100, 200]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("handles quote-only replies without reply metadata", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
