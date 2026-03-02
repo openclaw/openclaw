@@ -102,6 +102,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/CLI session recovery: handle expired CLI session IDs gracefully by clearing stale session state and retrying without crashing gateway runs. Landed from contributor PR #31090 by @frankekn. Thanks @frankekn.
+- Slack/Subagent completion delivery: stop forcing bound conversation IDs into `threadId` so Slack completion announces do not send invalid `thread_ts` for DMs/top-level channels. Landed from contributor PR #31105 by @stakeswky. Thanks @stakeswky.
+- Signal/Loop protection: evaluate own-account detection before sync-message filtering (including UUID-only `accountUuid` configs) so `sentTranscript` sync events cannot bypass loop protection and self-reply loops. Landed from contributor PR #31093 by @kevinWangSheng. Thanks @kevinWangSheng.
+- Gateway/Control UI origins: support wildcard `"*"` in `gateway.controlUi.allowedOrigins` for trusted remote access setups. Landed from contributor PR #31088 by @frankekn. Thanks @frankekn.
 - Security/Sandbox media reads: eliminate sandbox media TOCTOU symlink-retarget escapes by enforcing root-scoped boundary-safe reads at attachment/image load time and consolidating shared safe-read helpers across sandbox media callsites. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Security/Subagents sandbox inheritance: block sandboxed sessions from spawning cross-agent subagents that would run unsandboxed, preventing runtime sandbox downgrade via `sessions_spawn agentId`. Thanks @tdjackey for reporting.
 - Security/Workspace safe writes: harden `writeFileWithinRoot` against symlink-retarget TOCTOU races by opening existing files without truncation, creating missing files with exclusive create, deferring truncation until post-open identity+boundary validation, and removing out-of-root create artifacts on blocked races; added regression tests for truncate/create race paths. This ships in the next npm release (`2026.3.1`). Thanks @tdjackey for reporting.
