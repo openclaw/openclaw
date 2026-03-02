@@ -117,7 +117,7 @@ describe("sendPayload", () => {
   });
 
   it("returns no-op when chunker produces empty array", async () => {
-    const chunkerSpy = vi.spyOn(googlechatPlugin.outbound!, "chunker").mockReturnValue([]);
+    const chunkerSpy = vi.spyOn(googlechatPlugin.outbound! as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(googlechatPlugin.outbound!, "sendText");
     const result = await googlechatPlugin.outbound!.sendPayload!({
       ...baseCtx,

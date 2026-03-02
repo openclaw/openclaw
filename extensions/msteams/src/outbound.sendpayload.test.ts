@@ -88,7 +88,7 @@ describe("sendPayload", () => {
   });
 
   it("returns no-op when chunker produces empty array", async () => {
-    const chunkerSpy = vi.spyOn(msteamsOutbound, "chunker").mockReturnValue([]);
+    const chunkerSpy = vi.spyOn(msteamsOutbound as any, "chunker").mockReturnValue([]);
     const sendTextSpy = vi.spyOn(msteamsOutbound, "sendText");
     const result = await msteamsOutbound.sendPayload!({
       ...baseCtx,
