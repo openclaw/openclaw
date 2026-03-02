@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { describe, expect, it, vi } from "vitest";
+import { handleChatEvent, loadChatHistory, type ChatEventPayload, type ChatState } from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -427,5 +427,72 @@ describe("handleChatEvent", () => {
     // User messages with NO_REPLY text should NOT be filtered — only assistant messages.
     // normalizeFinalAssistantMessage returns null for user role, so this falls through.
     expect(handleChatEvent(state, payload)).toBe("final");
+  });
+
+  it("keeps assistant message when text field has real reply but content is NO_REPLY", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        text: "real reply",
+        content: "NO_REPLY",
+      },
+    };
+
+    // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("loadChatHistory", () => {
+  it("filters NO_REPLY assistant messages from history", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Hello" }] },
+      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      { role: "assistant", content: [{ type: "text", text: "Real answer" }] },
+      { role: "assistant", text: "  NO_REPLY  " },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(messages[0]);
+    expect(state.chatMessages[1]).toEqual(messages[2]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
+    const messages = [
+      { role: "assistant", text: "real reply", content: "NO_REPLY" },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    // text takes precedence — "real reply" is NOT silent, so message is kept.
+    expect(state.chatMessages).toHaveLength(1);
   });
 });

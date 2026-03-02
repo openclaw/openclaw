@@ -15,6 +15,10 @@ function isAssistantSilentReply(message: unknown): boolean {
   if (role !== "assistant") {
     return false;
   }
+  // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
+  if (typeof entry.text === "string") {
+    return SILENT_REPLY_PATTERN.test(entry.text);
+  }
   const text = extractText(message);
   return typeof text === "string" && SILENT_REPLY_PATTERN.test(text);
 }
