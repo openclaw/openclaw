@@ -1,6 +1,10 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  formatApiKeyPreview,
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
   createAuthChoiceAgentModelNoter,
@@ -16,7 +20,6 @@ import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
-import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyBedrockDefaultModel,
   applyBedrockProviderConfig,
@@ -24,6 +27,7 @@ import {
   listBedrockModels,
   setBedrockApiKey,
 } from "./onboard-auth.config-bedrock.js";
+import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -680,7 +684,6 @@ export async function applyAuthChoiceApiProviders(
 
     return { config: nextConfig, agentModelOverride };
   }
-
 
   if (authChoice === "bedrock-api-key") {
     let hasCredential = false;
