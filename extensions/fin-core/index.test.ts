@@ -284,7 +284,7 @@ describe("fin-core plugin", () => {
     expect(plugins.entries.length).toBeGreaterThan(0);
   });
 
-  it("renders finance dashboard route", async () => {
+  it("renders finance dashboard route (redirects to overview)", async () => {
     const { api, routes } = createFakeApi();
     plugin.register(api);
 
@@ -295,10 +295,8 @@ describe("fin-core plugin", () => {
     await route?.({}, recorder.res);
     const output = recorder.read();
 
-    expect(output.statusCode).toBe(200);
-    expect(output.headers["Content-Type"]).toContain("text/html");
-    expect(output.body).toContain("Finance Dashboard");
-    expect(output.body).toContain("Finance Plugin Matrix");
+    expect(output.statusCode).toBe(302);
+    expect(output.headers["Location"]).toBe("/dashboard/overview");
   });
 
   // ── SSE Endpoint Tests ──
@@ -497,12 +495,37 @@ describe("fin-core plugin", () => {
 
   // ── Trading Dashboard Route Tests ──
 
-  it("trading dashboard route serves HTML with CSS and data injected", async () => {
+  it("trading dashboard route redirects to trading-desk", async () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    const route = routes.get("/dashboard/trading");
+    expect(route).toBeDefined();
+
+    const recorder = createResponseRecorder();
+    await route?.({}, recorder.res);
+    const output = recorder.read();
+
+    expect(output.statusCode).toBe(302);
+    expect(output.headers["Location"]).toBe("/dashboard/trading-desk");
+  });
+
+  it("trading dashboard redirect preserves route registration", () => {
+    const { api, routes } = createFakeApi();
+    plugin.register(api);
+
+    // Old trading route still registered (as redirect)
+    expect(routes.has("/dashboard/trading")).toBe(true);
+    // New unified route registered
+    expect(routes.has("/dashboard/trading-desk")).toBe(true);
+  });
+
+  it("unified trading-desk dashboard renders HTML with SSE connections", async () => {
     const { api, services, routes } = createFakeApi();
     plugin.register(api);
     injectMockTradingServices(services);
 
-    const route = routes.get("/dashboard/trading");
+    const route = routes.get("/dashboard/trading-desk");
     expect(route).toBeDefined();
 
     const recorder = createResponseRecorder();
@@ -512,79 +535,13 @@ describe("fin-core plugin", () => {
     expect(output.statusCode).toBe(200);
     expect(output.headers["Content-Type"]).toContain("text/html");
 
-    // HTML contains key structural elements
-    expect(output.body).toContain("OpenFinClaw Trading Dashboard");
-    expect(output.body).toContain("updateDashboard");
+    // Key structural elements
+    expect(output.body).toContain("Trading Desk");
     expect(output.body).toContain("EventSource");
-    expect(output.body).toContain("/api/v1/finance/trading/stream");
-
-    // CSS is injected (the placeholder is replaced)
-    expect(output.body).not.toContain("/*__TRADING_CSS__*/");
-
-    // Data is injected (the placeholder is replaced with real JSON)
-    expect(output.body).not.toContain("/*__TRADING_DATA__*/{}");
-    expect(output.body).toContain('"totalEquity"');
-  });
-
-  it("trading dashboard HTML contains all 7 panels", async () => {
-    const { api, routes } = createFakeApi();
-    plugin.register(api);
-
-    const route = routes.get("/dashboard/trading");
-    const recorder = createResponseRecorder();
-    await route?.({}, recorder.res);
-    const html = recorder.read().body;
-
-    // Panel 1: Hero
-    expect(html).toContain('id="hero-equity"');
-    expect(html).toContain('id="hero-pnl"');
-    expect(html).toContain('id="hero-positions"');
-    expect(html).toContain('id="hero-sharpe"');
-
-    // Panel 2: Equity chart
-    expect(html).toContain('id="equity-chart"');
-
-    // Panel 3: Allocation chart
-    expect(html).toContain('id="alloc-chart"');
-
-    // Panel 4: Positions table
-    expect(html).toContain('id="positions-table"');
-
-    // Panel 5: Strategy cards
-    expect(html).toContain('id="strategy-grid"');
-
-    // Panel 6: Orders table
-    expect(html).toContain('id="orders-table"');
-
-    // Panel 7: Backtest table
-    expect(html).toContain('id="backtest-table"');
-  });
-
-  it("trading dashboard JS has SSE with fetch polling fallback", async () => {
-    const { api, routes } = createFakeApi();
-    plugin.register(api);
-
-    const route = routes.get("/dashboard/trading");
-    const recorder = createResponseRecorder();
-    await route?.({}, recorder.res);
-    const html = recorder.read().body;
-
-    // SSE connection logic
-    expect(html).toContain("startSSE");
-    expect(html).toContain("EventSource");
-    expect(html).toContain("es.onmessage");
-    expect(html).toContain("es.onerror");
-
-    // Polling fallback
-    expect(html).toContain("startPolling");
-    expect(html).toContain('fetch("/api/v1/finance/trading")');
-
-    // Chart persistence (update without recreation)
-    expect(html).toContain('equityChart.update("none")');
-    expect(html).toContain('allocChart.update("none")');
-
-    // NOT the old reload pattern
-    expect(html).not.toContain("location.reload");
+    expect(output.body).toContain("connectSSE");
+    // CSS and data injected (placeholders replaced)
+    expect(output.body).not.toContain("/*__SHARED_CSS__*/");
+    expect(output.body).not.toMatch(/\/\*__PAGE_DATA__\*\/\s*\{\}/);
   });
 
   // ── Config SSE Endpoint Tests ──
@@ -669,26 +626,27 @@ describe("fin-core plugin", () => {
 
   // ── Finance Dashboard HTML Validation ──
 
-  it("finance dashboard has CSS injection placeholder and renders config data", async () => {
-    const { api, routes } = createFakeApi();
+  it("unified overview dashboard renders HTML with config data", async () => {
+    const { api, services, routes } = createFakeApi();
     plugin.register(api);
+    injectMockTradingServices(services);
 
-    const route = routes.get("/dashboard/finance");
+    const route = routes.get("/dashboard/overview");
+    expect(route).toBeDefined();
+
     const recorder = createResponseRecorder();
     await route?.({}, recorder.res);
-    const html = recorder.read().body;
+    const output = recorder.read();
 
-    // CSS injected (placeholder replaced)
-    expect(html).not.toContain("/*__FINANCE_CSS__*/");
+    expect(output.statusCode).toBe(200);
+    expect(output.headers["Content-Type"]).toContain("text/html");
 
-    // Data injected (template token replaced with actual JSON)
-    expect(html).not.toMatch(/\/\*__FINANCE_DATA__\*\/\s*\{\}/);
-
-    // Key sections present
-    expect(html).toContain("renderSummary");
-    expect(html).toContain("renderTrading");
-    expect(html).toContain("renderExchanges");
-    expect(html).toContain("renderPlugins");
+    // CSS and data injected (placeholders replaced)
+    expect(output.body).not.toContain("/*__SHARED_CSS__*/");
+    expect(output.body).not.toMatch(/\/\*__PAGE_DATA__\*\/\s*\{\}/);
+    // Key structural elements
+    expect(output.body).toContain("Overview");
+    expect(output.body).toContain("connectSSE");
   });
 
   // ── Route Registration Completeness ──
@@ -705,6 +663,10 @@ describe("fin-core plugin", () => {
       "/api/v1/finance/trading/stream",
       "/dashboard/finance",
       "/dashboard/trading",
+      // Unified dashboard routes
+      "/dashboard/overview",
+      "/dashboard/trading-desk",
+      "/dashboard/strategy-lab",
       // P0-1: Write endpoints
       "/api/v1/finance/orders",
       "/api/v1/finance/orders/cancel",
@@ -1411,10 +1373,9 @@ describe("fin-core plugin", () => {
     });
   });
 
-  it("/dashboard/command-center renders HTML with injected CSS and data", async () => {
-    const { api, routes, services } = createFakeApi();
+  it("/dashboard/command-center redirects to trading-desk", async () => {
+    const { api, routes } = createFakeApi();
     plugin.register(api);
-    injectMockTradingServices(services);
 
     const route = routes.get("/dashboard/command-center");
     expect(route).toBeDefined();
@@ -1423,18 +1384,8 @@ describe("fin-core plugin", () => {
     await route?.({}, recorder.res);
     const output = recorder.read();
 
-    expect(output.statusCode).toBe(200);
-    expect(output.headers["Content-Type"]).toContain("text/html");
-
-    // HTML should contain key Command Center elements
-    expect(output.body).toContain("Command Center");
-    expect(output.body).toContain("riskHalo");
-    expect(output.body).toContain("eventFeed");
-    expect(output.body).toContain("estopBtn");
-    expect(output.body).toContain("positionsList");
-    // CSS should be injected
-    expect(output.body).toContain("--bg:");
-    expect(output.body).toContain(".risk-halo");
+    expect(output.statusCode).toBe(302);
+    expect(output.headers["Location"]).toBe("/dashboard/trading-desk");
   });
 
   it("GET /api/v1/finance/command-center returns events with pendingCount", async () => {
@@ -1514,10 +1465,9 @@ describe("fin-core plugin", () => {
     expect(payload.fund).toHaveProperty("totalCapital");
   });
 
-  it("/dashboard/mission-control renders HTML with injected CSS and data", async () => {
-    const { api, routes, services } = createFakeApi();
+  it("/dashboard/mission-control redirects to overview", async () => {
+    const { api, routes } = createFakeApi();
     plugin.register(api);
-    injectMockTradingServices(services);
 
     const route = routes.get("/dashboard/mission-control");
     expect(route).toBeDefined();
@@ -1526,18 +1476,7 @@ describe("fin-core plugin", () => {
     await route?.({}, recorder.res);
     const output = recorder.read();
 
-    expect(output.statusCode).toBe(200);
-    expect(output.headers["Content-Type"]).toContain("text/html");
-
-    // HTML should contain key Mission Control elements
-    expect(output.body).toContain("Mission Control");
-    expect(output.body).toContain("riskHalo");
-    expect(output.body).toContain("equityChart");
-    expect(output.body).toContain("raceBody");
-    expect(output.body).toContain("feedList");
-    expect(output.body).toContain("estopBtn");
-    // CSS should be injected
-    expect(output.body).toContain("--bg:");
-    expect(output.body).toContain(".risk-halo");
+    expect(output.statusCode).toBe(302);
+    expect(output.headers["Location"]).toBe("/dashboard/overview");
   });
 });

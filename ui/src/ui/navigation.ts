@@ -9,7 +9,7 @@ export const TAB_GROUPS = [
   },
   {
     label: "finance",
-    tabs: ["missionControl", "commandCenter", "trading", "fund", "evolution", "financeDashboard"],
+    tabs: ["finOverview", "finTrading", "finStrategyLab"],
   },
   { label: "agent", tabs: ["agents", "skills", "nodes"] },
   { label: "settings", tabs: ["config", "debug", "logs"] },
@@ -23,12 +23,9 @@ export type Tab =
   | "sessions"
   | "usage"
   | "cron"
-  | "missionControl"
-  | "commandCenter"
-  | "trading"
-  | "fund"
-  | "evolution"
-  | "financeDashboard"
+  | "finOverview"
+  | "finTrading"
+  | "finStrategyLab"
   | "skills"
   | "nodes"
   | "chat"
@@ -44,12 +41,9 @@ const TAB_PATHS: Record<Tab, string> = {
   sessions: "/sessions",
   usage: "/usage",
   cron: "/cron",
-  missionControl: "/mission-control",
-  commandCenter: "/command-center",
-  trading: "/trading",
-  fund: "/fund",
-  evolution: "/evolution",
-  financeDashboard: "/finance-dashboard",
+  finOverview: "/fin-overview",
+  finTrading: "/fin-trading",
+  finStrategyLab: "/fin-strategy-lab",
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
@@ -161,18 +155,12 @@ export function iconForTab(tab: Tab): IconName {
       return "zap";
     case "nodes":
       return "monitor";
-    case "missionControl":
-      return "radio";
-    case "trading":
-      return "candlestick";
-    case "fund":
-      return "folder";
-    case "commandCenter":
-      return "radio";
-    case "evolution":
-      return "zap";
-    case "financeDashboard":
+    case "finOverview":
       return "barChart";
+    case "finTrading":
+      return "candlestick";
+    case "finStrategyLab":
+      return "zap";
     case "config":
       return "settings";
     case "debug":

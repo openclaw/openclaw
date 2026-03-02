@@ -264,3 +264,31 @@ export function gatherMissionControlData(deps: DataGatheringDeps) {
     fund: fundState,
   };
 }
+
+/** Gather overview data (mission control + finance config merged). */
+export function gatherOverviewData(deps: DataGatheringDeps) {
+  const mc = gatherMissionControlData(deps);
+  const config = gatherFinanceConfigData(deps);
+  return { ...mc, config };
+}
+
+/** Gather strategy lab data (strategies + backtests + fund allocations). */
+export function gatherStrategyLabData(deps: DataGatheringDeps) {
+  const { runtime } = deps;
+
+  const trading = gatherTradingData(deps);
+
+  const fundManager = runtime.services?.get?.("fin-fund-manager") as FundManagerLike | undefined;
+  const fundState = fundManager?.getState?.() ?? {
+    allocations: [],
+    totalCapital: 0,
+  };
+
+  return {
+    strategies: trading.strategies,
+    backtests: trading.backtests,
+    allocations: trading.allocations,
+    fund: fundState,
+    summary: trading.summary,
+  };
+}

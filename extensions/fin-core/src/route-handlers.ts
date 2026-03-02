@@ -12,13 +12,15 @@ import {
   gatherTradingData,
   gatherCommandCenterData,
   gatherMissionControlData,
+  gatherOverviewData,
+  gatherStrategyLabData,
 } from "./data-gathering.js";
 import type { ExchangeHealthStore } from "./exchange-health-store.js";
 import type { RiskController } from "./risk-controller.js";
 import { registerAlertRoutes } from "./routes-alerts.js";
 import { registerStrategyRoutes } from "./routes-strategies.js";
 import type { DashboardTemplates } from "./template-renderer.js";
-import { renderDashboard } from "./template-renderer.js";
+import { renderDashboard, renderUnifiedDashboard } from "./template-renderer.js";
 import type {
   HttpReq,
   HttpRes,
@@ -49,23 +51,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
-  // ── Finance Dashboard HTML ──
+  // ── Finance Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
     path: "/dashboard/finance",
     handler: async (_req: unknown, res: HttpRes) => {
-      const financeData = gatherFinanceConfigData(gatherDeps);
-      const html = renderDashboard(
-        templates.finance,
-        financeData,
-        "/*__FINANCE_CSS__*/",
-        /\/\*__FINANCE_DATA__\*\/\s*\{\}/,
-      );
-      if (!html) {
-        jsonResponse(res, 200, financeData);
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
+      res.writeHead(302, { Location: "/dashboard/overview" });
+      res.end();
     },
   });
 
@@ -85,23 +76,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
-  // ── Trading Dashboard HTML ──
+  // ── Trading Dashboard → redirect to unified trading desk ──
   api.registerHttpRoute({
     path: "/dashboard/trading",
     handler: async (_req: unknown, res: HttpRes) => {
-      const tradingData = gatherTradingData(gatherDeps);
-      const html = renderDashboard(
-        templates.trading,
-        tradingData,
-        "/*__TRADING_CSS__*/",
-        "/*__TRADING_DATA__*/ {}",
-      );
-      if (!html) {
-        jsonResponse(res, 200, tradingData);
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
+      res.writeHead(302, { Location: "/dashboard/trading-desk" });
+      res.end();
     },
   });
 
@@ -493,22 +473,12 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
+  // ── Command Center Dashboard → redirect to unified trading desk ──
   api.registerHttpRoute({
     path: "/dashboard/command-center",
     handler: async (_req: unknown, res: HttpRes) => {
-      const ccData = gatherCommandCenterData(gatherDeps);
-      const html = renderDashboard(
-        templates.commandCenter,
-        ccData,
-        "/*__CC_CSS__*/",
-        /\/\*__CC_DATA__\*\/\s*\{\}/,
-      );
-      if (!html) {
-        jsonResponse(res, 200, ccData);
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
+      res.writeHead(302, { Location: "/dashboard/trading-desk" });
+      res.end();
     },
   });
 
@@ -520,22 +490,71 @@ export function registerHttpRoutes(deps: RouteHandlerDeps): void {
     },
   });
 
+  // ── Mission Control Dashboard → redirect to unified overview ──
   api.registerHttpRoute({
     path: "/dashboard/mission-control",
     handler: async (_req: unknown, res: HttpRes) => {
-      const mcData = gatherMissionControlData(gatherDeps);
-      const html = renderDashboard(
-        templates.missionControl,
-        mcData,
-        "/*__MC_CSS__*/",
-        /\/\*__MC_DATA__\*\/\s*\{\}/,
-      );
+      res.writeHead(302, { Location: "/dashboard/overview" });
+      res.end();
+    },
+  });
+
+  // ── Unified Dashboard: Overview ──
+  api.registerHttpRoute({
+    path: "/dashboard/overview",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherOverviewData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.overview, data);
       if (!html) {
-        jsonResponse(res, 200, mcData);
+        jsonResponse(res, 200, data);
         return;
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
     },
   });
+
+  // ── Unified Dashboard: Trading Desk ──
+  api.registerHttpRoute({
+    path: "/dashboard/trading-desk",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherCommandCenterData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.tradingDesk, data);
+      if (!html) {
+        jsonResponse(res, 200, data);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    },
+  });
+
+  // ── Unified Dashboard: Strategy Lab ──
+  api.registerHttpRoute({
+    path: "/dashboard/strategy-lab",
+    handler: async (_req: unknown, res: HttpRes) => {
+      const data = gatherStrategyLabData(gatherDeps);
+      const html = renderUnifiedDashboard(templates.strategyLab, data);
+      if (!html) {
+        jsonResponse(res, 200, data);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+    },
+  });
+
+  // ── Legacy path redirects ──
+  for (const [from, to] of [
+    ["/dashboard/evolution", "/dashboard/strategy-lab"],
+    ["/dashboard/fund", "/dashboard/strategy-lab"],
+  ] as const) {
+    api.registerHttpRoute({
+      path: from,
+      handler: async (_req: unknown, res: HttpRes) => {
+        res.writeHead(302, { Location: to });
+        res.end();
+      },
+    });
+  }
 }
