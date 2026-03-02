@@ -24,7 +24,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistReportsRejectedBasenamePattern() async throws {
+    func updateAllowlistReportsRejectedBasenamePattern() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
@@ -46,7 +46,7 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async throws {
+    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
@@ -55,7 +55,11 @@ struct ExecApprovalsStoreRefactorTests {
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [
-                    ExecAllowlistEntry(pattern: "echo", lastUsedAt: nil, lastUsedCommand: nil, lastResolvedPath: " /usr/bin/echo "),
+                    ExecAllowlistEntry(
+                        pattern: "echo",
+                        lastUsedAt: nil,
+                        lastUsedCommand: nil,
+                        lastResolvedPath: " /usr/bin/echo "),
                 ])
             #expect(rejected.isEmpty)
 
