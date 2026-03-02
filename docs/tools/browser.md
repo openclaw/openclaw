@@ -196,16 +196,23 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
-## Browserbase (hosted remote CDP)
+## Direct WebSocket CDP providers
+
+Some hosted browser services expose a **direct WebSocket** endpoint rather than
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+
+- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+  discover the WebSocket debugger URL, then connects.
+- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
+  skipping `/json/version`. Use this for services like
+  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  WebSocket URL.
+
+### Browserbase
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
-headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
-solving, stealth mode, and residential proxies. Unlike Browserless (which
-exposes a standard HTTP-based CDP discovery endpoint), Browserbase uses a
-direct WebSocket connection — OpenClaw connects to `wss://connect.browserbase.com`
-and authenticates via your API key in the query string.
-
-Example:
+headless browsers with built-in CAPTCHA solving, stealth mode, and residential
+proxies.
 
 ```json5
 {
@@ -247,7 +254,7 @@ Key ideas:
 
 Remote CDP tips:
 
-- Prefer HTTPS endpoints and short-lived tokens where possible.
+- Prefer encrypted endpoints (HTTPS or WSS) and short-lived tokens where possible.
 - Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
