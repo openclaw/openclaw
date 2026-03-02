@@ -22,6 +22,7 @@ import {
   EventType,
   MsgType,
   RelationType,
+  type MatrixEditOpts,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -31,7 +32,7 @@ import {
 const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
-export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+export type { MatrixSendOpts, MatrixSendResult, MatrixEditOpts } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export async function sendMessageMatrix(
@@ -260,6 +261,52 @@ export async function reactMatrixMessage(
   } finally {
     if (stopOnDone) {
       resolved.stop();
+    }
+  }
+}
+
+export async function editMessageMatrix(
+  roomId: string,
+  eventId: string,
+  text: string,
+  opts: MatrixEditOpts = {},
+): Promise<MatrixSendResult> {
+  const { client, stopOnDone } = await resolveMatrixClient({
+    client: opts.client,
+    timeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
+  });
+  try {
+    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+    const newContent: Record<string, unknown> = {
+      msgtype: MsgType.Text,
+      body: text,
+    };
+    if (opts.formattedText) {
+      newContent.format = "org.matrix.custom.html";
+      newContent.formatted_body = opts.formattedText;
+    }
+    const editContent: Record<string, unknown> = {
+      msgtype: MsgType.Text,
+      body: `* ${text}`,
+      "m.new_content": newContent,
+      "m.relates_to": {
+        rel_type: RelationType.Replace,
+        event_id: eventId,
+      },
+    };
+    if (opts.formattedText) {
+      editContent.format = "org.matrix.custom.html";
+      editContent.formatted_body = `* ${opts.formattedText}`;
+    }
+    const resultEventId = await client.sendEvent(resolvedRoom, EventType.RoomMessage, editContent);
+    return {
+      messageId: (resultEventId as string) ?? "unknown",
+      roomId: resolvedRoom,
+    };
+  } finally {
+    if (stopOnDone) {
+      client.stop();
     }
   }
 }
