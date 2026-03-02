@@ -1,9 +1,10 @@
 @echo off
-title OpenClaw Server
+title OpenClaw Launcher (Hakua)
 cd /d "%~dp0"
 echo ===================================================
-echo Starting OpenClaw on port 3000...
+echo  OpenClaw Integrated Launcher
 echo ===================================================
-set OPENCLAW_GATEWAY_PORT=3000
-call pnpm start
+
+REM Use the PowerShell launcher which handles Ngrok and Browser
+powershell -ExecutionPolicy Bypass -File "launch-with-browser.ps1"
 pause

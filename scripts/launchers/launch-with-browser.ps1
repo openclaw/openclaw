@@ -1,5 +1,5 @@
-# OpenClaw ブラウザ付きランチャー
-# サーバーを起動し、準備ができたらブラウザで UI を自動的に開きます。
+# OpenClaw Launcher with Browser
+# Starts server, starts Ngrok, syncs URL, and opens browser when ready.
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = (Get-Item $PSScriptRoot).Parent.Parent.FullName
@@ -21,28 +21,35 @@ if (Test-Path $EnvFile) {
 $BrowserUrl = "http://127.0.0.1:$GatewayPort"
 
 Write-Host "=================================================" -ForegroundColor Cyan
-Write-Host " OpenClaw Launcher (Browser Auto-Open)" -ForegroundColor Cyan
+Write-Host " OpenClaw Launcher (Hakua)" -ForegroundColor Cyan
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host "Project: $ProjectDir"
 Write-Host "URL    : $BrowserUrl"
 Write-Host ""
 
-# --- Webhook Integration: Start Ngrok and update .env ---
+# --- Webhook Integration: Start Ngrok ---
 $StartNgrokScript = Join-Path $ProjectDir "scripts\launchers\start_ngrok.ps1"
 if (Test-Path $StartNgrokScript) {
+    Write-Host "[0/3] Starting Ngrok..." -ForegroundColor Yellow
     & powershell.exe -ExecutionPolicy Bypass -File $StartNgrokScript -Port $GatewayPort
+    
+    # Sync Ngrok URL to .env
+    $SyncScript = Join-Path $ProjectDir "scripts\sync-ngrok-url.ps1"
+    if (Test-Path $SyncScript) {
+        & powershell.exe -ExecutionPolicy Bypass -File $SyncScript
+    }
     Write-Host ""
 }
 
-# --- サーバーをバックグラウンドジョブとして起動 ---
-Write-Host "[1/3] OpenClaw サーバーを起動中..." -ForegroundColor Yellow
+# --- Start OpenClaw Gateway as a background job ---
+Write-Host "[1/3] Starting OpenClaw Server..." -ForegroundColor Yellow
 $env:OPENCLAW_GATEWAY_PORT = $GatewayPort
 
 $serverJob = Start-Job -ScriptBlock {
     param($dir, $port)
     Set-Location -Path $dir
     $env:OPENCLAW_GATEWAY_PORT = $port
-    # dist/entry.js が存在すればビルド済みバイナリを使用（高速）
+    # Use built binary if available
     if (Test-Path (Join-Path $dir "dist\entry.js")) {
         node .\dist\entry.js gateway
     }
@@ -51,8 +58,8 @@ $serverJob = Start-Job -ScriptBlock {
     }
 } -ArgumentList $ProjectDir, $GatewayPort
 
-# --- サーバーの起動を待つ（最大60秒） ---
-Write-Host "[2/3] サーバー起動を待機中..." -ForegroundColor Yellow
+# --- Wait for server to be ready (max 60s) ---
+Write-Host "[2/3] Waiting for server..." -ForegroundColor Yellow
 $maxWait = 60
 $waited = 0
 $interval = 2
@@ -69,26 +76,25 @@ while ($waited -lt $maxWait) {
         }
     }
     catch {
-        # まだ起動中 — 再試行
+        # Not ready yet
     }
-    Write-Host "  ... $waited 秒経過 (最大 ${maxWait} 秒)" -ForegroundColor DarkGray
+    Write-Host "  ... $waited seconds passed (max ${maxWait}s)" -ForegroundColor DarkGray
 }
 
-# --- ブラウザを開く ---
+# --- Open Browser ---
 if ($isReady) {
-    Write-Host "[3/3] ブラウザを起動します: $BrowserUrl" -ForegroundColor Green
+    Write-Host "[3/3] Launching browser: $BrowserUrl" -ForegroundColor Green
     Start-Process $BrowserUrl
 }
 else {
-    Write-Host "[!] サーバーが ${maxWait} 秒以内に応答しませんでした。" -ForegroundColor Red
-    Write-Host "    ブラウザを手動で開いてください: $BrowserUrl" -ForegroundColor Yellow
-    # タイムアウトしてもブラウザは開こうとする
+    Write-Host "[!] Server timed out." -ForegroundColor Red
+    Write-Host "    Open manually: $BrowserUrl" -ForegroundColor Yellow
     Start-Process $BrowserUrl
 }
 
-# --- サーバーログをフォアグラウンドに表示 ---
+# --- Display server logs ---
 Write-Host ""
-Write-Host "サーバーログ (Ctrl+C で終了):" -ForegroundColor Cyan
+Write-Host "Server Logs (Ctrl+C to stop):" -ForegroundColor Cyan
 Write-Host "-------------------------------------------------" -ForegroundColor DarkGray
 
 try {
@@ -96,7 +102,9 @@ try {
         $output = Receive-Job -Job $serverJob
         if ($output) { Write-Host $output }
         if ($serverJob.State -ne "Running") {
-            Write-Host "[!] サーバーが予期せず停止しました。" -ForegroundColor Red
+            Write-Host "[!] Server stopped unexpectedly." -ForegroundColor Red
+            $errors = Receive-Job -Job $serverJob -ErrorAction SilentlyContinue
+            if ($errors) { Write-Host $errors -ForegroundColor Red }
             break
         }
         Start-Sleep -Milliseconds 500
@@ -105,5 +113,5 @@ try {
 finally {
     Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
     Remove-Job -Job $serverJob -ErrorAction SilentlyContinue
-    Write-Host "サーバーを停止しました。" -ForegroundColor Gray
+    Write-Host "Server shutdown." -ForegroundColor Gray
 }

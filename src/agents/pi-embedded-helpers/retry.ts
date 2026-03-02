@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { retryAsync } from "../../../infra/retry.js";
+import { retryAsync } from "../../infra/retry.js";
 import { isRateLimitErrorMessage, isTransientHttpError } from "./errors.js";
 
 /**
