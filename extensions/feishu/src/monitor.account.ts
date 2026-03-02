@@ -134,11 +134,11 @@ function mergeFeishuDebounceMentions(
   for (const entry of entries) {
     for (const mention of entry.message.mentions ?? []) {
       const key =
-        mention.key?.trim() ||
         mention.id.open_id?.trim() ||
         mention.id.user_id?.trim() ||
         mention.id.union_id?.trim() ||
-        mention.name?.trim();
+        mention.name?.trim() ||
+        mention.key?.trim();
       if (!key || merged.has(key)) {
         continue;
       }
@@ -149,6 +149,26 @@ function mergeFeishuDebounceMentions(
     return undefined;
   }
   return Array.from(merged.values());
+}
+
+function dedupeFeishuDebounceEntriesByMessageId(
+  entries: FeishuMessageEvent[],
+): FeishuMessageEvent[] {
+  const seen = new Set<string>();
+  const deduped: FeishuMessageEvent[] = [];
+  for (const entry of entries) {
+    const messageId = entry.message.message_id?.trim();
+    if (!messageId) {
+      deduped.push(entry);
+      continue;
+    }
+    if (seen.has(messageId)) {
+      continue;
+    }
+    seen.add(messageId);
+    deduped.push(entry);
+  }
+  return deduped;
 }
 
 function registerEventHandlers(
@@ -238,11 +258,12 @@ function registerEventHandlers(
         return;
       }
       await recordSuppressedMessageIds(entries);
-      const combinedText = entries
+      const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
+      const combinedText = dedupedEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
         .join("\n");
-      const mergedMentions = mergeFeishuDebounceMentions(entries);
+      const mergedMentions = mergeFeishuDebounceMentions(dedupedEntries);
       if (!combinedText.trim()) {
         await dispatchFeishuMessage({
           ...last,
