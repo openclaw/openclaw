@@ -6,7 +6,7 @@ const resolvePluginToolsMock = vi.fn((params?: unknown) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
-  resolvePluginTools: (params: unknown) => resolvePluginToolsMock(params),
+  resolvePluginTools: resolvePluginToolsMock,
 }));
 
 import { createOpenClawTools } from "./openclaw-tools.js";

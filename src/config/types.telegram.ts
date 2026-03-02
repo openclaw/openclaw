@@ -229,4 +229,6 @@ export type TelegramDirectConfig = {
 export type TelegramConfig = {
   /** Optional per-account Telegram configuration (multi-account). */
   accounts?: Record<string, TelegramAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & TelegramAccountConfig;

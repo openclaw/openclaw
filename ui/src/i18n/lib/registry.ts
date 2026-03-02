@@ -37,10 +37,6 @@ export function isSupportedLocale(value: string | null | undefined): value is Lo
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
 }
 
-function isLazyLocale(locale: Locale): locale is LazyLocale {
-  return locale !== DEFAULT_LOCALE;
-}
-
 export function resolveNavigatorLocale(navLang: string): Locale {
   if (navLang.startsWith("zh")) {
     return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
@@ -55,7 +51,7 @@ export function resolveNavigatorLocale(navLang: string): Locale {
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
-  if (!isLazyLocale(locale)) {
+  if (locale === DEFAULT_LOCALE) {
     return null;
   }
   const registration = LAZY_LOCALE_REGISTRY[locale];
