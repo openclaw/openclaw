@@ -1176,12 +1176,17 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        // Exponential backoff: 1m, 2m, 4m, 8m… capped at intervalMs.
-        // The heartbeat never ran, so don't advance the schedule by full interval.
+        const maxRetries = 5;
         const skips = (agent.consecutiveSkips ?? 0) + 1;
         agent.consecutiveSkips = skips;
-        const retryMs = Math.min(60_000 * Math.pow(2, skips - 1), agent.intervalMs);
-        agent.nextDueMs = now + retryMs;
+        if (skips <= maxRetries) {
+          // Exponential backoff: 1m, 2m, 4m, 8m, 16m — then give up.
+          const retryMs = Math.min(60_000 * Math.pow(2, skips - 1), agent.intervalMs);
+          agent.nextDueMs = now + retryMs;
+        } else {
+          // Max retries exhausted — advance to next regular interval.
+          advanceAgentSchedule(agent, now);
+        }
         scheduleNext();
         return res;
       }
