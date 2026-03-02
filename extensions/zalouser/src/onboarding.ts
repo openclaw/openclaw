@@ -7,6 +7,7 @@ import type {
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
+  formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
@@ -398,18 +399,12 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
               .filter((entry) => !entry.resolved)
               .map((entry) => entry.input);
             keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
-            if (resolvedIds.length > 0 || unresolved.length > 0) {
-              await prompter.note(
-                [
-                  resolvedIds.length > 0 ? `Resolved: ${resolvedIds.join(", ")}` : undefined,
-                  unresolved.length > 0
-                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
-                    : undefined,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-                "Zalo groups",
-              );
+            const resolution = formatResolvedUnresolvedNote({
+              resolved: resolvedIds,
+              unresolved,
+            });
+            if (resolution) {
+              await prompter.note(resolution, "Zalo groups");
             }
           } catch (err) {
             await prompter.note(

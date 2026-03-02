@@ -2,6 +2,7 @@ import {
   isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
+  type ParsedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "openclaw/plugin-sdk";
@@ -14,11 +15,7 @@ export type BlueBubblesTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; to: string; service: BlueBubblesService };
 
-export type BlueBubblesAllowTarget =
-  | { kind: "chat_id"; chatId: number }
-  | { kind: "chat_guid"; chatGuid: string }
-  | { kind: "chat_identifier"; chatIdentifier: string }
-  | { kind: "handle"; handle: string };
+export type BlueBubblesAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];

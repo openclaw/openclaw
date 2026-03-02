@@ -6,6 +6,7 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
+  createInboundEnvelopeBuilder,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
@@ -314,22 +315,21 @@ async function processMessage(
       id: peer.id,
     },
   });
+  const buildEnvelope = createInboundEnvelopeBuilder({
+    cfg: config,
+    route,
+    sessionStore: config.session?.store,
+    resolveStorePath: core.channel.session.resolveStorePath,
+    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
+    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
+    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
+  });
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: timestamp ? timestamp * 1000 : undefined,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 
