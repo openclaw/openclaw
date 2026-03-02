@@ -155,28 +155,6 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
   return value;
 }
 
-async function promptOptionalPositiveInt(params: {
-  message: string;
-  initialValue?: number;
-  max: number;
-}): Promise<number | undefined> {
-  const raw = assertNoCancel(
-    await text({
-      message: params.message,
-      initialValue: params.initialValue ? String(params.initialValue) : "",
-      validate: (value) => {
-        const parsed = parseOptionalPositiveInt(String(value ?? ""), params.max);
-        if (String(value ?? "").trim() && parsed === undefined) {
-          return `Must be an integer between 1 and ${params.max}`;
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-  return parseOptionalPositiveInt(String(raw ?? ""), params.max);
-}
-
 const AUTH_PROFILE_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function validateEnvNameCsv(value: string): string | undefined {

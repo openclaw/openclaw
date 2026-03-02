@@ -143,7 +143,7 @@ describe("talk normalization", () => {
   });
 
   it("does not inject ELEVENLABS_API_KEY fallback when talk.apiKey is SecretRef", async () => {
-    await withEnv({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
       await withTempConfig(
         {
           talk: {

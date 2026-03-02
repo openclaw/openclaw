@@ -590,7 +590,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 ): Promise<T> {
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
-  const resolvedCredentials = resolveGatewayCredentials(context);
+  const resolvedCredentials = await resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
