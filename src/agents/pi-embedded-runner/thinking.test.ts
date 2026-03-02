@@ -90,7 +90,6 @@ describe("downgradeUnsignedThinkingBlocks", () => {
     expect(result).toBe(messages);
   });
 
-
   it("preserves thinking blocks with non-string (object) signatures", () => {
     const messages: AgentMessage[] = [
       {
