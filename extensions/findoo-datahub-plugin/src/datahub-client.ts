@@ -102,6 +102,11 @@ export class DataHubClient {
     return this.query(`coverage/${endpoint}`);
   }
 
+  /** /api/v1/ta/* — Technical Analysis indicators (sma, ema, rsi, macd, bbands) */
+  ta(indicator: string, params?: Record<string, string>): Promise<unknown[]> {
+    return this.query(`ta/${indicator}`, params);
+  }
+
   /* ============================================================
    * Typed convenience methods (OHLCV + Ticker)
    * ============================================================ */
@@ -203,5 +208,5 @@ function detectEquityProvider(symbol: string): string {
   ) {
     return "tushare";
   }
-  return "yfinance";
+  return "polygon";
 }

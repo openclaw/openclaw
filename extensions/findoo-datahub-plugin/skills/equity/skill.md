@@ -95,11 +95,16 @@ Use **fin_stock** and **fin_index** for equity analysis across A-share, HK, and 
    - 💡 与 step 2 交叉验证：利润增长但现金差 = 典型"纸面利润"
 4. **估值定位** `fin_stock(fundamental/ratios)` — PE/PB/ROE
    - 💡 结合 `fin_index(daily_basic)` 查所属指数估值，判断行业相对位置
-5. **资金博弈** `fin_stock(moneyflow/individual)` — 主力资金净流入/流出
-6. **筹码结构** `fin_stock(ownership/top10_holders)` — 机构增减持趋势
-   - 💡 结合 step 5：资金净流出但机构增持 → 可能是洗盘
-   - 💡 结合 step 5：资金净流入且机构增持 → 强共识信号
-7. **宏观背景** → 建议切换 `/fin-macro` 查相关宏观指标
+5. **技术形态** `fin_ta(sma, period=20/60)` + `fin_ta(rsi)` — 趋势与超买超卖
+   - ⚠️ RSI > 70 → 超买区间，注意回调风险
+   - ⚠️ RSI < 30 → 超卖区间，可能有反弹机会
+   - 💡 结合 step 4 资金流向：RSI 超卖 + 主力净流入 = 底部信号
+   - 💡 SMA20 上穿 SMA60 = 金叉（看多），下穿 = 死叉（看空）
+6. **资金博弈** `fin_stock(moneyflow/individual)` — 主力资金净流入/流出
+7. **筹码结构** `fin_stock(ownership/top10_holders)` — 机构增减持趋势
+   - 💡 结合 step 6：资金净流出但机构增持 → 可能是洗盘
+   - 💡 结合 step 6：资金净流入且机构增持 → 强共识信号
+8. **宏观背景** → 建议切换 `/fin-macro` 查相关宏观指标
 
 ## Data Notes
 

@@ -575,6 +575,68 @@ const findooDatahubPlugin = {
       { names: ["fin_data_regime"] },
     );
 
+    // === Tool 11: fin_ta — Technical Analysis Indicators ===
+    api.registerTool(
+      {
+        name: "fin_ta",
+        label: "Technical Analysis",
+        description:
+          "Calculate technical indicators (SMA, EMA, RSI, MACD, Bollinger Bands) for any symbol. DataHub fetches OHLCV and computes server-side.",
+        parameters: Type.Object({
+          symbol: Type.String({
+            description:
+              "Stock/crypto symbol. A: 600519.SH; HK: 00700.HK; US: AAPL; Crypto: BTC-USDT",
+          }),
+          indicator: Type.Unsafe<string>({
+            type: "string",
+            enum: ["sma", "ema", "rsi", "macd", "bbands"],
+            description: "Technical indicator to calculate",
+          }),
+          period: Type.Optional(
+            Type.Number({
+              description: "Indicator period (default: 20 for SMA/EMA/BBANDS, 14 for RSI)",
+            }),
+          ),
+          limit: Type.Optional(
+            Type.Number({ description: "Number of OHLCV bars to fetch (default: 200)" }),
+          ),
+          fast: Type.Optional(Type.Number({ description: "MACD fast period (default: 12)" })),
+          slow: Type.Optional(Type.Number({ description: "MACD slow period (default: 26)" })),
+          signal: Type.Optional(Type.Number({ description: "MACD signal period (default: 9)" })),
+          std: Type.Optional(
+            Type.Number({ description: "Bollinger Bands std dev (default: 2.0)" }),
+          ),
+          provider: Type.Optional(
+            Type.String({ description: "Data provider override (auto-detected if omitted)" }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const indicator = String(params.indicator ?? "sma");
+            const qp: Record<string, string> = {};
+            if (params.symbol) qp.symbol = String(params.symbol);
+            if (params.period) qp.period = String(params.period);
+            if (params.limit) qp.limit = String(params.limit);
+            if (params.fast) qp.fast = String(params.fast);
+            if (params.slow) qp.slow = String(params.slow);
+            if (params.signal) qp.signal = String(params.signal);
+            if (params.std) qp.std = String(params.std);
+            if (params.provider) qp.provider = String(params.provider);
+            const results = await client.ta(indicator, qp);
+            return json({
+              success: true,
+              endpoint: `ta/${indicator}`,
+              count: results.length,
+              results,
+            });
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
+          }
+        },
+      },
+      { names: ["fin_ta"] },
+    );
+
     // === Tool 10: fin_data_markets — Supported Markets ===
     api.registerTool(
       {
