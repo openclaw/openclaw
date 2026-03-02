@@ -574,10 +574,53 @@ export async function dispatchReplyFromConfig(params: {
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed");
+
+    // Emit message:sent internal hook for embedded runtime channels (Telegram, etc.)
+    // This bridges the gap where deliverOutboundPayloads (non-embedded path) emits
+    // message_sent but the embedded path does not.
+    // Skip when shouldRouteToOriginating is true — that path uses deliverOutboundPayloads
+    // which already emits message:sent via its own emitMessageSent.
+    if (sessionKey && !shouldRouteToOriginating) {
+      const sentContent =
+        replies
+          .map((r) => r.text ?? "")
+          .filter(Boolean)
+          .join("\n") || accumulatedBlockText;
+      if (sentContent) {
+        void triggerInternalHook(
+          createInternalHookEvent("message", "sent", sessionKey, {
+            to: conversationId,
+            content: sentContent,
+            success: queuedFinal || counts.block > 0,
+            channelId,
+            accountId: ctx.AccountId,
+            conversationId,
+          }),
+        ).catch(() => {});
+      }
+    }
+
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
+
+    // Emit message:sent with success: false on error (mirrors deliver.ts catch path)
+    if (sessionKey && !shouldRouteToOriginating) {
+      const errorContent = "";
+      void triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, {
+          to: conversationId,
+          content: errorContent,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        }),
+      ).catch(() => {});
+    }
+
     markIdle("message_error");
     throw err;
   }

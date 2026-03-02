@@ -9,6 +9,7 @@ export {
   unregisterInternalHook as unregisterHook,
   clearInternalHooks as clearHooks,
   getRegisteredEventKeys as getRegisteredHookEventKeys,
+  hasInternalHooks,
   triggerInternalHook as triggerHook,
   createInternalHookEvent as createHookEvent,
 } from "./internal-hooks.js";

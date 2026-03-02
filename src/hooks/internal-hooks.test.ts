@@ -7,6 +7,7 @@ import {
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  hasInternalHooks,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -453,6 +454,27 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
+    });
+  });
+
+  describe("hasInternalHooks", () => {
+    it("should return true when specific event handler is registered", () => {
+      registerInternalHook("message:sent", vi.fn());
+      expect(hasInternalHooks("message", "sent")).toBe(true);
+    });
+
+    it("should return true when general type handler is registered", () => {
+      registerInternalHook("message", vi.fn());
+      expect(hasInternalHooks("message", "sent")).toBe(true);
+    });
+
+    it("should return false when no handlers registered", () => {
+      expect(hasInternalHooks("message", "sent")).toBe(false);
+    });
+
+    it("should return false for unrelated event", () => {
+      registerInternalHook("command:new", vi.fn());
+      expect(hasInternalHooks("message", "sent")).toBe(false);
     });
   });
 });
