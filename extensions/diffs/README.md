@@ -4,7 +4,8 @@ Read-only diff viewer plugin for **OpenClaw** agents.
 
 It gives agents one tool, `diffs`, that can:
 
-- render a gateway-hosted diff view, a file (PNG or PDF), or both
+- render a gateway-hosted diff viewer for canvas use
+- render the same diff to a file (PNG or PDF)
 - accept either arbitrary `before` and `after` text or a unified patch
 
 ## What Agents Get
@@ -14,12 +15,11 @@ The tool can return:
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
-- `details.format`: compatibility alias for `details.fileFormat`
 
 This means an agent can:
 
 - call `diffs` with `mode=view`, then pass `details.viewerUrl` to `canvas present`
-- call `diffs` with `mode=file` (optionally `fileFormat=pdf`), then send the file through the normal `message` tool using `path` or `filePath`
+- call `diffs` with `mode=file`, then send the file through the normal `message` tool using `path` or `filePath`
 - call `diffs` with `mode=both` when it wants both outputs
 
 ## Tool Inputs
@@ -57,7 +57,13 @@ Useful options:
 - `path`: display name for before and after input
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime
-- `baseUrl`: override the gateway base URL used in the returned viewer link
+- `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)
+
+Input safety limits:
+
+- `before` and `after`: max 512 KiB each
+- `patch`: max 2 MiB
+- patch rendering cap: max 128 files / 120,000 lines
 
 ## Plugin Defaults
 
@@ -95,7 +101,9 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 
 Explicit tool parameters still win over these defaults.
 
-Compatibility note: `defaults.format` is accepted as an alias for `defaults.fileFormat`.
+Security options:
+
+- `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 
 ## Example Agent Prompts
 
@@ -134,7 +142,7 @@ OpenClaw supports plugins and hosted diff views.
 Do both:
 
 ```text
-Use the `diffs` tool in `both` mode for this diff. Open the viewer in the canvas and then send the rendered image by passing `details.filePath` to the `message` tool.
+Use the `diffs` tool in `both` mode for this diff. Open the viewer in the canvas and then send the rendered file by passing `details.filePath` to the `message` tool.
 
 Path: src/demo.ts
 
@@ -163,7 +171,9 @@ diff --git a/src/example.ts b/src/example.ts
 ## Notes
 
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
-- Artifacts are ephemeral and stored in the local temp directory.
-- PNG/PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
+- Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
+- Default viewer URLs use loopback (`127.0.0.1`) unless you set `baseUrl` (or use `gateway.bind=custom` + `gateway.customBindHost`).
+- Remote viewer misses are throttled to reduce token-guess abuse.
+- PNG or PDF rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
 - If your delivery channel compresses images heavily (for example Telegram or WhatsApp), prefer `fileFormat: "pdf"` to preserve readability.
 - Diff rendering is powered by [Diffs](https://diffs.com).
