@@ -688,17 +688,7 @@ export const AgentEntrySchema = z
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),
-        model: z
-          .union([
-            z.string(),
-            z
-              .object({
-                primary: z.string().optional(),
-                fallbacks: z.array(z.string()).optional(),
-              })
-              .strict(),
-          ])
-          .optional(),
+        model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
       })
       .strict()
