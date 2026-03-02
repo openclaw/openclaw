@@ -3,6 +3,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import {
   isRequestBodyLimitError,
+  normalizeWebhookPath,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk";
@@ -265,8 +266,8 @@ export class VoiceCallWebhookServer {
   ): Promise<void> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
-    // Check path
-    if (!url.pathname.startsWith(webhookPath)) {
+    // Exact path match only (normalized) to avoid accepting prefix-suffix paths.
+    if (normalizeWebhookPath(url.pathname) !== normalizeWebhookPath(webhookPath)) {
       res.statusCode = 404;
       res.end("Not Found");
       return;

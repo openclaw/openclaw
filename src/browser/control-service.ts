@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
-import { ensureBrowserControlAuth } from "./control-auth.js";
+import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 
@@ -30,13 +30,26 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   if (!resolved.enabled) {
     return null;
   }
+  let browserAuth = resolveBrowserControlAuth(cfg);
+  let browserAuthBootstrapFailed = false;
   try {
     const ensured = await ensureBrowserControlAuth({ cfg });
+    browserAuth = ensured.auth;
     if (ensured.generatedToken) {
       logService.info("No browser auth configured; generated gateway.auth.token automatically.");
     }
   } catch (err) {
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
+    browserAuthBootstrapFailed = true;
+  }
+
+  // Fail closed: if auth bootstrap failed and no explicit auth is available,
+  // do not continue starting the browser control service state.
+  if (browserAuthBootstrapFailed && !browserAuth.token && !browserAuth.password) {
+    logService.error(
+      "browser control service startup aborted: authentication bootstrap failed and no fallback auth is configured.",
+    );
+    return null;
   }
 
   state = {
