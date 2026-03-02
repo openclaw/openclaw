@@ -248,3 +248,30 @@ describe("withNoProxyForLocalhost reverse exit order", () => {
     }
   });
 });
+
+describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
+  it("does not delete NO_PROXY when loopback entries already present", async () => {
+    const userNoProxy = "localhost,127.0.0.1,[::1],myhost.internal";
+    process.env.NO_PROXY = userNoProxy;
+    process.env.no_proxy = userNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        // Should not modify since loopback is already covered
+        expect(process.env.NO_PROXY).toBe(userNoProxy);
+        return "ok";
+      });
+
+      // After call completes, user's NO_PROXY must still be intact
+      expect(process.env.NO_PROXY).toBe(userNoProxy);
+      expect(process.env.no_proxy).toBe(userNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+});
