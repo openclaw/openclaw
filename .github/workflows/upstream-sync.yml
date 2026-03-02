@@ -122,35 +122,33 @@ jobs:
           SUMMARY: ${{ steps.check.outputs.summary }}
           SYNC_BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
-          cat > /tmp/pr-body.md <<'BODYEOF'
-          ## Upstream Sync
-          BODYEOF
+          TITLE="sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d))"
+          BODY="## Upstream Sync
 
-          # Use env vars (safe from shell expansion) to inject dynamic content
-          {
-            echo ""
-            echo "**${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw)."
-            echo ""
-            echo "### Commits"
-            echo '```'
-            echo "$SUMMARY"
-            echo '```'
-            echo ""
-            echo "**Status:** Clean merge, no conflicts."
-          } >> /tmp/pr-body.md
+          **${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
 
+          ### Commits
+          \`\`\`
+          ${SUMMARY}
+          \`\`\`
+
+          **Status:** Clean merge, no conflicts."
+
+          # Use REST API instead of gh pr create (GraphQL) to avoid branch indexing race
           PR_ERROR=""
           DELAYS=(30 60 120 240)
           for attempt in $(seq 1 4); do
-            if PR_ERROR=$(gh pr create \
-              --title "sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d))" \
-              --body-file /tmp/pr-body.md \
-              --base main \
-              --head "$SYNC_BRANCH" 2>&1); then
-              echo "PR created successfully on attempt $attempt"
+            if PR_RESPONSE=$(gh api repos/$GITHUB_REPOSITORY/pulls \
+              -f title="$TITLE" \
+              -f body="$BODY" \
+              -f head="$SYNC_BRANCH" \
+              -f base="main" 2>&1); then
+              PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url')
+              echo "PR created successfully on attempt $attempt: $PR_URL"
               exit 0
             fi
 
+            PR_ERROR="$PR_RESPONSE"
             if [ "$attempt" -lt 4 ]; then
               DELAY=${DELAYS[$((attempt - 1))]}
               echo "PR creation failed (attempt $attempt/4), retrying in ${DELAY}s..."
@@ -175,42 +173,44 @@ jobs:
           CONFLICTS: ${{ steps.merge.outputs.conflicts }}
           SYNC_BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
-          cat > /tmp/pr-body.md <<'BODYEOF'
-          ## Upstream Sync — Conflicts Detected
-          BODYEOF
+          TITLE="sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS"
+          BODY="## Upstream Sync — Conflicts Detected
 
-          {
-            echo ""
-            echo "**${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw)."
-            echo ""
-            echo "### Conflicted Files"
-            echo '```'
-            echo "$CONFLICTS"
-            echo '```'
-            echo ""
-            echo "### Commits"
-            echo '```'
-            echo "$SUMMARY"
-            echo '```'
-            echo ""
-            echo "**Action required:** Checkout this branch, resolve conflicts, and push."
-          } >> /tmp/pr-body.md
+          **${COMMIT_COUNT}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
 
+          ### Conflicted Files
+          \`\`\`
+          ${CONFLICTS}
+          \`\`\`
+
+          ### Commits
+          \`\`\`
+          ${SUMMARY}
+          \`\`\`
+
+          **Action required:** Checkout this branch, resolve conflicts, and push."
+
+          # Use REST API instead of gh pr create (GraphQL) to avoid branch indexing race
           PR_ERROR=""
           DELAYS=(30 60 120 240)
           for attempt in $(seq 1 4); do
-            if PR_URL=$(gh pr create \
-              --title "sync: merge ${COMMIT_COUNT} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
-              --body-file /tmp/pr-body.md \
-              --base main \
-              --head "$SYNC_BRANCH" \
-              --draft 2>&1); then
-              echo "Created PR: $PR_URL"
-              gh pr edit "$PR_URL" --add-label "conflicts" || echo "Warning: could not add 'conflicts' label"
+            if PR_RESPONSE=$(gh api repos/$GITHUB_REPOSITORY/pulls \
+              -f title="$TITLE" \
+              -f body="$BODY" \
+              -f head="$SYNC_BRANCH" \
+              -f base="main" \
+              -F draft=true 2>&1); then
+              PR_URL=$(echo "$PR_RESPONSE" | jq -r '.html_url')
+              echo "Created draft PR: $PR_URL"
+              # Add conflicts label (best-effort)
+              PR_NUMBER=$(echo "$PR_RESPONSE" | jq -r '.number')
+              gh api "repos/$GITHUB_REPOSITORY/issues/${PR_NUMBER}/labels" \
+                --input - <<< '{"labels":["conflicts"]}' 2>/dev/null \
+                || echo "Warning: could not add 'conflicts' label"
               exit 0
             fi
 
-            PR_ERROR="$PR_URL"
+            PR_ERROR="$PR_RESPONSE"
             if [ "$attempt" -lt 4 ]; then
               DELAY=${DELAYS[$((attempt - 1))]}
               echo "PR creation failed (attempt $attempt/4), retrying in ${DELAY}s..."
@@ -297,13 +297,24 @@ jobs:
             echo "5. Push your fix and create a PR targeting main, marked ready-for-review"
           } >> /tmp/ai-fix-body.md
 
+          # Ensure ai-fix label exists
+          gh api "repos/$GITHUB_REPOSITORY/labels" \
+            -f name="ai-fix" -f color="d73a4a" -f description="Triggers AI resolution workflow" \
+            2>/dev/null || true
+
           # Check for existing open ai-fix issue to avoid duplicates
-          EXISTING=$(gh issue list --label "ai-fix" --state open --limit 1 --json number -q '.[0].number' || echo "")
+          EXISTING=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=ai-fix&state=open&per_page=1" \
+            --jq '.[0].number // empty' 2>/dev/null || echo "")
           if [ -z "$EXISTING" ]; then
-            gh issue create \
-              --title "ai-fix: sync failure $(date +%Y-%m-%d)" \
-              --label "ai-fix" \
-              --body-file /tmp/ai-fix-body.md
+            ISSUE_RESPONSE=$(gh api "repos/$GITHUB_REPOSITORY/issues" \
+              -f title="ai-fix: sync failure $(date +%Y-%m-%d)" \
+              -f body="$(cat /tmp/ai-fix-body.md)")
+            ISSUE_NUMBER=$(echo "$ISSUE_RESPONSE" | jq -r '.number')
+            # Add label via API (separate from creation)
+            gh api "repos/$GITHUB_REPOSITORY/issues/${ISSUE_NUMBER}/labels" \
+              --input - <<< '{"labels":["ai-fix"]}' 2>/dev/null \
+              || echo "Warning: could not add ai-fix label to issue #${ISSUE_NUMBER}"
           else
-            gh issue comment "$EXISTING" --body-file /tmp/ai-fix-body.md
+            gh api "repos/$GITHUB_REPOSITORY/issues/${EXISTING}/comments" \
+              -f body="$(cat /tmp/ai-fix-body.md)"
           fi
