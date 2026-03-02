@@ -447,6 +447,34 @@ describe("buildEmbeddedRunPayloads", () => {
       expect(payloads).toHaveLength(0);
     });
 
+    it("suppresses plain-text rate limit error when errorMessage is absent and text is in assistantTexts", () => {
+      const payloads = buildPayloads({
+        assistantTexts: ["Rate limit reached for model"],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: undefined,
+          content: [{ type: "text", text: "Rate limit reached for model" }],
+        }),
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("suppresses plain-text overload error when errorMessage is absent and text is in assistantTexts", () => {
+      const payloads = buildPayloads({
+        assistantTexts: ["Overloaded. Please try again."],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: undefined,
+          content: [{ type: "text", text: "Overloaded. Please try again." }],
+        }),
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(0);
+    });
+
     it("does not suppress rate limit errors when suppressApiErrors is false", () => {
       const payloads = buildPayloads({
         lastAssistant: makeErrorAssistant(rateLimitJson),

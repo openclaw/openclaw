@@ -213,6 +213,12 @@ export function buildEmbeddedRunPayloads(params: {
     if (!lastAssistantErrored) {
       return false;
     }
+    // When suppressApiErrors is active and errorMessage is absent, the transient
+    // error was identified from assistantTexts — suppress all of those texts so
+    // plain-text errors (e.g. "Rate limit reached") are also filtered out.
+    if (suppressApiError && !params.lastAssistant?.errorMessage?.trim()) {
+      return true;
+    }
     const trimmed = text.trim();
     if (!trimmed) {
       return false;
