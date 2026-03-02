@@ -57,6 +57,10 @@ describe("markdownToSlackMrkdwn", () => {
       "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
   });
+
+  it("does not throw when input is undefined at runtime", () => {
+    expect(markdownToSlackMrkdwn(undefined as unknown as string)).toBe("");
+  });
 });
 
 describe("escapeSlackMrkdwn", () => {
