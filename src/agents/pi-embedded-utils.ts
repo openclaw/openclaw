@@ -207,6 +207,35 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+function hasAssistantToolCalls(msg: AssistantMessage): boolean {
+  if (!Array.isArray(msg.content)) {
+    return false;
+  }
+  return msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "toolCall" || type === "toolUse" || type === "functionCall";
+  });
+}
+
+function shouldFallbackToThinkingText(msg: AssistantMessage): boolean {
+  if (msg.api !== "openai-completions") {
+    return false;
+  }
+  const provider = typeof msg.provider === "string" ? msg.provider.trim().toLowerCase() : "";
+  // Keep OpenAI/OpenAI Codex behavior unchanged; only recover for strict
+  // OpenAI-compatible providers that may place final text in reasoning blocks.
+  if (!provider || provider === "openai" || provider === "openai-codex") {
+    return false;
+  }
+  if (msg.stopReason === "error" || msg.stopReason === "toolUse") {
+    return false;
+  }
+  return !hasAssistantToolCalls(msg);
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -217,10 +246,15 @@ export function extractAssistantText(msg: AssistantMessage): string {
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";
+  const fallbackThinkingText =
+    !extracted && shouldFallbackToThinkingText(msg)
+      ? stripThinkingTagsFromText(extractAssistantThinking(msg)).trim()
+      : "";
+  const textForUser = extracted || fallbackThinkingText;
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());
-  return sanitizeUserFacingText(extracted, { errorContext });
+  return sanitizeUserFacingText(textForUser, { errorContext });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {

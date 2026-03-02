@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -471,6 +472,59 @@ File contents here`,
       });
       expect(extractAssistantText(msg), testCase.name).toBe(testCase.expected);
     }
+  });
+
+  it("falls back to reasoning blocks for non-openai openai-completions providers", () => {
+    const msg = makeAssistantMessage({
+      api: "openai-completions",
+      provider: "vllm",
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "Recovered reasoning answer" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Recovered reasoning answer");
+  });
+
+  it("does not fall back to reasoning blocks for openai provider", () => {
+    const msg = makeAssistantMessage({
+      api: "openai-completions",
+      provider: "openai",
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "internal reasoning" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("");
+  });
+
+  it("does not fall back to reasoning blocks when tool calls are present", () => {
+    const msg = makeAssistantMessage({
+      api: "openai-completions",
+      provider: "vllm",
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "reasoning should stay hidden for tool turns" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ],
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("");
+  });
+
+  it("recovers think-tagged-only replies after thinking promotion for compat providers", () => {
+    const msg = makeAssistantMessage({
+      api: "openai-completions",
+      provider: "vllm",
+      role: "assistant",
+      content: [{ type: "text", text: "<think>Tagged answer only</think>" }],
+      timestamp: Date.now(),
+    });
+    promoteThinkingTagsToBlocks(msg);
+
+    expect(extractAssistantText(msg)).toBe("Tagged answer only");
   });
 });
 
