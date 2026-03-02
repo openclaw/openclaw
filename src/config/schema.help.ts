@@ -709,7 +709,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.slack.thread.initialHistoryLimit":
     "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   "channels.slack.thread.autoReplyOnParticipation":
-    "If true, the bot auto-replies in threads it has previously participated in, even without @mention (default: true). Set to false to require explicit @mention for every thread reply.",
+    "If true, the bot auto-replies in threads it has previously participated in, even without @mention (default: true). Set to false to require explicit @mention in threads where the bot participated but did not start the conversation.",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":

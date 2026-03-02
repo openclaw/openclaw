@@ -9,10 +9,17 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
+
+vi.mock("../../sent-thread-cache.js", () => ({
+  hasSlackThreadParticipation: vi.fn(() => false),
+  recordSlackThreadParticipation: vi.fn(),
+  clearSlackThreadParticipationCache: vi.fn(),
+}));
 
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
@@ -602,6 +609,30 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.Body).toMatch(/\[slack message id: 1\.000 channel: D123\]$/);
     expect(prepared!.ctxPayload.Body).not.toContain("thread_ts");
     expect(prepared!.ctxPayload.Body).not.toContain("parent_user_id");
+  });
+
+  it("skips thread reply when autoReplyOnParticipation is false despite participation", async () => {
+    vi.mocked(hasSlackThreadParticipation).mockReturnValue(true);
+
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      threadAutoReplyOnParticipation: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const message = createSlackMessage({
+      channel_type: "channel",
+      channel: "C123",
+      text: "hello",
+      thread_ts: "1.000",
+      parent_user_id: "U2",
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, message);
+    expect(prepared).toBeNull();
+
+    vi.mocked(hasSlackThreadParticipation).mockReturnValue(false);
   });
 
   it("creates thread session for top-level DM when replyToMode=all", async () => {
