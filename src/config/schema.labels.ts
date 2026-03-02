@@ -105,6 +105,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.headless": "Browser Headless Mode",
   "browser.noSandbox": "Browser No-Sandbox Mode",
   "browser.attachOnly": "Browser Attach-only Mode",
+  "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
