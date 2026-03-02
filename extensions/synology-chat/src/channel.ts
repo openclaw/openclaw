@@ -216,7 +216,7 @@ export function createSynologyChatPlugin() {
           }
           return lastResult;
         }
-        return plugin.outbound.sendText!({ ...ctx });
+        return plugin.outbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
       },
 
       sendText: async ({ to, text, accountId, cfg }: any) => {

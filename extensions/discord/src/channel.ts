@@ -323,7 +323,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
         return lastResult;
       }
-      return discordPlugin.outbound!.sendText!({ ...ctx });
+      return discordPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
       const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;

@@ -404,7 +404,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         }
         return lastResult;
       }
-      return googlechatPlugin.outbound!.sendText!({ ...ctx });
+      return googlechatPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim() ?? "";

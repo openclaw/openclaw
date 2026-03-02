@@ -377,7 +377,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         }
         return lastResult;
       }
-      return slackPlugin.outbound!.sendText!({ ...ctx });
+      return slackPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
       const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({

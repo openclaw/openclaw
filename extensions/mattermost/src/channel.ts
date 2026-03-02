@@ -392,7 +392,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         }
         return lastResult;
       }
-      return mattermostPlugin.outbound!.sendText!({ ...ctx });
+      return mattermostPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();

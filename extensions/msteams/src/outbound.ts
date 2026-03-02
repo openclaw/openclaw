@@ -30,7 +30,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return msteamsOutbound.sendText!({ ...ctx });
+    return msteamsOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ cfg, to, text, deps }) => {
     const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
