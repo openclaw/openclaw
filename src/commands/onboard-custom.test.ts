@@ -76,6 +76,43 @@ function expectOpenAiCompatResult(params: {
   expect(params.result.config.models?.providers?.custom?.api).toBe("openai-completions");
 }
 
+function buildCustomProviderConfig(contextWindow?: number) {
+  if (contextWindow === undefined) {
+    return {};
+  }
+  return {
+    models: {
+      providers: {
+        custom: {
+          api: "openai-completions",
+          baseUrl: "https://llm.example.com/v1",
+          models: [
+            {
+              id: "foo-large",
+              name: "foo-large",
+              contextWindow,
+              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              reasoning: false,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
+  return applyCustomApiConfig({
+    config: buildCustomProviderConfig(contextWindow),
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+  });
+}
+
 describe("promptCustomApiConfig", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -327,89 +364,28 @@ describe("promptCustomApiConfig", () => {
 });
 
 describe("applyCustomApiConfig", () => {
-  it("uses hard-min context window for newly added custom models", () => {
-    const result = applyCustomApiConfig({
-      config: {},
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
+  it.each([
+    {
+      name: "uses hard-min context window for newly added custom models",
+      existingContextWindow: undefined,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+    },
+    {
+      name: "upgrades existing custom model context window when below hard minimum",
+      existingContextWindow: 4096,
+      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+    },
+    {
+      name: "preserves existing custom model context window when already above minimum",
+      existingContextWindow: 131072,
+      expectedContextWindow: 131072,
+    },
+  ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
+    const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
     const model = result.config.models?.providers?.custom?.models?.find(
       (entry) => entry.id === "foo-large",
     );
-    expect(model?.contextWindow).toBe(CONTEXT_WINDOW_HARD_MIN_TOKENS);
-  });
-
-  it("upgrades existing custom model context window when below hard minimum", () => {
-    const result = applyCustomApiConfig({
-      config: {
-        models: {
-          providers: {
-            custom: {
-              api: "openai-completions",
-              baseUrl: "https://llm.example.com/v1",
-              models: [
-                {
-                  id: "foo-large",
-                  name: "foo-large",
-                  contextWindow: 4096,
-                  maxTokens: 1024,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
-            },
-          },
-        },
-      },
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(CONTEXT_WINDOW_HARD_MIN_TOKENS);
-  });
-
-  it("preserves existing custom model context window when already above minimum", () => {
-    const result = applyCustomApiConfig({
-      config: {
-        models: {
-          providers: {
-            custom: {
-              api: "openai-completions",
-              baseUrl: "https://llm.example.com/v1",
-              models: [
-                {
-                  id: "foo-large",
-                  name: "foo-large",
-                  contextWindow: 131072,
-                  maxTokens: 4096,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
-            },
-          },
-        },
-      },
-      baseUrl: "https://llm.example.com/v1",
-      modelId: "foo-large",
-      compatibility: "openai",
-      providerId: "custom",
-    });
-
-    const model = result.config.models?.providers?.custom?.models?.find(
-      (entry) => entry.id === "foo-large",
-    );
-    expect(model?.contextWindow).toBe(131072);
+    expect(model?.contextWindow).toBe(expectedContextWindow);
   });
 
   it.each([
