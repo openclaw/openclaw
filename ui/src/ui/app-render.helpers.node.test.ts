@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveActiveAgentId,
+  resolveActiveWorkspace,
   resolveSessionDisplayName,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -282,5 +284,41 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("active agent + workspace context", () => {
+  it("resolves active agent id from agent-scoped session key", () => {
+    const state = { sessionKey: "agent:codex:telegram:direct:abc", agentsList: null } as any;
+    expect(resolveActiveAgentId(state)).toBe("codex");
+  });
+
+  it("falls back to default agent id for non-agent session keys", () => {
+    const state = { sessionKey: "main", agentsList: { defaultId: "main", agents: [] } } as any;
+    expect(resolveActiveAgentId(state)).toBe("main");
+  });
+
+  it("resolves workspace from per-agent config first", () => {
+    const state = {
+      configForm: {
+        agents: {
+          defaults: { workspace: "~/default" },
+          list: [{ id: "codex", workspace: "~/codex" }],
+        },
+      },
+    } as any;
+    expect(resolveActiveWorkspace(state, "codex")).toBe("~/codex");
+  });
+
+  it("falls back to default workspace when per-agent workspace missing", () => {
+    const state = {
+      configForm: {
+        agents: {
+          defaults: { workspace: "~/default" },
+          list: [{ id: "codex" }],
+        },
+      },
+    } as any;
+    expect(resolveActiveWorkspace(state, "codex")).toBe("~/default");
   });
 });
