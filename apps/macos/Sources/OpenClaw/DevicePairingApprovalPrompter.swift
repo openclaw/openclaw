@@ -55,46 +55,35 @@ final class DevicePairingApprovalPrompter {
         }
     }
 
-    private struct PairingResolvedEvent: Codable {
-        let requestId: String
-        let deviceId: String
-        let decision: String
-        let ts: Double
-    }
-
-    private enum PairingResolution: String {
-        case approved
-        case rejected
-    }
+    private typealias PairingResolvedEvent = PairingAlertSupport.PairingResolvedEvent
 
     func start() {
-        guard self.task == nil else { return }
-        self.isStopping = false
-        self.task = Task { [weak self] in
-            guard let self else { return }
-            _ = try? await GatewayConnection.shared.refresh()
-            await self.loadPendingRequestsFromGateway()
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in self?.handle(push: push) }
-            }
-        }
+        self.startPushTask()
+    }
+
+    private func startPushTask() {
+        PairingAlertSupport.startPairingPushTask(
+            task: &self.task,
+            isStopping: &self.isStopping,
+            loadPending: self.loadPendingRequestsFromGateway,
+            handlePush: self.handle(push:))
     }
 
     func stop() {
-        self.isStopping = true
-        self.endActiveAlert()
-        self.task?.cancel()
-        self.task = nil
-        self.queue.removeAll(keepingCapacity: false)
+        self.stopPushTask()
         self.updatePendingCounts()
-        self.isPresenting = false
-        self.activeRequestId = nil
-        self.alertHostWindow?.orderOut(nil)
-        self.alertHostWindow?.close()
-        self.alertHostWindow = nil
         self.resolvedByRequestId.removeAll(keepingCapacity: false)
+    }
+
+    private func stopPushTask() {
+        PairingAlertSupport.stopPairingPrompter(
+            isStopping: &self.isStopping,
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            task: &self.task,
+            queue: &self.queue,
+            isPresenting: &self.isPresenting,
+            alertHostWindow: &self.alertHostWindow)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -127,44 +116,23 @@ final class DevicePairingApprovalPrompter {
 
     private func presentAlert(for req: PendingRequest) {
         self.logger.info("presenting device pairing alert requestId=\(req.requestId, privacy: .public)")
-        NSApp.activate(ignoringOtherApps: true)
+        PairingAlertSupport.presentPairingAlert(
+            request: req,
+            requestId: req.requestId,
+            messageText: "Allow device to connect?",
+            informativeText: Self.describe(req),
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            alertHostWindow: &self.alertHostWindow,
+            clearActive: self.clearActiveAlert(hostWindow:),
+            onResponse: self.handleAlertResponse)
+    }
 
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Allow device to connect?"
-        alert.informativeText = Self.describe(req)
-        alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "Approve")
-        alert.addButton(withTitle: "Reject")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
-        }
-
-        self.activeAlert = alert
-        self.activeRequestId = req.requestId
-        let hostWindow = self.requireAlertHostWindow()
-
-        let sheetSize = alert.window.frame.size
-        if let screen = hostWindow.screen ?? NSScreen.main {
-            let bounds = screen.visibleFrame
-            let x = bounds.midX - (sheetSize.width / 2)
-            let sheetOriginY = bounds.midY - (sheetSize.height / 2)
-            let hostY = sheetOriginY + sheetSize.height - hostWindow.frame.height
-            hostWindow.setFrameOrigin(NSPoint(x: x, y: hostY))
-        } else {
-            hostWindow.center()
-        }
-
-        hostWindow.makeKeyAndOrderFront(nil)
-        alert.beginSheetModal(for: hostWindow) { [weak self] response in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.activeRequestId = nil
-                self.activeAlert = nil
-                await self.handleAlertResponse(response, request: req)
-                hostWindow.orderOut(nil)
-            }
-        }
+    private func clearActiveAlert(hostWindow: NSWindow) {
+        PairingAlertSupport.clearActivePairingAlert(
+            activeAlert: &self.activeAlert,
+            activeRequestId: &self.activeRequestId,
+            hostWindow: hostWindow)
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
@@ -206,33 +174,27 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func approve(requestId: String) async -> Bool {
-        do {
+        await PairingAlertSupport.approveRequest(
+            requestId: requestId,
+            kind: "device",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.devicePairApprove(requestId: requestId)
-            self.logger.info("approved device pairing requestId=\(requestId, privacy: .public)")
-            return true
-        } catch {
-            self.logger.error("approve failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("approve failed: \(error.localizedDescription, privacy: .public)")
-            return false
         }
     }
 
     private func reject(requestId: String) async {
-        do {
+        await PairingAlertSupport.rejectRequest(
+            requestId: requestId,
+            kind: "device",
+            logger: self.logger)
+        {
             try await GatewayConnection.shared.devicePairReject(requestId: requestId)
-            self.logger.info("rejected device pairing requestId=\(requestId, privacy: .public)")
-        } catch {
-            self.logger.error("reject failed requestId=\(requestId, privacy: .public)")
-            self.logger.error("reject failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func endActiveAlert() {
         PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
-    }
-
-    private func requireAlertHostWindow() -> NSWindow {
-        PairingAlertSupport.requireAlertHostWindow(alertHostWindow: &self.alertHostWindow)
     }
 
     private func handle(push: GatewayPush) {
@@ -269,8 +231,9 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func handleResolved(_ resolved: PairingResolvedEvent) {
-        let resolution = resolved.decision == PairingResolution.approved.rawValue ? PairingResolution
-            .approved : .rejected
+        let resolution = resolved.decision == PairingAlertSupport.PairingResolution.approved.rawValue
+            ? PairingAlertSupport.PairingResolution.approved
+            : PairingAlertSupport.PairingResolution.rejected
         if let activeRequestId, activeRequestId == resolved.requestId {
             self.resolvedByRequestId.insert(resolved.requestId)
             self.endActiveAlert()
