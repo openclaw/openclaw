@@ -147,7 +147,7 @@ describe("inspectGatewayRestart", () => {
 
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("other");
+    classifyPortListener.mockReturnValue("ssh");
 
     const service = {
       readRuntime: vi.fn(async () => ({ status: "stopped" })),

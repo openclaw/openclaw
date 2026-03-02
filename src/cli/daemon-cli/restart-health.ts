@@ -81,11 +81,23 @@ export async function inspectGatewayRestart(params: {
         (portUsage.status === "busy" && portUsage.listeners.length === 0);
   const healthy = running && ownsPort;
   const staleGatewayPids = Array.from(
-    new Set(
-      [...gatewayListeners.map((listener) => listener.pid), ...fallbackListenerPids]
-        .filter((pid): pid is number => Number.isFinite(pid))
-        .filter((pid) => runtime.pid == null || pid !== runtime.pid || !running),
-    ),
+    new Set([
+      ...gatewayListeners
+        .filter((listener) => Number.isFinite(listener.pid))
+        .filter((listener) => {
+          if (!running) {
+            return true;
+          }
+          if (runtimePid == null) {
+            return true;
+          }
+          return !listenerOwnedByRuntimePid({ listener, runtimePid });
+        })
+        .map((listener) => listener.pid as number),
+      ...fallbackListenerPids.filter(
+        (pid) => runtime.pid == null || pid !== runtime.pid || !running,
+      ),
+    ]),
   );
 
   return {
