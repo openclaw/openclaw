@@ -221,7 +221,16 @@ export function parseTtsDirectives(
             }
             // Defer routing: provider= may appear later in the same directive
             // block, so we resolve the target after all tokens are parsed.
-            deferredGenericModel = rawValue;
+            // Only overwrite a previously-deferred value if the new one is
+            // recognized by a known provider, so a later invalid token
+            // (e.g. model=bad) doesn't erase an earlier valid one.
+            if (
+              !deferredGenericModel ||
+              isValidMinimaxModel(rawValue) ||
+              isValidOpenAIModel(rawValue)
+            ) {
+              deferredGenericModel = rawValue;
+            }
             break;
           case "stability":
             if (!policy.allowVoiceSettings) {

@@ -428,6 +428,15 @@ describe("tts", () => {
       expect(result.overrides.minimax?.model).toBeUndefined();
     });
 
+    it("later invalid generic model does not erase earlier valid one", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=tts-1 model=bad]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("tts-1");
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
