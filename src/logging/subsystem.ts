@@ -75,16 +75,23 @@ function isRichConsoleEnv(): boolean {
   return term.length > 0 && term !== "dumb";
 }
 
+let cachedChalk: ChalkInstance | null = null;
+
 function getColorForConsole(): ChalkInstance {
+  if (cachedChalk) {
+    return cachedChalk;
+  }
   const hasForceColor =
     typeof process.env.FORCE_COLOR === "string" &&
     process.env.FORCE_COLOR.trim().length > 0 &&
     process.env.FORCE_COLOR.trim() !== "0";
   if (process.env.NO_COLOR && !hasForceColor) {
-    return new Chalk({ level: 0 });
+    cachedChalk = new Chalk({ level: 0 });
+    return cachedChalk;
   }
   const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
-  return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
+  cachedChalk = hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
+  return cachedChalk;
 }
 
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
