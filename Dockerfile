@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
       org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
       org.opencontainers.image.url="https://openclaw.ai" \
       org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
-      org.opencontainers.image.licenses="AGPL-3.0-only" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.title="OpenClaw" \
       org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
