@@ -30,6 +30,68 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+function expectSinglePngDownload(params: {
+  result: unknown;
+  expectedUrl: string;
+  filePathHint: string;
+  expectedPath: string;
+  placeholder: "<media:image>" | "<media:sticker>";
+}) {
+  expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+  expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    url: params.expectedUrl,
+    filePathHint: params.filePathHint,
+    maxBytes: 512,
+    fetchImpl: undefined,
+    ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+  });
+  expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+  expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+  expect(params.result).toEqual([
+    {
+      path: params.expectedPath,
+      contentType: "image/png",
+      placeholder: params.placeholder,
+    },
+  ]);
+}
+
+function expectAttachmentImageFallback(params: { result: unknown; attachment: { url: string } }) {
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
+  expect(params.result).toEqual([
+    {
+      path: params.attachment.url,
+      contentType: "image/png",
+      placeholder: "<media:image>",
+    },
+  ]);
+}
+
+function asForwardedSnapshotMessage(params: {
+  content: string;
+  embeds: Array<{ title?: string; description?: string }>;
+}) {
+  return asMessage({
+    content: "",
+    rawData: {
+      message_snapshots: [
+        {
+          message: {
+            content: params.content,
+            embeds: params.embeds,
+            attachments: [],
+            author: {
+              id: "u2",
+              username: "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+
 describe("resolveDiscordMessageChannelId", () => {
   it.each([
     {
@@ -157,14 +219,7 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual([
-      {
-        path: attachment.url,
-        contentType: "image/png",
-        placeholder: "<media:image>",
-      },
-    ]);
+    expectAttachmentImageFallback({ result, attachment });
   });
 
   it("downloads forwarded stickers", async () => {
@@ -191,23 +246,13 @@ describe("resolveForwardedMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-1.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-1.png",
       filePathHint: "wave.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("returns empty when no snapshots are present", async () => {
@@ -260,23 +305,13 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
-      url: "https://media.discordapp.net/stickers/sticker-2.png",
+    expectSinglePngDownload({
+      result,
+      expectedUrl: "https://media.discordapp.net/stickers/sticker-2.png",
       filePathHint: "hello.png",
-      maxBytes: 512,
-      fetchImpl: undefined,
-      ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      expectedPath: "/tmp/sticker-2.png",
+      placeholder: "<media:sticker>",
     });
-    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
-    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
-    expect(result).toEqual([
-      {
-        path: "/tmp/sticker-2.png",
-        contentType: "image/png",
-        placeholder: "<media:sticker>",
-      },
-    ]);
   });
 
   it("forwards fetchImpl to sticker downloads", async () => {
@@ -324,14 +359,7 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual([
-      {
-        path: attachment.url,
-        contentType: "image/png",
-        placeholder: "<media:image>",
-      },
-    ]);
+    expectAttachmentImageFallback({ result, attachment });
   });
 
   it("falls back to URL when saveMediaBuffer fails", async () => {
@@ -471,24 +499,9 @@ describe("Discord media SSRF policy", () => {
 describe("resolveDiscordMessageText", () => {
   it("includes forwarded message snapshots in body text", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "forwarded hello",
-                embeds: [],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+      asForwardedSnapshotMessage({
+        content: "forwarded hello",
+        embeds: [],
       }),
       { includeForwarded: true },
     );
@@ -560,24 +573,9 @@ describe("resolveDiscordMessageText", () => {
 
   it("joins forwarded snapshot embed title and description when content is empty", () => {
     const text = resolveDiscordMessageText(
-      asMessage({
+      asForwardedSnapshotMessage({
         content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "",
-                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
-                attachments: [],
-                author: {
-                  id: "u2",
-                  username: "Bob",
-                  discriminator: "0",
-                },
-              },
-            },
-          ],
-        },
+        embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
       }),
       { includeForwarded: true },
     );

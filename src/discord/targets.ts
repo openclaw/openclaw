@@ -1,9 +1,7 @@
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 import {
   buildMessagingTarget,
-  ensureTargetId,
-  parseTargetMention,
-  parseTargetPrefixes,
+  parseMentionPrefixOrAtUserTarget,
   requireTargetKind,
   type MessagingTarget,
   type MessagingTargetKind,
@@ -25,33 +23,19 @@ export function parseDiscordTarget(
   if (!trimmed) {
     return undefined;
   }
-  const mentionTarget = parseTargetMention({
+  const userTarget = parseMentionPrefixOrAtUserTarget({
     raw: trimmed,
     mentionPattern: /^<@!?(\d+)>$/,
-    kind: "user",
-  });
-  if (mentionTarget) {
-    return mentionTarget;
-  }
-  const prefixedTarget = parseTargetPrefixes({
-    raw: trimmed,
     prefixes: [
       { prefix: "user:", kind: "user" },
       { prefix: "channel:", kind: "channel" },
       { prefix: "discord:", kind: "user" },
     ],
+    atUserPattern: /^\d+$/,
+    atUserErrorMessage: "Discord DMs require a user id (use user:<id> or a <@id> mention)",
   });
-  if (prefixedTarget) {
-    return prefixedTarget;
-  }
-  if (trimmed.startsWith("@")) {
-    const candidate = trimmed.slice(1).trim();
-    const id = ensureTargetId({
-      candidate,
-      pattern: /^\d+$/,
-      errorMessage: "Discord DMs require a user id (use user:<id> or a <@id> mention)",
-    });
-    return buildMessagingTarget("user", id, trimmed);
+  if (userTarget) {
+    return userTarget;
   }
   if (/^\d+$/.test(trimmed)) {
     if (options.defaultKind) {
