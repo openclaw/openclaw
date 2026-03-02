@@ -127,7 +127,8 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
   const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
   if (!REACTION_TYPES.has(mapped)) {
-    throw new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
+    // Fallback: map unsupported emoji to the closest iMessage tapback.
+    return remove ? "-like" : "like";
   }
   return remove ? `-${mapped}` : mapped;
 }
@@ -180,3 +181,4 @@ export async function sendBlueBubblesReaction(params: {
     throw new Error(`BlueBubbles reaction failed (${res.status}): ${errorText || "unknown"}`);
   }
 }
+
