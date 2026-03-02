@@ -79,4 +79,31 @@ describe("startBrowserBridgeServer auth", () => {
       }),
     ).rejects.toThrow(/requires auth/i);
   });
+
+  it("serves noVNC bootstrap html without leaking password in Location header", async () => {
+    const bridge = await startBrowserBridgeServer({
+      resolved: buildResolvedConfig(),
+      authToken: "secret-token",
+      resolveSandboxNoVncToken: (token) => {
+        if (token !== "valid-token") {
+          return null;
+        }
+        return { noVncPort: 45678, password: "Abc123xy" };
+      },
+    });
+    servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
+
+    const res = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=valid-token`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+
+    const body = await res.text();
+    expect(body).toContain("window.location.replace");
+    expect(body).toContain(
+      "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=Abc123xy",
+    );
+    expect(body).not.toContain("?password=");
+  });
 });

@@ -180,9 +180,7 @@ final class VoiceWakeManager: NSObject {
 
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
-            self.statusText = Self.permissionMessage(
-                kind: "Microphone",
-                status: AVAudioSession.sharedInstance().recordPermission)
+            self.statusText = Self.microphonePermissionMessage(kind: "Microphone")
             self.isListening = false
             return
         }
@@ -389,8 +387,7 @@ final class VoiceWakeManager: NSObject {
     }
 
     private nonisolated static func requestMicrophonePermission() async -> Bool {
-        let session = AVAudioSession.sharedInstance()
-        switch session.recordPermission {
+        switch AVAudioApplication.shared.recordPermission {
         case .granted:
             return true
         case .denied:
@@ -402,9 +399,20 @@ final class VoiceWakeManager: NSObject {
         }
 
         return await self.requestPermissionWithTimeout { completion in
-            AVAudioSession.sharedInstance().requestRecordPermission { ok in
-                completion(ok)
-            }
+            AVAudioApplication.requestRecordPermission(completionHandler: completion)
+        }
+    }
+
+    private nonisolated static func microphonePermissionMessage(kind: String) -> String {
+        switch AVAudioApplication.shared.recordPermission {
+        case .denied:
+            return "\(kind) permission denied"
+        case .undetermined:
+            return "\(kind) permission not granted"
+        case .granted:
+            return "\(kind) permission denied"
+        @unknown default:
+            return "\(kind) permission denied"
         }
     }
 
@@ -429,7 +437,7 @@ final class VoiceWakeManager: NSObject {
     }
 
     private nonisolated static func requestPermissionWithTimeout(
-        _ operation: @escaping @Sendable (@escaping (Bool) -> Void) -> Void) async -> Bool
+        _ operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
     {
         do {
             return try await AsyncTimeout.withTimeout(

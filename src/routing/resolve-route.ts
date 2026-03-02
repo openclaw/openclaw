@@ -262,12 +262,24 @@ function hasRolesConstraint(match: NormalizedBindingMatch): boolean {
   return Boolean(match.roles);
 }
 
+function peerKindMatches(bindingKind: ChatType, scopeKind: ChatType): boolean {
+  if (bindingKind === scopeKind) {
+    return true;
+  }
+  const both = new Set([bindingKind, scopeKind]);
+  return both.has("group") && both.has("channel");
+}
+
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
   if (match.peer.state === "invalid") {
     return false;
   }
   if (match.peer.state === "valid") {
-    if (!scope.peer || scope.peer.kind !== match.peer.kind || scope.peer.id !== match.peer.id) {
+    if (
+      !scope.peer ||
+      !peerKindMatches(match.peer.kind, scope.peer.kind) ||
+      scope.peer.id !== match.peer.id
+    ) {
       return false;
     }
   }
