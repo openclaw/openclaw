@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
+import { emitMessageSentHookForReply } from "./reply/emit-message-sent-hook.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
@@ -10,7 +11,18 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions } from "./types.js";
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
+
+/** Build an onDelivered callback that emits message_sent hooks from ctx. */
+function buildOnDeliveredHook(ctx: MsgContext | FinalizedMsgContext) {
+  const sessionKey = ctx.SessionKey;
+  const channelId = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
+  const accountId = ctx.AccountId;
+  const to = ctx.To ?? ctx.From ?? "";
+  return (payload: ReplyPayload) => {
+    emitMessageSentHookForReply(payload, { sessionKey, channelId, accountId, to });
+  };
+}
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 
@@ -60,9 +72,14 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
-    params.dispatcherOptions,
-  );
+  const onDeliveredHook = buildOnDeliveredHook(params.ctx);
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    ...params.dispatcherOptions,
+    onDelivered: (payload, info) => {
+      params.dispatcherOptions.onDelivered?.(payload, info);
+      onDeliveredHook(payload);
+    },
+  });
   try {
     return await dispatchInboundMessage({
       ctx: params.ctx,
@@ -86,7 +103,14 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+  const onDeliveredHook = buildOnDeliveredHook(params.ctx);
+  const dispatcher = createReplyDispatcher({
+    ...params.dispatcherOptions,
+    onDelivered: (payload, info) => {
+      params.dispatcherOptions.onDelivered?.(payload, info);
+      onDeliveredHook(payload);
+    },
+  });
   return await dispatchInboundMessage({
     ctx: params.ctx,
     cfg: params.cfg,

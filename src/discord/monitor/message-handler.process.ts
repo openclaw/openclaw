@@ -4,6 +4,7 @@ import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js"
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import { emitMessageSentHookForReply } from "../../auto-reply/reply/emit-message-sent-hook.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -674,6 +675,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     onReplyStart: async () => {
       await typingCallbacks.onReplyStart();
       await statusReactions.setThinking();
+    },
+    onDelivered: (payload) => {
+      emitMessageSentHookForReply(payload, {
+        sessionKey: ctxPayload.SessionKey,
+        channelId: "discord",
+        accountId: accountId,
+        to: deliverTarget,
+      });
     },
   });
 

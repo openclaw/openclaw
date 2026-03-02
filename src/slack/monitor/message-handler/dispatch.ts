@@ -1,5 +1,6 @@
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
+import { emitMessageSentHookForReply } from "../../../auto-reply/reply/emit-message-sent-hook.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
@@ -323,6 +324,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
+    },
+    onDelivered: (payload) => {
+      emitMessageSentHookForReply(payload, {
+        sessionKey: prepared.ctxPayload.SessionKey,
+        channelId: "slack",
+        accountId: route.accountId,
+        to: prepared.replyTarget,
+      });
     },
   });
 

@@ -5,6 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { emitMessageSentHookForReply } from "../../auto-reply/reply/emit-message-sent-hook.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
@@ -842,6 +843,13 @@ export const chatHandlers: GatewayRequestHandlers = {
             return;
           }
           finalReplyParts.push(text);
+        },
+        onDelivered: (payload) => {
+          emitMessageSentHookForReply(payload, {
+            sessionKey: ctx.SessionKey,
+            channelId: "webchat",
+            to: ctx.To ?? ctx.From ?? "",
+          });
         },
       });
 

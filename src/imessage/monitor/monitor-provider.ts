@@ -7,6 +7,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import { emitMessageSentHookForReply } from "../../auto-reply/reply/emit-message-sent-hook.js";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -376,6 +377,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
+      },
+      onDelivered: (payload) => {
+        emitMessageSentHookForReply(payload, {
+          sessionKey: ctxPayload.SessionKey,
+          channelId: "imessage",
+          accountId: accountInfo.accountId,
+          to: ctxPayload.To ?? "",
+        });
       },
     });
 

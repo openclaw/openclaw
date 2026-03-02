@@ -10,6 +10,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import { emitMessageSentHookForReply } from "../../auto-reply/reply/emit-message-sent-hook.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -242,6 +243,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
+      },
+      onDelivered: (payload) => {
+        emitMessageSentHookForReply(payload, {
+          sessionKey: ctxPayload.SessionKey,
+          channelId: "signal",
+          accountId: deps.accountId,
+          to: ctxPayload.To ?? "",
+        });
       },
     });
 
