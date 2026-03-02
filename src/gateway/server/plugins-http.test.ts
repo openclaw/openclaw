@@ -27,6 +27,14 @@ function createRoute(params: {
   };
 }
 
+function buildRepeatedEncodedSlash(depth: number): string {
+  let encodedSlash = "%2f";
+  for (let i = 1; i < depth; i++) {
+    encodedSlash = encodedSlash.replace(/%/g, "%25");
+  }
+  return encodedSlash;
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
     const log = createPluginLog();
@@ -127,6 +135,10 @@ describe("createGatewayPluginRequestHandler", () => {
 });
 
 describe("plugin HTTP registry helpers", () => {
+  const deeplyEncodedChannelPath =
+    "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile";
+  const decodeOverflowPublicPath = `/googlechat${buildRepeatedEncodedSlash(40)}public`;
+
   it("detects registered route paths", () => {
     const registry = createTestRegistry({
       httpRoutes: [createRoute({ path: "/demo" })],
@@ -150,6 +162,8 @@ describe("plugin HTTP registry helpers", () => {
     });
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, deeplyEncodedChannelPath)).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, decodeOverflowPublicPath)).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });
 });

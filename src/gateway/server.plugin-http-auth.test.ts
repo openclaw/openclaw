@@ -181,6 +181,10 @@ type RouteVariant = {
 const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
   { label: "case-variant", path: "/API/channels/nostr/default/profile" },
   { label: "encoded-slash", path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" },
+  {
+    label: "encoded-slash-4x",
+    path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+  },
   { label: "encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
   { label: "dot-traversal-encoded-slash", path: "/api/foo/..%2fchannels/nostr/default/profile" },
   {
@@ -199,6 +203,10 @@ const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
 
 const CANONICAL_AUTH_VARIANTS: RouteVariant[] = [
   { label: "auth-case-variant", path: "/API/channels/nostr/default/profile" },
+  {
+    label: "auth-encoded-slash-4x",
+    path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+  },
   { label: "auth-encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
   { label: "auth-duplicate-trailing-slash", path: "/api/channels//nostr/default/profile/" },
   {
@@ -221,6 +229,7 @@ function buildChannelPathFuzzCorpus(): RouteVariant[] {
     "/api/channels//nostr/default/profile/",
     "/api/channels%2Fnostr%2Fdefault%2Fprofile",
     "/api/channels%252Fnostr%252Fdefault%252Fprofile",
+    "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
     "/api//channels/nostr/default/profile",
     "/api/channels%2",
     "/api/channels%zz",
@@ -454,7 +463,7 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/api/channels/nostr/default/profile") {
+      if (canonicalizePluginPath(pathname) === "/api/channels/nostr/default/profile") {
         res.statusCode = 200;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.end(JSON.stringify({ ok: true, route: "channel-default" }));
@@ -483,6 +492,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expectUnauthorizedResponse(unauthenticatedChannel);
 
+        const unauthenticatedDeepEncodedChannel = await sendRequest(server, {
+          path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+        });
+        expectUnauthorizedResponse(unauthenticatedDeepEncodedChannel);
+
         const authenticated = await sendRequest(server, {
           path: "/googlechat",
           authorization: "Bearer test-token",
@@ -496,6 +510,13 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expect(authenticatedChannel.res.statusCode).toBe(200);
         expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
+
+        const authenticatedDeepEncodedChannel = await sendRequest(server, {
+          path: "/api%2525252fchannels%2525252fnostr%2525252fdefault%2525252fprofile",
+          authorization: "Bearer test-token",
+        });
+        expect(authenticatedDeepEncodedChannel.res.statusCode).toBe(200);
+        expect(authenticatedDeepEncodedChannel.getBody()).toContain('"route":"channel-default"');
       },
     });
   });
