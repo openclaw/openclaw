@@ -84,15 +84,27 @@ export async function resolveSessionKey(params: {
   return params.fallbackKey;
 }
 
+export function startResetIfNeeded(params: {
+  meta: AcpSessionMeta;
+  sessionKey: string;
+  gateway: GatewayClient;
+  opts: AcpServerOptions;
+}): Promise<void> | null {
+  const resetSession = params.meta.resetSession ?? params.opts.resetSession ?? false;
+  if (!resetSession) {
+    return null;
+  }
+  return params.gateway.request("sessions.reset", { key: params.sessionKey }).then(() => undefined);
+}
+
 export async function resetSessionIfNeeded(params: {
   meta: AcpSessionMeta;
   sessionKey: string;
   gateway: GatewayClient;
   opts: AcpServerOptions;
 }): Promise<void> {
-  const resetSession = params.meta.resetSession ?? params.opts.resetSession ?? false;
-  if (!resetSession) {
-    return;
+  const resetPromise = startResetIfNeeded(params);
+  if (resetPromise) {
+    await resetPromise;
   }
-  await params.gateway.request("sessions.reset", { key: params.sessionKey });
 }

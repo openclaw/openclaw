@@ -36,7 +36,7 @@ import {
   inferToolKind,
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
-import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resolveSessionKey, startResetIfNeeded } from "./session-mapper.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
@@ -156,7 +156,9 @@ export class AcpGatewayAgent implements Agent {
       gateway: this.gateway,
       opts: this.opts,
     });
-    await resetSessionIfNeeded({
+
+    // Start reset asynchronously (non-blocking)
+    const resetPromise = startResetIfNeeded({
       meta,
       sessionKey,
       gateway: this.gateway,
@@ -168,6 +170,12 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
+
+    // Track the pending reset so prompt() can wait for it
+    if (resetPromise) {
+      this.sessionStore.setPendingReset(sessionId, resetPromise);
+    }
+
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     await this.sendAvailableCommands(session.sessionId);
     return { sessionId: session.sessionId };
@@ -188,7 +196,9 @@ export class AcpGatewayAgent implements Agent {
       gateway: this.gateway,
       opts: this.opts,
     });
-    await resetSessionIfNeeded({
+
+    // Start reset asynchronously (non-blocking)
+    const resetPromise = startResetIfNeeded({
       meta,
       sessionKey,
       gateway: this.gateway,
@@ -200,6 +210,12 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
+
+    // Track the pending reset so prompt() can wait for it
+    if (resetPromise) {
+      this.sessionStore.setPendingReset(params.sessionId, resetPromise);
+    }
+
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
     await this.sendAvailableCommands(session.sessionId);
     return {};
@@ -253,6 +269,12 @@ export class AcpGatewayAgent implements Agent {
     const session = this.sessionStore.getSession(params.sessionId);
     if (!session) {
       throw new Error(`Session ${params.sessionId} not found`);
+    }
+
+    // Wait for any pending session reset to complete before sending the prompt
+    if (session.pendingReset) {
+      await session.pendingReset;
+      this.sessionStore.setPendingReset(params.sessionId, null);
     }
 
     if (session.abortController) {
