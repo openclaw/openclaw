@@ -441,6 +441,10 @@ describe("pairing store", () => {
         accountId: "yy",
         allowFrom: ["10022"],
       });
+      // Some filesystems have coarse mtime precision; bump it explicitly.
+      const bumpedTime = new Date(Date.now() + 1_000);
+      await fs.utimes(resolveAllowFromFilePath(stateDir, "telegram", "yy"), bumpedTime, bumpedTime);
+
       const third = await readChannelAllowFromStore("telegram", process.env, "yy");
       expect(third).toEqual(["10022"]);
       expect(readSpy).toHaveBeenCalledTimes(2);
@@ -470,6 +474,14 @@ describe("pairing store", () => {
         accountId: "yy",
         allowFrom: ["10022"],
       });
+      // Some filesystems have coarse mtime precision; bump it explicitly.
+      const bumpedTime2 = new Date(Date.now() + 1_000);
+      await fs.utimes(
+        resolveAllowFromFilePath(stateDir, "telegram", "yy"),
+        bumpedTime2,
+        bumpedTime2,
+      );
+
       const third = readChannelAllowFromStoreSync("telegram", process.env, "yy");
       expect(third).toEqual(["10022"]);
       expect(readSpy).toHaveBeenCalledTimes(2);
