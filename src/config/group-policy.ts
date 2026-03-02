@@ -12,7 +12,7 @@ import {
 export type GroupPolicyChannel = ChannelId;
 
 export type ChannelGroupConfig = {
-  requireMention?: boolean;
+  requireMention?: boolean | "monitor";
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
@@ -366,9 +366,15 @@ export function resolveChannelGroupRequireMention(params: {
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
   overrideOrder?: "before-config" | "after-config";
-}): boolean {
+}): boolean | "monitor" {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
   const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+
+  // "monitor" takes absolute precedence — group or default level
+  if (groupConfig?.requireMention === "monitor" || defaultConfig?.requireMention === "monitor") {
+    return "monitor";
+  }
+
   const configMention =
     typeof groupConfig?.requireMention === "boolean"
       ? groupConfig.requireMention

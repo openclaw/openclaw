@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -99,6 +100,25 @@ export async function checkInboundAccessControl(params: {
     accountId: account.accountId,
     log: (message) => logVerbose(message),
   });
+  // Monitor-only groups bypass all sender-level filtering.
+  // They are passive (hooks fire, bot never responds), so groupAllowFrom is unnecessary.
+  // group-gating handles the rest downstream.
+  if (
+    params.group &&
+    resolveChannelGroupRequireMention({
+      cfg,
+      channel: "whatsapp",
+      groupId: params.remoteJid,
+    }) === "monitor"
+  ) {
+    return {
+      allowed: true,
+      shouldMarkRead: true,
+      isSelfChat,
+      resolvedAccountId: account.accountId,
+    };
+  }
+
   const normalizedDmSender = normalizeE164(params.from);
   const normalizedGroupSender =
     typeof params.senderE164 === "string" ? normalizeE164(params.senderE164) : null;

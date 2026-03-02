@@ -8,12 +8,13 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
+import { RequireMentionSchema } from "./zod-schema.providers-core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const WhatsAppGroupEntrySchema = z
   .object({
-    requireMention: z.boolean().optional(),
+    requireMention: RequireMentionSchema,
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })

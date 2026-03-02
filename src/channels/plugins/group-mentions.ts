@@ -43,7 +43,7 @@ function resolveTelegramRequireMention(params: {
   cfg: OpenClawConfig;
   chatId?: string;
   topicId?: string;
-}): boolean | undefined {
+}): boolean | "monitor" | undefined {
   const { cfg, chatId, topicId } = params;
   if (!chatId) {
     return undefined;
@@ -160,7 +160,7 @@ function resolveChannelRequireMention(
   params: GroupMentionParams,
   channel: ChannelGroupPolicyChannel,
   groupId: string | null | undefined = params.groupId,
-): boolean {
+): boolean | "monitor" {
   return resolveChannelGroupRequireMention({
     cfg: params.cfg,
     channel,
@@ -221,7 +221,7 @@ function resolveDiscordPolicyContext(params: GroupMentionParams) {
 
 export function resolveTelegramGroupRequireMention(
   params: GroupMentionParams,
-): boolean | undefined {
+): boolean | "monitor" | undefined {
   const { chatId, topicId } = parseTelegramGroupId(params.groupId);
   const requireMention = resolveTelegramRequireMention({
     cfg: params.cfg,
@@ -239,15 +239,19 @@ export function resolveTelegramGroupRequireMention(
   });
 }
 
-export function resolveWhatsAppGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveWhatsAppGroupRequireMention(
+  params: GroupMentionParams,
+): boolean | "monitor" {
   return resolveChannelRequireMention(params, "whatsapp");
 }
 
-export function resolveIMessageGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveIMessageGroupRequireMention(
+  params: GroupMentionParams,
+): boolean | "monitor" {
   return resolveChannelRequireMention(params, "imessage");
 }
 
-export function resolveDiscordGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveDiscordGroupRequireMention(params: GroupMentionParams): boolean | "monitor" {
   const context = resolveDiscordPolicyContext(params);
   if (typeof context.channelEntry?.requireMention === "boolean") {
     return context.channelEntry.requireMention;
@@ -258,7 +262,9 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   return true;
 }
 
-export function resolveGoogleChatGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveGoogleChatGroupRequireMention(
+  params: GroupMentionParams,
+): boolean | "monitor" {
   return resolveChannelRequireMention(params, "googlechat");
 }
 
@@ -268,7 +274,7 @@ export function resolveGoogleChatGroupToolPolicy(
   return resolveChannelToolPolicyForSender(params, "googlechat");
 }
 
-export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean | "monitor" {
   const resolved = resolveSlackChannelPolicyEntry(params);
   if (typeof resolved?.requireMention === "boolean") {
     return resolved.requireMention;
@@ -276,7 +282,9 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   return true;
 }
 
-export function resolveBlueBubblesGroupRequireMention(params: GroupMentionParams): boolean {
+export function resolveBlueBubblesGroupRequireMention(
+  params: GroupMentionParams,
+): boolean | "monitor" {
   return resolveChannelRequireMention(params, "bluebubbles");
 }
 
