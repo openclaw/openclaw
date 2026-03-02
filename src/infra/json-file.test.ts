@@ -172,7 +172,10 @@ describe("save + load round-trip", () => {
       profiles: { "ollama:local": { type: "api_key", provider: "ollama" } },
     };
 
-    // Simulate: good save, then crash leaves file empty.
+    // Simulate: good save, a second save (which creates the .bak), then crash
+    // leaves the primary file empty.  Two saves are needed because saveJsonFile
+    // only backs up the previous file when one already exists on disk.
+    saveJsonFile(p, goodData);
     saveJsonFile(p, goodData);
     fs.writeFileSync(p, ""); // Simulate truncation from crash.
 
