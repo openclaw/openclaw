@@ -289,7 +289,17 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
 }
 
 export function sortLocaleStrings(values: Iterable<string>): string[] {
-  return Array.from(values).sort((a, b) => a.localeCompare(b));
+  const sorted = Array.from(values);
+  for (let i = 1; i < sorted.length; i++) {
+    const value = sorted[i] as string;
+    let j = i - 1;
+    while (j >= 0 && sorted[j]!.localeCompare(value) > 0) {
+      sorted[j + 1] = sorted[j] as string;
+      j -= 1;
+    }
+    sorted[j + 1] = value;
+  }
+  return sorted;
 }
 
 export function resolveConfiguredCronModelSuggestions(
