@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
-import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
@@ -80,7 +79,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       };
     } else {
       const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = deriveDefaultBrowserCdpPortRange(state.resolved.controlPort);
+      const range = {
+        start: state.resolved.cdpPortRangeStart,
+        end: state.resolved.cdpPortRangeEnd,
+      };
       const cdpPort = allocateCdpPort(usedPorts, range);
       if (cdpPort === null) {
         throw new Error("no available CDP ports in range");
