@@ -48,6 +48,7 @@ import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
 import {
@@ -630,7 +631,7 @@ export function attachGatewayWsMessageHandler(params: {
               ok: false,
               error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
                 details: {
-                  code: ConnectErrorDetailCodes.DEVICE_AUTH_INVALID,
+                  code: resolveDeviceAuthConnectErrorDetailCode(reason),
                   reason,
                 },
               }),
@@ -1015,6 +1016,7 @@ export function attachGatewayWsMessageHandler(params: {
           connId,
           presenceKey,
           clientIp: reportedClientIp,
+          canvasHostUrl,
           canvasCapability,
           canvasCapabilityExpiresAtMs,
         };

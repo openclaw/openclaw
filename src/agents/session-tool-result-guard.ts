@@ -31,6 +31,42 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizePersistedToolResultName(
+  message: AgentMessage,
+  fallbackName?: string,
+): AgentMessage {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return message;
+  }
+  const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
+  const rawToolName = (toolResult as { toolName?: unknown }).toolName;
+  const normalizedToolName = trimNonEmptyString(rawToolName);
+  if (normalizedToolName) {
+    if (rawToolName === normalizedToolName) {
+      return toolResult;
+    }
+    return { ...toolResult, toolName: normalizedToolName };
+  }
+
+  const normalizedFallback = trimNonEmptyString(fallbackName);
+  if (normalizedFallback) {
+    return { ...toolResult, toolName: normalizedFallback };
+  }
+
+  if (typeof rawToolName === "string") {
+    return { ...toolResult, toolName: "unknown" };
+  }
+  return toolResult;
+}
+
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -150,9 +186,10 @@ export function installSessionToolResultGuard(
       if (id) {
         pending.delete(id);
       }
+      const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(nextMessage));
+      const capped = capToolResultSize(persistMessage(normalizedToolResult));
       const persisted = applyBeforeWriteHook(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
