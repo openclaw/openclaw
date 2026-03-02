@@ -214,7 +214,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
-function recordScheduleComputeError(params: {
+export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
