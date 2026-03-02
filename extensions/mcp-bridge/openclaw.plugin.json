@@ -1,0 +1,49 @@
+{
+  "id": "mcp-bridge",
+  "name": "MCP Bridge",
+  "description": "Bridge any MCP server's tools into OpenClaw agent.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "servers": {
+        "type": "array",
+        "description": "MCP servers to bridge",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Tool name prefix (e.g. lark_project)"
+            },
+            "type": {
+              "type": "string",
+              "enum": ["stdio", "sse", "http"],
+              "description": "Transport type"
+            },
+            "url": {
+              "type": "string",
+              "description": "Server URL (for http/sse)"
+            },
+            "command": {
+              "type": "string",
+              "description": "Command to run (for stdio)"
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Command arguments (for stdio)"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "HTTP headers (for http/sse)"
+            }
+          },
+          "required": ["name", "type"]
+        }
+      }
+    },
+    "required": ["servers"]
+  }
+}
