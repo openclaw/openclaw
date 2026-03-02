@@ -3,6 +3,8 @@ import {
   deriveSessionChatType,
   getSubagentDepth,
   isCronSessionKey,
+  resolveSessionThreadInfo,
+  resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
   classifySessionKeyShape,
@@ -113,5 +115,45 @@ describe("session key canonicalization", () => {
         requestKey: "agent:main:main",
       }),
     ).toBe("agent:main:main");
+  });
+});
+
+describe("resolveSessionThreadInfo", () => {
+  it("extracts parent and thread id from :thread: session keys", () => {
+    expect(
+      resolveSessionThreadInfo("agent:main:slack:channel:c123:thread:1710000000.9999"),
+    ).toEqual({
+      marker: "thread",
+      parentSessionKey: "agent:main:slack:channel:c123",
+      threadId: "1710000000.9999",
+    });
+  });
+
+  it("extracts parent and thread id from :topic: session keys", () => {
+    expect(resolveSessionThreadInfo("agent:main:telegram:group:-1001:topic:42")).toEqual({
+      marker: "topic",
+      parentSessionKey: "agent:main:telegram:group:-1001",
+      threadId: "42",
+    });
+  });
+
+  it("returns null marker info for non-thread session keys", () => {
+    expect(resolveSessionThreadInfo("agent:main:main")).toEqual({
+      marker: null,
+      parentSessionKey: null,
+      threadId: null,
+    });
+  });
+});
+
+describe("resolveThreadParentSessionKey", () => {
+  it("returns null for non-thread keys", () => {
+    expect(resolveThreadParentSessionKey("agent:main:main")).toBeNull();
+  });
+
+  it("returns the parent key for thread keys", () => {
+    expect(resolveThreadParentSessionKey("agent:main:discord:channel:c1:thread:abc")).toBe(
+      "agent:main:discord:channel:c1",
+    );
   });
 });

@@ -8,6 +8,7 @@ import {
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveSessionThreadInfo } from "../sessions/session-key-utils.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
@@ -470,6 +471,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       state.activeChatRunId = runId;
       setActivityStatus("sending");
       tui.requestRender();
+      const threadInfo = resolveSessionThreadInfo(state.currentSessionKey);
+      const threadLabel =
+        threadInfo.threadId && state.sessionInfo.displayName
+          ? state.sessionInfo.displayName
+          : undefined;
       await client.sendChat({
         sessionKey: state.currentSessionKey,
         message: text,
@@ -477,6 +483,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
         runId,
+        threadId: threadInfo.threadId ?? undefined,
+        parentSessionKey: threadInfo.parentSessionKey ?? undefined,
+        threadLabel,
       });
       setActivityStatus("waiting");
       tui.requestRender();

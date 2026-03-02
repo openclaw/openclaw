@@ -107,26 +107,63 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
+export type SessionThreadMarker = "thread" | "topic";
+
+type ThreadMarkerConfig = {
+  marker: SessionThreadMarker;
+  needle: string;
+};
+
+const THREAD_SESSION_MARKERS: ThreadMarkerConfig[] = [
+  { marker: "thread", needle: ":thread:" },
+  { marker: "topic", needle: ":topic:" },
+];
+
+export function resolveSessionThreadInfo(sessionKey: string | undefined | null): {
+  marker: SessionThreadMarker | null;
+  parentSessionKey: string | null;
+  threadId: string | null;
+} {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return {
+      marker: null,
+      parentSessionKey: null,
+      threadId: null,
+    };
+  }
+
+  const normalized = raw.toLowerCase();
+  let best: { marker: SessionThreadMarker; index: number; needle: string } | null = null;
+  for (const marker of THREAD_SESSION_MARKERS) {
+    const index = normalized.lastIndexOf(marker.needle);
+    if (index < 0) {
+      continue;
+    }
+    if (!best || index > best.index) {
+      best = { marker: marker.marker, index, needle: marker.needle };
+    }
+  }
+
+  if (!best || best.index <= 0) {
+    return {
+      marker: null,
+      parentSessionKey: null,
+      threadId: null,
+    };
+  }
+
+  const parentSessionKey = raw.slice(0, best.index).trim();
+  const threadIdRaw = raw.slice(best.index + best.needle.length).trim();
+  return {
+    marker: best.marker,
+    parentSessionKey: parentSessionKey || null,
+    threadId: threadIdRaw || null,
+  };
+}
 
 export function resolveThreadParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {
-  const raw = (sessionKey ?? "").trim();
-  if (!raw) {
-    return null;
-  }
-  const normalized = raw.toLowerCase();
-  let idx = -1;
-  for (const marker of THREAD_SESSION_MARKERS) {
-    const candidate = normalized.lastIndexOf(marker);
-    if (candidate > idx) {
-      idx = candidate;
-    }
-  }
-  if (idx <= 0) {
-    return null;
-  }
-  const parent = raw.slice(0, idx).trim();
-  return parent ? parent : null;
+  return resolveSessionThreadInfo(sessionKey).parentSessionKey;
 }

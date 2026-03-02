@@ -1,5 +1,8 @@
+import {
+  parseAgentSessionKey,
+  resolveSessionThreadInfo,
+} from "../../../../src/sessions/session-key-utils.js";
 import { extractText } from "../chat/message-extract.ts";
-import { parseAgentSessionKey } from "../../../../src/sessions/session-key-utils.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -235,12 +238,15 @@ export async function sendChatMessage(
         })
         .filter((a): a is NonNullable<typeof a> => a !== null)
     : undefined;
+  const threadInfo = resolveSessionThreadInfo(state.sessionKey);
 
   try {
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
+      threadId: threadInfo.threadId ?? undefined,
+      parentSessionKey: threadInfo.parentSessionKey ?? undefined,
       idempotencyKey: runId,
       attachments: apiAttachments,
     });

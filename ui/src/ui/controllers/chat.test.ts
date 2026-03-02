@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   handleChatEvent,
+  sendChatMessage,
   syncChatHistoryDuringRun,
   type ChatEventPayload,
   type ChatState,
@@ -359,5 +360,44 @@ describe("syncChatHistoryDuringRun", () => {
 
     expect(state.chatMessages).toBe(originalMessages);
     expect(state.chatThinkingLevel).toBe("medium");
+  });
+});
+
+describe("sendChatMessage", () => {
+  it("forwards thread metadata for thread session keys", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "agent:main:discord:channel:c1:thread:abc",
+    });
+
+    await sendChatMessage(state, "hello");
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:c1:thread:abc",
+        message: "hello",
+        deliver: false,
+        threadId: "abc",
+        parentSessionKey: "agent:main:discord:channel:c1",
+      }),
+    );
+  });
+
+  it("does not attach thread metadata for non-thread session keys", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "agent:main:main",
+    });
+
+    await sendChatMessage(state, "hello");
+
+    const payload = request.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.threadId).toBeUndefined();
+    expect(payload.parentSessionKey).toBeUndefined();
   });
 });
