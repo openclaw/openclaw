@@ -88,6 +88,21 @@ Returns full block data including tables, images. Use this to read structured co
 { "action": "delete_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
 ```
 
+### Insert Content After a Block
+
+```json
+{
+  "action": "insert",
+  "doc_token": "ABC123def",
+  "after_block_id": "doxcnXxxBlockId",
+  "content": "## New Section\n\nMarkdown content..."
+}
+```
+
+Inserts markdown immediately after the specified block. Supports the same content types as `write`, including GFM tables and `![](url)` images.
+
+**Image note:** `![](url)` in `insert`/`write`/`append` only accepts HTTP URLs — local paths and file tokens are not supported. To insert a local image, use `upload_image` instead.
+
 ### Create Table (Docx Table Block)
 
 ```json
