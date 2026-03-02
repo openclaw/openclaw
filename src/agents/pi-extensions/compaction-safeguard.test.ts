@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -13,6 +16,7 @@ const {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
@@ -483,4 +487,42 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
+});
+
+describe("readWorkspaceContextForSummary", () => {
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a symlink escape",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+      const prevCwd = process.cwd();
+      try {
+        const outside = path.join(root, "outside-secret.txt");
+        fs.writeFileSync(outside, "secret");
+        fs.symlinkSync(outside, path.join(root, "AGENTS.md"));
+        process.chdir(root);
+        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns empty when AGENTS.md is a hardlink alias",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+      const prevCwd = process.cwd();
+      try {
+        const outside = path.join(root, "outside-secret.txt");
+        fs.writeFileSync(outside, "secret");
+        fs.linkSync(outside, path.join(root, "AGENTS.md"));
+        process.chdir(root);
+        await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+      } finally {
+        process.chdir(prevCwd);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

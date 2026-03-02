@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
@@ -169,11 +170,22 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
-    if (!fs.existsSync(agentsPath)) {
+    const opened = await openBoundaryFile({
+      absolutePath: agentsPath,
+      rootPath: workspaceDir,
+      boundaryLabel: "workspace root",
+    });
+    if (!opened.ok) {
       return "";
     }
 
-    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    const content = (() => {
+      try {
+        return fs.readFileSync(opened.fd, "utf-8");
+      } finally {
+        fs.closeSync(opened.fd);
+      }
+    })();
     const sections = extractSections(content, ["Session Startup", "Red Lines"]);
 
     if (sections.length === 0) {
@@ -392,6 +404,7 @@ export const __testing = {
   formatToolFailuresSection,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
+  readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,

@@ -166,4 +166,28 @@ Never do Y.
     expect(result).toContain("Rule 2");
     expect(result).not.toContain("Other Section");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "returns null when AGENTS.md is a symlink escaping workspace",
+    async () => {
+      const outside = path.join(tmpDir, "outside-secret.txt");
+      fs.writeFileSync(outside, "secret");
+      fs.symlinkSync(outside, path.join(tmpDir, "AGENTS.md"));
+
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns null when AGENTS.md is a hardlink alias",
+    async () => {
+      const outside = path.join(tmpDir, "outside-secret.txt");
+      fs.writeFileSync(outside, "secret");
+      fs.linkSync(outside, path.join(tmpDir, "AGENTS.md"));
+
+      const result = await readPostCompactionContext(tmpDir);
+      expect(result).toBeNull();
+    },
+  );
 });
