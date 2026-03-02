@@ -21,8 +21,7 @@ export type ArchiveLogger = {
 
 export type ArchiveExtractLimits = {
   /**
-   * Max archive file bytes (compressed). Primarily protects zip extraction
-   * because we currently read the whole archive into memory for parsing.
+   * Max archive file bytes (compressed).
    */
   maxArchiveBytes?: number;
   /** Max number of extracted entries (files + dirs). */
@@ -457,7 +456,16 @@ async function extractZip(params: {
   }
 }
 
-type TarEntryInfo = { path: string; type: string; size: number };
+export type TarEntryInfo = { path: string; type: string; size: number };
+
+const BLOCKED_TAR_ENTRY_TYPES = new Set([
+  "SymbolicLink",
+  "Link",
+  "BlockDevice",
+  "CharacterDevice",
+  "FIFO",
+  "Socket",
+]);
 
 function readTarEntryInfo(entry: unknown): TarEntryInfo {
   const p =
@@ -479,6 +487,42 @@ function readTarEntryInfo(entry: unknown): TarEntryInfo {
   return { path: p, type: t, size: s };
 }
 
+export function createTarEntrySafetyChecker(params: {
+  rootDir: string;
+  stripComponents?: number;
+  limits?: ArchiveExtractLimits;
+  escapeLabel?: string;
+}): (entry: TarEntryInfo) => void {
+  const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
+  const limits = resolveExtractLimits(params.limits);
+  let entryCount = 0;
+  const budget = createByteBudgetTracker(limits);
+
+  return (entry: TarEntryInfo) => {
+    validateArchiveEntryPath(entry.path, { escapeLabel: params.escapeLabel });
+
+    const relPath = stripArchivePath(entry.path, strip);
+    if (!relPath) {
+      return;
+    }
+    validateArchiveEntryPath(relPath, { escapeLabel: params.escapeLabel });
+    resolveArchiveOutputPath({
+      rootDir: params.rootDir,
+      relPath,
+      originalPath: entry.path,
+      escapeLabel: params.escapeLabel,
+    });
+
+    if (BLOCKED_TAR_ENTRY_TYPES.has(entry.type)) {
+      throw new Error(`tar entry is a link: ${entry.path}`);
+    }
+
+    entryCount += 1;
+    assertArchiveEntryCountWithinLimit(entryCount, limits);
+    budget.addEntrySize(entry.size);
+  };
+}
+
 export async function extractArchive(params: {
   archivePath: string;
   destDir: string;
@@ -496,49 +540,28 @@ export async function extractArchive(params: {
 
   const label = kind === "zip" ? "extract zip" : "extract tar";
   if (kind === "tar") {
-    const strip = Math.max(0, Math.floor(params.stripComponents ?? 0));
     const limits = resolveExtractLimits(params.limits);
-    let entryCount = 0;
-    const budget = createByteBudgetTracker(limits);
+    const stat = await fs.stat(params.archivePath);
+    if (stat.size > limits.maxArchiveBytes) {
+      throw new Error(ERROR_ARCHIVE_SIZE_EXCEEDS_LIMIT);
+    }
+
+    const checkTarEntrySafety = createTarEntrySafetyChecker({
+      rootDir: params.destDir,
+      stripComponents: params.stripComponents,
+      limits,
+    });
     await withTimeout(
       tar.x({
         file: params.archivePath,
         cwd: params.destDir,
-        strip,
+        strip: Math.max(0, Math.floor(params.stripComponents ?? 0)),
         gzip: params.tarGzip,
         preservePaths: false,
         strict: true,
         onReadEntry(entry) {
-          const info = readTarEntryInfo(entry);
-
           try {
-            validateArchiveEntryPath(info.path);
-
-            const relPath = stripArchivePath(info.path, strip);
-            if (!relPath) {
-              return;
-            }
-            validateArchiveEntryPath(relPath);
-            resolveArchiveOutputPath({
-              rootDir: params.destDir,
-              relPath,
-              originalPath: info.path,
-            });
-
-            if (
-              info.type === "SymbolicLink" ||
-              info.type === "Link" ||
-              info.type === "BlockDevice" ||
-              info.type === "CharacterDevice" ||
-              info.type === "FIFO" ||
-              info.type === "Socket"
-            ) {
-              throw new Error(`tar entry is a link: ${info.path}`);
-            }
-
-            entryCount += 1;
-            assertArchiveEntryCountWithinLimit(entryCount, limits);
-            budget.addEntrySize(info.size);
+            checkTarEntrySafety(readTarEntryInfo(entry));
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
             // Node's EventEmitter calls listeners with `this` bound to the
