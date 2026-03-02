@@ -406,22 +406,21 @@ export function buildAgentSelectCustomId(componentId: string): string {
 
 /**
  * Parse agent component data from Carbon's parsed ComponentData
- * Carbon parses "key:componentId=xxx" into { componentId: "xxx" }
+ * Supports both legacy { componentId } and Components v2 { cid } payloads.
  */
+function readParsedComponentId(data: ComponentData): unknown {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  return "cid" in data
+    ? (data as Record<string, unknown>).cid
+    : (data as Record<string, unknown>).componentId;
+}
+
 function parseAgentComponentData(data: ComponentData): {
   componentId: string;
 } | null {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  // Carbon parses "key:componentId=xxx" into { componentId: "xxx" }
-  // Components v2 / other builders may use { cid: "xxx" } (e.g. occomp:cid=xxx).
-  const raw =
-    ("cid" in data
-      ? (data as Record<string, unknown>).cid
-      : (data as Record<string, unknown>).componentId) ??
-    (data as Record<string, unknown>).componentId;
+  const raw = readParsedComponentId(data);
 
   const decodeSafe = (value: string): string => {
     // `cid` values may be raw (not URI-encoded). Guard against malformed % sequences.
@@ -601,10 +600,7 @@ function parseDiscordComponentData(
   if (!data || typeof data !== "object") {
     return null;
   }
-  const rawComponentId =
-    "cid" in data
-      ? (data as { cid?: unknown }).cid
-      : (data as { componentId?: unknown }).componentId;
+  const rawComponentId = readParsedComponentId(data);
   const rawModalId =
     "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
   let componentId = normalizeComponentId(rawComponentId);
