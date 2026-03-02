@@ -2,30 +2,56 @@
  * Redacts sensitive tokens from config output, logs, and error messages.
  *
  * T-ACCESS-003 residual risk: tokens visible in plaintext.
- * This doesn't solve at-rest encryption but prevents accidental
- * exposure through CLI output, log files, and error stack traces.
+ * This prevents accidental exposure through CLI output, log files,
+ * and error stack traces.
  */
 
-const TOKEN_PATTERN = /("token"\s*:\s*")([a-f0-9]{16,})(")/gi;
-const BEARER_PATTERN = /(Bearer\s+)([a-f0-9]{16,})/gi;
+// Matches "token": "any-string-value"
+const TOKEN_FIELD_PATTERN = /("token"\s*:\s*")([^"]{8,})(")/gi;
 
-/**
- * Replace token values with a redacted placeholder.
- * Keeps first 4 and last 4 characters for debugging.
- */
-export function redactTokens(input: string): string {
-  return input
-    .replace(TOKEN_PATTERN, (_match, pre, token, post) => {
-      return `${pre}${mask(token)}${post}`;
-    })
-    .replace(BEARER_PATTERN, (_match, pre, token) => {
-      return `${pre}${mask(token)}`;
-    });
-}
+// Matches Bearer tokens: hex, base64url, JWT (header.payload.signature)
+const BEARER_PATTERN = /(Bearer\s+)([A-Za-z0-9_\-\.]{16,})/g;
+
+// Matches standalone hex tokens (API keys, session IDs)
+const HEX_TOKEN_PATTERN = /\b([a-f0-9]{32,})\b/gi;
 
 function mask(token: string): string {
   if (token.length <= 8) return "****";
   return token.slice(0, 4) + "****" + token.slice(-4);
+}
+
+export function redactTokens(input: string): string {
+  return input
+    .replace(TOKEN_FIELD_PATTERN, (_m, pre, token, post) => {
+      return `${pre}${mask(token)}${post}`;
+    })
+    .replace(BEARER_PATTERN, (_m, pre, token) => {
+      return `${pre}${mask(token)}`;
+    })
+    .replace(HEX_TOKEN_PATTERN, (token) => {
+      return mask(token);
+    });
+}
+
+/**
+ * Convert any argument to a string for redaction.
+ */
+function stringify(arg: any): any {
+  if (typeof arg === "string") return redactTokens(arg);
+  if (arg instanceof Error) {
+    arg.message = redactTokens(arg.message);
+    if (arg.stack) arg.stack = redactTokens(arg.stack);
+    return arg;
+  }
+  if (typeof arg === "object" && arg !== null) {
+    try {
+      const serialized = JSON.stringify(arg);
+      return JSON.parse(redactTokens(serialized));
+    } catch {
+      return arg;
+    }
+  }
+  return arg;
 }
 
 /**
@@ -41,9 +67,7 @@ export function installLogRedaction(): void {
 
   for (const level of ["log", "warn", "error"] as const) {
     console[level] = (...args: any[]) => {
-      const redacted = args.map((a) =>
-        typeof a === "string" ? redactTokens(a) : a
-      );
+      const redacted = args.map(stringify);
       original[level].apply(console, redacted);
     };
   }

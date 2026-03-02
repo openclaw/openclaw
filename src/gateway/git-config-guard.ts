@@ -11,10 +11,6 @@
 import { existsSync } from "fs";
 import { resolve, dirname } from "path";
 
-/**
- * Walk up from configDir looking for a .git directory.
- * Returns the git root if found, null otherwise.
- */
 function findGitRoot(startDir: string): string | null {
   let dir = resolve(startDir);
   const root = resolve("/");
@@ -28,10 +24,6 @@ function findGitRoot(startDir: string): string | null {
   return null;
 }
 
-/**
- * Check if the config directory is tracked by git.
- * Call at gateway startup with the resolved config path.
- */
 export function checkConfigInGitRepo(configDir: string): void {
   const gitRoot = findGitRoot(configDir);
   if (gitRoot) {
