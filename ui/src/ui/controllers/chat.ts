@@ -40,6 +40,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatPendingMessages: Array<{ text: string; mode: "steered" | "queued" }>;
   lastError: string | null;
 };
 

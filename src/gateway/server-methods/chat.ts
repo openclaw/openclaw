@@ -3,6 +3,10 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import {
+  queueEmbeddedPiMessage,
+  isEmbeddedPiRunActive,
+} from "../../agents/pi-embedded-runner/runs.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -1007,6 +1011,26 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
       });
       return;
+    }
+
+    // Try to steer the message into an active run if one exists
+    const sessionId = entry?.sessionId;
+    if (sessionId && isEmbeddedPiRunActive(sessionId)) {
+      // Try to inject the message into the active run
+      const steered = queueEmbeddedPiMessage(sessionId, parsedMessage);
+      if (steered) {
+        context.logGateway.info(
+          `chat.send: message steered into active run sessionId=${sessionId} message=${parsedMessage.slice(0, 50)}...`,
+        );
+        respond(true, { runId: clientRunId, status: "steered" as const }, undefined, {
+          runId: clientRunId,
+        });
+        return;
+      }
+      // If steering failed (e.g., compacting), fall through to normal dispatch
+      context.logGateway.debug(
+        `chat.send: steering failed for sessionId=${sessionId}, falling back to normal dispatch`,
+      );
     }
 
     try {
