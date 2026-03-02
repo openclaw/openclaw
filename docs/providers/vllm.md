@@ -108,8 +108,8 @@ If your server binds only to `127.0.0.1`, other machines (including Docker conta
 <Warning>
 **Docker networking:** If the gateway runs inside a container but vLLM runs on the host, `localhost` inside the container does not reach the host.
 
-- **macOS / Windows:** Use `host.docker.internal:<port>` in your `baseUrl`.
-- **Linux:** Use the Docker bridge gateway IP (commonly `172.17.0.1`; verify with `docker network inspect bridge`).
+- **macOS / Windows:** Use `http://host.docker.internal:<port>/v1` as your `baseUrl`.
+- **Linux:** Use `http://172.17.0.1:<port>/v1` (verify the bridge IP with `docker network inspect bridge`).
 
 To verify from inside a container (macOS/Windows):
 
