@@ -8,6 +8,11 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import {
+  ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+  COPILOT_1M_FORWARD_COMPAT_CANDIDATES,
+  COPILOT_FAST_FORWARD_COMPAT_CANDIDATES,
+} from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -106,6 +111,25 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
   try {
     const availableModels = loadAvailableModels(registry);
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    // Antigravity forward-compat models inherit auth from their base model.
+    for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
+      const key = modelKey("google-antigravity", candidate.id);
+      if (hasAvailableTemplate(availableKeys, candidate.templatePrefixes)) {
+        availableKeys.add(key);
+      }
+    }
+    // Copilot "-1m" variants inherit auth from their base model.
+    for (const candidate of COPILOT_1M_FORWARD_COMPAT_CANDIDATES) {
+      if (hasAvailableTemplate(availableKeys, candidate.templatePrefixes)) {
+        availableKeys.add(candidate.key);
+      }
+    }
+    // Copilot "-fast" variants inherit auth from their base model.
+    for (const candidate of COPILOT_FAST_FORWARD_COMPAT_CANDIDATES) {
+      if (hasAvailableTemplate(availableKeys, candidate.templatePrefixes)) {
+        availableKeys.add(candidate.key);
+      }
+    }
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {
       throw err;
@@ -119,6 +143,18 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
     }
   }
   return { registry, models, availableKeys, availabilityErrorMessage };
+}
+
+function hasAvailableTemplate(
+  availableKeys: Set<string>,
+  templatePrefixes: readonly string[],
+): boolean {
+  for (const key of availableKeys) {
+    if (templatePrefixes.some((prefix) => key.startsWith(prefix))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function toModelRow(params: {
