@@ -54,6 +54,13 @@ export function findBundledPluginByNpmSpec(params: {
     if (source.npmSpec === targetSpec) {
       return source;
     }
+    // Also match by plugin id so that e.g. `openclaw plugins install diffs`
+    // resolves to the bundled @openclaw/diffs plugin when the unscoped npm
+    // package `diffs` is not a valid OpenClaw plugin.
+    // See: https://github.com/openclaw/openclaw/issues/32019
+    if (source.pluginId === targetSpec) {
+      return source;
+    }
   }
   return undefined;
 }
