@@ -81,15 +81,32 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("  HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
   });
 
-  it("rejects ambiguous natural-language prefixes", () => {
-    expect(isSilentReplyPrefixText("N")).toBe(false);
+  it("matches uppercase pre-underscore streaming prefixes (#32168)", () => {
+    // During streaming, the LLM may emit "NO" before the underscore arrives.
+    // These all-uppercase fragments must be caught to prevent a visible
+    // partial leak in webchat.
+    expect(isSilentReplyPrefixText("NO")).toBe(true);
+    expect(isSilentReplyPrefixText("N")).toBe(true);
+    expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(true);
+  });
+
+  it("rejects mixed-case natural-language prefixes", () => {
+    // Mixed case indicates natural language, not a streaming token prefix.
     expect(isSilentReplyPrefixText("No")).toBe(false);
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
+    expect(isSilentReplyPrefixText("Heart")).toBe(false);
+    expect(isSilentReplyPrefixText("no")).toBe(false);
   });
 
   it("rejects non-prefixes and mixed characters", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+
+  it("returns false for undefined/empty", () => {
+    expect(isSilentReplyPrefixText(undefined)).toBe(false);
+    expect(isSilentReplyPrefixText("")).toBe(false);
+    expect(isSilentReplyPrefixText("   ")).toBe(false);
   });
 });

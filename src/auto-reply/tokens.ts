@@ -34,14 +34,19 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
-  const normalized = text.trimStart().toUpperCase();
-  if (!normalized) {
+  const trimmed = text.trimStart();
+  if (!trimmed) {
     return false;
   }
-  if (!normalized.includes("_")) {
-    return false;
-  }
+  const normalized = trimmed.toUpperCase();
   if (/[^A-Z_]/.test(normalized)) {
+    return false;
+  }
+  // For fragments that don't yet contain an underscore, only match when the
+  // original text is already fully uppercase.  This avoids false positives
+  // with natural-language words like "No" or "Heart" while still catching
+  // streaming prefixes like "NO" from NO_REPLY (#32168).
+  if (!normalized.includes("_") && trimmed !== normalized) {
     return false;
   }
   return token.toUpperCase().startsWith(normalized);
