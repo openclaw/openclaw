@@ -123,6 +123,25 @@ vi.mock("../agents/openclaw-tools.js", () => {
         return { ok: true };
       },
     },
+    {
+      name: "diffs_compat_test",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          fileFormat: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, args: unknown) => {
+        const input = (args ?? {}) as Record<string, unknown>;
+        return {
+          ok: true,
+          observedFormat: input.format,
+          observedFileFormat: input.fileFormat,
+        };
+      },
+    },
   ];
 
   return {
@@ -545,5 +564,26 @@ describe("POST /tools/invoke", () => {
     expect(crashBody.ok).toBe(false);
     expect(crashBody.error?.type).toBe("tool_error");
     expect(crashBody.error?.message).toBe("tool execution failed");
+  });
+
+  it("passes deprecated format alias through invoke payloads even when schema omits it", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["diffs_compat_test"] } }],
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "diffs_compat_test",
+      args: { mode: "file", format: "pdf" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.observedFormat).toBe("pdf");
+    expect(body.result?.observedFileFormat).toBeUndefined();
   });
 });

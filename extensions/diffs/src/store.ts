@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
-import type { DiffArtifactMeta } from "./types.js";
+import type { DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
@@ -17,6 +17,21 @@ type CreateArtifactParams = {
   fileCount: number;
   ttlMs?: number;
 };
+
+type CreateStandaloneFileArtifactParams = {
+  format?: DiffOutputFormat;
+  ttlMs?: number;
+};
+
+type StandaloneFileMeta = {
+  kind: "standalone_file";
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  filePath: string;
+};
+
+type ArtifactMetaFileName = "meta.json" | "file-meta.json";
 
 export class DiffArtifactStore {
   private readonly rootDir: string;
@@ -87,27 +102,61 @@ export class DiffArtifactStore {
     return await fs.readFile(htmlPath, "utf8");
   }
 
-  async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
+  async updateFilePath(id: string, filePath: string): Promise<DiffArtifactMeta> {
     const meta = await this.readMeta(id);
     if (!meta) {
       throw new Error(`Diff artifact not found: ${id}`);
     }
-    const normalizedImagePath = this.normalizeStoredPath(imagePath, "imagePath");
+    const normalizedFilePath = this.normalizeStoredPath(filePath, "filePath");
     const next: DiffArtifactMeta = {
       ...meta,
-      imagePath: normalizedImagePath,
+      filePath: normalizedFilePath,
+      imagePath: normalizedFilePath,
     };
     await this.writeMeta(next);
     return next;
   }
 
-  allocateImagePath(id: string): string {
-    return path.join(this.artifactDir(id), "preview.png");
+  async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
+    return this.updateFilePath(id, imagePath);
   }
 
-  allocateStandaloneImagePath(): string {
+  allocateFilePath(id: string, format: DiffOutputFormat = "png"): string {
+    return path.join(this.artifactDir(id), `preview.${format}`);
+  }
+
+  async createStandaloneFileArtifact(
+    params: CreateStandaloneFileArtifactParams = {},
+  ): Promise<{ id: string; filePath: string; expiresAt: string }> {
+    await this.ensureRoot();
+
     const id = crypto.randomBytes(10).toString("hex");
-    return path.join(this.artifactDir(id), "preview.png");
+    const artifactDir = this.artifactDir(id);
+    const format = params.format ?? "png";
+    const filePath = path.join(artifactDir, `preview.${format}`);
+    const ttlMs = normalizeTtlMs(params.ttlMs);
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    const meta: StandaloneFileMeta = {
+      kind: "standalone_file",
+      id,
+      createdAt: createdAt.toISOString(),
+      expiresAt,
+      filePath: this.normalizeStoredPath(filePath, "filePath"),
+    };
+
+    await fs.mkdir(artifactDir, { recursive: true });
+    await this.writeStandaloneMeta(meta);
+    this.scheduleCleanup();
+    return {
+      id,
+      filePath: meta.filePath,
+      expiresAt: meta.expiresAt,
+    };
+  }
+
+  allocateImagePath(id: string, format: DiffOutputFormat = "png"): string {
+    return this.allocateFilePath(id, format);
   }
 
   scheduleCleanup(): void {
@@ -127,6 +176,14 @@ export class DiffArtifactStore {
           const meta = await this.readMeta(id);
           if (meta) {
             if (isExpired(meta)) {
+              await this.deleteArtifact(id);
+            }
+            return;
+          }
+
+          const standaloneMeta = await this.readStandaloneMeta(id);
+          if (standaloneMeta) {
+            if (isExpired(standaloneMeta)) {
               await this.deleteArtifact(id);
             }
             return;
@@ -173,23 +230,76 @@ export class DiffArtifactStore {
     return this.resolveWithinRoot(id);
   }
 
-  private metaPath(id: string): string {
-    return path.join(this.artifactDir(id), "meta.json");
-  }
-
   private async writeMeta(meta: DiffArtifactMeta): Promise<void> {
-    await fs.writeFile(this.metaPath(meta.id), JSON.stringify(meta, null, 2), "utf8");
+    await this.writeJsonMeta(meta.id, "meta.json", meta);
   }
 
   private async readMeta(id: string): Promise<DiffArtifactMeta | null> {
+    const parsed = await this.readJsonMeta(id, "meta.json", "diff artifact");
+    if (!parsed) {
+      return null;
+    }
+    return parsed as DiffArtifactMeta;
+  }
+
+  private async writeStandaloneMeta(meta: StandaloneFileMeta): Promise<void> {
+    await this.writeJsonMeta(meta.id, "file-meta.json", meta);
+  }
+
+  private async readStandaloneMeta(id: string): Promise<StandaloneFileMeta | null> {
+    const parsed = await this.readJsonMeta(id, "file-meta.json", "standalone diff");
+    if (!parsed) {
+      return null;
+    }
     try {
-      const raw = await fs.readFile(this.metaPath(id), "utf8");
-      return JSON.parse(raw) as DiffArtifactMeta;
+      const value = parsed as Partial<StandaloneFileMeta>;
+      if (
+        value.kind !== "standalone_file" ||
+        typeof value.id !== "string" ||
+        typeof value.createdAt !== "string" ||
+        typeof value.expiresAt !== "string" ||
+        typeof value.filePath !== "string"
+      ) {
+        return null;
+      }
+      return {
+        kind: value.kind,
+        id: value.id,
+        createdAt: value.createdAt,
+        expiresAt: value.expiresAt,
+        filePath: this.normalizeStoredPath(value.filePath, "filePath"),
+      };
+    } catch (error) {
+      this.logger?.warn(`Failed to normalize standalone diff metadata for ${id}: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private metaFilePath(id: string, fileName: ArtifactMetaFileName): string {
+    return path.join(this.artifactDir(id), fileName);
+  }
+
+  private async writeJsonMeta(
+    id: string,
+    fileName: ArtifactMetaFileName,
+    data: unknown,
+  ): Promise<void> {
+    await fs.writeFile(this.metaFilePath(id, fileName), JSON.stringify(data, null, 2), "utf8");
+  }
+
+  private async readJsonMeta(
+    id: string,
+    fileName: ArtifactMetaFileName,
+    context: string,
+  ): Promise<unknown | null> {
+    try {
+      const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
+      return JSON.parse(raw) as unknown;
     } catch (error) {
       if (isFileNotFound(error)) {
         return null;
       }
-      this.logger?.warn(`Failed to read diff artifact metadata for ${id}: ${String(error)}`);
+      this.logger?.warn(`Failed to read ${context} metadata for ${id}: ${String(error)}`);
       return null;
     }
   }
@@ -235,7 +345,7 @@ function normalizeTtlMs(value?: number): number {
   return Math.min(rounded, MAX_TTL_MS);
 }
 
-function isExpired(meta: DiffArtifactMeta): boolean {
+function isExpired(meta: { expiresAt: string }): boolean {
   const expiresAt = Date.parse(meta.expiresAt);
   if (!Number.isFinite(expiresAt)) {
     return true;
