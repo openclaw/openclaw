@@ -129,7 +129,8 @@ export async function runExec(
       execCommand = resolveCommand(command);
       execArgs = args;
     }
-    const { stdout, stderr } = isWindowsBatchCommand(execCommand)
+    const useCmdWrapper = isWindowsBatchCommand(execCommand);
+    const { stdout, stderr } = useCmdWrapper
       ? await execFileAsync(
           process.env.ComSpec ?? "cmd.exe",
           ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
