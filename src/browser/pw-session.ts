@@ -330,9 +330,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
-        const timeout = 5000 + attempt * 2000;
+        const timeout = 7500 + attempt * 2500;
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
