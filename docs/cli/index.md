@@ -380,7 +380,7 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset/file). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
@@ -389,6 +389,8 @@ Subcommands:
 - `config set <path> <value>`: set a value (JSON5 or raw string).
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
+- `config validate`: validate the current config against the schema without starting the gateway.
+- `config validate --json`: emit machine-readable JSON output.
 
 ### `doctor`
 
