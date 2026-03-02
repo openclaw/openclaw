@@ -120,7 +120,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      // Config path resolved via resolveChannelAccountConfigBasePath — see plugin-sdk/config-paths.ts
       const basePath = resolveChannelAccountConfigBasePath({
         cfg,
         channelKey: "discord",

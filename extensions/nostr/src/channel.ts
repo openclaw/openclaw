@@ -98,8 +98,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      // Config path resolved via resolveChannelAccountConfigBasePath — see plugin-sdk/config-paths.ts
-      // Previously used hardcoded paths which produced garbled "channels.nostr.allowFromallowFrom".
       const basePath = resolveChannelAccountConfigBasePath({
         cfg,
         channelKey: "nostr",

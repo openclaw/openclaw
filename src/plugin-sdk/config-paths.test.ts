@@ -86,4 +86,17 @@ describe("resolveChannelAccountConfigBasePath", () => {
     expect(basePath.endsWith(".")).toBe(true);
     expect(`${basePath}dm.allowFrom`).toBe("channels.discord.accounts.bot2.dm.allowFrom");
   });
+
+  it("returns channel-root path when accountId entry is null (falsy guard)", () => {
+    // Boolean(null) is false — null entry should not trigger per-account path
+    const cfg = {
+      channels: { telegram: { accounts: { orphan: null } } },
+    } as unknown as OpenClawConfig;
+    const result = resolveChannelAccountConfigBasePath({
+      cfg,
+      channelKey: "telegram",
+      accountId: "orphan",
+    });
+    expect(result).toBe("channels.telegram.");
+  });
 });
