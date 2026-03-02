@@ -118,7 +118,7 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
     lines.push(message);
   }
   const reason = payload.stats?.reason?.trim();
-  if (reason) {
+  if (reason && reason !== message) {
     lines.push(`Reason: ${reason}`);
   }
   if (payload.doctorHint?.trim()) {
