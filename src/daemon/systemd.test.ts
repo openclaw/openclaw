@@ -186,6 +186,24 @@ describe("splitArgsPreservingQuotes", () => {
       }),
     ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
   });
+
+  it("treats apostrophes as literal text in backslash-quote-only mode", () => {
+    expect(
+      splitArgsPreservingQuotes("C:\\\\Users\\\\O'Neil\\\\openclaw gateway start", {
+        escapeMode: "backslash-quote-only",
+      }),
+    ).toEqual(["C:\\\\Users\\\\O'Neil\\\\openclaw", "gateway", "start"]);
+  });
+
+  it("treats apostrophes as literal text in default (none) mode", () => {
+    expect(splitArgsPreservingQuotes("/usr/bin/openclaw --user O'Neil gateway start")).toEqual([
+      "/usr/bin/openclaw",
+      "--user",
+      "O'Neil",
+      "gateway",
+      "start",
+    ]);
+  });
 });
 
 describe("parseSystemdExecStart", () => {

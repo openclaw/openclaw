@@ -28,7 +28,8 @@ export function splitArgsPreservingQuotes(
       i++;
       continue;
     }
-    if ((char === '"' || char === "'") && (quoteChar === null || quoteChar === char)) {
+    const isQuote = char === '"' || (char === "'" && escapeMode === "backslash");
+    if (isQuote && (quoteChar === null || quoteChar === char)) {
       quoteChar = quoteChar === null ? char : null;
       continue;
     }
