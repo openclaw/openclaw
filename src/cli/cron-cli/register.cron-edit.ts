@@ -73,6 +73,11 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
+      .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
+      .option(
+        "--failure-alert-account-id <id>",
+        "Account ID for failure alert channel (multi-account setups)",
+      )
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -286,11 +291,15 @@ export function registerCronEditCommand(cron: Command) {
           const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
           const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
           const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
+          const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
+          const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
           const hasFailureAlertFields =
             hasFailureAlertAfter ||
             hasFailureAlertChannel ||
             hasFailureAlertTo ||
-            hasFailureAlertCooldown;
+            hasFailureAlertCooldown ||
+            hasFailureAlertMode ||
+            hasFailureAlertAccountId;
           const failureAlertFlag =
             typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
           if (failureAlertFlag === false && hasFailureAlertFields) {
@@ -321,6 +330,17 @@ export function registerCronEditCommand(cron: Command) {
                 throw new Error("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;
+            }
+            if (hasFailureAlertMode) {
+              const mode = String(opts.failureAlertMode).trim().toLowerCase();
+              if (mode !== "announce" && mode !== "webhook") {
+                throw new Error("Invalid --failure-alert-mode (must be 'announce' or 'webhook').");
+              }
+              failureAlert.mode = mode;
+            }
+            if (hasFailureAlertAccountId) {
+              const accountId = String(opts.failureAlertAccountId).trim();
+              failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;
           }

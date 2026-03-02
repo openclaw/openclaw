@@ -14,6 +14,15 @@ export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
   cooldownMs?: number;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+};
+
+export type CronFailureDestinationConfig = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
 };
 
 export type CronConfig = {
@@ -44,4 +53,6 @@ export type CronConfig = {
     keepLines?: number;
   };
   failureAlert?: CronFailureAlertConfig;
+  /** Default destination for failure notifications across all cron jobs. */
+  failureDestination?: CronFailureDestinationConfig;
 };

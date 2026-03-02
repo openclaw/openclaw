@@ -8,6 +8,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
@@ -70,6 +71,66 @@ function resolveCronWebhookTarget(params: {
   }
 
   return null;
+}
+
+function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (webhookToken) {
+    headers.Authorization = `Bearer ${webhookToken}`;
+  }
+  return headers;
+}
+
+async function postCronWebhook(params: {
+  webhookUrl: string;
+  webhookToken?: string;
+  payload: unknown;
+  logContext: Record<string, unknown>;
+  blockedLog: string;
+  failedLog: string;
+  logger: ReturnType<typeof getChildLogger>;
+}): Promise<void> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, CRON_WEBHOOK_TIMEOUT_MS);
+
+  try {
+    const result = await fetchWithSsrFGuard({
+      url: params.webhookUrl,
+      init: {
+        method: "POST",
+        headers: buildCronWebhookHeaders(params.webhookToken),
+        body: JSON.stringify(params.payload),
+        signal: abortController.signal,
+      },
+    });
+    await result.release();
+  } catch (err) {
+    if (err instanceof SsrFBlockedError) {
+      params.logger.warn(
+        {
+          ...params.logContext,
+          reason: formatErrorMessage(err),
+          webhookUrl: redactWebhookUrl(params.webhookUrl),
+        },
+        params.blockedLog,
+      );
+    } else {
+      params.logger.warn(
+        {
+          ...params.logContext,
+          err: formatErrorMessage(err),
+          webhookUrl: redactWebhookUrl(params.webhookUrl),
+        },
+        params.failedLog,
+      );
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function buildGatewayCronService(params: {
@@ -226,11 +287,51 @@ export function buildGatewayCronService(params: {
         lane: "cron",
       });
     },
-    sendCronFailureAlert: async ({ job, text, channel, to }) => {
+    sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      const webhookToken = params.cfg.cron?.webhookToken?.trim();
+
+      // Webhook mode requires a URL - fail closed if missing
+      if (mode === "webhook" && !to) {
+        cronLogger.warn(
+          { jobId: job.id },
+          "cron: failure alert webhook mode requires URL, skipping",
+        );
+        return;
+      }
+
+      if (mode === "webhook" && to) {
+        const webhookUrl = normalizeHttpWebhookUrl(to);
+        if (webhookUrl) {
+          await postCronWebhook({
+            webhookUrl,
+            webhookToken,
+            payload: {
+              jobId: job.id,
+              jobName: job.name,
+              message: text,
+            },
+            logContext: { jobId: job.id },
+            blockedLog: "cron: failure alert webhook blocked by SSRF guard",
+            failedLog: "cron: failure alert webhook failed",
+            logger: cronLogger,
+          });
+        } else {
+          cronLogger.warn(
+            {
+              jobId: job.id,
+              webhookUrl: redactWebhookUrl(to),
+            },
+            "cron: failure alert webhook URL is invalid, skipping",
+          );
+        }
+        return;
+      }
+
       const target = await resolveDeliveryTarget(runtimeConfig, agentId, {
         channel,
         to,
+        accountId,
       });
       if (!target.ok) {
         throw target.error;
@@ -284,54 +385,81 @@ export function buildGatewayCronService(params: {
         }
 
         if (webhookTarget && evt.summary) {
-          const headers: Record<string, string> = {
-            "Content-Type": "application/json",
-          };
-          if (webhookToken) {
-            headers.Authorization = `Bearer ${webhookToken}`;
-          }
-          const abortController = new AbortController();
-          const timeout = setTimeout(() => {
-            abortController.abort();
-          }, CRON_WEBHOOK_TIMEOUT_MS);
-
           void (async () => {
-            try {
-              const result = await fetchWithSsrFGuard({
-                url: webhookTarget.url,
-                init: {
-                  method: "POST",
-                  headers,
-                  body: JSON.stringify(evt),
-                  signal: abortController.signal,
-                },
-              });
-              await result.release();
-            } catch (err) {
-              if (err instanceof SsrFBlockedError) {
-                cronLogger.warn(
-                  {
-                    reason: formatErrorMessage(err),
-                    jobId: evt.jobId,
-                    webhookUrl: redactWebhookUrl(webhookTarget.url),
-                  },
-                  "cron: webhook delivery blocked by SSRF guard",
-                );
-              } else {
-                cronLogger.warn(
-                  {
-                    err: formatErrorMessage(err),
-                    jobId: evt.jobId,
-                    webhookUrl: redactWebhookUrl(webhookTarget.url),
-                  },
-                  "cron: webhook delivery failed",
-                );
-              }
-            } finally {
-              clearTimeout(timeout);
-            }
+            await postCronWebhook({
+              webhookUrl: webhookTarget.url,
+              webhookToken,
+              payload: evt,
+              logContext: { jobId: evt.jobId },
+              blockedLog: "cron: webhook delivery blocked by SSRF guard",
+              failedLog: "cron: webhook delivery failed",
+              logger: cronLogger,
+            });
           })();
         }
+
+        if (evt.status === "error" && job) {
+          const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
+          if (failureDest) {
+            const isBestEffort =
+              job.delivery?.bestEffort === true ||
+              (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+
+            if (!isBestEffort) {
+              const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+              const failurePayload = {
+                jobId: job.id,
+                jobName: job.name,
+                message: failureMessage,
+                status: evt.status,
+                error: evt.error,
+                runAtMs: evt.runAtMs,
+                durationMs: evt.durationMs,
+                nextRunAtMs: evt.nextRunAtMs,
+              };
+
+              if (failureDest.mode === "webhook" && failureDest.to) {
+                const webhookUrl = normalizeHttpWebhookUrl(failureDest.to);
+                if (webhookUrl) {
+                  void (async () => {
+                    await postCronWebhook({
+                      webhookUrl,
+                      webhookToken,
+                      payload: failurePayload,
+                      logContext: { jobId: evt.jobId },
+                      blockedLog: "cron: failure destination webhook blocked by SSRF guard",
+                      failedLog: "cron: failure destination webhook failed",
+                      logger: cronLogger,
+                    });
+                  })();
+                } else {
+                  cronLogger.warn(
+                    {
+                      jobId: evt.jobId,
+                      webhookUrl: redactWebhookUrl(failureDest.to),
+                    },
+                    "cron: failure destination webhook URL is invalid, skipping",
+                  );
+                }
+              } else if (failureDest.mode === "announce") {
+                const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+                void sendFailureNotificationAnnounce(
+                  params.deps,
+                  runtimeConfig,
+                  agentId,
+                  job.id,
+                  {
+                    channel: failureDest.channel,
+                    to: failureDest.to,
+                    accountId: failureDest.accountId,
+                  },
+                  `[Cron Failure] ${failureMessage}`,
+                );
+              }
+            }
+          }
+        }
+
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,
