@@ -40,7 +40,7 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
-  readSessionMessages,
+  readSessionMessagesWithStatus,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -541,8 +541,26 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
-    const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    const result =
+      sessionId && storePath
+        ? readSessionMessagesWithStatus(sessionId, storePath, entry?.sessionFile)
+        : null;
+    const rawMessages = result?.messages ?? [];
+
+    // Classify transcript availability for diagnostics.
+    let historyStatus: "ok" | "not_found" | "not_persisted" | "empty";
+    if (!entry) {
+      historyStatus = "not_found";
+    } else if (!sessionId || !storePath) {
+      historyStatus = "not_persisted";
+    } else if (!result || !result.fileFound) {
+      historyStatus = "not_persisted";
+    } else if (rawMessages.length === 0) {
+      historyStatus = "empty";
+    } else {
+      historyStatus = "ok";
+    }
+
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -584,6 +602,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       messages: bounded.messages,
       thinkingLevel,
       verboseLevel,
+      historyStatus,
     });
   },
   "chat.abort": ({ params, respond, context }) => {
