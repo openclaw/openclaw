@@ -56,6 +56,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Per-provider HTTP proxy. "direct" bypasses all proxies; a URL routes through that proxy; omit to use system env proxy. */
+  proxy?: string;
 };
 
 export type BedrockDiscoveryConfig = {

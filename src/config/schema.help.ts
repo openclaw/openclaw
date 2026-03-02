@@ -668,6 +668,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+  "models.providers.*.proxy":
+    'Per-provider HTTP proxy override. Set to "direct" to bypass all proxies and connect directly, a proxy URL (e.g. "http://127.0.0.1:7890") to route through a specific proxy, or omit to use the system proxy from HTTP_PROXY/HTTPS_PROXY environment variables.',
   "models.bedrockDiscovery":
     "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
   "models.bedrockDiscovery.enabled":
