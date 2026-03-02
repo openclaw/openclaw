@@ -1,5 +1,6 @@
 import { beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { clearTelegramOutboundSendGuard } from "./outbound-send-guard.js";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
@@ -77,6 +78,7 @@ export function getTelegramSendTestMocks(): TelegramSendTestMocks {
 
 export function installTelegramSendTestHooks() {
   beforeEach(() => {
+    clearTelegramOutboundSendGuard();
     loadConfig.mockReturnValue({});
     loadWebMedia.mockReset();
     maybePersistResolvedTelegramTarget.mockReset();

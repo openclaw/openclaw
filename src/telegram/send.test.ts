@@ -762,6 +762,64 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("suppresses duplicate text sends to the same chat within the dedupe window", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const chatId = "123";
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      await expect(
+        sendMessageTelegram(chatId, "hello world", { token: "tok", api }),
+      ).resolves.toEqual({ messageId: "1", chatId });
+      await expect(
+        sendMessageTelegram(chatId, "hello   world", {
+          token: "tok",
+          api,
+        }),
+      ).rejects.toThrow(/duplicate message suppressed/i);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(8_001);
+      await expect(
+        sendMessageTelegram(chatId, "hello world", { token: "tok", api }),
+      ).resolves.toEqual({ messageId: "1", chatId });
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps retry attempts to avoid runaway resend loops", async () => {
+    vi.useFakeTimers();
+    try {
+      const chatId = "123";
+      const sendMessage = vi.fn().mockRejectedValue(new Error("timeout"));
+      const api = { sendMessage } as unknown as {
+        sendMessage: typeof sendMessage;
+      };
+
+      const promise = sendMessageTelegram(chatId, "hi", {
+        token: "tok",
+        api,
+        retry: { attempts: 50, minDelayMs: 1, maxDelayMs: 1, jitter: 0 },
+      });
+
+      const rejection = expect(promise).rejects.toThrow(/timeout/i);
+      await vi.runAllTimersAsync();
+      await rejection;
+      expect(sendMessage).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));

@@ -28,6 +28,12 @@ import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import {
+  markTelegramOutboundSendFailure,
+  markTelegramOutboundSendSuccess,
+  reserveTelegramOutboundSend,
+  type TelegramOutboundSendIdentity,
+} from "./outbound-send-guard.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
@@ -102,6 +108,7 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const MAX_TELEGRAM_SEND_RETRY_ATTEMPTS = 5;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
@@ -342,6 +349,81 @@ type TelegramRequestWithDiag = <T>(
   options?: { shouldLog?: (err: unknown) => boolean },
 ) => Promise<T>;
 
+function resolveBoundedTelegramSendRetryConfig(params: {
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
+}): RetryConfig {
+  const merged: RetryConfig = {
+    ...params.configRetry,
+    ...params.retry,
+  };
+  if (typeof merged.attempts !== "number" || !Number.isFinite(merged.attempts)) {
+    return merged;
+  }
+  const boundedAttempts = Math.min(
+    MAX_TELEGRAM_SEND_RETRY_ATTEMPTS,
+    Math.max(1, Math.round(merged.attempts)),
+  );
+  if (params.verbose && boundedAttempts !== merged.attempts) {
+    sendLogger.warn(
+      `telegram send retry attempts capped at ${MAX_TELEGRAM_SEND_RETRY_ATTEMPTS} (requested ${merged.attempts})`,
+    );
+  }
+  return { ...merged, attempts: boundedAttempts };
+}
+
+function resolveThreadIdParamValue(params?: Record<string, unknown>): number | undefined {
+  const value = params?.message_thread_id;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+async function withTelegramOutboundSendGuard<T>(params: {
+  accountId: string;
+  chatId: string;
+  text: string;
+  messageThreadId?: number;
+  verbose?: boolean;
+  label: string;
+  send: () => Promise<T>;
+}): Promise<T> {
+  const identity: TelegramOutboundSendIdentity = {
+    accountId: params.accountId,
+    chatId: params.chatId,
+    text: params.text,
+    messageThreadId: params.messageThreadId,
+  };
+  const decision = reserveTelegramOutboundSend(identity);
+  if (decision.blocked) {
+    const retryAfter = `${Math.max(1, Math.ceil(decision.retryAfterMs / 1000))}s`;
+    if (params.verbose) {
+      sendLogger.warn(
+        `telegram ${params.label} blocked (${decision.reason}) for chat ${params.chatId}; retry in ${retryAfter}`,
+      );
+    }
+    throw new Error(
+      decision.reason === "duplicate"
+        ? `Telegram duplicate message suppressed for chat ${params.chatId}; retry in ${retryAfter}`
+        : `Telegram send circuit breaker is open for chat ${params.chatId}; retry in ${retryAfter}`,
+    );
+  }
+  try {
+    const result = await params.send();
+    markTelegramOutboundSendSuccess(identity);
+    return result;
+  } catch (err) {
+    markTelegramOutboundSendFailure(identity);
+    throw err;
+  }
+}
+
 function createTelegramRequestWithDiag(params: {
   cfg: ReturnType<typeof loadConfig>;
   account: ResolvedTelegramAccount;
@@ -350,9 +432,13 @@ function createTelegramRequestWithDiag(params: {
   shouldRetry?: (err: unknown) => boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const retry = resolveBoundedTelegramSendRetryConfig({
     retry: params.retry,
     configRetry: params.account.config.retry,
+    verbose: params.verbose,
+  });
+  const request = createTelegramRetryRunner({
+    retry,
     verbose: params.verbose,
     ...(params.shouldRetry ? { shouldRetry: params.shouldRetry } : {}),
   });
@@ -512,50 +598,59 @@ export async function sendMessageTelegram(
     params?: Record<string, unknown>,
     fallbackText?: string,
   ) => {
-    return await withTelegramThreadFallback(
-      params,
-      "message",
-      opts.verbose,
-      async (effectiveParams, label) => {
-        const htmlText = renderHtmlText(rawText);
-        const baseParams = effectiveParams ? { ...effectiveParams } : {};
-        if (linkPreviewOptions) {
-          baseParams.link_preview_options = linkPreviewOptions;
-        }
-        const hasBaseParams = Object.keys(baseParams).length > 0;
-        const sendParams = {
-          parse_mode: "HTML" as const,
-          ...baseParams,
-          ...(opts.silent === true ? { disable_notification: true } : {}),
-        };
-        return await withTelegramHtmlParseFallback({
-          label,
-          verbose: opts.verbose,
-          requestHtml: (retryLabel) =>
-            requestWithChatNotFound(
-              () =>
-                api.sendMessage(
-                  chatId,
-                  htmlText,
-                  sendParams as Parameters<typeof api.sendMessage>[2],
+    return await withTelegramOutboundSendGuard({
+      accountId: account.accountId,
+      chatId,
+      text: fallbackText ?? rawText,
+      messageThreadId: resolveThreadIdParamValue(params),
+      verbose: opts.verbose,
+      label: "message",
+      send: async () =>
+        await withTelegramThreadFallback(
+          params,
+          "message",
+          opts.verbose,
+          async (effectiveParams, label) => {
+            const htmlText = renderHtmlText(rawText);
+            const baseParams = effectiveParams ? { ...effectiveParams } : {};
+            if (linkPreviewOptions) {
+              baseParams.link_preview_options = linkPreviewOptions;
+            }
+            const hasBaseParams = Object.keys(baseParams).length > 0;
+            const sendParams = {
+              parse_mode: "HTML" as const,
+              ...baseParams,
+              ...(opts.silent === true ? { disable_notification: true } : {}),
+            };
+            return await withTelegramHtmlParseFallback({
+              label,
+              verbose: opts.verbose,
+              requestHtml: (retryLabel) =>
+                requestWithChatNotFound(
+                  () =>
+                    api.sendMessage(
+                      chatId,
+                      htmlText,
+                      sendParams as Parameters<typeof api.sendMessage>[2],
+                    ),
+                  retryLabel,
                 ),
-              retryLabel,
-            ),
-          requestPlain: (retryLabel) => {
-            const plainParams = hasBaseParams
-              ? (baseParams as Parameters<typeof api.sendMessage>[2])
-              : undefined;
-            return requestWithChatNotFound(
-              () =>
-                plainParams
-                  ? api.sendMessage(chatId, fallbackText ?? rawText, plainParams)
-                  : api.sendMessage(chatId, fallbackText ?? rawText),
-              retryLabel,
-            );
+              requestPlain: (retryLabel) => {
+                const plainParams = hasBaseParams
+                  ? (baseParams as Parameters<typeof api.sendMessage>[2])
+                  : undefined;
+                return requestWithChatNotFound(
+                  () =>
+                    plainParams
+                      ? api.sendMessage(chatId, fallbackText ?? rawText, plainParams)
+                      : api.sendMessage(chatId, fallbackText ?? rawText),
+                  retryLabel,
+                );
+              },
+            });
           },
-        });
-      },
-    );
+        ),
+    });
   };
 
   if (mediaUrl) {
