@@ -734,6 +734,29 @@ describe("agentCommand", () => {
     });
   });
 
+  it("defaults thinking to adaptive for Anthropic Claude 4.6 models", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        models: { "anthropic/claude-opus-4-6": {} },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-6",
+          name: "Opus 4.6",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ]);
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.thinkLevel).toBe("adaptive");
+    });
+  });
+
   it("prefers per-model thinking over global thinkingDefault", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

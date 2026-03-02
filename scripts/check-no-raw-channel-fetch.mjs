@@ -35,7 +35,6 @@ const allowedRawFetchCallsites = new Set([
   "extensions/googlechat/src/api.ts:22",
   "extensions/googlechat/src/api.ts:43",
   "extensions/googlechat/src/api.ts:63",
-  "extensions/googlechat/src/api.ts:184",
   "extensions/googlechat/src/api.ts:188",
   "extensions/googlechat/src/auth.ts:82",
   "extensions/matrix/src/directory-live.ts:41",
