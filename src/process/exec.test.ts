@@ -66,7 +66,7 @@ describe("runCommandWithTimeout", () => {
           'process.stdout.write((process.env.OPENCLAW_BASE_ENV ?? "") + "|" + (process.env.OPENCLAW_TEST_ENV ?? ""))',
         ],
         {
-          timeoutMs: 5_000,
+          timeoutMs: 1_000,
           env: { OPENCLAW_TEST_ENV: "ok" },
         },
       );
@@ -82,7 +82,7 @@ describe("runCommandWithTimeout", () => {
       [process.execPath, "-e", "setTimeout(() => {}, 60)"],
       {
         timeoutMs: 500,
-        noOutputTimeoutMs: 20,
+        noOutputTimeoutMs: 12,
       },
     );
 
