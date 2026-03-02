@@ -192,6 +192,8 @@ lsblk
 
 See [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#usb-mass-storage-boot) for setup.
 
+## Raspberry Pi OS Setup
+
 ### Speed up CLI startup (module compile cache)
 
 On lower-power Pi hosts, enable Node's module compile cache so repeated CLI runs are faster:
@@ -249,8 +251,11 @@ How `Restart=` policies help automated recovery:
 # Disable GPU memory allocation (headless)
 echo 'gpu_mem=16' | sudo tee -a /boot/config.txt
 
+
 # Disable Bluetooth if not needed
 sudo systemctl disable bluetooth
+
+## USB Boot Configuration
 ```
 
 ### Monitor Resources
