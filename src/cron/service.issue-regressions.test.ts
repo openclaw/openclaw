@@ -20,7 +20,7 @@ const noopLogger = {
   trace: vi.fn(),
 };
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
-const FAST_TIMEOUT_SECONDS = 0.006;
+const FAST_TIMEOUT_SECONDS = 0.004;
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
 function topOfHourOffsetMs(jobId: string) {
@@ -1523,7 +1523,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.03;
+    const timeoutSeconds = 0.02;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
