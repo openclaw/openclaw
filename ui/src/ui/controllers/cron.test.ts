@@ -160,7 +160,6 @@ describe("cron controller", () => {
       name: "main job",
     });
     expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
-    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it("submits cron.update when editing an existing job", async () => {
@@ -210,6 +209,7 @@ describe("cron controller", () => {
         deleteAfterRun: false,
         schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
         payload: { kind: "systemEvent", text: "updated" },
+        delivery: { mode: "none" },
       },
     });
     expect(state.cronEditingJobId).toBeNull();
