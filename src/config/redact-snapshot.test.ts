@@ -254,6 +254,29 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toContain(REDACTED_SENTINEL);
   });
 
+  it("does not corrupt raw text when secret ref structural fields appear elsewhere", () => {
+    const config = {
+      models: {
+        providers: {
+          default: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: "https://api.openai.com",
+          },
+        },
+      },
+    };
+    const raw = JSON.stringify(config, null, 2);
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    // The secret ref id should be redacted in the raw text
+    expect(result.raw).not.toContain("OPENAI_API_KEY");
+    // Structural fields like "default" and "env" must survive — they appear
+    // as provider names and source discriminators throughout the config.
+    expect(result.raw).toContain('"default"');
+    expect(result.raw).toContain('"env"');
+    expect(result.raw).toContain("https://api.openai.com");
+  });
+
   it("redacts parsed and resolved objects", () => {
     const snapshot = makeSnapshot({
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },

@@ -22,6 +22,16 @@ function isWholeObjectSensitivePath(path: string): boolean {
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
 }
 
+/**
+ * Detect a SecretRef-shaped object (has `source` discriminator + `id`).
+ * These objects carry structural fields ("env", "default", "file") that
+ * must NOT be treated as secret values to avoid corrupting the raw config
+ * text during global string replacement.
+ */
+function isSecretRefShape(value: Record<string, unknown>): boolean {
+  return typeof value.source === "string" && typeof value.id === "string";
+}
+
 function collectSensitiveStrings(value: unknown, values: string[]): void {
   if (typeof value === "string") {
     if (!isEnvVarPlaceholder(value)) {
@@ -36,7 +46,18 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
     return;
   }
   if (value && typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) {
+    const obj = value as Record<string, unknown>;
+    // Secret refs carry structural fields (source, provider) whose values
+    // ("env", "default", "file") appear elsewhere in the config.  Collecting
+    // them causes global text replacement to corrupt unrelated fields.
+    // Only collect the `id` value — the actual secret reference.
+    if (isSecretRefShape(obj)) {
+      if (typeof obj.id === "string" && !isEnvVarPlaceholder(obj.id)) {
+        values.push(obj.id);
+      }
+      return;
+    }
+    for (const item of Object.values(obj)) {
       collectSensitiveStrings(item, values);
     }
   }
