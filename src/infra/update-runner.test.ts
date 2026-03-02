@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -155,10 +156,11 @@ describe("runGatewayUpdate", () => {
 
   async function runWithCommand(
     runCommand: (argv: string[]) => Promise<CommandResult>,
-    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string; argv1?: string },
   ) {
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
+      argv1: options?.argv1,
       runCommand: async (argv, _runOptions) => runCommand(argv),
       timeoutMs: 5000,
       ...(options?.channel ? { channel: options.channel } : {}),
@@ -168,7 +170,7 @@ describe("runGatewayUpdate", () => {
 
   async function runWithRunner(
     runner: (argv: string[]) => Promise<CommandResult>,
-    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string; argv1?: string },
   ) {
     return runWithCommand(runner, options);
   }
@@ -502,6 +504,73 @@ describe("runGatewayUpdate", () => {
       expect(result.after?.version).toBe("2.0.0");
       expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
     });
+  });
+
+  it("updates global npm installs even when argv1 is a symlinked global bin path", async () => {
+    const serviceDir = path.join(tempDir, "service-workspace");
+    await fs.mkdir(path.join(serviceDir, ".git"), { recursive: true });
+
+    const nodeModules = path.join(tempDir, "npm-global", "lib", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const binPath = path.join(tempDir, "npm-global", "bin", "openclaw");
+    const realEntry = path.join(pkgRoot, "dist", "entry.js");
+
+    await seedGlobalPackageRoot(pkgRoot);
+    await fs.mkdir(path.dirname(realEntry), { recursive: true });
+    await fs.writeFile(realEntry, "export {};\n", "utf-8");
+
+    const installCommand = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]): Promise<CommandResult> => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${serviceDir} rev-parse --show-toplevel`) {
+        return { stdout: serviceDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${path.dirname(binPath)} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === installCommand) {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const originalRealpathSync = fsSync.realpathSync.bind(fsSync);
+    const realpathSpy = vi.spyOn(fsSync, "realpathSync").mockImplementation((target) => {
+      if (String(target) === binPath) {
+        return realEntry;
+      }
+      return originalRealpathSync(target);
+    });
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(serviceDir);
+
+    try {
+      const result = await runWithCommand(runCommand, { cwd: serviceDir, argv1: binPath });
+
+      expect(result.status).toBe("ok");
+      expect(result.mode).toBe("npm");
+      expect(result.root).toBe(pkgRoot);
+      expect(result.reason).toBeUndefined();
+      expect(calls).toContain(installCommand);
+    } finally {
+      cwdSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
   });
 
   it("rejects git roots that are not a openclaw checkout", async () => {

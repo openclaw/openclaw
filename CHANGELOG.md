@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Pairing/AllowFrom account fallback: handle omitted `accountId` values in `readChannelAllowFromStore` and `readChannelAllowFromStoreSync` as `default`, while preserving legacy unscoped allowFrom merges for default-account flows. Thanks @Sid-Qin and @vincentkoc.
+- Update/Global npm installs: resolve package roots from symlinked global `openclaw` bin paths during `update.run`/`openclaw update` discovery so updates no longer fail with `not-openclaw-root` when service cwd points at an unrelated git repo. (#31382)
 - Agents/Subagent announce cleanup: keep completion-message runs pending while descendants settle, add a 30 minute hard-expiry backstop to avoid indefinite pending state, and keep retry bookkeeping resumable across deferred wakes. (#23970) Thanks @tyler6204.
 - BlueBubbles/Message metadata: harden send response ID extraction, include sender identity in DM context, and normalize inbound `message_id` selection to avoid duplicate ID metadata. (#23970) Thanks @tyler6204.
 - Gateway/Control UI method guard: allow POST requests to non-UI routes to fall through when no base path is configured, and add POST regression coverage for fallthrough and base-path 405 behavior. (#23970) Thanks @tyler6204.

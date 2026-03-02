@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +113,48 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   return path.join(nodeModulesDir, binName);
 }
 
+function resolveNodeModulesPackageRootFromPath(filePath: string): string | null {
+  const normalized = path.resolve(filePath);
+  const marker = `${path.sep}node_modules${path.sep}${DEFAULT_PACKAGE_NAME}`;
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const packageRootEnd = markerIndex + marker.length;
+  const nextChar = normalized.charAt(packageRootEnd);
+  if (nextChar && nextChar !== path.sep) {
+    return null;
+  }
+  return normalized.slice(0, packageRootEnd);
+}
+
+function resolveRealpathSync(filePath: string): string | null {
+  try {
+    return fsSync.realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function appendArgv1Candidates(dirs: string[], argv1: string) {
+  const appendFromPath = (candidatePath: string) => {
+    dirs.push(path.dirname(candidatePath));
+    const packageRoot =
+      resolveNodeModulesBinPackageRoot(candidatePath) ??
+      resolveNodeModulesPackageRootFromPath(candidatePath);
+    if (packageRoot) {
+      dirs.push(packageRoot);
+    }
+  };
+
+  const normalized = path.resolve(argv1);
+  appendFromPath(normalized);
+  const realpath = resolveRealpathSync(normalized);
+  if (realpath && realpath !== normalized) {
+    appendFromPath(realpath);
+  }
+}
+
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
   const cwd = normalizeDir(opts.cwd);
@@ -120,11 +163,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
-    dirs.push(path.dirname(argv1));
-    const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
-    if (packageRoot) {
-      dirs.push(packageRoot);
-    }
+    appendArgv1Candidates(dirs, argv1);
   }
   const proc = normalizeDir(process.cwd());
   if (proc) {
