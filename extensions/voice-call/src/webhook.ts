@@ -255,6 +255,25 @@ export class VoiceCallWebhookServer {
     }
   }
 
+  private normalizeWebhookPathForMatch(pathname: string): string {
+    const trimmed = pathname.trim();
+    if (!trimmed) {
+      return "/";
+    }
+    const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    if (prefixed === "/") {
+      return prefixed;
+    }
+    return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+  }
+
+  private isWebhookPathMatch(requestPath: string, configuredPath: string): boolean {
+    return (
+      this.normalizeWebhookPathForMatch(requestPath) ===
+      this.normalizeWebhookPathForMatch(configuredPath)
+    );
+  }
+
   /**
    * Handle incoming HTTP request.
    */
@@ -266,7 +285,7 @@ export class VoiceCallWebhookServer {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
     // Check path
-    if (!url.pathname.startsWith(webhookPath)) {
+    if (!this.isWebhookPathMatch(url.pathname, webhookPath)) {
       res.statusCode = 404;
       res.end("Not Found");
       return;
