@@ -1,7 +1,7 @@
 """
 agent_base.py — generic commands + cross-agent intelligence helpers.
 
-Commands: status, files, read, log, config
+Commands: status, files, read, log, config, exp
 Cross-agent: cross_agent_recent(), parse_tasks_md()
 """
 
@@ -309,6 +309,149 @@ def parse_tasks_md(path=None):
     return result
 
 
+# ── exp (experience memory) ────────────────────────────────────────
+
+def cmd_exp(agent, args):
+    """Search experience memory for an agent context."""
+    query = " ".join(args) if args else ""
+    if not query:
+        print("  usage: wuji <agent> exp <query>")
+        return
+
+    bridge = WORKSPACE_ROOT / "scripts" / "exp-bridge.py"
+    if not bridge.exists():
+        print("  exp-bridge.py not found")
+        return
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(bridge), "search", query],
+            capture_output=True, text=True, timeout=15
+        )
+        print(result.stdout)
+        if result.stderr.strip():
+            print(result.stderr, file=sys.stderr)
+    except Exception as e:
+        print(f"  error: {e}")
+
+
+# ── inject (context sync) ─────────────────────────────────────────
+
+def cmd_inject(agent, args):
+    """Inject context into agent memory (for actions done on agent's behalf)."""
+    if not args:
+        print("  usage: wuji <agent> inject <message>")
+        print("         wuji <agent> inject --file <path>")
+        print("         wuji <agent> inject --live <message>  (also notify gateway)")
+        return
+
+    live = False
+    file_mode = False
+    message_parts = []
+
+    i = 0
+    while i < len(args):
+        if args[i] == "--live":
+            live = True
+        elif args[i] == "--file":
+            file_mode = True
+            i += 1
+            if i < len(args):
+                fpath = Path(args[i])
+                if fpath.exists():
+                    message_parts.append(fpath.read_text().strip())
+                else:
+                    print(f"  file not found: {fpath}")
+                    return
+        else:
+            message_parts.append(args[i])
+        i += 1
+
+    message = " ".join(message_parts) if not file_mode else "\n".join(message_parts)
+    if not message:
+        print("  empty message, nothing to inject")
+        return
+
+    # ── Step 1: Write to agent's daily memory file ──
+    ws = _workspace_path(agent)
+    memory_dir = ws / "memory"
+    memory_dir.mkdir(exist_ok=True)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    memory_file = memory_dir / f"{today}.md"
+    ts = datetime.now().strftime("%H:%M")
+
+    entry = f"\n\n## 系統注入 ({ts})\n{message}\n"
+
+    if memory_file.exists():
+        with open(memory_file, "a") as f:
+            f.write(entry)
+    else:
+        with open(memory_file, "w") as f:
+            f.write(f"# {today} 記憶記錄\n{entry}")
+
+    print(f"  written to {memory_file.relative_to(ws)}")
+
+    # ── Step 2: If --live, notify gateway via webhook ──
+    if live:
+        _inject_via_gateway(agent, message)
+
+
+def _inject_via_gateway(agent, message):
+    """POST to /hooks/agent to inject context into live session."""
+    import urllib.request
+    import urllib.error
+
+    try:
+        cfg = _load_openclaw()
+    except Exception:
+        print("  gateway: cannot read openclaw.json")
+        return
+
+    # Get gateway token
+    hooks_cfg = cfg.get("hooks", {})
+    token = hooks_cfg.get("token", "")
+    if not token:
+        # Try gateway token
+        token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+    if not token:
+        gw_cfg = cfg.get("gateway", {})
+        token = gw_cfg.get("token", "")
+
+    if not token:
+        print("  gateway: no hooks/gateway token found, skipping live inject")
+        return
+
+    # Build webhook payload
+    payload = json.dumps({
+        "agentId": agent["id"],
+        "message": f"[系統上下文注入] 以下是你先前代為執行的操作記錄，請記住這個上下文：\n\n{message}",
+    }).encode()
+
+    url = "http://127.0.0.1:18789/hooks/agent"
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+            if result.get("ok") or resp.status < 300:
+                print(f"  gateway: injected into live session")
+            else:
+                print(f"  gateway: {result}")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:200]
+        print(f"  gateway: {e.code} {body}")
+    except Exception as e:
+        print(f"  gateway: {e}")
+
+
 # ── registry ────────────────────────────────────────────────────────
 
 GENERIC_COMMANDS = {
@@ -317,6 +460,8 @@ GENERIC_COMMANDS = {
     "read": cmd_read,
     "log": cmd_log,
     "config": cmd_config,
+    "exp": cmd_exp,
+    "inject": cmd_inject,
 }
 
 
