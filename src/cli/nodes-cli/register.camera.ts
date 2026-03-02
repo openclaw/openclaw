@@ -13,7 +13,13 @@ import {
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callGatewayCli,
+  nodesCallOpts,
+  resolveNode,
+  resolveNodeId,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
@@ -102,7 +108,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const node = await resolveNode(opts, String(opts.node ?? ""));
+          const nodeId = node.nodeId;
           const facingOpt = String(opts.facing ?? "both")
             .trim()
             .toLowerCase();
@@ -160,7 +167,10 @@ export function registerNodesCameraCommands(nodes: Command) {
               ext: payload.format === "jpeg" ? "jpg" : payload.format,
             });
             if (payload.url) {
-              await writeUrlToFile(filePath, payload.url);
+              if (!node.remoteIp) {
+                throw new Error("camera URL payload requires node remoteIp");
+              }
+              await writeUrlToFile(filePath, payload.url, { expectedHost: node.remoteIp });
             } else if (payload.base64) {
               await writeBase64ToFile(filePath, payload.base64);
             }
@@ -198,7 +208,8 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 90000)", "90000")
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const node = await resolveNode(opts, String(opts.node ?? ""));
+          const nodeId = node.nodeId;
           const facing = parseFacing(String(opts.facing ?? "front"));
           const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
           const includeAudio = opts.audio !== false;
@@ -226,6 +237,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const filePath = await writeCameraClipPayloadToFile({
             payload,
             facing,
+            expectedHost: node.remoteIp,
           });
 
           if (opts.json) {

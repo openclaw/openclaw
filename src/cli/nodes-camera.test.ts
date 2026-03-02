@@ -95,20 +95,37 @@ describe("nodes camera helpers", () => {
   it("writes camera clip payload from url", async () => {
     stubFetchResponse(new Response("url-clip", { status: 200 }));
     await withCameraTempDir(async (dir) => {
+      const expectedHost = "198.51.100.42";
       const out = await writeCameraClipPayloadToFile({
         payload: {
           format: "mp4",
-          url: "https://example.com/clip.mp4",
+          url: `https://${expectedHost}/clip.mp4`,
           durationMs: 200,
           hasAudio: false,
         },
         facing: "back",
         tmpDir: dir,
         id: "clip2",
+        expectedHost,
       });
       expect(out).toBe(path.join(dir, "openclaw-camera-clip-back-clip2.mp4"));
       await expect(fs.readFile(out, "utf8")).resolves.toBe("url-clip");
     });
+  });
+
+  it("rejects camera clip url payloads without node remoteIp", async () => {
+    stubFetchResponse(new Response("url-clip", { status: 200 }));
+    await expect(
+      writeCameraClipPayloadToFile({
+        payload: {
+          format: "mp4",
+          url: "https://198.51.100.42/clip.mp4",
+          durationMs: 200,
+          hasAudio: false,
+        },
+        facing: "back",
+      }),
+    ).rejects.toThrow(/node remoteip/i);
   });
 
   it("writes base64 to file", async () => {
@@ -127,9 +144,20 @@ describe("nodes camera helpers", () => {
     stubFetchResponse(new Response("url-content", { status: 200 }));
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeUrlToFile(out, "https://example.com/clip.mp4");
+      await writeUrlToFile(out, "https://198.51.100.42/clip.mp4", {
+        expectedHost: "198.51.100.42",
+      });
       await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
     });
+  });
+
+  it("rejects url host mismatches", async () => {
+    stubFetchResponse(new Response("url-content", { status: 200 }));
+    await expect(
+      writeUrlToFile("/tmp/ignored", "https://198.51.100.42/clip.mp4", {
+        expectedHost: "198.51.100.43",
+      }),
+    ).rejects.toThrow(/must match node host/i);
   });
 
   it("rejects invalid url payload responses", async () => {
@@ -141,12 +169,12 @@ describe("nodes camera helpers", () => {
     }> = [
       {
         name: "non-https url",
-        url: "http://example.com/x.bin",
+        url: "http://198.51.100.42/x.bin",
         expectedMessage: /only https/i,
       },
       {
         name: "oversized content-length",
-        url: "https://example.com/huge.bin",
+        url: "https://198.51.100.42/huge.bin",
         response: new Response("tiny", {
           status: 200,
           headers: { "content-length": String(999_999_999) },
@@ -155,13 +183,13 @@ describe("nodes camera helpers", () => {
       },
       {
         name: "non-ok status",
-        url: "https://example.com/down.bin",
+        url: "https://198.51.100.42/down.bin",
         response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
         expectedMessage: /503/i,
       },
       {
         name: "empty response body",
-        url: "https://example.com/empty.bin",
+        url: "https://198.51.100.42/empty.bin",
         response: new Response(null, { status: 200 }),
         expectedMessage: /empty response body/i,
       },
@@ -171,9 +199,10 @@ describe("nodes camera helpers", () => {
       if (testCase.response) {
         stubFetchResponse(testCase.response);
       }
-      await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
-        testCase.expectedMessage,
-      );
+      await expect(
+        writeUrlToFile("/tmp/ignored", testCase.url, { expectedHost: "198.51.100.42" }),
+        testCase.name,
+      ).rejects.toThrow(testCase.expectedMessage);
     }
   });
 
@@ -188,9 +217,9 @@ describe("nodes camera helpers", () => {
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
-      await expect(writeUrlToFile(out, "https://example.com/broken.bin")).rejects.toThrow(
-        /stream exploded/i,
-      );
+      await expect(
+        writeUrlToFile(out, "https://198.51.100.42/broken.bin", { expectedHost: "198.51.100.42" }),
+      ).rejects.toThrow(/stream exploded/i);
       await expect(fs.stat(out)).rejects.toThrow();
     });
   });
