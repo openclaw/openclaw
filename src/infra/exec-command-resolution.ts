@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { escapeRegExp } from "../utils.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
 import { resolveExecutablePath as resolveExecutableCandidatePath } from "./executable-path.js";
@@ -132,7 +133,7 @@ function globToRegExp(pattern: string): RegExp {
       i += 1;
       continue;
     }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
+    regex += escapeRegExp(ch);
     i += 1;
   }
   regex += "$";

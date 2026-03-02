@@ -90,6 +90,25 @@ describe("exec approvals allowlist matching", () => {
     });
     expect(match).toBeNull();
   });
+
+  it("handles paths with regex metacharacters (g++, clang++)", () => {
+    const gppResolution = {
+      rawExecutable: "g++",
+      resolvedPath: "/usr/bin/g++",
+      executableName: "g++",
+    };
+    const match = matchAllowlist([{ pattern: "/usr/bin/g++" }], gppResolution);
+    expect(match).not.toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/g++");
+
+    const clangResolution = {
+      rawExecutable: "clang++",
+      resolvedPath: "/usr/local/bin/clang++",
+      executableName: "clang++",
+    };
+    const clangMatch = matchAllowlist([{ pattern: "/usr/local/bin/clang++" }], clangResolution);
+    expect(clangMatch).not.toBeNull();
+  });
 });
 
 describe("mergeExecApprovalsSocketDefaults", () => {
