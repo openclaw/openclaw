@@ -59,6 +59,19 @@ With folder:
 
 **Important:** Always pass `owner_open_id` with the requesting user's `open_id` (from inbound metadata `sender_id`) so the user automatically gets `full_access` permission on the created document. Without this, only the bot app has access.
 
+### Create Document with Content (Recommended)
+
+```json
+{
+  "action": "create_with_content",
+  "title": "New Document",
+  "content": "# Heading\n\nMarkdown content...",
+  "folder_token": "fldcnXXX"
+}
+```
+
+Creates a new document and writes content in a single step. This is the **recommended** way to create documents with content -- it avoids the two-step create-then-write pattern that weaker models may fail to complete.
+
 ### List Blocks
 
 ```json
@@ -194,6 +207,12 @@ Rules:
 1. Start with `action: "read"` - get plain text + statistics
 2. Check `block_types` in response for Table, Image, Code, etc.
 3. If structured content exists, use `action: "list_blocks"` for full data
+
+## Creating Documents
+
+- **Simple:** Use `create_with_content` for one-step creation with content
+- **Complex / large content with tables:** Use `feishu_drive` upload + import workflow (upload .md file, then import as docx)
+- **Empty:** Use `create` then write later
 
 ## Configuration
 
