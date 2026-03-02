@@ -72,15 +72,32 @@ async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
   await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
 }
 
+type HistoryPayload = {
+  messages?: unknown[];
+  historyStatus?: string;
+};
+
 async function fetchHistoryMessages(
   ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
 ): Promise<unknown[]> {
-  const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+  const historyRes = await rpcReq<HistoryPayload>(ws, "chat.history", {
     sessionKey: "main",
     limit: 1000,
   });
   expect(historyRes.ok).toBe(true);
   return historyRes.payload?.messages ?? [];
+}
+
+async function fetchHistoryPayload(
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+  sessionKey = "main",
+): Promise<HistoryPayload> {
+  const historyRes = await rpcReq<HistoryPayload>(ws, "chat.history", {
+    sessionKey,
+    limit: 1000,
+  });
+  expect(historyRes.ok).toBe(true);
+  return historyRes.payload ?? {};
 }
 
 describe("gateway server chat", () => {
@@ -329,6 +346,77 @@ describe("gateway server chat", () => {
       expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
       expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
       expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
+    });
+  });
+
+  test("chat.history returns historyStatus: not_found when session key has no store entry", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      await createSessionDir();
+      // No session store written — entry doesn't exist
+      const payload = await fetchHistoryPayload(ws, "nonexistent-key");
+      expect(payload.historyStatus).toBe("not_found");
+      expect(payload.messages).toEqual([]);
+    });
+  });
+
+  test("chat.history returns historyStatus: not_persisted when store entry has no sessionId", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      await createSessionDir();
+      // Write store entry without sessionId
+      await writeSessionStore({
+        entries: {
+          main: { updatedAt: Date.now() } as Record<string, unknown>,
+        },
+      });
+      const payload = await fetchHistoryPayload(ws);
+      expect(payload.historyStatus).toBe("not_persisted");
+      expect(payload.messages).toEqual([]);
+    });
+  });
+
+  test("chat.history returns historyStatus: not_persisted when transcript file is missing", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      await createSessionDir();
+      // Store entry has sessionId but no transcript file on disk
+      await writeMainSessionStore();
+      const payload = await fetchHistoryPayload(ws);
+      expect(payload.historyStatus).toBe("not_persisted");
+      expect(payload.messages).toEqual([]);
+    });
+  });
+
+  test("chat.history returns historyStatus: empty when transcript file exists but has no messages", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+      // Write an empty transcript (header only, no messages)
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+      ]);
+      const payload = await fetchHistoryPayload(ws);
+      expect(payload.historyStatus).toBe("empty");
+      expect(payload.messages).toEqual([]);
+    });
+  });
+
+  test("chat.history returns historyStatus: ok when transcript has messages", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ message: { role: "user", content: "Hello", timestamp: Date.now() } }),
+        JSON.stringify({
+          message: { role: "assistant", content: "Hi", timestamp: Date.now() + 1 },
+        }),
+      ]);
+      const payload = await fetchHistoryPayload(ws);
+      expect(payload.historyStatus).toBe("ok");
+      expect(payload.messages!.length).toBe(2);
     });
   });
 
