@@ -344,4 +344,76 @@ describe("web processMessage inbound contract", () => {
 
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
+
+  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:main",
+      groupHistoryKey: "+3000",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
+        },
+        messages: {},
+        session: { store: sessionStorePath, dmScope: "main" },
+      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+      msg: {
+        id: "msg-last-route-3",
+        from: "+3000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+3000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("updates main last route for owner sender when main DM scope is pinned", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:main",
+      groupHistoryKey: "+1000",
+      cfg: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
+        },
+        messages: {},
+        session: { store: sessionStorePath, dmScope: "main" },
+      } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+      msg: {
+        id: "msg-last-route-4",
+        from: "+1000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+1000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+  });
 });
