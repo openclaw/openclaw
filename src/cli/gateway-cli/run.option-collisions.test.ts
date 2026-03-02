@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -93,9 +92,14 @@ vi.mock("./run-loop.js", () => ({
 
 describe("gateway run option collisions", () => {
   let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let sharedProgram: Command;
 
   beforeAll(async () => {
     ({ addGatewayRunCommand } = await import("./run.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));
+    addGatewayRunCommand(gateway.command("run"));
   });
 
   beforeEach(() => {
@@ -109,13 +113,7 @@ describe("gateway run option collisions", () => {
   });
 
   async function runGatewayCli(argv: string[]) {
-    await runRegisteredCli({
-      register: ((program: Command) => {
-        const gateway = addGatewayRunCommand(program.command("gateway"));
-        addGatewayRunCommand(gateway.command("run"));
-      }) as (program: Command) => void,
-      argv,
-    });
+    await sharedProgram.parseAsync(argv, { from: "user" });
   }
 
   function expectAuthOverrideMode(mode: string) {

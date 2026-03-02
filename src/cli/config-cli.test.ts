@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 
 /**
@@ -61,25 +61,22 @@ function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
 }
 
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
-  const program = new Command();
-  program.exitOverride();
-  registerConfigCli(program);
-  await program.parseAsync(args, { from: "user" });
+  await sharedProgram.parseAsync(args, { from: "user" });
 }
 
 describe("config cli", () => {
   beforeAll(async () => {
     ({ registerConfigCli } = await import("./config-cli.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    registerConfigCli(sharedProgram);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   describe("config set - issue #6070", () => {

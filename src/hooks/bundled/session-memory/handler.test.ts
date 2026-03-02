@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import type { HookHandler } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 
@@ -12,9 +13,28 @@ vi.mock("../../llm-slug-generator.js", () => ({
 }));
 
 let handler: HookHandler;
+let suiteWorkspaceRoot = "";
+let workspaceCaseCounter = 0;
+
+async function createCaseWorkspace(prefix = "case"): Promise<string> {
+  const dir = path.join(suiteWorkspaceRoot, `${prefix}-${workspaceCaseCounter}`);
+  workspaceCaseCounter += 1;
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
 
 beforeAll(async () => {
   ({ default: handler } = await import("./handler.js"));
+  suiteWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-"));
+});
+
+afterAll(async () => {
+  if (!suiteWorkspaceRoot) {
+    return;
+  }
+  await fs.rm(suiteWorkspaceRoot, { recursive: true, force: true });
+  suiteWorkspaceRoot = "";
+  workspaceCaseCounter = 0;
 });
 
 /**
@@ -69,7 +89,7 @@ async function runNewWithPreviousSession(params: {
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
-  const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+  const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -117,7 +137,7 @@ function makeSessionMemoryConfig(tempDir: string, messages?: number): OpenClawCo
 async function createSessionMemoryWorkspace(params?: {
   activeSession?: { name: string; content: string };
 }): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
-  const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+  const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -162,7 +182,7 @@ function expectMemoryConversation(params: {
 
 describe("session-memory hook", () => {
   it("skips non-command events", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const tempDir = await createCaseWorkspace("workspace");
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
       workspaceDir: tempDir,
@@ -176,7 +196,7 @@ describe("session-memory hook", () => {
   });
 
   it("skips commands other than new", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const tempDir = await createCaseWorkspace("workspace");
 
     const event = createHookEvent("command", "help", "agent:main:main", {
       workspaceDir: tempDir,
