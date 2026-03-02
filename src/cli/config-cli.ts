@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info } from "../globals.js";
+import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -14,6 +15,10 @@ import { formatCliCommand } from "./command-format.js";
 type PathSegment = string;
 type ConfigSetParseOpts = {
   strictJson?: boolean;
+};
+type ConfigIssue = {
+  path: string;
+  message: string;
 };
 
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
@@ -95,6 +100,21 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function normalizeConfigIssues(issues: ReadonlyArray<ConfigIssue>): ConfigIssue[] {
+  return issues.map((issue) => ({
+    path: issue.path || "<root>",
+    message: issue.message,
+  }));
+}
+
+function formatConfigIssueLines(issues: ReadonlyArray<ConfigIssue>, marker: string): string[] {
+  return normalizeConfigIssues(issues).map((issue) => `${marker} ${issue.path}: ${issue.message}`);
+}
+
+function formatDoctorHint(message: string): string {
+  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
 }
 
 function validatePathSegments(path: PathSegment[]): void {
@@ -229,10 +249,10 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
-  for (const issue of snapshot.issues) {
-    runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+  for (const line of formatConfigIssueLines(snapshot.issues, "-")) {
+    runtime.error(line);
   }
-  runtime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
+  runtime.error(formatDoctorHint("to repair, then retry."));
   runtime.exit(1);
   return snapshot;
 }
@@ -324,11 +344,73 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   }
 }
 
+export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    runtime.log(shortenHomePath(snapshot.path));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
+export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  let outputPath = CONFIG_PATH ?? "openclaw.json";
+
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    outputPath = snapshot.path;
+    const shortPath = shortenHomePath(outputPath);
+
+    if (!snapshot.exists) {
+      if (opts.json) {
+        runtime.log(JSON.stringify({ valid: false, path: outputPath, error: "file not found" }));
+      } else {
+        runtime.error(danger(`Config file not found: ${shortPath}`));
+      }
+      runtime.exit(1);
+      return;
+    }
+
+    if (!snapshot.valid) {
+      const issues = normalizeConfigIssues(snapshot.issues);
+
+      if (opts.json) {
+        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
+      } else {
+        runtime.error(danger(`Config invalid at ${shortPath}:`));
+        for (const line of formatConfigIssueLines(issues, danger("×"))) {
+          runtime.error(`  ${line}`);
+        }
+        runtime.error("");
+        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+      }
+      runtime.exit(1);
+      return;
+    }
+
+    if (opts.json) {
+      runtime.log(JSON.stringify({ valid: true, path: outputPath }));
+    } else {
+      runtime.log(success(`Config valid: ${shortPath}`));
+    }
+  } catch (err) {
+    if (opts.json) {
+      runtime.log(JSON.stringify({ valid: false, path: outputPath, error: String(err) }));
+    } else {
+      runtime.error(danger(`Config validation error: ${String(err)}`));
+    }
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset). Run without subcommand for the setup wizard.",
+      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for the setup wizard.",
     )
     .addHelpText(
       "after",
@@ -389,5 +471,20 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("file")
+    .description("Print the active config file path")
+    .action(async () => {
+      await runConfigFile({});
+    });
+
+  cmd
+    .command("validate")
+    .description("Validate the current config against the schema without starting the gateway")
+    .option("--json", "Output validation result as JSON", false)
+    .action(async (opts) => {
+      await runConfigValidate({ json: Boolean(opts.json) });
     });
 }

@@ -27,7 +27,11 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Default thinking level for spawned sub-agents. */
+    thinking?: string;
   };
+  /** Default thinking level for this agent (overrides agents.defaults.thinkingDefault). */
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */

@@ -81,6 +81,7 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    lightContext: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -751,6 +752,16 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    thinkingDefault: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+        z.literal("xhigh"),
+      ])
+      .optional(),
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     claudeSdk: z.union([ClaudeSdkConfigSchema, z.literal(false)]).optional(),
@@ -822,6 +833,21 @@ export const ToolsSchema = z
     sandbox: z
       .object({
         tools: ToolPolicySchema,
+      })
+      .strict()
+      .optional(),
+    sessions_spawn: z
+      .object({
+        attachments: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxTotalBytes: z.number().optional(),
+            maxFiles: z.number().optional(),
+            maxFileBytes: z.number().optional(),
+            retainOnSessionKeep: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

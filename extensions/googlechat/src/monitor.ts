@@ -10,6 +10,7 @@ import {
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -637,14 +638,16 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: spaceId,
     },
+    runtime: core.channel,
+    sessionStore: config.session?.store,
   });
 
   let mediaPath: string | undefined;
@@ -661,20 +664,10 @@ async function processMessageWithPipeline(params: {
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,
     timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 

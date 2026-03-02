@@ -138,4 +138,35 @@ describe("registerMatrixMonitorEvents", () => {
     expect(getUserId).toHaveBeenCalledTimes(1);
     expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
   });
+
+  it("skips duplicate listener registration for the same client", () => {
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const onMock = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+      handlers.set(event, handler);
+    });
+    const client = {
+      on: onMock,
+      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      crypto: undefined,
+    } as unknown as MatrixClient;
+    const params = {
+      client,
+      auth: { encryption: false } as MatrixAuth,
+      logVerboseMessage: vi.fn(),
+      warnedEncryptedRooms: new Set<string>(),
+      warnedCryptoMissingRooms: new Set<string>(),
+      logger: { warn: vi.fn() } as unknown as RuntimeLogger,
+      formatNativeDependencyHint: (() =>
+        "") as PluginRuntime["system"]["formatNativeDependencyHint"],
+      onRoomMessage: vi.fn(),
+    };
+    registerMatrixMonitorEvents(params);
+    const initialCallCount = onMock.mock.calls.length;
+    registerMatrixMonitorEvents(params);
+
+    expect(onMock).toHaveBeenCalledTimes(initialCallCount);
+    expect(params.logVerboseMessage).toHaveBeenCalledWith(
+      "matrix: skipping duplicate listener registration for client",
+    );
+  });
 });

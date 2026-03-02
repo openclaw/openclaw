@@ -100,6 +100,32 @@ describe("failover-error", () => {
     expect(err?.provider).toBe("anthropic");
   });
 
+  it("403 permission_error returns auth_permanent", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message:
+          "permission_error: OAuth authentication is currently not allowed for this organization.",
+      }),
+    ).toBe("auth_permanent");
+  });
+
+  it("permission_error in error message string classifies as auth_permanent", () => {
+    const err = coerceToFailoverError(
+      "HTTP 403 permission_error: OAuth authentication is currently not allowed for this organization.",
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("auth_permanent");
+  });
+
+  it("'not allowed for this organization' classifies as auth_permanent", () => {
+    const err = coerceToFailoverError(
+      "OAuth authentication is currently not allowed for this organization",
+      { provider: "anthropic", model: "claude-opus-4-6" },
+    );
+    expect(err?.reason).toBe("auth_permanent");
+  });
+
   it("describes non-Error values consistently", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");

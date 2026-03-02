@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
+import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildSandboxFsMounts,
@@ -22,7 +23,7 @@ type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowMissingTarget?: boolean;
+  allowedType?: SafeOpenSyncAllowedType;
 };
 
 export type SandboxResolvedPath = {
@@ -132,7 +133,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowedType: "directory",
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -258,14 +263,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
       aliasPolicy: options.aliasPolicy,
+      allowedType: options.allowedType,
     });
     if (!guarded.ok) {
-      if (guarded.reason !== "path" || options.allowMissingTarget === false) {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+      if (guarded.reason !== "path") {
+        // Some platforms cannot open directories via openSync(O_RDONLY), even when
+        // the path is a valid in-boundary directory. Allow mkdirp to proceed in that
+        // narrow case by verifying the host path is an existing directory.
+        const canFallbackToDirectoryStat =
+          options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
+        if (!canFallbackToDirectoryStat) {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
       }
     } else {
       fs.closeSync(guarded.fd);
@@ -285,6 +298,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
+    }
+  }
+
+  private pathIsExistingDirectory(hostPath: string): boolean {
+    try {
+      return fs.statSync(hostPath).isDirectory();
+    } catch {
+      return false;
     }
   }
 

@@ -1,10 +1,6 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createStartAccountContext } from "../../test-utils/start-account-context.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -20,32 +16,6 @@ vi.mock("./monitor.js", async () => {
 });
 
 import { googlechatPlugin } from "./channel.js";
-
-function createStartAccountCtx(params: {
-  account: ResolvedGoogleChatAccount;
-  abortSignal: AbortSignal;
-  statusPatchSink?: (next: ChannelAccountSnapshot) => void;
-}): ChannelGatewayContext<ResolvedGoogleChatAccount> {
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.account.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.account.accountId,
-    account: params.account,
-    cfg: {} as OpenClawConfig,
-    runtime: createRuntimeEnv(),
-    abortSignal: params.abortSignal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: (next) => {
-      Object.assign(snapshot, next);
-      params.statusPatchSink?.(snapshot);
-    },
-  };
-}
 
 describe("googlechatPlugin gateway.startAccount", () => {
   afterEach(() => {
@@ -72,7 +42,7 @@ describe("googlechatPlugin gateway.startAccount", () => {
     const patches: ChannelAccountSnapshot[] = [];
     const abort = new AbortController();
     const task = googlechatPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
+      createStartAccountContext({
         account,
         abortSignal: abort.signal,
         statusPatchSink: (next) => patches.push({ ...next }),

@@ -20,6 +20,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createManagedProcessManager } from "../infra/managed-processes.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -38,6 +39,11 @@ export async function startGatewaySidecars(params: {
   deps: CliDeps;
   startChannels: () => Promise<void>;
   log: { warn: (msg: string) => void };
+  logManagedProcesses: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -67,6 +73,17 @@ export async function startGatewaySidecars(params: {
     browserControl = await startBrowserControlServerIfEnabled();
   } catch (err) {
     params.logBrowser.error(`server failed to start: ${String(err)}`);
+  }
+
+  // Spawn configured startup commands as managed gateway-scoped subprocesses.
+  let managedProcesses: ReturnType<typeof createManagedProcessManager> | null = null;
+  if (params.cfg.gateway?.startupCommands?.length) {
+    try {
+      managedProcesses = createManagedProcessManager();
+      await managedProcesses.start(params.cfg.gateway.startupCommands);
+    } catch (err) {
+      params.logManagedProcesses.error(`startup commands failed: ${String(err)}`);
+    }
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
@@ -187,5 +204,5 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  return { browserControl, pluginServices, managedProcesses };
 }

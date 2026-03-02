@@ -11,8 +11,43 @@ import {
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+
+const EXPLICIT_ALLOWLIST_CONFIG = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.2" },
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      },
+    },
+  },
+} as OpenClawConfig;
+
+const BUNDLED_ALLOWLIST_CATALOG = [
+  { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+  { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+];
+
+const ANTHROPIC_OPUS_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    reasoning: true,
+  },
+];
+
+function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    catalog: ANTHROPIC_OPUS_CATALOG,
+  });
+}
 
 describe("model-selection", () => {
   describe("normalizeProviderId", () => {
@@ -70,17 +105,17 @@ describe("model-selection", () => {
       });
     });
 
-    it("normalizes openai gpt-5.3 codex refs to openai-codex provider", () => {
+    it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("gpt-5.3-codex", "openai")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex",
       });
       expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.3-codex-codex",
       });
     });
@@ -244,25 +279,9 @@ describe("model-selection", () => {
 
   describe("buildAllowedModelSet", () => {
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = buildAllowedModelSet({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         defaultProvider: "anthropic",
       });
 
@@ -276,25 +295,9 @@ describe("model-selection", () => {
 
   describe("resolveAllowedModelRef", () => {
     it("accepts explicit allowlist refs absent from bundled catalog", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.2" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            },
-          },
-        },
-      } as OpenClawConfig;
-
-      const catalog = [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
-      ];
-
       const result = resolveAllowedModelRef({
-        cfg,
-        catalog,
+        cfg: EXPLICIT_ALLOWLIST_CONFIG,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
         raw: "anthropic/claude-sonnet-4-6",
         defaultProvider: "openai",
         defaultModel: "gpt-5.2",
@@ -468,6 +471,63 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+  });
+
+  describe("resolveThinkingDefault", () => {
+    it("prefers per-model params.thinking over global thinkingDefault", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { thinking: "high" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("high");
+    });
+
+    it("accepts per-model params.thinking=adaptive", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { thinking: "adaptive" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("defaults Anthropic Claude 4.6 models to adaptive", () => {
+      const cfg = {} as OpenClawConfig;
+
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6-v1:0",
+          catalog: [
+            {
+              provider: "amazon-bedrock",
+              id: "us.anthropic.claude-sonnet-4-6-v1:0",
+              name: "Claude Sonnet 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("adaptive");
     });
   });
 });

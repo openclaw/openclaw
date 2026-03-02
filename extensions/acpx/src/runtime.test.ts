@@ -102,6 +102,7 @@ describe("AcpxRuntime", () => {
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
     expect(prompt).toBeDefined();
+    expect(prompt?.openclawShell).toBe("acp");
     expect(Array.isArray(prompt?.args)).toBe(true);
     const promptArgs = (prompt?.args as string[]) ?? [];
     expect(promptArgs).toContain("--ttl");
@@ -325,6 +326,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
+        strictWindowsCmdWrapper: true,
         queueOwnerTtlSeconds: 0.1,
       },
       { logger: NOOP_LOGGER },
@@ -340,6 +342,31 @@ describe("AcpxRuntime", () => {
     expect(runtime.isHealthy()).toBe(true);
   });
 
+  it("logs ACPX spawn resolution once per command policy", async () => {
+    const { config } = await createMockRuntimeFixture();
+    const debugLogs: string[] = [];
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        strictWindowsCmdWrapper: true,
+      },
+      {
+        logger: {
+          ...NOOP_LOGGER,
+          debug: (message: string) => {
+            debugLogs.push(message);
+          },
+        },
+      },
+    );
+
+    await runtime.probeAvailability();
+
+    const spawnLogs = debugLogs.filter((entry) => entry.startsWith("acpx spawn resolver:"));
+    expect(spawnLogs.length).toBe(1);
+    expect(spawnLogs[0]).toContain("mode=strict");
+  });
+
   it("returns doctor report for missing command", async () => {
     const runtime = new AcpxRuntime(
       {
@@ -349,6 +376,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
+        strictWindowsCmdWrapper: true,
         queueOwnerTtlSeconds: 0.1,
       },
       { logger: NOOP_LOGGER },

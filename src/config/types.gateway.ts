@@ -315,6 +315,63 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayStartupCommandStartPolicy = "always" | "reuse" | "never";
+
+export type GatewayStartupCommandRestartPolicy = "off" | "on-failure";
+
+export type GatewayStartupCommandLogConfig = {
+  /**
+   * How to handle process stdout/stderr.
+   * - inherit: pipe to gateway's own stdout/stderr and also write to file
+   * - file: write to rolling log files only (default paths under state dir)
+   * - discard: suppress all output
+   * Default: inherit.
+   */
+  mode?: "inherit" | "file" | "discard";
+  /** Custom stdout log path (only used when mode="file"). Supports ~ expansion. */
+  stdoutPath?: string;
+  /** Custom stderr log path (only used when mode="file"). Supports ~ expansion. */
+  stderrPath?: string;
+};
+
+export type GatewayStartupCommand = {
+  /** Stable identifier used for PID tracking and log file names. Auto-derived from name if omitted. */
+  id?: string;
+  /** Display name shown in logs. */
+  name?: string;
+  /** Executable to run (required). */
+  command: string;
+  /** Arguments for the command. */
+  args?: string[];
+  /** Working directory. Supports ~ expansion and relative paths (resolved from gateway cwd). */
+  cwd?: string;
+  /** Extra environment variables merged into the process environment. */
+  env?: Record<string, string>;
+  /** Disable this command without removing it from config. Default: true. */
+  enabled?: boolean;
+  /**
+   * What to do when an existing process for this command is already running.
+   * - always: terminate existing and spawn fresh
+   * - reuse: reuse existing process if alive and command signature matches
+   * - never: skip spawning this command entirely
+   * Default: reuse.
+   */
+  startPolicy?: GatewayStartupCommandStartPolicy;
+  /** Signal used for graceful shutdown. Default: SIGTERM. */
+  stopSignal?: string;
+  /** Milliseconds to wait for graceful shutdown before sending SIGKILL. Default: 10000. */
+  stopTimeoutMs?: number;
+  /**
+   * Restart policy on unexpected exit.
+   * - off: do not restart
+   * - on-failure: restart with exponential backoff (1s–30s) on non-zero exit or signal
+   * Default: off.
+   */
+  restart?: GatewayStartupCommandRestartPolicy;
+  /** Log output handling configuration. */
+  log?: GatewayStartupCommandLogConfig;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -362,4 +419,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Commands to spawn as managed subprocesses when the gateway starts.
+   * Each entry is a long-lived sidecar process supervised by the gateway.
+   * PID files and rolling logs are stored under the state directory.
+   * Processes are stopped gracefully when the gateway shuts down.
+   */
+  startupCommands?: GatewayStartupCommand[];
 };

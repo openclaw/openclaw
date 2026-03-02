@@ -2,62 +2,18 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  collectTypeScriptFiles,
+  resolveRepoRoot,
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const uiSourceDir = path.join(repoRoot, "ui", "src", "ui");
 const allowedCallsites = new Set([path.join(uiSourceDir, "open-external-url.ts")]);
-
-function isTestFile(filePath) {
-  return (
-    filePath.endsWith(".test.ts") ||
-    filePath.endsWith(".browser.test.ts") ||
-    filePath.endsWith(".node.test.ts")
-  );
-}
-
-async function collectTypeScriptFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const out = [];
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...(await collectTypeScriptFiles(entryPath)));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!entryPath.endsWith(".ts")) {
-      continue;
-    }
-    if (isTestFile(entryPath)) {
-      continue;
-    }
-    out.push(entryPath);
-  }
-  return out;
-}
-
-function unwrapExpression(expression) {
-  let current = expression;
-  while (true) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    return current;
-  }
-}
 
 function asPropertyAccess(expression) {
   if (ts.isPropertyAccessExpression(expression)) {
@@ -87,9 +43,7 @@ export function findRawWindowOpenLines(content, fileName = "source.ts") {
 
   const visit = (node) => {
     if (ts.isCallExpression(node) && isRawWindowOpenCall(node.expression)) {
-      const line =
-        sourceFile.getLineAndCharacterOfPosition(node.expression.getStart(sourceFile)).line + 1;
-      lines.push(line);
+      lines.push(toLine(sourceFile, node.expression));
     }
     ts.forEachChild(node, visit);
   };
@@ -99,7 +53,10 @@ export function findRawWindowOpenLines(content, fileName = "source.ts") {
 }
 
 export async function main() {
-  const files = await collectTypeScriptFiles(uiSourceDir);
+  const files = await collectTypeScriptFiles(uiSourceDir, {
+    extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],
+    ignoreMissing: true,
+  });
   const violations = [];
 
   for (const filePath of files) {
@@ -126,17 +83,4 @@ export async function main() {
   process.exit(1);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
+runAsScript(import.meta.url, main);

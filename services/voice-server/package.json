@@ -1,0 +1,16 @@
+{
+  "name": "clawd-voice-server",
+  "version": "1.0.0",
+  "description": "Real-time voice conversation server: Twilio Media Streams + Deepgram STT + ElevenLabs TTS + Claude",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.4.5",
+    "openai": "^6.17.0",
+    "ws": "^8.18.0"
+  }
+}

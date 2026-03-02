@@ -34,4 +34,7 @@ export type SubagentRunRecord = {
   endedHookEmittedAt?: number;
   /** How many times the subagent_stopping hook has redirected this run chain. */
   steerCount?: number;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 };
