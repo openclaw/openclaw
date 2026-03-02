@@ -29,13 +29,18 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
+import {
+  normalizeSlackAllowOwnerEntry,
+  resolveSlackAllowListMatch,
+  resolveSlackUserAllowed,
+} from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
@@ -701,6 +706,13 @@ export async function prepareSlackMessage(params: {
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
   }) satisfies FinalizedMsgContext;
+  const pinnedMainDmOwner = isDirectMessage
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: cfg.session?.dmScope,
+        allowFrom: ctx.allowFrom,
+        normalizeEntry: normalizeSlackAllowOwnerEntry,
+      })
+    : null;
 
   await recordInboundSession({
     storePath,
@@ -713,6 +725,18 @@ export async function prepareSlackMessage(params: {
           to: `user:${message.user}`,
           accountId: route.accountId,
           threadId: threadContext.messageThreadId,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && message.user
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: message.user.toLowerCase(),
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
         }
       : undefined,
     onRecordError: (err) => {

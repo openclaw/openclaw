@@ -7,6 +7,7 @@ import {
   resolveDmGroupAccessDecision,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
+  resolvePinnedMainDmOwnerFromAllowlist,
 } from "./dm-policy-shared.js";
 
 describe("security/dm-policy-shared", () => {
@@ -104,6 +105,43 @@ describe("security/dm-policy-shared", () => {
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
     expect(lists.effectiveGroupAllowFrom).toEqual([]);
+  });
+
+  it("infers pinned main DM owner from a single configured allowlist entry", () => {
+    const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: "main",
+      allowFrom: [" line:user:U123 "],
+      normalizeEntry: (entry) =>
+        entry
+          .trim()
+          .toLowerCase()
+          .replace(/^line:(?:user:)?/, ""),
+    });
+    expect(pinnedOwner).toBe("u123");
+  });
+
+  it("does not infer pinned owner for wildcard/multi-owner/non-main scope", () => {
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "main",
+        allowFrom: ["*"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "main",
+        allowFrom: ["u123", "u456"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "per-channel-peer",
+        allowFrom: ["u123"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
   });
 
   it("excludes storeAllowFrom when dmPolicy is allowlist", () => {
