@@ -906,6 +906,29 @@ describe("handleCommands hooks", () => {
     spy.mockRestore();
   });
 
+  it("does not trigger reset hooks for channel-off /reset when channel is inferred from group sender", async () => {
+    const cfg = {
+      commands: { text: true },
+      session: {
+        resetByChannel: {
+          discord: { mode: "off" },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildParams("/reset", cfg, {
+      Provider: undefined,
+      Surface: undefined,
+      From: "discord:group:123456",
+      ChatType: "group",
+    });
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it("triggers hooks for native /new routed to target sessions", async () => {
     const cfg = {
       commands: { text: true },

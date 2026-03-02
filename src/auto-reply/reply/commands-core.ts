@@ -3,6 +3,7 @@ import {
   DEFAULT_RESET_TRIGGER,
   DEFAULT_RESET_TRIGGERS,
   resolveChannelResetConfig,
+  resolveGroupSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveThreadFlag,
@@ -50,28 +51,36 @@ let HANDLERS: CommandHandler[] | null = null;
 export type ResetCommandAction = "new" | "reset";
 
 function resolveResetCommandAction(params: HandleCommandsParams): ResetCommandAction | null {
+  const targetSessionKey =
+    params.ctx.CommandSource === "native" ? params.ctx.CommandTargetSessionKey?.trim() : undefined;
+  const sessionCtxForState =
+    targetSessionKey && targetSessionKey !== params.ctx.SessionKey
+      ? { ...params.ctx, SessionKey: targetSessionKey }
+      : params.ctx;
+  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const sessionCfg = params.cfg.session;
   const configuredResetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const isThread = resolveThreadFlag({
     sessionKey: params.sessionKey,
-    messageThreadId: params.ctx.MessageThreadId,
-    threadLabel: params.ctx.ThreadLabel,
-    threadStarterBody: params.ctx.ThreadStarterBody,
-    parentSessionKey: params.ctx.ParentSessionKey,
+    messageThreadId: sessionCtxForState.MessageThreadId,
+    threadLabel: sessionCtxForState.ThreadLabel,
+    threadStarterBody: sessionCtxForState.ThreadStarterBody,
+    parentSessionKey: sessionCtxForState.ParentSessionKey,
   });
   const resetType = resolveSessionResetType({
     sessionKey: params.sessionKey,
-    isGroup: params.isGroup,
+    isGroup: params.isGroup || Boolean(groupResolution),
     isThread,
   });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
     channel:
-      (params.ctx.OriginatingChannel as string | undefined) ??
-      params.ctx.Surface ??
-      params.ctx.Provider,
+      groupResolution?.channel ??
+      (sessionCtxForState.OriginatingChannel as string | undefined) ??
+      sessionCtxForState.Surface ??
+      sessionCtxForState.Provider,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
