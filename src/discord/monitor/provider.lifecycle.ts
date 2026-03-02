@@ -49,6 +49,16 @@ export async function runDiscordGatewayLifecycle(params: {
     params.statusSink?.(patch);
   };
 
+  // On initial startup the bot has already received READY from Discord (that's
+  // how the provider obtained botUserId). The "WebSocket connection opened"
+  // debug event fired before this lifecycle's listener was attached, so the
+  // 250ms poll in onGatewayDebug never starts and `connected` would otherwise
+  // remain undefined. Push connected:true upfront when already connected so
+  // the health monitor doesn't declare the channel "stuck". (Issue #31760)
+  if (gateway?.isConnected) {
+    pushStatus({ connected: true });
+  }
+
   const triggerForceStop = (err: unknown) => {
     if (forceStopHandler) {
       forceStopHandler(err);
