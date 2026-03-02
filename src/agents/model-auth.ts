@@ -67,6 +67,22 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function resolveApiKeyFallbackForLocalProvider(params: {
+  provider: string;
+  cfg: OpenClawConfig | undefined;
+}): string | undefined {
+  const normalized = normalizeProviderId(params.provider);
+  if (normalized !== "ollama") {
+    return undefined;
+  }
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  // Keep strict API-key checks for explicitly OpenAI-compatible ollama setups.
+  if (providerConfig?.api && providerConfig.api !== "ollama") {
+    return undefined;
+  }
+  return "ollama-local";
+}
+
 function resolveEnvSourceLabel(params: {
   applied: Set<string>;
   envVars: string[];
@@ -210,6 +226,18 @@ export async function resolveApiKeyForProvider(params: {
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
+  }
+
+  const localFallbackApiKey = resolveApiKeyFallbackForLocalProvider({
+    provider,
+    cfg,
+  });
+  if (localFallbackApiKey) {
+    return {
+      apiKey: localFallbackApiKey,
+      source: `provider-default: ${localFallbackApiKey}`,
+      mode: "api-key",
+    };
   }
 
   if (provider === "openai") {

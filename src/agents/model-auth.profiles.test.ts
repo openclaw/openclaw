@@ -187,6 +187,55 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("falls back to a local placeholder key for native ollama when no auth is configured", async () => {
+    await withEnvAsync(
+      {
+        OLLAMA_API_KEY: undefined,
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+        });
+
+        expect(resolved.apiKey).toBe("ollama-local");
+        expect(resolved.source).toContain("provider-default");
+      },
+    );
+  });
+
+  it("keeps key enforcement for ollama providers configured as openai-compatible", async () => {
+    await withEnvAsync(
+      {
+        OLLAMA_API_KEY: undefined,
+      },
+      async () => {
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({
+            provider: "ollama",
+            store: { version: 1, profiles: {} },
+            cfg: {
+              models: {
+                providers: {
+                  ollama: {
+                    api: "openai-completions",
+                    baseUrl: "http://127.0.0.1:11434/v1",
+                    models: [],
+                  },
+                },
+              },
+            } as never,
+          });
+        } catch (err) {
+          error = err;
+        }
+
+        expect(String(error)).toContain('No API key found for provider "ollama".');
+      },
+    );
+  });
+
   it("accepts legacy Z_AI_API_KEY for zai", async () => {
     await withEnvAsync(
       {

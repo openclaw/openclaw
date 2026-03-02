@@ -129,6 +129,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Control UI CSP: allow required Google Fonts origins in Control UI CSP. (#29279) Thanks @Glucksberg and @vincentkoc.
 - CLI/Install: add an npm-link fallback to fix CLI startup `Permission denied` failures (`exit 127`) on affected installs. (#17151) Thanks @sskyu and @vincentkoc.
 - Onboarding/Custom providers: improve verification reliability for slower local endpoints (for example Ollama) during setup. (#27380) Thanks @Sid-Qin.
+- Agents/Ollama auth fallback: allow native Ollama provider runs to proceed without preconfigured auth-profiles API keys by applying a local default placeholder during runtime auth resolution, while preserving strict key enforcement for explicit OpenAI-compatible Ollama provider configs. (#31577)
 - Plugins/NPM spec install: fix npm-spec plugin installs when `npm pack` output is empty by detecting newly created `.tgz` archives in the pack directory. (#21039) Thanks @graysurf and @vincentkoc.
 - Plugins/Install: clear stale install errors when an npm package is not found so follow-up install attempts report current state correctly. (#25073) Thanks @dalefrieswthat.
 - Security/Feishu webhook ingress: bound unauthenticated webhook rate-limit state with stale-window pruning and a hard key cap to prevent unbounded pre-auth memory growth from rotating source keys. (#26050) Thanks @bmendonca3.
