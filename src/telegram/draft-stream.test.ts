@@ -141,6 +141,42 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it("rotates draft_id when forceNewMessage races an in-flight DM draft send", async () => {
+    let resolveFirstDraft: ((value: boolean) => void) | undefined;
+    const firstDraftSend = new Promise<boolean>((resolve) => {
+      resolveFirstDraft = resolve;
+    });
+    const api = {
+      sendMessageDraft: vi.fn().mockReturnValueOnce(firstDraftSend).mockResolvedValueOnce(true),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+    };
+    const stream = createThreadedDraftStream(
+      api as unknown as ReturnType<typeof createMockDraftApi>,
+      { id: 42, scope: "dm" },
+    );
+
+    stream.update("Message A");
+    await vi.waitFor(() => expect(api.sendMessageDraft).toHaveBeenCalledTimes(1));
+
+    stream.forceNewMessage();
+    stream.update("Message B");
+
+    resolveFirstDraft?.(true);
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    const firstDraftId = api.sendMessageDraft.mock.calls[0]?.[1];
+    const secondDraftId = api.sendMessageDraft.mock.calls[1]?.[1];
+    expect(typeof firstDraftId).toBe("number");
+    expect(typeof secondDraftId).toBe("number");
+    expect(firstDraftId).not.toBe(secondDraftId);
+    expect(api.sendMessageDraft.mock.calls[1]?.[2]).toBe("Message B");
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it("creates new message after forceNewMessage is called", async () => {
     const { api, stream } = createForceNewMessageHarness();
 
