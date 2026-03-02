@@ -202,6 +202,7 @@ export async function monitorWebChannel(
       authDir: account.authDir,
       mediaMaxMb: account.mediaMaxMb,
       sendReadReceipts: account.sendReadReceipts,
+      markOnline: account.markOnline,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
       onMessage: async (msg: WebInboundMsg) => {

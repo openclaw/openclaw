@@ -30,6 +30,8 @@ export async function monitorWebInbox(options: {
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Mark the bot as "online" on connect (default false). */
+  markOnline?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
@@ -56,13 +58,14 @@ export async function monitorWebInbox(options: {
     resolver(reason);
   };
 
+  const presenceStatus = options.markOnline ? "available" : "unavailable";
   try {
-    await sock.sendPresenceUpdate("available");
+    await sock.sendPresenceUpdate(presenceStatus);
     if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+      logVerbose(`Sent global '${presenceStatus}' presence on connect`);
     }
   } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+    logVerbose(`Failed to send '${presenceStatus}' presence on connect: ${String(err)}`);
   }
 
   const selfJid = sock.user?.id;

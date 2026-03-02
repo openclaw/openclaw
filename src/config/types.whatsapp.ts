@@ -89,6 +89,8 @@ type WhatsAppConfigCore = {
   configWrites?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Mark the bot as "online" on connect (default false). When false, sends "unavailable" to avoid suppressing push notifications on the user's phone. */
+  markOnline?: boolean;
   /** Inbound message prefix override (WhatsApp only). */
   messagePrefix?: string;
   /** Outbound response prefix override. */

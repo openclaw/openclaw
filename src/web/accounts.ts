@@ -14,6 +14,7 @@ export type ResolvedWhatsAppAccount = {
   name?: string;
   enabled: boolean;
   sendReadReceipts: boolean;
+  markOnline: boolean;
   messagePrefix?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
@@ -128,6 +129,7 @@ export function resolveWhatsAppAccount(params: {
     name: accountCfg?.name?.trim() || undefined,
     enabled,
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
+    markOnline: accountCfg?.markOnline ?? rootCfg?.markOnline ?? false,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
     authDir,
