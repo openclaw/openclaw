@@ -7,7 +7,6 @@ vi.mock("node:child_process", () => ({
   execFile: execFileMock,
 }));
 
-import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
@@ -151,58 +150,6 @@ describe("resolveSystemdUserUnitPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveSystemdUserUnitPath(env)).toBe(expected);
-  });
-});
-
-describe("splitArgsPreservingQuotes", () => {
-  it("splits on whitespace outside quotes", () => {
-    expect(splitArgsPreservingQuotes('/usr/bin/openclaw gateway start --name "My Bot"')).toEqual([
-      "/usr/bin/openclaw",
-      "gateway",
-      "start",
-      "--name",
-      "My Bot",
-    ]);
-  });
-
-  it("supports systemd-style backslash escaping", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
-        escapeMode: "backslash",
-      }),
-    ).toEqual(["openclaw", "--name", 'My "Bot"', "--foo", "bar"]);
-  });
-
-  it("supports schtasks-style escaped quotes while preserving other backslashes", () => {
-    expect(
-      splitArgsPreservingQuotes('openclaw --path "C:\\\\Program Files\\\\OpenClaw"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--path", "C:\\\\Program Files\\\\OpenClaw"]);
-
-    expect(
-      splitArgsPreservingQuotes('openclaw --label "My \\"Quoted\\" Name"', {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["openclaw", "--label", 'My "Quoted" Name']);
-  });
-
-  it("treats apostrophes as literal text in backslash-quote-only mode", () => {
-    expect(
-      splitArgsPreservingQuotes("C:\\\\Users\\\\O'Neil\\\\openclaw gateway start", {
-        escapeMode: "backslash-quote-only",
-      }),
-    ).toEqual(["C:\\\\Users\\\\O'Neil\\\\openclaw", "gateway", "start"]);
-  });
-
-  it("treats apostrophes as literal text in default (none) mode", () => {
-    expect(splitArgsPreservingQuotes("/usr/bin/openclaw --user O'Neil gateway start")).toEqual([
-      "/usr/bin/openclaw",
-      "--user",
-      "O'Neil",
-      "gateway",
-      "start",
-    ]);
   });
 });
 
