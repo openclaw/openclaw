@@ -1,4 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const SHARED_NAMES_FILE = path.join(os.tmpdir(), "openclaw-e2e-channel-names.txt");
+const SHARED_NAMES_LOCK = SHARED_NAMES_FILE + ".lock";
 
 // Each test needs a fresh module to reset the generatedNames Set.
 async function freshImport() {
@@ -6,14 +12,29 @@ async function freshImport() {
   return mod.e2eChannelName;
 }
 
+function cleanSharedState() {
+  try {
+    fs.unlinkSync(SHARED_NAMES_FILE);
+  } catch {
+    // File doesn't exist, that's fine.
+  }
+  try {
+    fs.rmdirSync(SHARED_NAMES_LOCK);
+  } catch {
+    // Lock doesn't exist, that's fine.
+  }
+}
+
 describe("e2eChannelName", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.resetModules();
+    cleanSharedState();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    cleanSharedState();
   });
 
   it("returns the expected timestamp format", async () => {
@@ -155,5 +176,28 @@ describe("e2eChannelName", () => {
       const ss = String(i).padStart(2, "0");
       expect(names[i]).toBe(`e2e-2026-02-22-t-10-30-${ss}`);
     }
+  });
+
+  it("persists names to shared file for cross-worker visibility", async () => {
+    vi.setSystemTime(new Date(2026, 1, 22, 10, 30, 0));
+    const e2eChannelName = await freshImport();
+
+    e2eChannelName();
+    e2eChannelName();
+
+    const content = fs.readFileSync(SHARED_NAMES_FILE, "utf-8");
+    const lines = content.split("\n").filter(Boolean);
+    expect(lines).toEqual(["e2e-2026-02-22-t-10-30-00", "e2e-2026-02-22-t-10-30-01"]);
+  });
+
+  it("reads shared file to avoid names claimed by other workers", async () => {
+    vi.setSystemTime(new Date(2026, 1, 22, 10, 30, 0));
+
+    // Simulate another worker having already claimed 10:30:00.
+    fs.writeFileSync(SHARED_NAMES_FILE, "e2e-2026-02-22-t-10-30-00\n");
+
+    const e2eChannelName = await freshImport();
+
+    expect(e2eChannelName()).toBe("e2e-2026-02-22-t-10-30-01");
   });
 });
