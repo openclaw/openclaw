@@ -56,6 +56,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     drive: false,
     perm: false,
     scopes: false,
+    urgent: false,
   };
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
@@ -65,6 +66,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
     merged.drive = merged.drive || cfg.drive;
     merged.perm = merged.perm || cfg.perm;
     merged.scopes = merged.scopes || cfg.scopes;
+    merged.urgent = merged.urgent || cfg.urgent;
   }
   return merged;
 }
