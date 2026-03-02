@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
@@ -144,6 +144,24 @@ function createPluginInstallLogger(): { info: (msg: string) => void; warn: (msg:
   };
 }
 
+async function loadPluginsConfigForWriteOrExit(): Promise<{
+  config: OpenClawConfig;
+  writeOptions: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["writeOptions"];
+}> {
+  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  if (!snapshot.valid) {
+    defaultRuntime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
+    for (const issue of snapshot.issues) {
+      defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+    }
+    defaultRuntime.error("Run `openclaw doctor` to repair, then retry.");
+    process.exit(1);
+  }
+  return {
+    config: structuredClone(snapshot.resolved),
+    writeOptions,
+  };
+}
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) {
     return;
@@ -552,12 +570,12 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await loadPluginsConfigForWriteOrExit();
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
       next = slotResult.config;
-      await writeConfigFile(next);
+      await writeConfigFile(next, writeOptions);
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
@@ -575,9 +593,9 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await loadPluginsConfigForWriteOrExit();
       const next = setPluginEnabledInConfig(cfg, id, false);
-      await writeConfigFile(next);
+      await writeConfigFile(next, writeOptions);
       defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
 
@@ -590,7 +608,7 @@ export function registerPluginsCli(program: Command) {
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await loadPluginsConfigForWriteOrExit();
       const report = buildPluginStatusReport({ config: cfg });
       const extensionsDir = path.join(resolveStateDir(process.env, os.homedir), "extensions");
       const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
@@ -688,7 +706,7 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(theme.warn(warning));
       }
 
-      await writeConfigFile(result.config);
+      await writeConfigFile(result.config, writeOptions);
 
       const removed: string[] = [];
       if (result.actions.entry) {
@@ -733,7 +751,7 @@ export function registerPluginsCli(program: Command) {
     .option("--all", "Update all tracked plugins", false)
     .option("--dry-run", "Show what would change without writing", false)
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
-      const cfg = loadConfig();
+      const { config: cfg, writeOptions } = await loadPluginsConfigForWriteOrExit();
       const installs = cfg.plugins?.installs ?? {};
       const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
 
@@ -783,7 +801,7 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (!opts.dryRun && result.changed) {
-        await writeConfigFile(result.config);
+        await writeConfigFile(result.config, writeOptions);
         defaultRuntime.log("Restart the gateway to load plugins.");
       }
     });
