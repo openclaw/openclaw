@@ -82,13 +82,25 @@ describe("exec approvals allowlist matching", () => {
     expect(match?.pattern).toBe("*");
   });
 
-  it("requires a resolved path", () => {
-    const match = matchAllowlist([{ pattern: "bin/rg" }], {
-      rawExecutable: "bin/rg",
-      resolvedPath: undefined,
-      executableName: "rg",
+  it("matches absolute paths containing regex metacharacters", () => {
+    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"];
+    for (const candidatePath of plusPathCases) {
+      const match = matchAllowlist([{ pattern: candidatePath }], {
+        rawExecutable: candidatePath,
+        resolvedPath: candidatePath,
+        executableName: candidatePath.split("/").at(-1) ?? candidatePath,
+      });
+      expect(match?.pattern).toBe(candidatePath);
+    }
+  });
+
+  it("does not throw when wildcard globs are mixed with + in path", () => {
+    const match = matchAllowlist([{ pattern: "/usr/bin/*++" }], {
+      rawExecutable: "/usr/bin/g++",
+      resolvedPath: "/usr/bin/g++",
+      executableName: "g++",
     });
-    expect(match).toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/*++");
   });
 });
 
