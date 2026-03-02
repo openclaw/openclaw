@@ -1186,6 +1186,10 @@ describe("runReplyAgent fallback reasoning tags", () => {
   type EmbeddedPiAgentParams = {
     enforceFinalTag?: boolean;
     prompt?: string;
+    inputProvenance?: {
+      kind?: string;
+      sourceTool?: string;
+    };
   };
 
   function createRun(params?: {
@@ -1303,6 +1307,10 @@ describe("runReplyAgent fallback reasoning tags", () => {
     )?.[0] as EmbeddedPiAgentParams | undefined;
 
     expect(flushCall?.enforceFinalTag).toBe(true);
+    expect(flushCall?.inputProvenance).toEqual({
+      kind: "internal_system",
+      sourceTool: "memory_flush",
+    });
   });
 });
 

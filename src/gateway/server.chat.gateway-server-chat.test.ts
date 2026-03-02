@@ -304,6 +304,62 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.history hides internal-system provenance user prompts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hello from user" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Pre-compaction memory flush. Internal only." }],
+            provenance: {
+              kind: "internal_system",
+              sourceTool: "memory_flush",
+            },
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "final visible reply" }],
+            timestamp: Date.now() + 2,
+          },
+        }),
+      ];
+      await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const messages = historyRes.payload?.messages ?? [];
+      expect(messages.length).toBe(2);
+      expect(extractFirstTextBlock(messages[0])).toBe("hello from user");
+      expect(extractFirstTextBlock(messages[1])).toBe("final visible reply");
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {

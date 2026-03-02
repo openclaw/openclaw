@@ -488,6 +488,10 @@ export async function runMemoryFlushIfNeeded(params: {
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
           }),
+          inputProvenance: {
+            kind: "internal_system",
+            sourceTool: "memory_flush",
+          },
           extraSystemPrompt: flushSystemPrompt,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {

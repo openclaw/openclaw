@@ -10,6 +10,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -197,6 +198,18 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     return res.message;
   });
   return changed ? next : messages;
+}
+
+function shouldHideChatHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  return provenance?.kind === "internal_system";
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
@@ -543,11 +556,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    const filteredMessages = rawMessages.filter(
+      (message) => !shouldHideChatHistoryMessage(message),
+    );
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced = filteredMessages.length > max ? filteredMessages.slice(-max) : filteredMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = sanitizeChatHistoryMessages(sanitized);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
