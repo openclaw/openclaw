@@ -7,7 +7,9 @@ EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
-SANDBOX_ENABLED="${OPENCLAW_SANDBOX:-}"
+RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
+SANDBOX_ENABLED=""
+DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -19,6 +21,15 @@ require_cmd() {
     echo "Missing dependency: $1" >&2
     exit 1
   fi
+}
+
+is_truthy_value() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    1 | true | yes | on) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 read_config_gateway_token() {
@@ -145,6 +156,16 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -z "$DOCKER_SOCKET_PATH" && "${DOCKER_HOST:-}" == unix://* ]]; then
+  DOCKER_SOCKET_PATH="${DOCKER_HOST#unix://}"
+fi
+if [[ -z "$DOCKER_SOCKET_PATH" ]]; then
+  DOCKER_SOCKET_PATH="/var/run/docker.sock"
+fi
+if is_truthy_value "$RAW_SANDBOX_SETTING"; then
+  SANDBOX_ENABLED="1"
+fi
+
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
@@ -159,6 +180,9 @@ if [[ -n "$HOME_VOLUME_NAME" ]]; then
 fi
 if contains_disallowed_chars "$EXTRA_MOUNTS"; then
   fail "OPENCLAW_EXTRA_MOUNTS cannot contain control characters."
+fi
+if [[ -n "$SANDBOX_ENABLED" ]]; then
+  validate_mount_path_value "OPENCLAW_DOCKER_SOCKET" "$DOCKER_SOCKET_PATH"
 fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
@@ -180,11 +204,12 @@ export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
+export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
-if [[ -n "$SANDBOX_ENABLED" && -S /var/run/docker.sock ]]; then
-  DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || echo "")"
+if [[ -n "$SANDBOX_ENABLED" && -S "$DOCKER_SOCKET_PATH" ]]; then
+  DOCKER_GID="$(stat -c '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || stat -f '%g' "$DOCKER_SOCKET_PATH" 2>/dev/null || echo "")"
 fi
 export DOCKER_GID
 
@@ -351,6 +376,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_SANDBOX \
+  OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
@@ -438,14 +464,14 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi
 
-  # Verify Docker CLI is available inside the container for non-local images.
-  if [[ "$IMAGE_NAME" != "openclaw:local" ]]; then
-    if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
-      echo "WARNING: Docker CLI not found inside the container image." >&2
-      echo "  Sandbox requires Docker CLI. Rebuild with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1" >&2
-      echo "  or use a local build (OPENCLAW_IMAGE=openclaw:local). Skipping sandbox setup." >&2
-      SANDBOX_ENABLED=""
-    fi
+  # Defense-in-depth: verify Docker CLI in the running image before enabling
+  # sandbox. This avoids claiming sandbox is enabled when the image cannot
+  # launch sandbox containers.
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
+    echo "WARNING: Docker CLI not found inside the container image." >&2
+    echo "  Sandbox requires Docker CLI. Rebuild with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1" >&2
+    echo "  or use a local build (OPENCLAW_IMAGE=openclaw:local). Skipping sandbox setup." >&2
+    SANDBOX_ENABLED=""
   fi
 fi
 
@@ -454,13 +480,13 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Mount Docker socket via a dedicated compose overlay. This overlay is
   # created only after sandbox prerequisites pass, so the socket is never
   # exposed when sandbox cannot actually run.
-  if [[ -S /var/run/docker.sock ]]; then
+  if [[ -S "$DOCKER_SOCKET_PATH" ]]; then
     SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
-    cat >"$SANDBOX_COMPOSE_FILE" <<'YAML'
+    cat >"$SANDBOX_COMPOSE_FILE" <<YAML
 services:
   openclaw-gateway:
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCKET_PATH}:/var/run/docker.sock
 YAML
     if [[ -n "${DOCKER_GID:-}" ]]; then
       cat >>"$SANDBOX_COMPOSE_FILE" <<YAML
@@ -471,7 +497,7 @@ YAML
     COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
     echo "==> Sandbox: added Docker socket mount"
   else
-    echo "WARNING: OPENCLAW_SANDBOX=1 but /var/run/docker.sock not found." >&2
+    echo "WARNING: OPENCLAW_SANDBOX enabled but Docker socket not found at $DOCKER_SOCKET_PATH." >&2
     echo "  Sandbox requires Docker socket access. Skipping sandbox setup." >&2
     SANDBOX_ENABLED=""
   fi
@@ -498,13 +524,27 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
 
   if [[ "$sandbox_config_ok" == true ]]; then
     echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
+    echo "Docs: https://docs.openclaw.ai/gateway/sandboxing"
+    # Restart gateway with sandbox compose overlay to pick up socket mount + config.
+    docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
+    echo "  Skipping gateway restart to avoid exposing Docker socket without a full sandbox policy." >&2
+    if [[ -n "${SANDBOX_COMPOSE_FILE:-}" ]]; then
+      rm -f "$SANDBOX_COMPOSE_FILE"
+    fi
   fi
-  echo "Docs: https://docs.openclaw.ai/gateway/sandboxing"
-
-  # Restart gateway with sandbox compose overlay to pick up socket mount + config.
-  docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
+else
+  # Keep reruns deterministic: if sandbox is not active for this run, reset
+  # persisted sandbox mode so future execs do not require docker.sock by stale
+  # config alone.
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.mode "off" >/dev/null; then
+    echo "WARNING: Failed to reset agents.defaults.sandbox.mode to off" >&2
+  fi
+  if [[ -f "$ROOT_DIR/docker-compose.sandbox.yml" ]]; then
+    rm -f "$ROOT_DIR/docker-compose.sandbox.yml"
+  fi
 fi
 
 echo ""
