@@ -84,7 +84,7 @@ function resolveSubagentOutputDir(cfg: ReturnType<typeof loadConfig>): string {
   const configured = (cfg.agents?.defaults?.subagents as Record<string, unknown> | undefined)
     ?.outputDir;
   if (typeof configured === "string" && configured.trim()) {
-    return configured.trim().replace(/^~/, process.env.HOME ?? "");
+    return configured.trim().replace(/^~/, process.env.HOME ?? "/root");
   }
   const home = process.env.HOME ?? "/root";
   return `${home}/.openclaw/workspace/tmp/agent-output`;
@@ -1426,7 +1426,11 @@ export async function runSubagentAnnounceFlow(params: {
       ? `${findings.slice(0, 1_500)}
 …
 
-_Full output saved: \`${savedFilePath.replace(/.*\.openclaw\/workspace\//, "")}\`_`
+_Full output saved: \`${
+          savedFilePath.includes("/.openclaw/workspace/")
+            ? savedFilePath.replace(/.*\.openclaw\/workspace\//, "")
+            : savedFilePath
+        }\`_`
       : findings;
     const internalEvents: AgentInternalEvent[] = [
       {
