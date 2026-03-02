@@ -138,3 +138,32 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
   });
 });
+
+describe("FeishuConfigSchema defaultAccount", () => {
+  it("accepts defaultAccount when it matches an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        "router-d": { appId: "cli_router", appSecret: "secret_router" },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects defaultAccount when it does not match an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        backup: { appId: "cli_backup", appSecret: "secret_backup" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
+        true,
+      );
+    }
+  });
+});
