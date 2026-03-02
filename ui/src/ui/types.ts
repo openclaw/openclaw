@@ -482,13 +482,22 @@ export type CronPayload =
       model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+      lightContext?: boolean;
     };
 
 export type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  accountId?: string;
   bestEffort?: boolean;
+};
+
+export type CronFailureAlert = {
+  after?: number;
+  channel?: string;
+  to?: string;
+  cooldownMs?: number;
 };
 
 export type CronJobState = {
@@ -498,11 +507,13 @@ export type CronJobState = {
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
+  lastFailureAlertAtMs?: number;
 };
 
 export type CronJob = {
   id: string;
   agentId?: string;
+  sessionKey?: string;
   name: string;
   description?: string;
   enabled: boolean;
@@ -514,6 +525,7 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  failureAlert?: CronFailureAlert | false;
   state?: CronJobState;
 };
 
