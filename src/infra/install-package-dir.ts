@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fileExists } from "./archive.js";
+import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -60,11 +61,23 @@ export async function installPackageDir(params: {
   afterCopy?: () => void | Promise<void>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
+  const installBaseDir = path.dirname(params.targetDir);
+  await fs.mkdir(installBaseDir, { recursive: true });
+  await assertCanonicalPathWithinBase({
+    baseDir: installBaseDir,
+    candidatePath: params.targetDir,
+    boundaryLabel: "install directory",
+  });
   let backupDir: string | null = null;
   if (params.mode === "update" && (await fileExists(params.targetDir))) {
     const backupRoot = path.join(path.dirname(params.targetDir), ".openclaw-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(params.targetDir)}-${Date.now()}`);
     await fs.mkdir(backupRoot, { recursive: true });
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: backupDir,
+      boundaryLabel: "install directory",
+    });
     await fs.rename(params.targetDir, backupDir);
   }
 
@@ -72,11 +85,26 @@ export async function installPackageDir(params: {
     if (!backupDir) {
       return;
     }
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: params.targetDir,
+      boundaryLabel: "install directory",
+    });
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: backupDir,
+      boundaryLabel: "install directory",
+    });
     await fs.rm(params.targetDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rename(backupDir, params.targetDir).catch(() => undefined);
   };
 
   try {
+    await assertCanonicalPathWithinBase({
+      baseDir: installBaseDir,
+      candidatePath: params.targetDir,
+      boundaryLabel: "install directory",
+    });
     await fs.cp(params.sourceDir, params.targetDir, { recursive: true });
   } catch (err) {
     await rollback();
