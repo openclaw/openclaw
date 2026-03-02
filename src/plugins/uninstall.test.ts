@@ -376,6 +376,37 @@ describe("uninstallPlugin", () => {
     }
   });
 
+  it("deletes directory when plugin has only an entry record (no install record)", async () => {
+    const extensionsDir = path.join(tempDir, "extensions");
+    const pluginId = "entry-only-plugin";
+    const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          [pluginId]: { enabled: true },
+        },
+      },
+    };
+
+    const result = await uninstallPlugin({
+      config,
+      pluginId,
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.actions.entry).toBe(true);
+      expect(result.actions.install).toBe(false);
+      expect(result.actions.directory).toBe(true);
+      await expect(fs.access(pluginDir)).rejects.toThrow();
+    }
+  });
+
   it("preserves directory for linked plugins", async () => {
     const pluginDir = await createPluginDirFixture(tempDir);
 
@@ -498,6 +529,17 @@ describe("resolveUninstallDirectoryTarget", () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it("returns default path when hasInstall is false but plugin dir may exist on disk", () => {
+    const extensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-entry-only");
+    const target = resolveUninstallDirectoryTarget({
+      pluginId: "my-plugin",
+      hasInstall: false,
+      extensionsDir,
+    });
+
+    expect(target).toBe(resolvePluginInstallDir("my-plugin", extensionsDir));
   });
 
   it("falls back to default path when configured installPath is untrusted", () => {

@@ -518,8 +518,9 @@ export function registerPluginsCli(program: Command) {
     .description("Install a plugin (path, archive, or npm spec)")
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
+    .option("--force", "Overwrite existing plugin installation", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .action(async (raw: string, opts: { link?: boolean; force?: boolean; pin?: boolean }) => {
       const fileSpec = resolveFileNpmSpecToLocalPath(raw);
       if (fileSpec && !fileSpec.ok) {
         defaultRuntime.error(fileSpec.error);
@@ -533,7 +534,11 @@ export function registerPluginsCli(program: Command) {
         if (opts.link) {
           const existing = cfg.plugins?.load?.paths ?? [];
           const merged = Array.from(new Set([...existing, resolved]));
-          const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+          const probe = await installPluginFromPath({
+            path: resolved,
+            dryRun: true,
+            mode: opts.force ? "update" : "install",
+          });
           if (!probe.ok) {
             defaultRuntime.error(probe.error);
             process.exit(1);
@@ -571,6 +576,7 @@ export function registerPluginsCli(program: Command) {
         const result = await installPluginFromPath({
           path: resolved,
           logger: createPluginInstallLogger(),
+          mode: opts.force ? "update" : "install",
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
@@ -623,6 +629,7 @@ export function registerPluginsCli(program: Command) {
       const result = await installPluginFromNpmSpec({
         spec: raw,
         logger: createPluginInstallLogger(),
+        mode: opts.force ? "update" : "install",
       });
       if (!result.ok) {
         const bundledFallback = isPackageNotFoundInstallError(result.error)

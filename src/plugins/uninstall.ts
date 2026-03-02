@@ -30,10 +30,6 @@ export function resolveUninstallDirectoryTarget(params: {
   installRecord?: PluginInstallRecord;
   extensionsDir?: string;
 }): string | null {
-  if (!params.hasInstall) {
-    return null;
-  }
-
   if (params.installRecord?.source === "path") {
     return null;
   }
@@ -43,6 +39,12 @@ export function resolveUninstallDirectoryTarget(params: {
     defaultPath = resolvePluginInstallDir(params.pluginId, params.extensionsDir);
   } catch {
     return null;
+  }
+
+  // No install record — still return the default path so the caller can
+  // delete the directory if it exists on disk (entry-only uninstall case).
+  if (!params.hasInstall) {
+    return defaultPath;
   }
 
   const configuredPath = params.installRecord?.installPath;

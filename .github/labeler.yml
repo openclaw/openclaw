@@ -190,6 +190,11 @@
       - any-glob-to-any-file:
           - "src/agents/**"
 
+"plugins":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/plugins/**"
+
 "security":
   - changed-files:
       - any-glob-to-any-file:
