@@ -92,6 +92,16 @@ export type SignalAccountConfig = {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
+  /** Max outbound media size in MB. */
+  mediaMaxMb?: number;
+  /** Block streaming (send full reply at once). */
+  blockStreaming?: boolean;
+  /** Merge streamed block replies before sending. */
+  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Heartbeat visibility settings for this channel. */
+  heartbeat?: ChannelHeartbeatVisibilityConfig;
 };
 
 export type SignalConfig = {
