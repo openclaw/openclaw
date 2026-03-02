@@ -636,17 +636,22 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
   const runLevelError = runResult.meta?.error;
-  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
-  const hasSuccessfulPayloadAfterLastError =
-    !runLevelError &&
-    lastErrorPayloadIndex >= 0 &&
-    payloads
-      .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  // Tool wrappers can emit transient/false-positive error payloads before a valid final
-  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
-  // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const hasNonErrorPayloadWithContent = payloads.some(
+    (payload) =>
+      payload?.isError !== true &&
+      (Boolean(payload?.text?.trim()) ||
+        Boolean(payload?.mediaUrl) ||
+        (payload?.mediaUrls?.length ?? 0) > 0),
+  );
+  // Tool wrappers can emit transient error payloads (e.g. a failed write that is retried)
+  // alongside successful payloads in the same run.  When (a) the run itself did not report
+  // a model/context-level error and (b) a non-error payload with deliverable content exists
+  // anywhere in the run, the error is considered transient — the run produced useful output
+  // and should not be marked as failed.  This avoids false-positive "error" status when the
+  // model recovers from a tool failure or when the error payload is a trailing tool output
+  // line that merely contains the word "failed" (#32244).
+  const hasFatalErrorPayload =
+    hasErrorPayload && (Boolean(runLevelError) || !hasNonErrorPayloadWithContent);
   const lastErrorPayloadText = [...payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
