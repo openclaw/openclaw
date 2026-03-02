@@ -111,6 +111,24 @@ describe("bluebubblesPlugin sendPayload", () => {
     expect(result).toEqual({ channel: "bluebubbles", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    // Simulate a chunker that strips whitespace-only input to nothing
+    // BlueBubbles has no chunker by default, so we attach one that returns []
+    bluebubblesPlugin.outbound!.chunker = vi.fn().mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(bluebubblesPlugin.outbound!, "sendText");
+
+    const result = await bluebubblesPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "bluebubbles", messageId: "" });
+
+    // Clean up the manually attached chunker so subsequent tests use the default fallback
+    delete (bluebubblesPlugin.outbound as Record<string, unknown>).chunker;
+  });
+
   it("sends text as single chunk when no chunker is defined", async () => {
     // BlueBubbles has no chunker, so text is sent as a single chunk via [text] fallback
     const sendTextSpy = vi

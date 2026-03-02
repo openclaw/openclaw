@@ -291,6 +291,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       const outbound = signalPlugin.outbound!;
       const limit = outbound.textChunkLimit;
       const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      if (!chunks.length) return { channel: "signal", messageId: "" };
       let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
       for (const chunk of chunks) {
         lastResult = await outbound.sendText!({ ...ctx, text: chunk });

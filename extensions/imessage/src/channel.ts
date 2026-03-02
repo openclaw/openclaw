@@ -259,6 +259,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       const outbound = imessagePlugin.outbound!;
       const limit = outbound.textChunkLimit;
       const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      if (!chunks.length) return { channel: "imessage", messageId: "" };
       let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
       for (const chunk of chunks) {
         lastResult = await outbound.sendText!({ ...ctx, text: chunk });

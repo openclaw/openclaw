@@ -118,6 +118,20 @@ describe("whatsappPlugin sendPayload", () => {
     expect(result).toEqual({ channel: "whatsapp", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    // Simulate a chunker that strips whitespace-only input to nothing
+    vi.spyOn(whatsappPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(whatsappPlugin.outbound!, "sendText");
+
+    const result = await whatsappPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "whatsapp", messageId: "" });
+  });
+
   it("chunks long text via text chunker", async () => {
     const sendTextSpy = vi
       .spyOn(whatsappPlugin.outbound!, "sendText")

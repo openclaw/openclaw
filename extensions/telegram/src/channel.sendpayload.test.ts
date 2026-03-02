@@ -114,6 +114,20 @@ describe("telegramPlugin sendPayload", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    // Simulate a chunker that strips whitespace-only input to nothing
+    vi.spyOn(telegramPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(telegramPlugin.outbound!, "sendText");
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "" });
+  });
+
   it("chunks long text via markdown chunker", async () => {
     const sendTextSpy = vi
       .spyOn(telegramPlugin.outbound!, "sendText")

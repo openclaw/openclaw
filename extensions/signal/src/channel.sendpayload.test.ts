@@ -112,6 +112,20 @@ describe("signalPlugin sendPayload", () => {
     expect(result).toEqual({ channel: "signal", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    // Simulate a chunker that strips whitespace-only input to nothing
+    vi.spyOn(signalPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(signalPlugin.outbound!, "sendText");
+
+    const result = await signalPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "signal", messageId: "" });
+  });
+
   it("chunks long text via text chunker", async () => {
     const sendTextSpy = vi
       .spyOn(signalPlugin.outbound!, "sendText")
