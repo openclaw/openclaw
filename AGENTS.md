@@ -3,23 +3,6 @@
 - Repo: https://github.com/openclaw/openclaw
 - GitHub issues/comments/PR: use heredocs (`-F - <<'EOF'`) for multiline strings; never embed `"\n"`.
 
-## Project Structure
-
-| Directory                                                     | Purpose                                             |
-| ------------------------------------------------------------- | --------------------------------------------------- |
-| `src/`                                                        | Main source code (CLI, agents, gateway, channels)   |
-| `src/cli/`                                                    | CLI commands and program setup                      |
-| `src/agents/`                                                 | AI agent execution, tools, sessions                 |
-| `src/gateway/`                                                | WebSocket/HTTP gateway server                       |
-| `src/config/`                                                 | Configuration loading and types (modular)           |
-| `src/plugin-sdk/`                                             | Plugin SDK for extensions                           |
-| `src/{telegram,discord,slack,signal,whatsapp,imessage,line}/` | Messaging channel implementations                   |
-| `extensions/`                                                 | Plugin extensions (workspace packages)              |
-| `apps/`                                                       | Mobile/desktop companion apps (iOS, Android, macOS) |
-| `packages/`                                                   | Workspace packages (clawdbot, moltbot)              |
-| `test/`                                                       | Test setup files                                    |
-| `dist/`                                                       | Build output                                        |
-
 ## Build, Test, and Development Commands
 
 ```bash
@@ -75,7 +58,6 @@ pnpm gateway:dev
 - **Module**: NodeNext with NodeNext resolution
 - **Avoid**: `any`, `@ts-nocheck`, `@ts-ignore`, `@ts-expect-error`
 - **Type imports**: Use `import type { X }` for type-only imports
-- **No explicit any**: Never use `as any` or disable lint rules to suppress type errors
 
 ### Imports
 
@@ -104,7 +86,6 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 
 - Always handle errors explicitly; never use empty catch blocks
 - Log errors with context using `runtime.error?.()` or `log.error()`
-- For user-facing errors, provide actionable messages
 - Use `String(err)` for safe error message extraction
 
 ```typescript
@@ -120,14 +101,13 @@ try {
 
 - Formatting via **Oxfmt**, linting via **Oxlint**
 - Run `pnpm check` before commits
-- Run `pnpm format:fix` to auto-fix formatting issues
 - Keep files under ~700 LOC; split when it improves clarity
 - Add brief comments for tricky or non-obvious logic
 
 ### Class Design
 
 - Use explicit inheritance (`A extends B`) or composition
-- **Never** share behavior via prototype mutation (`applyPrototypeMixins`, `Object.defineProperty` on `.prototype`)
+- **Never** share behavior via prototype mutation
 - In tests, prefer per-instance stubs over prototype mutation
 
 ## Testing Guidelines
@@ -170,16 +150,17 @@ describe("MyClass", () => {
 6. **Always** consider all messaging channels when refactoring shared logic
 7. **Always** use `.js` extension in imports for ESM compatibility
 
-## Useful File Locations
+## Project Structure
 
-| Purpose           | Path                                               |
-| ----------------- | -------------------------------------------------- |
-| CLI entry         | `src/index.ts`, `openclaw.mjs`                     |
-| Config types      | `src/config/types.ts` (re-exports modular types)   |
-| Gateway server    | `src/gateway/server.ts`                            |
-| Telegram channel  | `src/telegram/`                                    |
-| Agent runner      | `src/agents/pi-embedded-runner.ts`                 |
-| Plugin SDK        | `src/plugin-sdk/index.ts`                          |
-| Test setup        | `test/setup.ts`                                    |
-| Vitest config     | `vitest.config.ts`, `vitest.unit.config.ts`        |
-| LaunchAgent plist | `~/Library/LaunchAgents/ai.openclaw.gateway.plist` |
+| Directory         | Purpose                                           |
+| ----------------- | ------------------------------------------------- |
+| `src/`            | Main source code (CLI, agents, gateway, channels) |
+| `src/cli/`        | CLI commands and program setup                    |
+| `src/agents/`     | AI agent execution, tools, sessions               |
+| `src/gateway/`    | WebSocket/HTTP gateway server                     |
+| `src/config/`     | Configuration loading and types                   |
+| `src/plugin-sdk/` | Plugin SDK for extensions                         |
+| `src/telegram/`   | Telegram channel implementation                   |
+| `extensions/`     | Plugin extensions (workspace packages)            |
+| `test/`           | Test setup files                                  |
+| `dist/`           | Build output                                      |
