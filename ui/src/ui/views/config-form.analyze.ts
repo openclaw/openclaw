@@ -86,8 +86,8 @@ function normalizeSchemaNode(
       if (!isAnySchema(schema.additionalProperties)) {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
+        for (const entry of res.unsupportedPaths) {
+          unsupported.add(entry);
         }
       }
     }
@@ -98,8 +98,8 @@ function normalizeSchemaNode(
     } else {
       const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
       normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) {
-        unsupported.add(pathLabel);
+      for (const entry of res.unsupportedPaths) {
+        unsupported.add(entry);
       }
     }
   } else if (
@@ -202,23 +202,6 @@ function normalizeUnion(
       },
       unsupportedPaths: [],
     };
-  }
-
-  // When a union mixes a single primitive with complex types (e.g. SecretInputSchema:
-  // string | { source: "env"|"file"|"exec", ... }), simplify to the primitive so the
-  // form can render a text input instead of marking the field unsupported.
-  if (remaining.length > 0 && literals.length === 0) {
-    const primitives = remaining.filter(
-      (entry) => entry.type && primitiveTypes.has(String(entry.type)),
-    );
-    if (primitives.length >= 1) {
-      const chosen = primitives[0];
-      const res = normalizeSchemaNode(chosen, path);
-      if (res.schema) {
-        res.schema.nullable = nullable || res.schema.nullable;
-      }
-      return res;
-    }
   }
 
   return null;

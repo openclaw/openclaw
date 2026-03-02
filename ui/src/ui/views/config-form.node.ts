@@ -4,6 +4,7 @@ import {
   defaultValue,
   hintForPath,
   humanize,
+  isPathUnsupported,
   pathKey,
   schemaType,
   type JsonSchema,
@@ -340,7 +341,7 @@ export function renderNode(params: {
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
+  if (isPathUnsupported(key, unsupported)) {
     return html`<div class="cfg-field cfg-field--error">
       <div class="cfg-field__label">${label}</div>
       <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>

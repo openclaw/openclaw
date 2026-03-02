@@ -317,6 +317,58 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).toContain("mixed");
   });
 
+  it("propagates unsupported children in additionalProperties without blocking parent", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        providers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              apiKey: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "object", properties: { source: { type: "string" } } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("providers");
+    expect(analysis.unsupportedPaths).toContain("providers.*.apiKey");
+  });
+
+  it("propagates unsupported children in array items without blocking parent", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              compat: {
+                anyOf: [
+                  { type: "object", properties: { a: { type: "string" } } },
+                  { type: "object", properties: { b: { type: "number" } } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("items");
+    expect(analysis.unsupportedPaths).toContain("items.*.compat");
+  });
+
   it("supports nullable types", () => {
     const schema = {
       type: "object",

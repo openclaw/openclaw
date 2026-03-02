@@ -87,6 +87,33 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
   return undefined;
 }
 
+export function isPathUnsupported(key: string, unsupported: Set<string>): boolean {
+  if (unsupported.has(key)) {
+    return true;
+  }
+  const segments = key.split(".");
+  for (const pattern of unsupported) {
+    if (!pattern.includes("*")) {
+      continue;
+    }
+    const patternSegments = pattern.split(".");
+    if (patternSegments.length !== segments.length) {
+      continue;
+    }
+    let match = true;
+    for (let i = 0; i < segments.length; i += 1) {
+      if (patternSegments[i] !== "*" && patternSegments[i] !== segments[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function humanize(raw: string) {
   return raw
     .replace(/_/g, " ")
