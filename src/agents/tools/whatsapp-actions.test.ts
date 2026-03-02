@@ -40,6 +40,24 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
+  it("falls back to MessageSid when messageId is omitted", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        MessageSid: "msg-context",
+        emoji: "✅",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "msg-context", "✅", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleWhatsAppAction(
       {

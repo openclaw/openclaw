@@ -1,7 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
-import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
+import {
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./whatsapp-target-auth.js";
 
 export async function handleWhatsAppAction(
@@ -16,7 +22,10 @@ export async function handleWhatsAppAction(
       throw new Error("WhatsApp reactions are disabled.");
     }
     const chatJid = readStringParam(params, "chatJid", { required: true });
-    const messageId = readStringParam(params, "messageId", { required: true });
+    const messageId = readStringParam(params, "messageId") ?? readStringParam(params, "MessageSid");
+    if (!messageId) {
+      throw new ToolInputError("messageId required");
+    }
     const { emoji, remove, isEmpty } = readReactionParams(params, {
       removeErrorMessage: "Emoji is required to remove a WhatsApp reaction.",
     });
