@@ -177,8 +177,9 @@ describe("runReplyAgent onAgentRunStart", () => {
 
     expect(onAgentRunStart).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      text: expect.stringContaining('No API key found for provider "anthropic".'),
+      text: expect.stringContaining('Missing API key for provider "anthropic".'),
     });
+    expect(result.text).toContain("openclaw configure");
   });
 
   it("emits start callback when cli runner starts", async () => {

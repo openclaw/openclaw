@@ -69,6 +69,12 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+function resolveMissingApiKeyProvider(message: string): string | null {
+  const match = message.match(/No API key found for provider "([^"]+)"/i);
+  const provider = match?.[1]?.trim();
+  return provider || null;
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -570,11 +576,14 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
+      const missingApiKeyProvider = resolveMissingApiKeyProvider(trimmedMessage);
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
         : isRoleOrderingError
           ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+          : missingApiKeyProvider
+            ? `⚠️ Missing API key for provider "${missingApiKeyProvider}".\nRun openclaw configure (or set the provider API key), then retry.\nLogs: openclaw logs --follow`
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
