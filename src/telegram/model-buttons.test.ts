@@ -21,6 +21,14 @@ describe("parseModelCallbackData", () => {
         { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
       ],
       ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
+      [
+        "mdl_sel/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        { type: "select", model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0" },
+      ],
+      [
+        "mdl_sel/anthropic/claude-3-7-sonnet",
+        { type: "select", model: "anthropic/claude-3-7-sonnet" },
+      ],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -36,6 +44,7 @@ describe("parseModelCallbackData", () => {
       "mdl_invalid",
       "mdl_list_",
       "mdl_sel_noslash",
+      "mdl_sel/",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -208,6 +217,18 @@ describe("buildModelsKeyboard", () => {
         expect(text?.length, testCase.name).toBeLessThanOrEqual(testCase.maxLength);
       }
     }
+  });
+
+  it("uses compact selection callback when provider/model callback exceeds 64 bytes", () => {
+    const model = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+    const result = buildModelsKeyboard({
+      provider: "amazon-bedrock",
+      models: [model],
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    expect(result[0]?.[0]?.callback_data).toBe(`mdl_sel/${model}`);
   });
 });
 
