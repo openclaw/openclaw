@@ -107,6 +107,36 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function createAssistantTextMessage(text: string, timestamp?: unknown): Record<string, unknown> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: typeof timestamp === "number" ? timestamp : Date.now(),
+  };
+}
+
+function shouldPreferStreamedText(
+  streamedText: string | null,
+  finalMessage: Record<string, unknown>,
+): boolean {
+  const streamed = streamedText?.trim();
+  if (!streamed) {
+    return false;
+  }
+  const finalText = extractText(finalMessage);
+  if (typeof finalText !== "string") {
+    return false;
+  }
+  const normalizedFinal = finalText.trim();
+  if (!normalizedFinal) {
+    return true;
+  }
+  if (streamed.length <= normalizedFinal.length) {
+    return false;
+  }
+  return streamed.includes(normalizedFinal);
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -250,16 +280,16 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+      if (shouldPreferStreamedText(state.chatStream, finalMessage)) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          createAssistantTextMessage(state.chatStream ?? "", finalMessage.timestamp),
+        ];
+      } else {
+        state.chatMessages = [...state.chatMessages, finalMessage];
+      }
     } else if (state.chatStream?.trim()) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
+      state.chatMessages = [...state.chatMessages, createAssistantTextMessage(state.chatStream)];
     }
     state.chatStream = null;
     state.chatRunId = null;

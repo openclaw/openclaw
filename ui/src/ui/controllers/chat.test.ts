@@ -181,6 +181,33 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
+  it("keeps streamed text when final payload appears truncated", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Part A\nPart B\nPart C",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Part C" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Part A\nPart B\nPart C" }],
+    });
+    expect(state.chatStream).toBe(null);
+    expect(state.chatRunId).toBe(null);
+  });
+
   it("appends final payload message from own run before clearing stream state", () => {
     const state = createState({
       sessionKey: "main",
