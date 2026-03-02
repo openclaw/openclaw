@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withEnvAsync } from "../test-utils/env.js";
+import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.js";
 
 type MediaFixtureParams = {
@@ -49,10 +50,16 @@ export async function withAudioFixture(
       filePrefix,
       extension: "wav",
       mediaType: "audio/wav",
-      fileContents: Buffer.alloc(2048, 0x52),
+      fileContents: createSafeAudioFixtureBuffer(2048, 0x52),
     },
     run,
   );
+}
+
+export function createSafeAudioFixtureBuffer(size?: number, fill = 0xab): Buffer {
+  const minSafeSize = MIN_AUDIO_FILE_BYTES + 1;
+  const finalSize = Math.max(size ?? minSafeSize, minSafeSize);
+  return Buffer.alloc(finalSize, fill);
 }
 
 export async function withVideoFixture(
