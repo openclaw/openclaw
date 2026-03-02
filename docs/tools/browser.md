@@ -145,8 +145,10 @@ and responding with the configured credentials.
 }
 ```
 
-Per-profile proxies inherit credentials from the global proxy unless the
-profile's own URL contains credentials.
+When a profile sets its own `proxy`, credentials come only from that URL.
+Global proxy credentials are inherited only when no profile-level proxy is set.
+A profile proxy without credentials means no authentication — global credentials
+are never forwarded to a different proxy server.
 
 ### Notes
 
