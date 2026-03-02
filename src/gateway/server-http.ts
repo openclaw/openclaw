@@ -48,6 +48,7 @@ import {
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { hasSecurityPathCanonicalizationAnomaly } from "./security-path.js";
 import { isProtectedPluginRoutePath } from "./security-path.js";
 import {
   authorizeCanvasRequest,
@@ -79,6 +80,10 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+
+function shouldEnforceDefaultPluginGatewayAuth(pathname: string): boolean {
+  return hasSecurityPathCanonicalizationAnomaly(pathname) || isProtectedPluginRoutePath(pathname);
+}
 
 function handleGatewayProbeRequest(
   req: IncomingMessage,
@@ -511,7 +516,9 @@ export function createGatewayHttpServer(opts: {
       // Plugins run after built-in gateway routes so core surfaces keep
       // precedence on overlapping paths.
       if (handlePluginRequest) {
-        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
+        if (
+          (shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(requestPath)
+        ) {
           const pluginAuthOk = await enforcePluginRouteGatewayAuth({
             req,
             res,
