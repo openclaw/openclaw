@@ -165,7 +165,7 @@ export type FeishuMessageEvent = {
     root_id?: string;
     parent_id?: string;
     chat_id: string;
-    chat_type: "p2p" | "group";
+    chat_type: "p2p" | "group" | "private";
     message_type: string;
     content: string;
     create_time?: string;
@@ -709,6 +709,7 @@ export async function handleFeishuMessage(params: {
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
+  const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
@@ -895,7 +896,7 @@ export async function handleFeishuMessage(params: {
       senderName: ctx.senderName,
     }).allowed;
 
-    if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
+    if (isDirect && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
         const { code, created } = await pairing.upsertPairingRequest({
           id: ctx.senderOpenId,
