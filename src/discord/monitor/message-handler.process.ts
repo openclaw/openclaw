@@ -577,10 +577,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     typingCallbacks,
     deliver: async (payload: ReplyPayload, info) => {
       const isFinal = info.kind === "final";
-      if (payload.isReasoning) {
-        // Reasoning/thinking payloads should not be delivered to Discord.
+      
+      // Internal Reasoning Block Filter:
+      // Prevents 'block' payloads (internal reasoning steps) from leaking to the external stream.
+      // This guard must be the first check to ensure no processing or delivery logic runs for these payloads.
+      if (info.kind === "block") {
         return;
       }
+      
+      if (payload.isReasoning) {
       if (draftStream && isFinal) {
         await flushDraft();
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
