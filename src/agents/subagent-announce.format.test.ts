@@ -570,6 +570,48 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.message).toBe("Task completed (2 jobs).");
   });
 
+  it("preserves error status even when findings summarize to success-looking text", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-direct-json-error",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-json-error",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "{\"version\":1,\"jobs\":[{\"id\":1},{\"id\":2}]}",
+            },
+          ],
+        },
+      ],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-json-error",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      outcome: { status: "error", error: "upstream timeout" },
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("Task failed: upstream timeout");
+    expect(msg).toContain("Task completed (2 jobs).");
+  });
+
   it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
