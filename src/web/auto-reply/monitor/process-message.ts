@@ -107,6 +107,28 @@ async function resolveWhatsAppCommandAuthorized(params: {
   return access.commandAuthorized;
 }
 
+function resolvePinnedMainDmRecipient(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+}): string | null {
+  if ((params.cfg.session?.dmScope ?? "main") !== "main") {
+    return null;
+  }
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  const rawAllowFrom = account.allowFrom ?? [];
+  if (rawAllowFrom.includes("*")) {
+    return null;
+  }
+  const normalizedOwners = Array.from(
+    new Set(
+      rawAllowFrom
+        .map((entry) => normalizeE164(String(entry)))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+}
+
 export async function processMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
@@ -320,7 +342,17 @@ export async function processMessage(params: {
   // Only update main session's lastRoute when DM actually IS the main session.
   // When dmScope="per-channel-peer", the DM uses an isolated sessionKey,
   // and updating mainSessionKey would corrupt routing for the session owner.
-  if (dmRouteTarget && params.route.sessionKey === params.route.mainSessionKey) {
+  const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
+    cfg: params.cfg,
+    msg: params.msg,
+  });
+  const shouldUpdateMainLastRoute =
+    !pinnedMainDmRecipient || pinnedMainDmRecipient === dmRouteTarget;
+  if (
+    dmRouteTarget &&
+    params.route.sessionKey === params.route.mainSessionKey &&
+    shouldUpdateMainLastRoute
+  ) {
     updateLastRouteInBackground({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
@@ -332,6 +364,14 @@ export async function processMessage(params: {
       ctx: ctxPayload,
       warn: params.replyLogger.warn.bind(params.replyLogger),
     });
+  } else if (
+    dmRouteTarget &&
+    params.route.sessionKey === params.route.mainSessionKey &&
+    pinnedMainDmRecipient
+  ) {
+    logVerbose(
+      `Skipping main-session last route update for ${dmRouteTarget} (pinned owner ${pinnedMainDmRecipient})`,
+    );
   }
 
   const metaTask = recordSessionMetaFromInbound({
