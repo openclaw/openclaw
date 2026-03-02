@@ -1,116 +1,158 @@
 ---
 name: hanzo-search
-description: "AI-powered full-text search with Hanzo Search (Meilisearch). Sub-50ms queries, typo tolerance, faceting, filtering, and multi-language support."
+description: "Search indexed documentation and knowledge bases via the Hanzo Search API. Supports hybrid fulltext+vector search, faceted filtering, and streaming RAG chat over search results. Use when a bot needs to search docs, knowledge bases, or indexed content, or when a user asks to find information across indexed sources."
 metadata:
-  {
-    "bot":
-      {
-        "requires": { "bins": ["python3"] },
-        "install":
-          [
-            {
-              "id": "pip",
-              "kind": "pip",
-              "package": "meilisearch",
-              "label": "Install Meilisearch Client (pip)",
-            },
-          ],
-      },
-  }
+  { "bot": { "requires": { "bins": ["python3"] }, "primaryEnv": "HANZO_API_KEY", "emoji": "🔍" } }
 ---
 
-# Hanzo Search — Full-Text Search
+# Hanzo Search -- Document Search API
 
-`pip install meilisearch`
+Search indexed documentation and knowledge bases with hybrid fulltext+vector retrieval, faceted filtering, and streaming RAG chat.
 
-Sub-50ms full-text search with typo tolerance, faceted filtering, sorting, and multi-language support. Built on Meilisearch.
+## API Endpoints
 
-## Quick Start
+Base URL: `https://api.cloud.hanzo.ai`
 
-```python
-import meilisearch
+| Endpoint           | Method | Purpose                                  |
+| ------------------ | ------ | ---------------------------------------- |
+| `/api/search-docs` | POST   | Search indexed documents                 |
+| `/api/chat-docs`   | POST   | RAG chat over search results (streaming) |
 
-client = meilisearch.Client("http://localhost:7700", "master-key")
+## Authentication
 
-# Create index and add documents
-index = client.index("products")
-index.add_documents([
-    {"id": 1, "title": "Hanzo Agent SDK", "category": "sdk", "price": 0},
-    {"id": 2, "title": "Hanzo MCP Server", "category": "tools", "price": 0},
-    {"id": 3, "title": "Hanzo Chat Pro", "category": "app", "price": 29},
-])
+All requests require a Bearer token in the `Authorization` header. Use the bot's IAM token or a Hanzo API key.
 
-# Search
-results = index.search("agent")
-for hit in results["hits"]:
-    print(hit["title"])
+```
+Authorization: Bearer <token>
 ```
 
-## Filtering & Faceting
+## Search Documents
 
-```python
-# Configure filterable attributes
-index.update_filterable_attributes(["category", "price"])
-index.update_sortable_attributes(["price", "title"])
-
-# Search with filters
-results = index.search("hanzo", {
-    "filter": "category = sdk AND price < 100",
-    "sort": ["price:asc"],
-    "limit": 20
-})
-
-# Faceted search
-results = index.search("hanzo", {
-    "facets": ["category"],
-})
-print(results["facetDistribution"])
-# {"category": {"sdk": 5, "tools": 3, "app": 2}}
+```bash
+python3 {baseDir}/scripts/search.py --query "how to deploy" --store my-docs
 ```
 
-## Typo Tolerance
+### Request Body (`/api/search-docs`)
 
-```python
-# Searches for "hanzp" still find "hanzo"
-results = index.search("hanzp")
-# Returns: Hanzo Agent SDK, Hanzo MCP Server, etc.
+```json
+{
+  "query": "how to deploy to kubernetes",
+  "store": "my-docs",
+  "mode": "hybrid",
+  "limit": 10,
+  "filters": {
+    "category": "deployment"
+  }
+}
 ```
 
-## Synonyms
+### Fields
 
-```python
-index.update_synonyms({
-    "ai": ["artificial intelligence", "ml", "machine learning"],
-    "sdk": ["library", "package", "client"]
-})
+- `query` (required): Search query string
+- `store` (required): Name of the search store / knowledge base
+- `mode` (optional): `"hybrid"` (default), `"fulltext"`, or `"vector"`
+- `limit` (optional): Max results (default 10, max 100)
+- `filters` (optional): Key-value facet filters
+- `offset` (optional): Pagination offset
+
+### Response
+
+```json
+{
+  "results": [
+    {
+      "id": "doc-123",
+      "title": "Kubernetes Deployment Guide",
+      "url": "https://docs.example.com/deploy",
+      "content": "To deploy your application to Kubernetes...",
+      "score": 0.95,
+      "metadata": {
+        "category": "deployment",
+        "updated_at": "2026-01-15"
+      }
+    }
+  ],
+  "total": 42,
+  "query": "how to deploy to kubernetes",
+  "mode": "hybrid"
+}
 ```
 
-## Multi-Language
+## RAG Chat over Search Results
 
-```python
-# Chinese, Japanese, Korean, Hebrew, Thai support
-index.add_documents([
-    {"id": 4, "title": "Hanzo AI", "title_ja": "ハンゾーAI"}
-])
+Stream a chat response grounded in search results.
+
+```bash
+python3 {baseDir}/scripts/chat.py --query "explain the deployment process" --store my-docs
 ```
 
-## Async Client
+### Request Body (`/api/chat-docs`)
 
-```python
-import meilisearch
-
-# Tasks are async by default
-task = index.add_documents(documents)
-client.wait_for_task(task.task_uid)
+```json
+{
+  "query": "explain the deployment process step by step",
+  "store": "my-docs",
+  "mode": "hybrid",
+  "limit": 5,
+  "stream": true
+}
 ```
 
-## Port
+### Fields
 
-- API: `7700`
+- `query` (required): Chat question
+- `store` (required): Search store to ground answers in
+- `mode` (optional): Search mode for retrieval (`"hybrid"`, `"fulltext"`, `"vector"`)
+- `limit` (optional): Number of source documents to retrieve (default 5)
+- `stream` (optional): Stream response chunks (default true)
+- `model` (optional): LLM model for chat generation
+- `system_prompt` (optional): Override system prompt for the chat
+
+### Streaming Response
+
+Each line is a JSON chunk:
+
+```json
+{"type": "source", "data": {"id": "doc-123", "title": "...", "url": "...", "score": 0.95}}
+{"type": "chunk", "data": {"text": "The deployment process"}}
+{"type": "chunk", "data": {"text": " involves three steps..."}}
+{"type": "done", "data": {"sources_count": 5, "tokens_used": 342}}
+```
+
+## Scripts
+
+### `scripts/search.py`
+
+Search documents from the command line.
+
+```bash
+python3 {baseDir}/scripts/search.py \
+  --query "search terms" \
+  --store "store-name" \
+  --mode hybrid \
+  --limit 10 \
+  --token "$HANZO_API_KEY"
+```
+
+### `scripts/chat.py`
+
+RAG chat over search results.
+
+```bash
+python3 {baseDir}/scripts/chat.py \
+  --query "your question" \
+  --store "store-name" \
+  --limit 5 \
+  --token "$HANZO_API_KEY"
+```
+
+## Billing
+
+Each search query is billed per the Hanzo Search pricing tier. RAG chat queries include both the search cost and the LLM generation cost. Usage is tracked automatically through the bot gateway.
 
 ## Environment Variables
 
 ```bash
-MEILISEARCH_HOST=http://localhost:7700
-MEILISEARCH_API_KEY=master-key
+HANZO_API_KEY=...                                  # API key or IAM token
+HANZO_SEARCH_BASE_URL=https://api.cloud.hanzo.ai   # Override API base URL
 ```

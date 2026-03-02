@@ -1,101 +1,195 @@
 ---
 name: hanzo-vector
-description: "Vector similarity search with Hanzo Vector (Qdrant). Store embeddings, semantic search, hybrid search, RAG pipelines, and recommendation systems."
+description: "Direct vector similarity search via Hanzo Vector (Qdrant). Store embeddings with metadata, search by similarity, manage collections, and build RAG pipelines. Use when a bot needs to store or query vector embeddings, perform semantic similarity search, or manage vector collections."
 metadata:
-  {
-    "bot":
-      {
-        "requires": { "bins": ["python3"] },
-        "install":
-          [
-            {
-              "id": "pip",
-              "kind": "pip",
-              "package": "qdrant-client",
-              "label": "Install Qdrant Client (pip)",
-            },
-          ],
-      },
-  }
+  { "bot": { "requires": { "bins": ["python3"] }, "primaryEnv": "HANZO_API_KEY", "emoji": "🧮" } }
 ---
 
-# Hanzo Vector — Similarity Search Engine
+# Hanzo Vector -- Similarity Search Engine
 
-`pip install qdrant-client`
+Direct vector operations on Hanzo's managed Qdrant instance. Store embeddings, search by similarity, manage collections, and build RAG pipelines.
 
-Vector similarity search for embeddings, semantic search, RAG pipelines, and recommendations. Built on Qdrant.
+## Endpoint
 
-## Quick Start
+Qdrant REST API at `https://vector.hanzo.ai:6333` (or internal at `vector.hanzo.svc:6333`).
 
-```python
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+## Authentication
 
-client = QdrantClient("http://localhost:6333")
+Pass the API key as the `api-key` header or via the Qdrant client's `api_key` parameter.
 
+```
+api-key: <token>
+```
+
+## Collections
+
+### Create a Collection
+
+```bash
+python3 {baseDir}/scripts/vector.py collection create \
+  --name documents \
+  --dimension 384 \
+  --distance cosine
+```
+
+### List Collections
+
+```bash
+python3 {baseDir}/scripts/vector.py collection list
+```
+
+### Delete a Collection
+
+```bash
+python3 {baseDir}/scripts/vector.py collection delete --name documents
+```
+
+### Collection Info
+
+```bash
+python3 {baseDir}/scripts/vector.py collection info --name documents
+```
+
+## Store Embeddings
+
+### Upsert Points
+
+```bash
+python3 {baseDir}/scripts/vector.py upsert \
+  --collection documents \
+  --input points.json
+```
+
+Input JSON format:
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3, ...],
+      "payload": {
+        "text": "Hello world",
+        "category": "greeting",
+        "source": "docs"
+      }
+    }
+  ]
+}
+```
+
+Or pipe from stdin:
+
+```bash
+echo '{"points": [...]}' | python3 {baseDir}/scripts/vector.py upsert \
+  --collection documents \
+  --input -
+```
+
+## Search by Similarity
+
+```bash
+python3 {baseDir}/scripts/vector.py search \
+  --collection documents \
+  --vector "[0.1, 0.2, 0.3, ...]" \
+  --limit 10
+```
+
+### Search with Filters
+
+```bash
+python3 {baseDir}/scripts/vector.py search \
+  --collection documents \
+  --vector "[0.1, 0.2, ...]" \
+  --filter '{"must": [{"key": "category", "match": {"value": "tech"}}]}' \
+  --limit 10
+```
+
+### Filter Syntax
+
+Qdrant filter conditions:
+
+```json
+{
+  "must": [
+    { "key": "category", "match": { "value": "tech" } },
+    { "key": "year", "range": { "gte": 2024 } }
+  ],
+  "should": [{ "key": "author", "match": { "value": "hanzo" } }],
+  "must_not": [{ "key": "status", "match": { "value": "draft" } }]
+}
+```
+
+## Scripts Reference
+
+### `scripts/vector.py`
+
+Unified CLI for all vector operations.
+
+#### Collection Management
+
+```bash
 # Create collection
-client.create_collection(
-    collection_name="documents",
-    vectors_config=VectorParams(size=384, distance=Distance.COSINE)
-)
+python3 {baseDir}/scripts/vector.py collection create \
+  --name <name> --dimension <dim> --distance <cosine|euclid|dot>
 
-# Upsert vectors
-client.upsert(
-    collection_name="documents",
-    points=[
-        PointStruct(id=1, vector=[0.1, 0.2, ...], payload={"text": "Hello world"}),
-        PointStruct(id=2, vector=[0.3, 0.4, ...], payload={"text": "Goodbye world"}),
-    ]
-)
+# List collections
+python3 {baseDir}/scripts/vector.py collection list
 
-# Search
-results = client.search(
-    collection_name="documents",
-    query_vector=[0.1, 0.2, ...],
-    limit=10
-)
-for r in results:
-    print(r.payload["text"], r.score)
+# Get collection info
+python3 {baseDir}/scripts/vector.py collection info --name <name>
+
+# Delete collection
+python3 {baseDir}/scripts/vector.py collection delete --name <name>
 ```
 
-## Hybrid Search (Dense + Sparse)
+#### Point Operations
 
-```python
-from qdrant_client.models import SparseVector, SearchRequest
+```bash
+# Upsert points from JSON file or stdin
+python3 {baseDir}/scripts/vector.py upsert \
+  --collection <name> --input <file.json or ->
 
-# Search with both dense and sparse vectors
-results = client.search(
-    collection_name="documents",
-    query_vector=dense_vector,
-    query_filter={"must": [{"key": "category", "match": {"value": "tech"}}]},
-    limit=10
-)
+# Search by vector
+python3 {baseDir}/scripts/vector.py search \
+  --collection <name> --vector "<json array>" --limit 10
+
+# Search with filter
+python3 {baseDir}/scripts/vector.py search \
+  --collection <name> --vector "<json array>" \
+  --filter '<json filter>' --limit 10
+
+# Get points by ID
+python3 {baseDir}/scripts/vector.py get \
+  --collection <name> --ids "1,2,3"
+
+# Delete points by ID
+python3 {baseDir}/scripts/vector.py delete \
+  --collection <name> --ids "1,2,3"
+
+# Count points
+python3 {baseDir}/scripts/vector.py count --collection <name>
 ```
 
-## Payload Filtering
+### Common Options
 
-```python
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+All commands accept:
 
-# Complex filtering
-results = client.search(
-    collection_name="documents",
-    query_vector=embedding,
-    query_filter=Filter(
-        must=[
-            FieldCondition(key="author", match=MatchValue(value="hanzo")),
-            FieldCondition(key="year", range=Range(gte=2024)),
-        ]
-    ),
-    limit=10
-)
+```
+--host       Qdrant host (default: $HANZO_VECTOR_HOST or https://vector.hanzo.ai)
+--port       Qdrant port (default: $HANZO_VECTOR_PORT or 6333)
+--api-key    API key (default: $HANZO_API_KEY)
+--format     Output: text, json (default: text)
 ```
 
-## RAG Pipeline
+## RAG Pipeline Example
+
+Generate embeddings with the Hanzo API, store in vector DB, and search:
 
 ```python
-# 1. Generate embedding for query
 from hanzoai import Hanzo
+
+# 1. Generate embedding
 ai = Hanzo(api_key="...")
 embedding = ai.embeddings.create(
     model="text-embedding-3-small",
@@ -103,31 +197,18 @@ embedding = ai.embeddings.create(
 ).data[0].embedding
 
 # 2. Search vector DB
-results = client.search(
-    collection_name="knowledge",
-    query_vector=embedding,
-    limit=5
-)
-
-# 3. Build context for LLM
-context = "\n".join([r.payload["text"] for r in results])
+# python3 {baseDir}/scripts/vector.py search \
+#   --collection knowledge --vector "<embedding>" --limit 5
 ```
 
-## In-Memory (Testing)
+## Billing
 
-```python
-client = QdrantClient(":memory:")  # No server needed
-```
-
-## Ports
-
-- HTTP REST: `6333`
-- gRPC: `6334`
+Vector operations are billed per query (search) and per batch (upsert). Collection management operations are free. Usage is tracked automatically through the bot gateway.
 
 ## Environment Variables
 
 ```bash
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
-QDRANT_API_KEY=...          # Optional, requires TLS
+HANZO_API_KEY=...                             # API key for authentication
+HANZO_VECTOR_HOST=https://vector.hanzo.ai     # Qdrant host
+HANZO_VECTOR_PORT=6333                        # Qdrant port
 ```
