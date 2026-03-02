@@ -181,6 +181,53 @@ describe("triggerSessionEventRun", () => {
     expect(params?.ctx?.SessionKey).toBe("main");
   });
 
+  it("queues a follow-up run when canonical and alias queues both have events", async () => {
+    vi.useFakeTimers();
+    loadSessionEntryMock.mockImplementation(
+      (inputKey: string): ReturnType<typeof loadSessionEntryType> => ({
+        cfg: { session: { mainKey: "agent:ops:work" } } as OpenClawConfig,
+        storePath: "/tmp/sessions.json",
+        store: {},
+        entry: {
+          sessionId: `sid-${inputKey}`,
+          updatedAt: Date.now(),
+          lastChannel: "discord",
+          lastTo: "C123",
+        },
+        canonicalKey: "agent:ops:work",
+        legacyKey: inputKey === "main" ? "main" : undefined,
+      }),
+    );
+
+    const pendingByKey = new Set(["agent:ops:work", "main"]);
+    hasSystemEventsMock.mockImplementation((key: string) => pendingByKey.has(key));
+    dispatchInboundMessageWithDispatcherMock.mockImplementation(async (raw) => {
+      const params = raw as { ctx?: { SessionKey?: string } };
+      const key = params.ctx?.SessionKey;
+      if (typeof key === "string") {
+        pendingByKey.delete(key);
+      }
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    });
+
+    requestSessionEventRun({
+      sessionKey: "main",
+      source: "exec-event",
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(250);
+
+    const dispatchedSessionKeys = dispatchInboundMessageWithDispatcherMock.mock.calls.map(
+      (call) => (call[0] as { ctx?: { SessionKey?: string } })?.ctx?.SessionKey,
+    );
+    expect(dispatchedSessionKeys).toEqual(["agent:ops:work", "main"]);
+    expect(pendingByKey.size).toBe(0);
+  });
+
   it("skips non-agent canonical session keys", async () => {
     loadSessionEntryMock.mockImplementationOnce(
       (_sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({

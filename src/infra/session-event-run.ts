@@ -51,14 +51,22 @@ function getPendingKey(params: { sessionKey: string }) {
   return params.sessionKey.trim();
 }
 
-function resolveSessionEventQueueKey(keys: Array<string | null | undefined>): string | undefined {
+function resolveSessionEventQueueKeys(keys: Array<string | null | undefined>): string[] {
   const visited = new Set<string>();
+  const resolved: string[] = [];
   for (const candidate of keys) {
     const key = normalizePendingTarget(candidate);
     if (!key || visited.has(key)) {
       continue;
     }
     visited.add(key);
+    resolved.push(key);
+  }
+  return resolved;
+}
+
+function resolveSessionEventQueueKey(keys: string[]): string | undefined {
+  for (const key of keys) {
     if (hasSystemEvents(key)) {
       return key;
     }
@@ -247,7 +255,8 @@ async function runSessionEventOnce(params: {
   if (!shouldUseSessionScopedEventRun(canonicalKey)) {
     return { status: "skipped", reason: "non-agent-session" };
   }
-  const dispatchSessionKey = resolveSessionEventQueueKey([canonicalKey, sessionKey]);
+  const candidateSessionKeys = resolveSessionEventQueueKeys([canonicalKey, sessionKey]);
+  const dispatchSessionKey = resolveSessionEventQueueKey(candidateSessionKeys);
   if (!dispatchSessionKey) {
     return { status: "skipped", reason: "no-system-events" };
   }
@@ -267,6 +276,21 @@ async function runSessionEventOnce(params: {
     agentId: resolvedAgentId,
     delivery,
   });
+  for (const nextSessionKey of candidateSessionKeys) {
+    if (nextSessionKey === dispatchSessionKey) {
+      continue;
+    }
+    if (!hasSystemEvents(nextSessionKey)) {
+      continue;
+    }
+    // Mixed alias/canonical keys can hold separate queued system events for the
+    // same logical session. Queue a follow-up run so both queues drain.
+    queuePendingSessionRun({
+      sessionKey: nextSessionKey,
+      source,
+      agentId: params.agentId,
+    });
+  }
 
   return { status: "ran" };
 }
