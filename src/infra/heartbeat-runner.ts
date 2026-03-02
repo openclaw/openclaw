@@ -33,6 +33,7 @@ import {
   resolveStorePath,
   saveSessionStore,
   updateSessionStore,
+  type SessionEntry,
 } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -588,6 +589,32 @@ function resolveHeartbeatRunPrompt(params: {
   return { prompt, hasExecCompletion, hasCronEvents };
 }
 
+/**
+ * For cron events with no explicit delivery target, find the most recently
+ * active session that has a real outbound channel (e.g. Discord), skipping
+ * the current cron/heartbeat session and other cron-only sessions.
+ */
+function resolveBestCronDeliveryEntry(
+  store: Record<string, SessionEntry>,
+  currentSessionKey: string,
+): SessionEntry | undefined {
+  let best: SessionEntry | undefined;
+  let bestUpdatedAt = 0;
+  for (const [key, e] of Object.entries(store)) {
+    if (!e.lastChannel || e.lastChannel === "none") {
+      continue;
+    }
+    if (key === currentSessionKey || key.includes(":cron:")) {
+      continue;
+    }
+    if ((e.updatedAt ?? 0) > bestUpdatedAt) {
+      bestUpdatedAt = e.updatedAt ?? 0;
+      best = e;
+    }
+  }
+  return best;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -641,22 +668,36 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, sessionKey, storePath, store } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
-  // For exec-completion and cron events, fall back to the session's last channel
-  // when the heartbeat has no explicit delivery target. This enables results to
-  // be relayed back to the originating channel (e.g. Discord) even when
-  // heartbeat.target is "none". Exec-events require a sessionKey (so we target
-  // the right channel); cron events use whatever session was resolved (typically
-  // the main session's lastChannel).
-  const shouldFallbackToLast =
-    !heartbeat?.target || heartbeat.target === "none"
-      ? (preflight.isExecEventReason && Boolean(opts.sessionKey)) || preflight.isCronEventReason
-      : false;
+  // For exec-completion events: fall back to "last" when no explicit target or target is "none",
+  // since the user who approved an exec expects the result even if they haven't configured
+  // heartbeat delivery. Requires a sessionKey so we target the right session.
+  // For cron events: fall back to best channel session when target is unconfigured or "last"
+  // (the cron runner passes target:"last" but the main session has no channel context, so we
+  // need to find the most recently active channel session). Respects explicit opt-out ("none")
+  // and explicit channel targets ("discord", "telegram", etc.).
+  const execFallback =
+    preflight.isExecEventReason &&
+    Boolean(opts.sessionKey) &&
+    (!heartbeat?.target || heartbeat.target === "none");
+  const cronFallback =
+    preflight.isCronEventReason && (!heartbeat?.target || heartbeat.target === "last");
+  const shouldFallbackToLast = execFallback || cronFallback;
   const eventHeartbeat = shouldFallbackToLast
     ? { ...heartbeat, target: "last" as const }
     : heartbeat;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat: eventHeartbeat });
+  // Cron sessions have no channel context; look for the most recently active
+  // real-channel session in the store so we can route the reminder there.
+  const cronEntry = cronFallback
+    ? (resolveBestCronDeliveryEntry(store, sessionKey) ?? entry)
+    : entry;
+  const deliveryEntry = preflight.isCronEventReason ? cronEntry : entry;
+  const delivery = resolveHeartbeatDeliveryTarget({
+    cfg,
+    entry: deliveryEntry,
+    heartbeat: eventHeartbeat,
+  });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
