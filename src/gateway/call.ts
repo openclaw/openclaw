@@ -390,13 +390,11 @@ async function resolveGatewayCredentialsWithEnv(
   if (remote) {
     const localToken = trimToUndefined(resolvedConfig.gateway?.auth?.token);
     const localPassword = trimToUndefined(resolvedConfig.gateway?.auth?.password);
-    const needsRemoteToken = !envToken && !localToken;
-    const needsRemotePassword = !envPassword && !localPassword;
-
-    if (
-      needsRemoteToken &&
-      resolveSecretInputRef({ value: remote.token, defaults: resolvedDefaults }).ref
-    ) {
+    const remoteTokenRef = resolveSecretInputRef({
+      value: remote.token,
+      defaults: resolvedDefaults,
+    }).ref;
+    if (!envToken && !localToken && remoteTokenRef) {
       remote.token = await resolveGatewaySecretInputString({
         config: resolvedConfig,
         value: remote.token,
@@ -404,10 +402,13 @@ async function resolveGatewayCredentialsWithEnv(
         env,
       });
     }
-    if (
-      needsRemotePassword &&
-      resolveSecretInputRef({ value: remote.password, defaults: resolvedDefaults }).ref
-    ) {
+
+    const tokenCanWin = Boolean(envToken || localToken || trimToUndefined(remote.token));
+    const remotePasswordRef = resolveSecretInputRef({
+      value: remote.password,
+      defaults: resolvedDefaults,
+    }).ref;
+    if (!tokenCanWin && !envPassword && !localPassword && remotePasswordRef) {
       remote.password = await resolveGatewaySecretInputString({
         config: resolvedConfig,
         value: remote.password,

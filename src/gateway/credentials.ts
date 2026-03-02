@@ -213,7 +213,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   if (remoteTokenRef && !token && !envToken && !localTokenFallback) {
     throwUnresolvedGatewaySecretInput("gateway.remote.token");
   }
-  if (remotePasswordRef && !password && !envPassword && !localPasswordFallback) {
+  if (remotePasswordRef && !password && !envPassword && !localPasswordFallback && !token) {
     throwUnresolvedGatewaySecretInput("gateway.remote.password");
   }
 
