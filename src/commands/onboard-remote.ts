@@ -144,7 +144,7 @@ export async function promptRemoteGatewayConfig(
     initialValue: suggestedUrl,
     validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
-  const url = ensureWsUrl(String(urlInput));
+  const url = ensureWsUrl(urlInput ?? "");
 
   const authChoice = await prompter.select({
     message: "Gateway auth",
@@ -156,12 +156,12 @@ export async function promptRemoteGatewayConfig(
 
   let token = cfg.gateway?.remote?.token ?? "";
   if (authChoice === "token") {
-    token = String(
-      await prompter.text({
+    token = (
+      (await prompter.text({
         message: "Gateway token",
         initialValue: token,
         validate: (value) => (value?.trim() ? undefined : "Required"),
-      }),
+      })) ?? ""
     ).trim();
   } else {
     token = "";
