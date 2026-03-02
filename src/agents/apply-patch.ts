@@ -250,22 +250,56 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
   const workspaceOnly = options.workspaceOnly !== false;
   const readOnlyPaths = options.readOnlyPaths;
 
-  // Helper to check if path is read-only
+  // Helper to check if path is read-only (handles symlinks)
   const checkReadOnly = (filePath: string) => {
     if (!readOnlyPaths || readOnlyPaths.length === 0) {
       return;
     }
-    // Import the matching function from pi-tools.read
-    // For simplicity, inline a basic check here
-    const resolved = path.resolve(filePath);
-    for (const pattern of readOnlyPaths) {
-      const patternResolved = path.resolve(pattern);
-      if (
-        resolved === patternResolved ||
-        resolved.startsWith(patternResolved + path.sep) ||
-        resolved.startsWith(patternResolved + "/")
-      ) {
+
+    const checkPattern = (resolved: string) => {
+      for (const pattern of readOnlyPaths) {
+        let patternResolved: string;
+        try {
+          patternResolved = syncFs.realpathSync(pattern);
+        } catch {
+          patternResolved = path.resolve(pattern);
+        }
+        const normalizedResolved = resolved.endsWith(path.sep) ? resolved.slice(0, -1) : resolved;
+        const normalizedPattern = patternResolved.endsWith(path.sep)
+          ? patternResolved.slice(0, -1)
+          : patternResolved;
+        if (
+          normalizedResolved === normalizedPattern ||
+          normalizedResolved.startsWith(normalizedPattern + path.sep) ||
+          normalizedResolved.startsWith(normalizedPattern + "/")
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Try to resolve symlinks
+    try {
+      const resolved = syncFs.realpathSync(filePath);
+      if (checkPattern(resolved)) {
         throw new Error(`Path is read-only: ${filePath}`);
+      }
+    } catch {
+      // File doesn't exist - check parent directories
+      let currentDir = path.dirname(filePath);
+      const rootCheck = path.parse(currentDir).root;
+
+      while (currentDir !== rootCheck && currentDir !== path.dirname(currentDir)) {
+        try {
+          const resolvedAncestor = syncFs.realpathSync(currentDir);
+          if (checkPattern(resolvedAncestor)) {
+            throw new Error(`Path is read-only: ${filePath}`);
+          }
+        } catch {
+          // Continue to parent
+        }
+        currentDir = path.dirname(currentDir);
       }
     }
   };
