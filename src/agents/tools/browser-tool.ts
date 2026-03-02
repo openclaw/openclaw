@@ -84,6 +84,80 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   return { targetId, timeoutMs };
 }
 
+function readTargetUrlParam(params: Record<string, unknown>) {
+  return (
+    readStringParam(params, "targetUrl") ??
+    readStringParam(params, "url", { required: true, label: "targetUrl" })
+  );
+}
+
+const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "targetId",
+  "ref",
+  "doubleClick",
+  "button",
+  "modifiers",
+  "text",
+  "submit",
+  "slowly",
+  "key",
+  "delayMs",
+  "startRef",
+  "endRef",
+  "values",
+  "fields",
+  "width",
+  "height",
+  "timeMs",
+  "textGone",
+  "selector",
+  "url",
+  "loadState",
+  "fn",
+  "timeoutMs",
+] as const;
+
+function readActRequestParam(params: Record<string, unknown>) {
+  const requestParam = params.request;
+  if (requestParam && typeof requestParam === "object") {
+    return requestParam as Parameters<typeof browserAct>[1];
+  }
+
+  const kind = readStringParam(params, "kind");
+  if (!kind) {
+    return undefined;
+  }
+
+  const request: Record<string, unknown> = { kind };
+  for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+    if (!Object.hasOwn(params, key)) {
+      continue;
+    }
+    request[key] = params[key];
+  }
+  return request as Parameters<typeof browserAct>[1];
+}
+
+function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
+  if (profile !== "chrome") {
+    return false;
+  }
+  const msg = String(err);
+  return msg.includes("404:") && msg.includes("tab not found");
+}
+
+function stripTargetIdFromActRequest(
+  request: Parameters<typeof browserAct>[1],
+): Parameters<typeof browserAct>[1] | null {
+  const targetId = typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+  if (!targetId) {
+    return null;
+  }
+  const retryRequest = { ...request };
+  delete retryRequest.targetId;
+  return retryRequest as Parameters<typeof browserAct>[1];
+}
+
 type BrowserProxyFile = {
   path: string;
   base64: string;
@@ -405,9 +479,7 @@ export function createBrowserTool(opts?: {
             return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -635,9 +707,7 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -793,8 +863,8 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
-          if (!request || typeof request !== "object") {
+          const request = readActRequestParam(params);
+          if (!request) {
             throw new Error("request required");
           }
           try {
@@ -805,13 +875,32 @@ export function createBrowserTool(opts?: {
                   profile,
                   body: request,
                 })
-              : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+              : await browserAct(baseUrl, request, {
                   profile,
                 });
             return jsonResult(result);
           } catch (err) {
-            const msg = String(err);
-            if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
+            if (isChromeStaleTargetError(profile, err)) {
+              const retryRequest = stripTargetIdFromActRequest(request);
+              // Some Chrome relay targetIds can go stale between snapshots and actions.
+              // Retry once without targetId to let relay use the currently attached tab.
+              if (retryRequest) {
+                try {
+                  const retryResult = proxyRequest
+                    ? await proxyRequest({
+                        method: "POST",
+                        path: "/act",
+                        profile,
+                        body: retryRequest,
+                      })
+                    : await browserAct(baseUrl, retryRequest, {
+                        profile,
+                      });
+                  return jsonResult(retryResult);
+                } catch {
+                  // Fall through to explicit stale-target guidance.
+                }
+              }
               const tabs = proxyRequest
                 ? ((
                     (await proxyRequest({

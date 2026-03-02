@@ -10,15 +10,17 @@ title: "Thinking Levels"
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high | xhigh` (GPT-5.2 + Codex models only)
+- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive`
   - minimal → “think”
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
   - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
+  - adaptive → provider-managed adaptive reasoning budget (supported for Anthropic Claude 4.6 model family)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
+  - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
 
 ## Resolution order
@@ -26,7 +28,7 @@ title: "Thinking Levels"
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
 3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: low for reasoning-capable models; off otherwise.
+4. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
 
 ## Setting a session default
 

@@ -54,6 +54,25 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw must be an object");
   });
+
+  it("rejects config.patch when tailscale serve/funnel is paired with non-loopback bind", async () => {
+    const res = await rpcReq<{
+      ok?: boolean;
+      error?: { details?: { issues?: Array<{ path?: string }> } };
+    }>(requireWs(), "config.patch", {
+      raw: JSON.stringify({
+        gateway: {
+          bind: "lan",
+          tailscale: { mode: "serve" },
+        },
+      }),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("invalid config");
+    const issues = (res.error as { details?: { issues?: Array<{ path?: string }> } } | undefined)
+      ?.details?.issues;
+    expect(issues?.some((issue) => issue.path === "gateway.bind")).toBe(true);
+  });
 });
 
 describe("gateway server sessions", () => {
