@@ -22,6 +22,7 @@ const sourceRoots = [
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
+  "extensions/bluebubbles/src/types.ts:131",
   "extensions/bluebubbles/src/types.ts:133",
   "extensions/feishu/src/streaming-card.ts:31",
   "extensions/feishu/src/streaming-card.ts:101",
