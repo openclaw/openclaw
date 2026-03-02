@@ -806,6 +806,10 @@ type TelegramDeleteOpts = {
   retry?: RetryConfig;
 };
 
+type TelegramPinOpts = TelegramDeleteOpts & {
+  disableNotification?: boolean;
+};
+
 export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
@@ -830,6 +834,66 @@ export async function deleteMessageTelegram(
   });
   await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
+  return { ok: true };
+}
+
+export async function pinMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  opts: TelegramPinOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  await requestWithDiag(
+    () =>
+      api.pinChatMessage(chatId, messageId, {
+        disable_notification: opts.disableNotification === true,
+      }),
+    "pinChatMessage",
+  );
+  logVerbose(`[telegram] Pinned message ${messageId} in chat ${chatId}`);
+  return { ok: true };
+}
+
+export async function unpinMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true }> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const rawTarget = String(chatIdInput);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: rawTarget,
+    persistTarget: rawTarget,
+    verbose: opts.verbose,
+  });
+  const messageId = normalizeMessageId(messageIdInput);
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  await requestWithDiag(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
+  logVerbose(`[telegram] Unpinned message ${messageId} in chat ${chatId}`);
   return { ok: true };
 }
 

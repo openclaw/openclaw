@@ -492,6 +492,8 @@ describe("telegramMessageActions", () => {
 
     for (const testCase of cases) {
       const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      expect(actions, testCase.name).toContain("pin");
+      expect(actions, testCase.name).toContain("unpin");
       if (testCase.expectSticker) {
         expect(actions, testCase.name).toContain("sticker");
         expect(actions, testCase.name).toContain("sticker-search");
@@ -550,6 +552,36 @@ describe("telegramMessageActions", () => {
           messageId: 42,
           content: "Updated",
           buttons: [],
+          accountId: undefined,
+        },
+      },
+      {
+        name: "pin maps to pinMessage",
+        action: "pin" as const,
+        params: {
+          chatId: "123",
+          messageId: 42,
+          silent: true,
+        },
+        expectedPayload: {
+          action: "pinMessage",
+          chatId: "123",
+          messageId: 42,
+          disableNotification: true,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "unpin maps to unpinMessage",
+        action: "unpin" as const,
+        params: {
+          channelId: "123",
+          messageId: 42,
+        },
+        expectedPayload: {
+          action: "unpinMessage",
+          chatId: "123",
+          messageId: 42,
           accountId: undefined,
         },
       },
