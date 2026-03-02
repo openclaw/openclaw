@@ -189,6 +189,73 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return prepareMessageWith(ctx, createThreadAccount(), createThreadReplyMessage(overrides));
   }
 
+  function createDmScopeMainSlackCtx(): SlackMonitorContext {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true } },
+        session: { dmScope: "main" },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    // Simulate API returning correct type for DM channel
+    slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
+    return slackCtx;
+  }
+
+  function createMainScopedDmMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "D0ACP6B1T8V",
+      user: "U1",
+      text: "hello from DM",
+      ts: "1.000",
+      ...overrides,
+    });
+  }
+
+  function expectMainScopedDmClassification(
+    prepared: Awaited<ReturnType<typeof prepareSlackMessage>>,
+    options?: { includeFromCheck?: boolean },
+  ) {
+    expect(prepared).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expectInboundContextContract(prepared!.ctxPayload as any);
+    expect(prepared!.isDirectMessage).toBe(true);
+    expect(prepared!.route.sessionKey).toBe("agent:main:main");
+    expect(prepared!.ctxPayload.ChatType).toBe("direct");
+    if (options?.includeFromCheck) {
+      expect(prepared!.ctxPayload.From).toContain("slack:U1");
+    }
+  }
+
+  function createReplyToAllSlackCtx(params?: {
+    groupPolicy?: "open";
+    defaultRequireMention?: boolean;
+    asChannel?: boolean;
+  }): SlackMonitorContext {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            ...(params?.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
+          },
+        },
+      } as OpenClawConfig,
+      replyToMode: "all",
+      ...(params?.defaultRequireMention === undefined
+        ? {}
+        : { defaultRequireMention: params.defaultRequireMention }),
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    if (params?.asChannel) {
+      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    }
+    return slackCtx;
+  }
+
   it("produces a finalized MsgContext", async () => {
     const message: SlackMessageEvent = {
       channel: "D123",
@@ -331,179 +398,34 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("classifies D-prefix DMs correctly even when channel_type is wrong", async () => {
-    const slackCtx = createSlackMonitorContext({
-      cfg: {
-        channels: { slack: { enabled: true } },
-        session: { dmScope: "main" },
-      } as OpenClawConfig,
-      accountId: "default",
-      botToken: "token",
-      app: { client: {} } as App,
-      runtime: {} as RuntimeEnv,
-      botUserId: "B1",
-      teamId: "T1",
-      apiAppId: "A1",
-      historyLimit: 0,
-      sessionScope: "per-sender",
-      mainKey: "main",
-      dmEnabled: true,
-      dmPolicy: "open",
-      allowFrom: [],
-      allowNameMatching: false,
-      groupDmEnabled: true,
-      groupDmChannels: [],
-      defaultRequireMention: true,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      reactionMode: "off",
-      reactionAllowlist: [],
-      replyToMode: "off",
-      threadHistoryScope: "thread",
-      threadInheritParent: false,
-      slashCommand: {
-        enabled: false,
-        name: "openclaw",
-        sessionPrefix: "slack:slash",
-        ephemeral: true,
-      },
-      textLimit: 4000,
-      ackReactionScope: "group-mentions",
-      mediaMaxBytes: 1024,
-      removeAckAfterReply: false,
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-    // Simulate API returning correct type for DM channel
-    slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
+    const prepared = await prepareMessageWith(
+      createDmScopeMainSlackCtx(),
+      createSlackAccount(),
+      createMainScopedDmMessage({
+        // Bug scenario: D-prefix channel but Slack event says channel_type: "channel"
+        channel_type: "channel",
+      }),
+    );
 
-    const account: ResolvedSlackAccount = {
-      accountId: "default",
-      enabled: true,
-      botTokenSource: "config",
-      appTokenSource: "config",
-      userTokenSource: "none",
-      config: {},
-    };
-
-    // Bug scenario: D-prefix channel but Slack event says channel_type: "channel"
-    const message: SlackMessageEvent = {
-      channel: "D0ACP6B1T8V",
-      channel_type: "channel",
-      user: "U1",
-      text: "hello from DM",
-      ts: "1.000",
-    } as SlackMessageEvent;
-
-    const prepared = await prepareSlackMessage({
-      ctx: slackCtx,
-      account,
-      message,
-      opts: { source: "message" },
-    });
-
-    expect(prepared).toBeTruthy();
-    // oxlint-disable-next-line typescript/no-explicit-any
-    expectInboundContextContract(prepared!.ctxPayload as any);
-    // Should be classified as DM, not channel
-    expect(prepared!.isDirectMessage).toBe(true);
-    // DM with dmScope: "main" should route to the main session
-    expect(prepared!.route.sessionKey).toBe("agent:main:main");
-    // ChatType should be "direct", not "channel"
-    expect(prepared!.ctxPayload.ChatType).toBe("direct");
-    // From should use user ID (DM pattern), not channel ID
-    expect(prepared!.ctxPayload.From).toContain("slack:U1");
+    expectMainScopedDmClassification(prepared, { includeFromCheck: true });
   });
 
   it("classifies D-prefix DMs when channel_type is missing", async () => {
-    const slackCtx = createSlackMonitorContext({
-      cfg: {
-        channels: { slack: { enabled: true } },
-        session: { dmScope: "main" },
-      } as OpenClawConfig,
-      accountId: "default",
-      botToken: "token",
-      app: { client: {} } as App,
-      runtime: {} as RuntimeEnv,
-      botUserId: "B1",
-      teamId: "T1",
-      apiAppId: "A1",
-      historyLimit: 0,
-      sessionScope: "per-sender",
-      mainKey: "main",
-      dmEnabled: true,
-      dmPolicy: "open",
-      allowFrom: [],
-      allowNameMatching: false,
-      groupDmEnabled: true,
-      groupDmChannels: [],
-      defaultRequireMention: true,
-      groupPolicy: "open",
-      useAccessGroups: false,
-      reactionMode: "off",
-      reactionAllowlist: [],
-      replyToMode: "off",
-      threadHistoryScope: "thread",
-      threadInheritParent: false,
-      slashCommand: {
-        enabled: false,
-        name: "openclaw",
-        sessionPrefix: "slack:slash",
-        ephemeral: true,
-      },
-      textLimit: 4000,
-      ackReactionScope: "group-mentions",
-      mediaMaxBytes: 1024,
-      removeAckAfterReply: false,
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-    // Simulate API returning correct type for DM channel
-    slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
-
-    const account: ResolvedSlackAccount = {
-      accountId: "default",
-      enabled: true,
-      botTokenSource: "config",
-      appTokenSource: "config",
-      userTokenSource: "none",
-      config: {},
-    };
-
-    // channel_type missing — should infer from D-prefix
-    const message: SlackMessageEvent = {
-      channel: "D0ACP6B1T8V",
-      user: "U1",
-      text: "hello from DM",
-      ts: "1.000",
-    } as SlackMessageEvent;
-
-    const prepared = await prepareSlackMessage({
-      ctx: slackCtx,
-      account,
+    const message = createMainScopedDmMessage({});
+    delete message.channel_type;
+    const prepared = await prepareMessageWith(
+      createDmScopeMainSlackCtx(),
+      createSlackAccount(),
+      // channel_type missing — should infer from D-prefix.
       message,
-      opts: { source: "message" },
-    });
+    );
 
-    expect(prepared).toBeTruthy();
-    // oxlint-disable-next-line typescript/no-explicit-any
-    expectInboundContextContract(prepared!.ctxPayload as any);
-    expect(prepared!.isDirectMessage).toBe(true);
-    expect(prepared!.route.sessionKey).toBe("agent:main:main");
-    expect(prepared!.ctxPayload.ChatType).toBe("direct");
+    expectMainScopedDmClassification(prepared);
   });
 
   it("sets MessageThreadId for top-level messages when replyToMode=all", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as OpenClawConfig,
-      replyToMode: "all",
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-
     const prepared = await prepareMessageWith(
-      slackCtx,
+      createReplyToAllSlackCtx(),
       createSlackAccount({ replyToMode: "all" }),
       createSlackMessage({}),
     );
@@ -513,17 +435,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("respects replyToModeByChatType.direct override for DMs", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as OpenClawConfig,
-      replyToMode: "all",
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-
     const prepared = await prepareMessageWith(
-      slackCtx,
+      createReplyToAllSlackCtx(),
       createSlackAccount({ replyToMode: "all", replyToModeByChatType: { direct: "off" } }),
       createSlackMessage({}), // DM (channel_type: "im")
     );
@@ -534,19 +447,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("still threads channel messages when replyToModeByChatType.direct is off", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-      } as OpenClawConfig,
-      replyToMode: "all",
-      defaultRequireMention: false,
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-
     const prepared = await prepareMessageWith(
-      slackCtx,
+      createReplyToAllSlackCtx({
+        groupPolicy: "open",
+        defaultRequireMention: false,
+        asChannel: true,
+      }),
       createSlackAccount({ replyToMode: "all", replyToModeByChatType: { direct: "off" } }),
       createSlackMessage({ channel: "C123", channel_type: "channel" }),
     );
@@ -557,17 +463,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("respects dm.replyToMode legacy override for DMs", async () => {
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as OpenClawConfig,
-      replyToMode: "all",
-    });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
-
     const prepared = await prepareMessageWith(
-      slackCtx,
+      createReplyToAllSlackCtx(),
       createSlackAccount({ replyToMode: "all", dm: { replyToMode: "off" } }),
       createSlackMessage({}), // DM
     );

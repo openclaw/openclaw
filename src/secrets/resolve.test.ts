@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
@@ -12,28 +12,92 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 }
 
 describe("secret ref resolver", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const cleanupRoots: string[] = [];
+  const execRef = { source: "exec", provider: "execmain", id: "openai/api-key" } as const;
+  const fileRef = { source: "file", provider: "filemain", id: "/providers/openai/apiKey" } as const;
 
-  const createCaseDir = async (label: string): Promise<string> => {
-    const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  };
+  function isWindows(): boolean {
+    return process.platform === "win32";
+  }
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
-  });
+  async function createTempRoot(prefix: string): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    cleanupRoots.push(root);
+    return root;
+  }
+
+  function createProviderConfig(
+    providerId: string,
+    provider: Record<string, unknown>,
+  ): OpenClawConfig {
+    return {
+      secrets: {
+        providers: {
+          [providerId]: provider,
+        },
+      },
+    };
+  }
+
+  async function resolveWithProvider(params: {
+    ref: Parameters<typeof resolveSecretRefString>[0];
+    providerId: string;
+    provider: Record<string, unknown>;
+  }) {
+    return await resolveSecretRefString(params.ref, {
+      config: createProviderConfig(params.providerId, params.provider),
+    });
+  }
+
+  function createExecProvider(
+    command: string,
+    overrides?: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      source: "exec",
+      command,
+      passEnv: ["PATH"],
+      ...overrides,
+    };
+  }
+
+  async function expectExecResolveRejects(
+    provider: Record<string, unknown>,
+    message: string,
+  ): Promise<void> {
+    await expect(
+      resolveWithProvider({
+        ref: execRef,
+        providerId: "execmain",
+        provider,
+      }),
+    ).rejects.toThrow(message);
+  }
+
+  async function createSymlinkedPlainExecCommand(
+    root: string,
+    targetRoot = root,
+  ): Promise<{ scriptPath: string; symlinkPath: string }> {
+    const scriptPath = path.join(targetRoot, "resolver-target.mjs");
+    const symlinkPath = path.join(root, "resolver-link.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
+      0o700,
+    );
+    await fs.symlink(scriptPath, symlinkPath);
+    return { scriptPath, symlinkPath };
+  }
 
   afterEach(async () => {
     vi.restoreAllMocks();
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+    while (cleanupRoots.length > 0) {
+      const root = cleanupRoots.pop();
+      if (!root) {
+        continue;
+      }
+      await fs.rm(root, { recursive: true, force: true });
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("resolves env refs via implicit default env provider", async () => {
@@ -49,10 +113,10 @@ describe("secret ref resolver", () => {
   });
 
   it("resolves file refs in json mode", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("file");
+    const root = await createTempRoot("openclaw-secrets-resolve-file-");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
@@ -65,30 +129,23 @@ describe("secret ref resolver", () => {
       }),
     );
 
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              filemain: {
-                source: "file",
-                path: filePath,
-                mode: "json",
-              },
-            },
-          },
-        },
+    const value = await resolveWithProvider({
+      ref: fileRef,
+      providerId: "filemain",
+      provider: {
+        source: "file",
+        path: filePath,
+        mode: "json",
       },
-    );
+    });
     expect(value).toBe("sk-file-value");
   });
 
   it("resolves exec refs with protocolVersion 1 response", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec");
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-");
     const scriptPath = path.join(root, "resolver.mjs");
     await writeSecureFile(
       scriptPath,
@@ -102,30 +159,23 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: scriptPath,
-                passEnv: ["PATH"],
-              },
-            },
-          },
-        },
+    const value = await resolveWithProvider({
+      ref: execRef,
+      providerId: "execmain",
+      provider: {
+        source: "exec",
+        command: scriptPath,
+        passEnv: ["PATH"],
       },
-    );
+    });
     expect(value).toBe("value:openai/api-key");
   });
 
   it("supports non-JSON single-value exec output when jsonOnly is false", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-plain");
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-plain-");
     const scriptPath = path.join(root, "resolver-plain.mjs");
     await writeSecureFile(
       scriptPath,
@@ -133,104 +183,57 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: scriptPath,
-                passEnv: ["PATH"],
-                jsonOnly: false,
-              },
-            },
-          },
-        },
+    const value = await resolveWithProvider({
+      ref: execRef,
+      providerId: "execmain",
+      provider: {
+        source: "exec",
+        command: scriptPath,
+        passEnv: ["PATH"],
+        jsonOnly: false,
       },
-    );
+    });
     expect(value).toBe("plain-secret");
   });
 
   it("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-link-reject");
-    const scriptPath = path.join(root, "resolver-target.mjs");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-link-");
+    const { symlinkPath } = await createSymlinkedPlainExecCommand(root);
+    await expectExecResolveRejects(
+      createExecProvider(symlinkPath, { jsonOnly: false }),
+      "must not be a symlink",
     );
-    await fs.symlink(scriptPath, symlinkPath);
-
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: false,
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("must not be a symlink");
   });
 
   it("allows symlink command paths when allowSymlinkCommand is enabled", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-link-allow");
-    const scriptPath = path.join(root, "resolver-target.mjs");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
-    );
-    await fs.symlink(scriptPath, symlinkPath);
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-link-");
+    const { symlinkPath } = await createSymlinkedPlainExecCommand(root);
     const trustedRoot = await fs.realpath(root);
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: symlinkPath,
-                passEnv: ["PATH"],
-                jsonOnly: false,
-                allowSymlinkCommand: true,
-                trustedDirs: [trustedRoot],
-              },
-            },
-          },
-        },
-      },
-    );
+    const value = await resolveWithProvider({
+      ref: execRef,
+      providerId: "execmain",
+      provider: createExecProvider(symlinkPath, {
+        jsonOnly: false,
+        allowSymlinkCommand: true,
+        trustedDirs: [trustedRoot],
+      }),
+    });
     expect(value).toBe("plain-secret");
   });
 
   it("handles Homebrew-style symlinked exec commands with args only when explicitly allowed", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
 
-    const root = await createCaseDir("homebrew");
+    const root = await createTempRoot("openclaw-secrets-resolve-homebrew-");
     const binDir = path.join(root, "opt", "homebrew", "bin");
     const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -254,89 +257,54 @@ describe("secret ref resolver", () => {
     const trustedRoot = await fs.realpath(root);
 
     await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkCommand,
-                  args: ["brew"],
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
+      resolveWithProvider({
+        ref: execRef,
+        providerId: "execmain",
+        provider: {
+          source: "exec",
+          command: symlinkCommand,
+          args: ["brew"],
+          passEnv: ["PATH"],
         },
-      ),
+      }),
     ).rejects.toThrow("must not be a symlink");
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: symlinkCommand,
-                args: ["brew"],
-                allowSymlinkCommand: true,
-                trustedDirs: [trustedRoot],
-              },
-            },
-          },
-        },
+    const value = await resolveWithProvider({
+      ref: execRef,
+      providerId: "execmain",
+      provider: {
+        source: "exec",
+        command: symlinkCommand,
+        args: ["brew"],
+        allowSymlinkCommand: true,
+        trustedDirs: [trustedRoot],
       },
-    );
+    });
     expect(value).toBe("brew:openai/api-key");
   });
 
   it("checks trustedDirs against resolved symlink target", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-link-trusted");
-    const outside = await createCaseDir("exec-outside");
-    const scriptPath = path.join(outside, "resolver-target.mjs");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-link-");
+    const outside = await createTempRoot("openclaw-secrets-resolve-exec-out-");
+    const { symlinkPath } = await createSymlinkedPlainExecCommand(root, outside);
+    await expectExecResolveRejects(
+      createExecProvider(symlinkPath, {
+        jsonOnly: false,
+        allowSymlinkCommand: true,
+        trustedDirs: [root],
+      }),
+      "outside trustedDirs",
     );
-    await fs.symlink(scriptPath, symlinkPath);
-
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: false,
-                  allowSymlinkCommand: true,
-                  trustedDirs: [root],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("outside trustedDirs");
   });
 
   it("rejects exec refs when protocolVersion is not 1", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-protocol");
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-protocol-");
     const scriptPath = path.join(root, "resolver-protocol.mjs");
     await writeSecureFile(
       scriptPath,
@@ -347,31 +315,14 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: scriptPath,
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("protocolVersion must be 1");
+    await expectExecResolveRejects(createExecProvider(scriptPath), "protocolVersion must be 1");
   });
 
   it("rejects exec refs when response omits requested id", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-missing-id");
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-id-");
     const scriptPath = path.join(root, "resolver-missing-id.mjs");
     await writeSecureFile(
       scriptPath,
@@ -382,31 +333,17 @@ describe("secret ref resolver", () => {
       0o700,
     );
 
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: scriptPath,
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow('response missing id "openai/api-key"');
+    await expectExecResolveRejects(
+      createExecProvider(scriptPath),
+      'response missing id "openai/api-key"',
+    );
   });
 
   it("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("exec-invalid-json");
+    const root = await createTempRoot("openclaw-secrets-resolve-exec-json-");
     const scriptPath = path.join(root, "resolver-invalid-json.mjs");
     await writeSecureFile(
       scriptPath,
@@ -415,58 +352,44 @@ describe("secret ref resolver", () => {
     );
 
     await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: scriptPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: true,
-                },
-              },
-            },
-          },
+      resolveWithProvider({
+        ref: execRef,
+        providerId: "execmain",
+        provider: {
+          source: "exec",
+          command: scriptPath,
+          passEnv: ["PATH"],
+          jsonOnly: true,
         },
-      ),
+      }),
     ).rejects.toThrow("returned invalid JSON");
   });
 
   it("supports file singleValue mode with id=value", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("file-single-value");
+    const root = await createTempRoot("openclaw-secrets-resolve-single-value-");
     const filePath = path.join(root, "token.txt");
     await writeSecureFile(filePath, "raw-token-value\n");
 
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "rawfile", id: "value" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              rawfile: {
-                source: "file",
-                path: filePath,
-                mode: "singleValue",
-              },
-            },
-          },
-        },
+    const value = await resolveWithProvider({
+      ref: { source: "file", provider: "rawfile", id: "value" },
+      providerId: "rawfile",
+      provider: {
+        source: "file",
+        path: filePath,
+        mode: "singleValue",
       },
-    );
+    });
     expect(value).toBe("raw-token-value");
   });
 
   it("times out file provider reads when timeoutMs elapses", async () => {
-    if (process.platform === "win32") {
+    if (isWindows()) {
       return;
     }
-    const root = await createCaseDir("file-timeout");
+    const root = await createTempRoot("openclaw-secrets-resolve-timeout-");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
@@ -491,23 +414,16 @@ describe("secret ref resolver", () => {
     }) as typeof fs.readFile);
 
     await expect(
-      resolveSecretRefString(
-        { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                filemain: {
-                  source: "file",
-                  path: filePath,
-                  mode: "json",
-                  timeoutMs: 5,
-                },
-              },
-            },
-          },
+      resolveWithProvider({
+        ref: fileRef,
+        providerId: "filemain",
+        provider: {
+          source: "file",
+          path: filePath,
+          mode: "json",
+          timeoutMs: 5,
         },
-      ),
+      }),
     ).rejects.toThrow('File provider "filemain" timed out');
   });
 
@@ -516,15 +432,7 @@ describe("secret ref resolver", () => {
       resolveSecretRefValue(
         { source: "exec", provider: "default", id: "abc" },
         {
-          config: {
-            secrets: {
-              providers: {
-                default: {
-                  source: "env",
-                },
-              },
-            },
-          },
+          config: createProviderConfig("default", { source: "env" }),
         },
       ),
     ).rejects.toThrow('has source "env" but ref requests "exec"');
