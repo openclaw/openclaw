@@ -1,0 +1,50 @@
+{
+  "id": "context-mode",
+  "name": "Context Mode",
+  "description": "Proactive tool-output compression for extended agent session lifetime",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable proactive tool-output compression",
+        "default": false
+      },
+      "threshold": {
+        "type": "number",
+        "description": "Character threshold below which results pass through unchanged",
+        "default": 2000,
+        "minimum": 100
+      },
+      "excludeTools": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Tool names excluded from compression",
+        "default": []
+      },
+      "summaryHeadChars": {
+        "type": "number",
+        "description": "Characters to keep from the head of the original output in summaries",
+        "default": 500,
+        "minimum": 50
+      },
+      "agents": {
+        "type": "object",
+        "description": "Per-agent opt-in/opt-out. Omit to enable for all agents.",
+        "properties": {
+          "include": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If set, only these agent IDs will use context-mode."
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If set, these agent IDs are excluded (ignored when include is set)."
+          }
+        }
+      }
+    }
+  }
+}

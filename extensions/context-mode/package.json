@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/context-mode",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "Proactive tool-output compression for extended agent session lifetime",
+  "type": "module",
+  "dependencies": {},
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
