@@ -30,3 +30,6 @@ export {
 } from "./peer.js";
 
 export { SessionStore } from "./session-store.js";
+
+export { FloodController } from "./flood-control.js";
+export type { FloodControllerConfig, FloodControllerMetrics } from "./flood-control.js";
