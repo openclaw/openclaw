@@ -14,7 +14,6 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -298,7 +297,6 @@ export function createImageTool(options?: {
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
-<<<<<<< HEAD
   const localRoots = (() => {
     const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
     if (options?.fsPolicy?.workspaceOnly) {
@@ -310,18 +308,6 @@ export function createImageTool(options?: {
     }
     return Array.from(new Set([...roots, workspaceDir]));
   })();
-||||||| parent of 4a741746c (refactor: dedupe agent and reply runtimes)
-  const localRoots = (() => {
-    const roots = getDefaultLocalRoots();
-    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
-    if (!workspaceDir) {
-      return roots;
-    }
-    return Array.from(new Set([...roots, workspaceDir]));
-  })();
-=======
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir);
->>>>>>> 4a741746c (refactor: dedupe agent and reply runtimes)
 
   return {
     label: "Image",

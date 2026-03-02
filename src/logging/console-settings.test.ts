@@ -1,9 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  captureConsoleSnapshot,
-  type ConsoleSnapshot,
-  restoreConsoleSnapshot,
-} from "./test-helpers/console-snapshot.js";
+import { captureConsoleSnapshot, type ConsoleSnapshot } from "./test-helpers/console-snapshot.js";
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: () => undefined,
@@ -42,7 +38,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-<<<<<<< HEAD
   console.log = snapshot.log;
   console.info = snapshot.info;
   console.warn = snapshot.warn;
@@ -54,16 +49,6 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_CONSOLE = originalOpenClawTestConsole;
   }
-||||||| parent of 4a741746c (refactor: dedupe agent and reply runtimes)
-  console.log = snapshot.log;
-  console.info = snapshot.info;
-  console.warn = snapshot.warn;
-  console.error = snapshot.error;
-  console.debug = snapshot.debug;
-  console.trace = snapshot.trace;
-=======
-  restoreConsoleSnapshot(snapshot);
->>>>>>> 4a741746c (refactor: dedupe agent and reply runtimes)
   Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
   logging.setConsoleConfigLoaderForTests();
   vi.restoreAllMocks();
