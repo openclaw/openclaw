@@ -8,6 +8,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
+  resetModelCatalogCacheForTest: vi.fn(),
 }));
 
 vi.mock("../agents/model-selection.js", async (importOriginal) => {
