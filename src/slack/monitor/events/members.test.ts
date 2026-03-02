@@ -113,7 +113,6 @@ describe("registerSlackMemberEvents", () => {
       calls: 0,
     },
   ];
-
   it.each(cases)("$name", async ({ args, calls }) => {
     await runMemberCase(args);
     expect(memberMocks.enqueue).toHaveBeenCalledTimes(calls);

@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 
 describe("config schema", () => {
+  let baseSchema: ReturnType<typeof buildConfigSchema>;
+
+  beforeAll(() => {
+    baseSchema = buildConfigSchema();
+  });
+
   it("exports schema + hints", () => {
-    const res = buildConfigSchema();
+    const res = baseSchema;
     const schema = res.schema as { properties?: Record<string, unknown> };
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
@@ -148,7 +154,7 @@ describe("config schema", () => {
   });
 
   it("covers core/built-in config paths with tags", () => {
-    const schema = buildConfigSchema();
+    const schema = baseSchema;
     const allowed = new Set<string>(CONFIG_TAGS);
     for (const [key, hint] of Object.entries(schema.uiHints)) {
       if (!key.includes(".")) {
