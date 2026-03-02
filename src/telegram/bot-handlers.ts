@@ -1261,11 +1261,29 @@ export const registerTelegramHandlers = ({
 
         if (modelCallback.type === "select") {
           const { provider, model } = modelCallback;
+          let resolvedProvider = provider;
+          if (!resolvedProvider) {
+            const matchingProviders = providers.filter((id) => byProvider.get(id)?.has(model));
+            if (matchingProviders.length === 1) {
+              resolvedProvider = matchingProviders[0];
+            } else {
+              const providerInfos: ProviderInfo[] = providers.map((p) => ({
+                id: p,
+                count: byProvider.get(p)?.size ?? 0,
+              }));
+              const buttons = buildProviderKeyboard(providerInfos);
+              await editMessageWithButtons(
+                `Could not resolve model "${model}".\n\nSelect a provider:`,
+                buttons,
+              );
+              return;
+            }
+          }
           // Process model selection as a synthetic message with /model command
           const syntheticMessage = buildSyntheticTextMessage({
             base: callbackMessage,
             from: callback.from,
-            text: `/model ${provider}/${model}`,
+            text: `/model ${resolvedProvider}/${model}`,
           });
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,
