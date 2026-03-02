@@ -614,7 +614,13 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "quiet-hours" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
+  // For exec-event wakes targeting a specific session, only gate on that
+  // session's own lane being busy. Unrelated channel activity (other users,
+  // rate-limit retries) should not delay exec-result delivery.
+  const execEventSessionKey =
+    resolveHeartbeatReasonKind(opts.reason) === "exec-event" ? opts.sessionKey : undefined;
+  const queueLane = execEventSessionKey ?? CommandLane.Main;
+  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(queueLane);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
