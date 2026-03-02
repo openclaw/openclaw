@@ -1,10 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
@@ -607,6 +613,62 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(response.getBody()).toContain("webhook-ok");
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
+    });
+  });
+
+  test("keeps webhook exact routes ungated while default exact routes still require auth", async () => {
+    await withGatewayTempConfig("openclaw-plugin-http-auth-exact-route-test-", async () => {
+      const registry = createEmptyPluginRegistry();
+
+      registerPluginHttpRoute({
+        path: "/bluebubbles-webhook",
+        handler: async (_req, res) => {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("webhook-ok");
+        },
+        requireGatewayAuth: false,
+        registry,
+      });
+      registerPluginHttpRoute({
+        path: "/plugins/private",
+        handler: async (_req, res) => {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("private-ok");
+        },
+        registry,
+      });
+
+      const handlePluginRequest = createGatewayPluginRequestHandler({
+        registry,
+        log: { warn: vi.fn() } as unknown as ReturnType<typeof createSubsystemLogger>,
+      });
+
+      const server = createTestGatewayServer({
+        resolvedAuth: AUTH_TOKEN,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+          shouldBypassControlUiForPath: (requestPath) => requestPath === "/bluebubbles-webhook",
+          shouldEnforcePluginGatewayAuth: (requestPath) =>
+            shouldEnforceGatewayAuthForPluginPath(registry, requestPath),
+        },
+      });
+
+      const webhookResponse = await sendRequest(server, {
+        path: "/bluebubbles-webhook",
+        method: "POST",
+      });
+      expect(webhookResponse.res.statusCode).toBe(200);
+      expect(webhookResponse.getBody()).toBe("webhook-ok");
+
+      const privateResponse = await sendRequest(server, {
+        path: "/plugins/private",
+      });
+      expectUnauthorizedResponse(privateResponse);
     });
   });
 

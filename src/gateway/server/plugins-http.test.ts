@@ -17,12 +17,14 @@ function createPluginLog(): PluginHandlerLog {
 function createRoute(params: {
   path: string;
   pluginId?: string;
+  requireGatewayAuth?: boolean;
   handler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
     path: params.path,
     handler: params.handler ?? (() => {}),
+    requireGatewayAuth: params.requireGatewayAuth ?? true,
     source: params.pluginId ?? "route",
   };
 }
@@ -151,5 +153,14 @@ describe("plugin HTTP registry helpers", () => {
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
+  });
+
+  it("skips gateway auth for routes that opt out explicitly", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/googlechat", requireGatewayAuth: false })],
+    });
+
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/googlechat")).toBe(false);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
   });
 });

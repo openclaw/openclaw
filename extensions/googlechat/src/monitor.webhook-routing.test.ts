@@ -161,6 +161,7 @@ describe("Google Chat webhook routing", () => {
         expect.objectContaining({
           pluginId: "googlechat",
           path: "/googlechat",
+          requireGatewayAuth: false,
         }),
       );
     } finally {

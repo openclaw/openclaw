@@ -242,6 +242,7 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
       registerPluginHttpRoute({
         path,
         pluginId: WEBHOOK_ROUTE_PLUGIN_ID,
+        requireGatewayAuth: false,
         source: "bluebubbles-webhook",
         handler: async (req, res) => {
           const handled = await handleBlueBubblesWebhookRequest(req, res);

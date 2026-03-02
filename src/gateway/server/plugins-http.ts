@@ -36,9 +36,11 @@ export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathname: string,
 ): boolean {
-  return (
-    isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
-  );
+  if (isProtectedPluginRoutePath(pathname)) {
+    return true;
+  }
+  const route = findRegisteredPluginHttpRoute(registry, pathname);
+  return route ? route.requireGatewayAuth !== false : false;
 }
 
 export function createGatewayPluginRequestHandler(params: {

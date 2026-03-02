@@ -106,6 +106,7 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
       registerPluginHttpRoute({
         path,
         pluginId: WEBHOOK_ROUTE_PLUGIN_ID,
+        requireGatewayAuth: false,
         source: "googlechat-webhook",
         handler: async (req, res) => {
           const handled = await handleGoogleChatWebhookRequest(req, res);

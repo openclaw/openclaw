@@ -79,6 +79,7 @@ describe("handleZaloWebhookRequest", () => {
         expect.objectContaining({
           pluginId: "zalo",
           path: "/hook",
+          requireGatewayAuth: false,
         }),
       );
     } finally {

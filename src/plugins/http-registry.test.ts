@@ -16,9 +16,23 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.path).toBe("/plugins/demo");
     expect(registry.httpRoutes[0]?.handler).toBe(handler);
+    expect(registry.httpRoutes[0]?.requireGatewayAuth).toBe(true);
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it("allows routes to opt out of gateway auth", () => {
+    const registry = createEmptyPluginRegistry();
+
+    registerPluginHttpRoute({
+      path: "/plugins/webhook",
+      handler: vi.fn(),
+      requireGatewayAuth: false,
+      registry,
+    });
+
+    expect(registry.httpRoutes[0]?.requireGatewayAuth).toBe(false);
   });
 
   it("returns noop unregister when path is missing", () => {

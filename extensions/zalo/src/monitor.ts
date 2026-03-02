@@ -79,6 +79,7 @@ export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void
       registerPluginHttpRoute({
         path,
         pluginId: "zalo",
+        requireGatewayAuth: false,
         source: "zalo-webhook",
         handler: async (req, res) => {
           const handled = await handleZaloWebhookRequest(req, res);

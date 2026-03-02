@@ -59,6 +59,7 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  requireGatewayAuth?: boolean;
   source?: string;
 };
 
