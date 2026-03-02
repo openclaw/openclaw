@@ -590,6 +590,7 @@ Docs: [Windows](/platforms/windows).
 This is usually a console code page mismatch on native Windows shells.
 
 Symptoms:
+
 - `system.run`/`exec` output renders Chinese as mojibake
 - The same command looks fine in another terminal profile
 
@@ -609,6 +610,7 @@ openclaw gateway restart
 ```
 
 If you still reproduce this on latest OpenClaw, track/report it in:
+
 - [Issue #30640](https://github.com/openclaw/openclaw/issues/30640)
 
 ### The docs didn't answer my question how do I get a better answer
