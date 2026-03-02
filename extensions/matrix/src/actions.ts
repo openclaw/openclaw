@@ -55,6 +55,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { action, params, cfg } = ctx;
+    const accountId = ctx.accountId ?? readStringParam(params, "accountId");
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
       readStringParam(params, "channelId") ??
@@ -77,6 +78,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyTo ?? undefined,
           threadId: threadId ?? undefined,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -93,6 +95,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -107,6 +110,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: resolveRoomId(),
           messageId,
           limit,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -121,6 +125,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           limit,
           before: readStringParam(params, "before"),
           after: readStringParam(params, "after"),
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -135,6 +140,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: resolveRoomId(),
           messageId,
           content,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -147,6 +153,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           action: "deleteMessage",
           roomId: resolveRoomId(),
           messageId,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -163,6 +170,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
             action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
           roomId: resolveRoomId(),
           messageId,
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -175,6 +183,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           action: "memberInfo",
           userId,
           roomId: readStringParam(params, "roomId") ?? readStringParam(params, "channelId"),
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );
@@ -185,6 +194,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         {
           action: "channelInfo",
           roomId: resolveRoomId(),
+          accountId: accountId ?? undefined,
         },
         cfg as CoreConfig,
       );

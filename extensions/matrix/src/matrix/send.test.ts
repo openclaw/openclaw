@@ -207,6 +207,46 @@ describe("sendMessageMatrix media", () => {
   });
 });
 
+describe("sendMessageMatrix — structured send logging", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("logs [matrix:send] attempt and [matrix:send:ok] with accountId on success", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { client } = makeClient();
+      await sendMessageMatrix("!room:example.org", "hello", { client, accountId: "neko" });
+
+      const logs = logSpy.mock.calls.map((c) => c[0] as string);
+      expect(logs.some((l) => l.includes("[matrix:send]") && l.includes("neko"))).toBe(true);
+      expect(logs.some((l) => l.includes("[matrix:send:ok]") && l.includes("neko"))).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("logs [matrix:send:fail] with error message when send throws", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { client, sendMessage } = makeClient();
+      sendMessage.mockRejectedValueOnce(new Error("M_FORBIDDEN: not in room"));
+
+      await expect(
+        sendMessageMatrix("!room:example.org", "hello", { client, accountId: "neko" }),
+      ).rejects.toThrow("M_FORBIDDEN");
+
+      const errors = errSpy.mock.calls.map((c) => c[0] as string);
+      expect(
+        errors.some((l) => l.includes("[matrix:send:fail]") && l.includes("M_FORBIDDEN")),
+      ).toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+});
+
 describe("sendMessageMatrix threads", () => {
   beforeEach(() => {
     vi.clearAllMocks();

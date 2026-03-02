@@ -586,7 +586,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }),
         );
       if (shouldAckReaction() && messageId) {
-        reactMatrixMessage(roomId, messageId, ackReaction, client).catch((err) => {
+        reactMatrixMessage(roomId, messageId, ackReaction, { client }).catch((err) => {
           logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
         });
       }

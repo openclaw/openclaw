@@ -23,6 +23,11 @@ export function getActiveMatrixClient(accountId?: string | null): MatrixClient |
 
 export function getAnyActiveMatrixClient(): MatrixClient | null {
   // Return any available client (for backward compatibility)
+  if (activeClients.size > 1) {
+    console.warn(
+      `[matrix:client] getAnyActiveMatrixClient: returning arbitrary client from ${activeClients.size} active accounts — pass accountId to avoid non-deterministic selection`,
+    );
+  }
   const first = activeClients.values().next();
   return first.done ? null : first.value;
 }
