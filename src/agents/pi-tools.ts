@@ -43,7 +43,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
-import { sanitizeSkillEnvOverrides } from "./skills/config.js";
+import { sanitizeSkillEnvOverrides } from "./skills/env-overrides.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {

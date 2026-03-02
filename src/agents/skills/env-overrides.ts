@@ -30,7 +30,7 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   );
 }
 
-function sanitizeSkillEnvOverrides(params: {
+export function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
 }): SanitizedSkillEnvOverrides {
