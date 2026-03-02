@@ -252,6 +252,22 @@ describe("findExtraGatewayServices (linux)", () => {
     expect(result).toEqual([]);
   });
 
+  it("skips browser services when single-quoted env wraps chromium without remote-debugging-port", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "chromium-env-single-quoted.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart='env' CHROME_USER_DATA=/home/test/snap/chromium/common/openclaw/user-data '/snap/bin/chromium' --headless --user-data-dir=/home/test/snap/chromium/common/openclaw/user-data",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
+  });
+
   it("skips browser services when env uses optional signal options", async () => {
     vi.spyOn(fs, "readdir").mockResolvedValue([
       "chromium-default-signal.service",

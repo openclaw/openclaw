@@ -86,6 +86,19 @@ function stripSystemdExecPrefix(token: string): string {
   return out;
 }
 
+function stripSurroundingQuotes(token: string): string {
+  let out = token.trim();
+  while (out.length >= 2) {
+    const quote = out[0];
+    if ((quote === "'" || quote === '"') && out.at(-1) === quote) {
+      out = out.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
 function envOptionConsumesNextValue(token: string): boolean {
   if (!token.startsWith("-")) {
     return false;
@@ -164,7 +177,7 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
 
   let index = 0;
   while (index < tokens.length) {
-    const token = stripSystemdExecPrefix(tokens[index] ?? "");
+    const token = stripSurroundingQuotes(stripSystemdExecPrefix(tokens[index] ?? ""));
     if (!token) {
       index += 1;
       continue;
@@ -173,7 +186,7 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
     if (token.toLowerCase().endsWith("/env") || token.toLowerCase() === "env") {
       const pending = tokens.slice(index + 1);
       while (pending.length > 0) {
-        const envToken = pending.shift() ?? "";
+        const envToken = stripSurroundingQuotes(pending.shift() ?? "");
         if (!envToken) {
           continue;
         }
@@ -188,7 +201,7 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
         if (envOptionConsumesNextValue(envToken)) {
           const optionValue = pending.shift();
           if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
-            const expanded = parseSystemdExecStart(optionValue);
+            const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
             if (expanded.length > 0) {
               pending.unshift(...expanded);
             }

@@ -80,6 +80,14 @@ describe("extractSystemdExecStartCommandToken", () => {
     ).toBe("/snap/bin/chromium");
   });
 
+  it("extracts executable token when single-quoted env wrapper is used", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "'env' CHROME_USER_DATA=/tmp/chrome '/snap/bin/chromium' --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
+
   it("skips env option values before picking executable token", () => {
     expect(
       extractSystemdExecStartCommandToken(
