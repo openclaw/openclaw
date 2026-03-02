@@ -288,4 +288,27 @@ describe("config cli", () => {
       });
     });
   });
+
+  describe("config file", () => {
+    it("prints the active config file path", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "file"]);
+
+      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("handles config file path with home directory", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      const snapshot = buildSnapshot({ resolved, config: resolved });
+      snapshot.path = "/home/user/.openclaw/openclaw.json";
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+
+      await runConfigCommand(["config", "file"]);
+
+      expect(mockLog).toHaveBeenCalledWith("/home/user/.openclaw/openclaw.json");
+    });
+  });
 });
