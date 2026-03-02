@@ -739,9 +739,7 @@ export function formatToolResultBlockDiscord(
   }
 
   let lang = inferCodeLang(key, display.detail, result.outputPreview);
-  // When codeLangHints is disabled (default), strip language hints
-  // except for diff which remains useful for readability.
-  if (!options?.codeLangHints && lang !== "diff") {
+  if (!options?.codeLangHints) {
     lang = "";
   }
   const codeBlock = `\`\`\`${lang}\n${codeLines.join("\n")}\n\`\`\``;

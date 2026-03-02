@@ -608,11 +608,16 @@ describe("formatToolResultBlockDiscord language detection", () => {
       name: "Bash",
       args: { command: "git diff" },
     });
-    const result = formatToolResultBlockDiscord(display, {
-      outputPreview: "--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-old line\n+new line",
-      lineCount: 5,
-      isError: false,
-    });
+    const result = formatToolResultBlockDiscord(
+      display,
+      {
+        outputPreview: "--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-old line\n+new line",
+        lineCount: 5,
+        isError: false,
+      },
+      undefined,
+      { codeLangHints: true },
+    );
     expect(result).toContain("```diff\n");
   });
 
@@ -726,7 +731,7 @@ describe("formatToolResultBlockDiscord codeLangHints disabled (default)", () => 
     expect(result).not.toContain("```json");
   });
 
-  it("preserves diff hints even when codeLangHints is disabled", () => {
+  it("strips diff hints when codeLangHints is disabled", () => {
     const display = resolveToolDisplay({
       name: "Bash",
       args: { command: "git diff" },
@@ -736,7 +741,8 @@ describe("formatToolResultBlockDiscord codeLangHints disabled (default)", () => 
       lineCount: 5,
       isError: false,
     });
-    expect(result).toContain("```diff\n");
+    expect(result).toContain("```\n");
+    expect(result).not.toContain("```diff");
   });
 
   it("preserves Edit diff blocks regardless of codeLangHints", () => {
