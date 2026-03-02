@@ -54,3 +54,18 @@ export async function withAudioFixture(
     run,
   );
 }
+
+export async function withVideoFixture(
+  filePrefix: string,
+  run: (params: MediaFixtureParams) => Promise<void>,
+) {
+  await withMediaFixture(
+    {
+      filePrefix,
+      extension: "mp4",
+      mediaType: "video/mp4",
+      fileContents: Buffer.from("video"),
+    },
+    run,
+  );
+}

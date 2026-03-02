@@ -1,26 +1,57 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
-import { withAudioFixture, withMediaFixture } from "./runner.test-utils.js";
+import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
 
-async function withVideoFixture(
-  filePrefix: string,
-  run: (params: {
-    ctx: { MediaPath: string; MediaType: string };
-    media: ReturnType<typeof import("./runner.js").normalizeMediaAttachments>;
-    cache: ReturnType<typeof import("./runner.js").createMediaAttachmentCache>;
-  }) => Promise<void>,
-) {
-  await withMediaFixture(
-    {
-      filePrefix,
-      extension: "mp4",
-      mediaType: "video/mp4",
-      fileContents: Buffer.from("video"),
-    },
-    run,
-  );
+async function runAudioCapabilityWithFetchCapture(params: {
+  fixturePrefix: string;
+  outputText: string;
+}): Promise<typeof fetch | undefined> {
+  let seenFetchFn: typeof fetch | undefined;
+  await withAudioFixture(params.fixturePrefix, async ({ ctx, media, cache }) => {
+    const providerRegistry = buildProviderRegistry({
+      openai: {
+        id: "openai",
+        capabilities: ["audio"],
+        transcribeAudio: async (req: AudioTranscriptionRequest) => {
+          seenFetchFn = req.fetchFn;
+          return { text: params.outputText, model: req.model };
+        },
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            apiKey: "test-key",
+            models: [],
+          },
+        },
+      },
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [{ provider: "openai", model: "whisper-1" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await runCapability({
+      capability: "audio",
+      cfg,
+      ctx,
+      attachments: cache,
+      media,
+      providerRegistry,
+    });
+
+    expect(result.outputs[0]?.text).toBe(params.outputText);
+  });
+  return seenFetchFn;
 }
 
 describe("runCapability proxy fetch passthrough", () => {
@@ -29,53 +60,12 @@ describe("runCapability proxy fetch passthrough", () => {
 
   it("passes fetchFn to audio provider when HTTPS_PROXY is set", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
-
-    await withAudioFixture("openclaw-audio-proxy", async ({ ctx, media, cache }) => {
-      let seenFetchFn: typeof fetch | undefined;
-
-      const providerRegistry = buildProviderRegistry({
-        openai: {
-          id: "openai",
-          capabilities: ["audio"],
-          transcribeAudio: async (req: AudioTranscriptionRequest) => {
-            seenFetchFn = req.fetchFn;
-            return { text: "transcribed", model: req.model };
-          },
-        },
-      });
-
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              apiKey: "test-key",
-              models: [],
-            },
-          },
-        },
-        tools: {
-          media: {
-            audio: {
-              enabled: true,
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      expect(result.outputs[0]?.text).toBe("transcribed");
-      expect(seenFetchFn).toBeDefined();
-      expect(seenFetchFn).not.toBe(globalThis.fetch);
+    const seenFetchFn = await runAudioCapabilityWithFetchCapture({
+      fixturePrefix: "openclaw-audio-proxy",
+      outputText: "transcribed",
     });
+    expect(seenFetchFn).toBeDefined();
+    expect(seenFetchFn).not.toBe(globalThis.fetch);
   });
 
   it("passes fetchFn to video provider when HTTPS_PROXY is set", async () => {
@@ -134,50 +124,10 @@ describe("runCapability proxy fetch passthrough", () => {
     vi.stubEnv("https_proxy", "");
     vi.stubEnv("http_proxy", "");
 
-    await withAudioFixture("openclaw-audio-no-proxy", async ({ ctx, media, cache }) => {
-      let seenFetchFn: typeof fetch | undefined;
-
-      const providerRegistry = buildProviderRegistry({
-        openai: {
-          id: "openai",
-          capabilities: ["audio"],
-          transcribeAudio: async (req: AudioTranscriptionRequest) => {
-            seenFetchFn = req.fetchFn;
-            return { text: "ok", model: req.model };
-          },
-        },
-      });
-
-      const cfg = {
-        models: {
-          providers: {
-            openai: {
-              apiKey: "test-key",
-              models: [],
-            },
-          },
-        },
-        tools: {
-          media: {
-            audio: {
-              enabled: true,
-              models: [{ provider: "openai", model: "whisper-1" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenFetchFn).toBeUndefined();
+    const seenFetchFn = await runAudioCapabilityWithFetchCapture({
+      fixturePrefix: "openclaw-audio-no-proxy",
+      outputText: "ok",
     });
+    expect(seenFetchFn).toBeUndefined();
   });
 });
