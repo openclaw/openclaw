@@ -11,6 +11,7 @@ import { execSchtasks } from "./schtasks-exec.js";
 import {
   collectSystemdExecStartValues,
   extractSystemdExecStartCommandToken,
+  parseSystemdExecStart,
 } from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
@@ -120,6 +121,13 @@ function isBrowserExecutableToken(token: string): boolean {
   );
 }
 
+function hasRemoteDebuggingPortArg(execStartValue: string): boolean {
+  const tokens = parseSystemdExecStart(execStartValue);
+  return tokens.some(
+    (token) => token === "--remote-debugging-port" || token.startsWith("--remote-debugging-port="),
+  );
+}
+
 /**
  * Returns true when a systemd unit is a browser/CDP service (e.g. a snap-installed
  * Chromium running headless with --remote-debugging-port as a persistent workaround
@@ -134,8 +142,7 @@ function isBrowserExecutableToken(token: string): boolean {
 function isBrowserCdpService(contents: string): boolean {
   const execStartValues = collectSystemdExecStartValues(contents);
   for (const value of execStartValues) {
-    const lower = value.toLowerCase();
-    if (lower.includes("--remote-debugging-port")) {
+    if (hasRemoteDebuggingPortArg(value)) {
       return true;
     }
     const commandToken = extractSystemdExecStartCommandToken(value);

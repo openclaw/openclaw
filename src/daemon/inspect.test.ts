@@ -251,4 +251,29 @@ describe("findExtraGatewayServices (linux)", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("does not treat env assignment text as remote debugging flag argument", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "openclaw-env-cdp-assignment.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/env CDP=--remote-debugging-port=18800 /usr/local/bin/helper --mode openclaw",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "openclaw-env-cdp-assignment.service",
+        detail: "unit: /home/test/.config/systemd/user/openclaw-env-cdp-assignment.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
 });
