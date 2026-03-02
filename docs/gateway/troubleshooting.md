@@ -335,3 +335,192 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## CLI and Configuration
+
+### CLI device token mismatch
+
+**Symptom**: CLI commands fail with "device token mismatch" error.
+
+**Root Cause**: Gateway uses project config/state, but CLI commands are not pointing to the same config/state directory.
+
+**Solution**:
+```bash
+# Source the environment script before running CLI commands
+source scripts/openclaw-env.sh
+
+# Or use the wrapper script
+./scripts/oc <command>
+
+# If still failing, rotate the token
+openclaw gateway token rotate
+openclaw gateway restart
+```
+
+### CLI config drift after Gateway update
+
+**Symptom**: CLI behavior differs from Gateway after updating OpenClaw.
+
+**Root Cause**: Gateway was updated but CLI wasn't restarted, or they're using different config files.
+
+**Solution**:
+```bash
+# Verify Gateway and CLI are aligned
+openclaw gateway status
+openclaw --version
+
+# Force reinstall if needed
+openclaw gateway install --force
+```
+
+## Agent Behavior
+
+### Agent outputs internal reasoning to user
+
+**Symptom**: User receives two messages—one short, another containing the model's internal reasoning.
+
+**Root Cause**: Model outputs reasoning block or writes reasoning into the response body, which gets delivered to the user.
+
+**Solution**:
+In SOUL.md, add a clear约定:
+> "只输出面向用户的那句话，不把内部推理、步骤说明写进回复。"
+
+Configure the model to use `thinking: off` or limit thinking output.
+
+### Group reply routed to wrong agent
+
+**Symptom**: In a group, replying to a message results in the wrong agent handling it (e.g., main instead of the bound agent).
+
+**Root Cause**: OpenClaw routes by "group → bound agent", not by "replied message sender".
+
+**Solution**:
+In group chats, send a new message and @ the bot—don't use the "reply" feature.
+
+### Heartbeat log entries appear out of order
+
+**Symptom**: Heartbeat logs are interleaved or out of sequence.
+
+**Root Cause**: Writing logs inserts at the wrong position in the file.
+
+**Solution**:
+Always append new log entries to the end of the file:
+1. Read the entire file
+2. Append new content to the end
+3. Write the full file back
+
+### Edit tool fails on multi-line files
+
+**Symptom**: Editing multi-line files fails with "Could not find the exact text".
+
+**Root Cause**: The edit tool requires exact text matching. Multi-line files with inconsistent line breaks often fail to match.
+
+**Solution**:
+For larger changes to plan files, use read + write instead of edit:
+1. Read the entire file
+2. Modify content in memory
+3. Write the full file back
+
+## Documentation Best Practices
+
+### Update docs before marking as done
+
+**Symptom**: Changes get documented but never verified, making docs unreliable for troubleshooting.
+
+**Root Cause**: Documentation updated before verification, or no smoke test performed.
+
+**Solution**:
+1. Complete smoke test and verify the fix works
+2. Then update CHANGELOG-RUNNING / DECISIONS / NOW / CLAUDE.md
+3. If fixing a bug or correcting behavior, add an entry to CLAUDE.md
+
+### Cursor Rules not auto-applied
+
+**Symptom**: Rules in `.cursor/rules/*.mdc` exist but are never injected into agent context.
+
+**Root Cause**: `.mdc` files without frontmatter are not recognized as auto-apply rules.
+
+**Solution**:
+Add frontmatter to the top of all rule files:
+```markdown
+---
+description: Rule description
+globs:
+alwaysApply: true
+---
+```
+
+Always add frontmatter first when creating new rules—never write content bare.
+
+### AGENTS.md MEMORY.md rule doesn't work in group sessions
+
+**Symptom**: MEMORY.md has full context, but agent in Feishu group acts like first meeting.
+
+**Root Cause**: AGENTS.md default rule is "Only read MEMORY.md in MAIN SESSION". Feishu groups are group sessions and never read MEMOR
+
+**Solution**:
+For agents that primarily work in group chats, modify AGENTS.md rule 5 to:
+> "每次都读 MEMORY.md" (read MEMORY.md every time)
+
+Don't add "If in MAIN SESSION" condition.
+
+## SKILL and Rule Paths
+
+### SKILL.md paths must use {baseDir}, not absolute paths
+
+**Symptom**: Skills break when moving to a different computer or path changes.
+
+**Root Cause**: SKILL.md files contain hardcoded absolute paths like `/Users/dada/openclaw-work/...`.
+
+**Solution**:
+In SKILL.md, always use `{baseDir}` placeholder instead of absolute paths:
+```bash
+# Wrong:
+/Users/dada/openclaw-work/scripts/xhs_evaluate.py
+
+# Correct:
+{baseDir}/scripts/xhs_evaluate.py
+```
+
+For cross-skill references:
+```bash
+{baseDir}/../other-skill/scripts/xxx.py
+```
+
+### Cursor Rules and SKILLS-CATALOG.md禁止绝对路径
+
+**Symptom**: knowledge-base-first.mdc and other files fail on different machines.
+
+**Root Cause**: Hand-written files contain hardcoded paths like `/Users/dada/...`.
+
+**Solution**:
+- In Cursor Rules / SKILLS-CATALOG.md: Use relative paths for project files (`knowledge-base/`), use `~` for user-level paths
+- In OpenClaw SKILL.md: Use `{baseDir}` placeholder
+- In Python/Shell scripts: Use `os.path.dirname(__file__)` for dynamic paths
+
+Quality check: `python3 scripts/generate-skills-catalog.py --check-only` detects absolute paths.
+
+## Memory and Skills Sync
+
+### SOUL.md "我能做的事" must sync with AGENTS.md Tools
+
+**Symptom**: User asks for a skill that exists in AGENTS.md, but agent says "I don't have that skill".
+
+**Root Cause**: SOUL.md lists only old skills. New skills added to AGENTS.md weren't synced to SOUL.md. Model reads SOUL.md and forms self-image of "I only have these 4 skills".
+
+**Solution**:
+Every time you add a new skill, update **three places** (all required):
+1. Run `python3 scripts/generate-skills-catalog.py` to update SKILLS-CATALOG.md
+2. Update the workspace's AGENTS.md Tools section (trigger rules + usage)
+3. Update the workspace's SOUL.md "我能做的事" list
+
+### New skill requires three-way sync
+
+**Symptom**: New skill doesn't appear in skill catalog, or agent doesn't know about it.
+
+**Root Cause**: Adding a skill is multi-step; often only step 1 is done.
+
+**Solution**:
+After adding a new skill, complete all three syncs:
+1. Generate skills catalog
+2. Update AGENTS.md Tools
+3. Update SOUL.md capabilities list
