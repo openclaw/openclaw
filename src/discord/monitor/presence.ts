@@ -9,20 +9,13 @@ type DiscordPresenceConfig = Pick<
   "activity" | "status" | "activityType" | "activityUrl"
 >;
 
-export function resolveDiscordPresenceUpdate(
-  config: DiscordPresenceConfig,
-): UpdatePresenceData | null {
+export function resolveDiscordPresenceUpdate(config: DiscordPresenceConfig): UpdatePresenceData {
   const activityText = typeof config.activity === "string" ? config.activity.trim() : "";
   const status = typeof config.status === "string" ? config.status.trim() : "";
   const activityType = config.activityType;
   const activityUrl = typeof config.activityUrl === "string" ? config.activityUrl.trim() : "";
 
   const hasActivity = Boolean(activityText);
-  const hasStatus = Boolean(status);
-
-  if (!hasActivity && !hasStatus) {
-    return null;
-  }
 
   const activities: Activity[] = [];
 

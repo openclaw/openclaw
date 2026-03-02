@@ -503,10 +503,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
 
         const presence = resolveDiscordPresenceUpdate(discordCfg);
-        if (!presence) {
-          return;
-        }
-
         gateway.updatePresence(presence);
       }
     }

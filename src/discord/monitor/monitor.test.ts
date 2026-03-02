@@ -711,23 +711,23 @@ describe("presence-cache", () => {
 });
 
 describe("resolveDiscordPresenceUpdate", () => {
-  it("returns null when no presence config provided", () => {
-    expect(resolveDiscordPresenceUpdate({})).toBeNull();
+  it("returns online status with no activities when no presence config provided", () => {
+    const presence = resolveDiscordPresenceUpdate({});
+    expect(presence.status).toBe("online");
+    expect(presence.activities).toEqual([]);
   });
 
   it("returns status-only presence when activity is omitted", () => {
     const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("dnd");
-    expect(presence?.activities).toEqual([]);
+    expect(presence.status).toBe("dnd");
+    expect(presence.activities).toEqual([]);
   });
 
   it("defaults to custom activity type when activity is set without type", () => {
     const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("online");
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
+    expect(presence.status).toBe("online");
+    expect(presence.activities).toHaveLength(1);
+    expect(presence.activities[0]).toMatchObject({
       type: 4,
       name: "Custom Status",
       state: "Focus time",
@@ -740,9 +740,8 @@ describe("resolveDiscordPresenceUpdate", () => {
       activityType: 1,
       activityUrl: "https://twitch.tv/openclaw",
     });
-    expect(presence).not.toBeNull();
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
+    expect(presence.activities).toHaveLength(1);
+    expect(presence.activities[0]).toMatchObject({
       type: 1,
       name: "Live",
       url: "https://twitch.tv/openclaw",

@@ -217,7 +217,12 @@ vi.mock("./native-command.js", () => ({
 }));
 
 vi.mock("./presence.js", () => ({
-  resolveDiscordPresenceUpdate: () => undefined,
+  resolveDiscordPresenceUpdate: () => ({
+    status: "online",
+    activities: [],
+    since: null,
+    afk: false,
+  }),
 }));
 
 vi.mock("./provider.allowlist.js", () => ({
