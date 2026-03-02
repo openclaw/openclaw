@@ -208,6 +208,43 @@ describe("bot-native-command-menu", () => {
     expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
   });
 
+  it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
+    const deleteMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient failure"))
+      .mockResolvedValue(undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-delete-fail-${Date.now()}`;
+
+    syncTelegramMenuCommands({
+      bot: { api: { deleteMyCommands, setMyCommands } } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["bot"],
+      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(1));
+
+    syncTelegramMenuCommands({
+      bot: { api: { deleteMyCommands, setMyCommands } } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["bot"],
+      runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() } as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
+    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
+  });
+
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi
