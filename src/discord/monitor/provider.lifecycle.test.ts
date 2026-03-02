@@ -6,8 +6,6 @@ import type { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 
 type WaitForDiscordGatewayStopParams = Parameters<typeof waitForDiscordGatewayStop>[0];
 
-type WaitForDiscordGatewayStop = typeof import("../monitor.gateway.js").waitForDiscordGatewayStop;
-
 const {
   attachDiscordGatewayLoggingMock,
   getDiscordGatewayEmitterMock,
@@ -21,7 +19,9 @@ const {
   return {
     attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
     getDiscordGatewayEmitterMock,
-    waitForDiscordGatewayStopMock: vi.fn<WaitForDiscordGatewayStop>(() => Promise.resolve()),
+    waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
+      Promise.resolve(),
+    ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
     stopGatewayLoggingMock,
