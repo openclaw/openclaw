@@ -25,6 +25,9 @@ type DiffsPluginConfig = {
     theme?: DiffTheme;
     mode?: DiffMode;
   };
+  security?: {
+    allowRemoteViewer?: boolean;
+  };
 };
 
 export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
@@ -38,6 +41,14 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   background: true,
   theme: "dark",
   mode: "both",
+};
+
+export type DiffsPluginSecurityConfig = {
+  allowRemoteViewer: boolean;
+};
+
+export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
+  allowRemoteViewer: false,
 };
 
 const DIFFS_PLUGIN_CONFIG_JSON_SCHEMA = {
@@ -89,6 +100,16 @@ const DIFFS_PLUGIN_CONFIG_JSON_SCHEMA = {
         },
       },
     },
+    security: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        allowRemoteViewer: {
+          type: "boolean",
+          default: DEFAULT_DIFFS_PLUGIN_SECURITY.allowRemoteViewer,
+        },
+      },
+    },
   },
 } as const;
 
@@ -132,6 +153,21 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     background: defaults.background !== false,
     theme: normalizeTheme(defaults.theme),
     mode: normalizeMode(defaults.mode),
+  };
+}
+
+export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurityConfig {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { ...DEFAULT_DIFFS_PLUGIN_SECURITY };
+  }
+
+  const security = (config as DiffsPluginConfig).security;
+  if (!security || typeof security !== "object" || Array.isArray(security)) {
+    return { ...DEFAULT_DIFFS_PLUGIN_SECURITY };
+  }
+
+  return {
+    allowRemoteViewer: security.allowRemoteViewer === true,
   };
 }
 
