@@ -186,6 +186,34 @@ describe("Signal ACK reactions", () => {
     expect(sendReactionSignal).not.toHaveBeenCalled();
   });
 
+  it("does NOT send ack when message body is empty (whitespace-only text, no attachment, no quote)", async () => {
+    const deps = makeDeps();
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      makeEvent({
+        dataMessage: { message: "   ", timestamp: 1700000000000 },
+      }),
+    );
+
+    expect(sendReactionSignal).not.toHaveBeenCalled();
+  });
+
+  it("sends ack when message has no text but has an attachment", async () => {
+    const deps = makeDeps();
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      makeEvent({
+        dataMessage: {
+          message: "",
+          timestamp: 1700000000000,
+          attachments: [{ id: "att1", contentType: "image/png", size: 1024 }],
+        },
+      }),
+    );
+
+    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+  });
+
   it("sends ack BEFORE dispatch", async () => {
     const callOrder: string[] = [];
     vi.mocked(sendReactionSignal).mockImplementation(async () => {
