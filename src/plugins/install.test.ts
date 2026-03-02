@@ -374,7 +374,7 @@ describe("installPluginFromArchive", () => {
     expect(result.error).toContain("openclaw.extensions");
   });
 
-  it("uses legacy entry fallback when openclaw.extensions is missing but plugin manifest exists", async () => {
+  it("rejects legacy plugin package shape when openclaw.extensions is missing", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -399,13 +399,13 @@ describe("installPluginFromArchive", () => {
       extensionsDir,
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     if (!result.ok) {
+      expect(result.error).toContain("package.json missing openclaw.extensions");
+      expect(result.error).toContain("update the plugin package");
       return;
     }
-    expect(result.pluginId).toBe("legacy-entry-fallback");
-    expect(result.extensions).toEqual(["./index.ts"]);
-    expect(fs.existsSync(path.join(result.targetDir, "index.ts"))).toBe(true);
+    expect.unreachable("expected install to fail without openclaw.extensions");
   });
 
   it("warns when plugin contains dangerous code patterns", async () => {

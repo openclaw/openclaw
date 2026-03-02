@@ -44,7 +44,8 @@ type PackageManifest = {
   dependencies?: Record<string, string>;
 } & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
 
-const LEGACY_EXTENSION_FALLBACK_ENTRIES = ["./index.ts", "./index.js", "./dist/index.js"] as const;
+const MISSING_EXTENSIONS_ERROR =
+  'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
 
 export type InstallPluginResult =
   | {
@@ -84,41 +85,16 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-async function resolveLegacyExtensionsFallback(packageDir: string): Promise<string[]> {
-  const manifestResult = loadPluginManifest(packageDir);
-  if (!manifestResult.ok) {
-    return [];
-  }
-  const resolvedEntries = await Promise.all(
-    LEGACY_EXTENSION_FALLBACK_ENTRIES.map(async (entry) => ({
-      entry,
-      exists: await fileExists(path.join(packageDir, entry)),
-    })),
-  );
-  return resolvedEntries.filter((item) => item.exists).map((item) => item.entry);
-}
-
-async function ensureOpenClawExtensions(params: {
-  manifest: PackageManifest;
-  packageDir: string;
-}): Promise<string[]> {
+function ensureOpenClawExtensions(params: { manifest: PackageManifest }): string[] {
   const extensions = params.manifest[MANIFEST_KEY]?.extensions;
-  if (Array.isArray(extensions)) {
-    const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
-    if (list.length > 0) {
-      return list;
-    }
-  }
-
-  const fallback = await resolveLegacyExtensionsFallback(params.packageDir);
-  if (fallback.length > 0) {
-    return fallback;
-  }
-
   if (!Array.isArray(extensions)) {
-    throw new Error("package.json missing openclaw.extensions");
+    throw new Error(MISSING_EXTENSIONS_ERROR);
   }
-  throw new Error("package.json openclaw.extensions is empty");
+  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
+  if (list.length === 0) {
+    throw new Error("package.json openclaw.extensions is empty");
+  }
+  return list;
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -176,9 +152,8 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureOpenClawExtensions({
+    extensions = ensureOpenClawExtensions({
       manifest,
-      packageDir: params.packageDir,
     });
   } catch (err) {
     return { ok: false, error: String(err) };
