@@ -27,6 +27,8 @@ describe("web-guarded-fetch", () => {
           dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
         }),
+        proxy: "env",
+        dangerouslyAllowEnvProxyWithoutPinnedDns: true,
       }),
     );
   });
@@ -47,5 +49,7 @@ describe("web-guarded-fetch", () => {
     );
     const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
     expect(call?.policy).toBeUndefined();
+    expect(call?.proxy).toBeUndefined();
+    expect(call?.dangerouslyAllowEnvProxyWithoutPinnedDns).toBeUndefined();
   });
 });
