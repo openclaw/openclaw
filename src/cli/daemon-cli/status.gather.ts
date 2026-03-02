@@ -4,8 +4,12 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
-import type { GatewayBindMode, GatewayControlUiConfig } from "../../config/types.js";
-import { normalizeSecretInputString } from "../../config/types.secrets.js";
+import type {
+  OpenClawConfig,
+  GatewayBindMode,
+  GatewayControlUiConfig,
+} from "../../config/types.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
@@ -22,6 +26,8 @@ import {
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { loadGatewayTlsRuntime } from "../../infra/tls/gateway.js";
+import { secretRefKey } from "../../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../../secrets/resolve.js";
 import { probeGatewayStatus } from "./probe.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -94,6 +100,47 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
     return false;
   }
   return true;
+}
+
+function trimToUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function resolveDaemonProbePassword(params: {
+  daemonCfg: OpenClawConfig;
+  mergedDaemonEnv: Record<string, string | undefined>;
+  explicitPassword?: string;
+}): Promise<string | undefined> {
+  const explicitPassword = trimToUndefined(params.explicitPassword);
+  if (explicitPassword) {
+    return explicitPassword;
+  }
+  const envPassword = trimToUndefined(params.mergedDaemonEnv.OPENCLAW_GATEWAY_PASSWORD);
+  if (envPassword) {
+    return envPassword;
+  }
+  const defaults = params.daemonCfg.secrets?.defaults;
+  const configured = params.daemonCfg.gateway?.auth?.password;
+  const { ref } = resolveSecretInputRef({
+    value: configured,
+    defaults,
+  });
+  if (!ref) {
+    return normalizeSecretInputString(configured);
+  }
+  const resolved = await resolveSecretRefValues([ref], {
+    config: params.daemonCfg,
+    env: params.mergedDaemonEnv as NodeJS.ProcessEnv,
+  });
+  const password = trimToUndefined(resolved.get(secretRefKey(ref)));
+  if (!password) {
+    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  }
+  return password;
 }
 
 export async function gatherDaemonStatus(
@@ -217,6 +264,13 @@ export async function gatherDaemonStatus(
   const tlsRuntime = shouldUseLocalTlsRuntime
     ? await loadGatewayTlsRuntime(daemonCfg.gateway?.tls)
     : undefined;
+  const daemonProbePassword = opts.probe
+    ? await resolveDaemonProbePassword({
+        daemonCfg,
+        mergedDaemonEnv,
+        explicitPassword: opts.rpc.password,
+      })
+    : undefined;
 
   const rpc = opts.probe
     ? await probeGatewayStatus({
@@ -225,10 +279,7 @@ export async function gatherDaemonStatus(
           opts.rpc.token ||
           mergedDaemonEnv.OPENCLAW_GATEWAY_TOKEN ||
           daemonCfg.gateway?.auth?.token,
-        password:
-          opts.rpc.password ||
-          mergedDaemonEnv.OPENCLAW_GATEWAY_PASSWORD ||
-          normalizeSecretInputString(daemonCfg.gateway?.auth?.password),
+        password: daemonProbePassword,
         tlsFingerprint:
           shouldUseLocalTlsRuntime && tlsRuntime?.enabled
             ? tlsRuntime.fingerprintSha256
