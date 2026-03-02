@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "remote";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,18 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  remote?: MemoryRemoteConfig;
+};
+
+export type MemoryRemoteConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  vectorStoreId?: string;
+  vectorStoreName?: string;
+  syncIntervalMs?: number;
+  searchMaxResults?: number;
+  searchScoreThreshold?: number;
 };
 
 export type MemoryQmdConfig = {

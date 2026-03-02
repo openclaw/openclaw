@@ -792,7 +792,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",
   "memory.backend":
-    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+    'Selects the global memory engine: "builtin" uses OpenClaw memory internals, "qmd" uses the QMD sidecar pipeline, and "remote" uses a remote vector store API. Keep "builtin" unless you intentionally operate QMD or a remote store.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
   "memory.qmd.command":
@@ -849,6 +849,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets per-query QMD search timeout in milliseconds (default: 4000). Increase for larger indexes or slower environments, and lower to keep request latency bounded.",
   "memory.qmd.scope":
     "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
+  "memory.remote.baseUrl":
+    "Base URL of the remote vector store API (e.g. http://localhost:8080). Required when backend is remote.",
+  "memory.remote.apiKey": "Optional API key for the remote vector store (sent as Bearer token).",
+  "memory.remote.headers": "Optional extra HTTP headers for remote vector store requests.",
+  "memory.remote.vectorStoreId":
+    "Existing vector store ID to use. If omitted, one is auto-created with vectorStoreName.",
+  "memory.remote.vectorStoreName":
+    "Name for auto-created vector store (default: openclaw-memory-{agentId}).",
+  "memory.remote.syncIntervalMs":
+    "How often to sync local memory files to the remote store in milliseconds (default: 300000).",
+  "memory.remote.searchMaxResults":
+    "Default max results returned from remote search (default: 10).",
+  "memory.remote.searchScoreThreshold":
+    "Minimum similarity score for remote search results, 0–1 (default: 0.3).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
   "agents.defaults.memorySearch.sync.onSessionStart":

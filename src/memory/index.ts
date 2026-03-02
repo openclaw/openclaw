@@ -1,4 +1,5 @@
 export { MemoryIndexManager } from "./manager.js";
+export { RemoteVectorStoreManager } from "./remote-manager.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ResolvedQmdConfig } from "./backend-config.js";
+import type { ResolvedQmdConfig, ResolvedRemoteConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -10,6 +10,7 @@ import type {
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
+const REMOTE_MANAGER_CACHE = new Map<string, MemorySearchManager>();
 
 export type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
@@ -22,6 +23,48 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  if (resolved.backend === "remote" && resolved.remote) {
+    const statusOnly = params.purpose === "status";
+    const cacheKey = buildRemoteCacheKey(params.agentId, resolved.remote);
+    if (!statusOnly) {
+      const cached = REMOTE_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
+    }
+    try {
+      const { RemoteVectorStoreManager } = await import("./remote-manager.js");
+      const primary = await RemoteVectorStoreManager.create({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        resolved,
+        mode: statusOnly ? "status" : "full",
+      });
+      if (primary) {
+        if (statusOnly) {
+          return { manager: primary };
+        }
+        const wrapper = new FallbackMemoryManager(
+          {
+            primary,
+            fallbackFactory: async () => {
+              const { MemoryIndexManager } = await import("./manager.js");
+              return await MemoryIndexManager.get(params);
+            },
+            label: "remote",
+          },
+          () => REMOTE_MANAGER_CACHE.delete(cacheKey),
+        );
+        REMOTE_MANAGER_CACHE.set(cacheKey, wrapper);
+        return { manager: wrapper };
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`remote memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
@@ -82,6 +125,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     private readonly deps: {
       primary: MemorySearchManager;
       fallbackFactory: () => Promise<MemorySearchManager | null>;
+      label?: string;
     },
     private readonly onClose?: () => void,
   ) {}
@@ -96,7 +140,9 @@ class FallbackMemoryManager implements MemorySearchManager {
       } catch (err) {
         this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
-        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        log.warn(
+          `${this.deps.label ?? "primary"} memory failed; switching to builtin index: ${this.lastError}`,
+        );
         await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
@@ -125,7 +171,7 @@ class FallbackMemoryManager implements MemorySearchManager {
       return this.deps.primary.status();
     }
     const fallbackStatus = this.fallback?.status();
-    const fallbackInfo = { from: "qmd", reason: this.lastError ?? "unknown" };
+    const fallbackInfo = { from: this.deps.label ?? "qmd", reason: this.lastError ?? "unknown" };
     if (fallbackStatus) {
       const custom = fallbackStatus.custom ?? {};
       return {
@@ -218,6 +264,10 @@ class FallbackMemoryManager implements MemorySearchManager {
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   return `${agentId}:${stableSerialize(config)}`;
+}
+
+function buildRemoteCacheKey(agentId: string, config: ResolvedRemoteConfig): string {
+  return `remote:${agentId}:${config.baseUrl}:${config.vectorStoreId ?? config.vectorStoreName}`;
 }
 
 function stableSerialize(value: unknown): string {
