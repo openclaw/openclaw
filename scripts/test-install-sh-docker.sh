@@ -14,7 +14,7 @@ echo "==> Build smoke image (upgrade, root): $SMOKE_IMAGE"
 docker build \
   -t "$SMOKE_IMAGE" \
   -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
-  "$ROOT_DIR/scripts/docker/install-sh-smoke"
+  "$ROOT_DIR/scripts/docker"
 
 echo "==> Run installer smoke test (root): $INSTALL_URL"
 docker run --rm -t \
@@ -40,7 +40,7 @@ else
   docker build \
     -t "$NONROOT_IMAGE" \
     -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \
-    "$ROOT_DIR/scripts/docker/install-sh-nonroot"
+    "$ROOT_DIR/scripts/docker"
 
   echo "==> Run installer non-root test: $INSTALL_URL"
   docker run --rm -t \
