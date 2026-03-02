@@ -48,17 +48,14 @@ describe("nextcloudTalkPlugin gateway.startAccount", () => {
         abortSignal: abort.signal,
       }),
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
     let settled = false;
     void task.then(() => {
       settled = true;
     });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() => {
+      expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
+    });
     expect(settled).toBe(false);
-    expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
     expect(stop).not.toHaveBeenCalled();
 
     abort.abort();

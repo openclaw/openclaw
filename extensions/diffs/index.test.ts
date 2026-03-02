@@ -71,6 +71,7 @@ describe("diffs plugin registration", () => {
       },
       pluginConfig: {
         defaults: {
+          mode: "view",
           theme: "light",
           background: false,
           layout: "split",
