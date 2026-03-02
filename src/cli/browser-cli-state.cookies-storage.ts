@@ -28,6 +28,24 @@ function resolveTargetId(rawTargetId: unknown, command: Command): string | undef
   return trimmed ? trimmed : undefined;
 }
 
+async function runMutationRequest(params: {
+  parent: BrowserParentOpts;
+  request: Parameters<typeof callBrowserRequest>[1];
+  successMessage: string;
+}) {
+  try {
+    const result = await callBrowserRequest(params.parent, params.request, { timeoutMs: 20000 });
+    if (params.parent?.json) {
+      defaultRuntime.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    defaultRuntime.log(params.successMessage);
+  } catch (err) {
+    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.exit(1);
+  }
+}
+
 export function registerBrowserCookiesAndStorageCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -81,29 +99,19 @@ export function registerBrowserCookiesAndStorageCommands(
         defaultRuntime.exit(1);
         return;
       }
-      try {
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/cookies/set",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId,
-              cookie: { name, value, url },
-            },
+      await runMutationRequest({
+        parent,
+        request: {
+          method: "POST",
+          path: "/cookies/set",
+          query: profile ? { profile } : undefined,
+          body: {
+            targetId,
+            cookie: { name, value, url },
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`cookie set: ${name}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+        },
+        successMessage: `cookie set: ${name}`,
+      });
     });
 
   cookies
@@ -114,28 +122,18 @@ export function registerBrowserCookiesAndStorageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const targetId = resolveTargetId(opts.targetId, cmd);
-      try {
-        const result = await callBrowserRequest(
-          parent,
-          {
-            method: "POST",
-            path: "/cookies/clear",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId,
-            },
+      await runMutationRequest({
+        parent,
+        request: {
+          method: "POST",
+          path: "/cookies/clear",
+          query: profile ? { profile } : undefined,
+          body: {
+            targetId,
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("cookies cleared");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+        },
+        successMessage: "cookies cleared",
+      });
     });
 
   const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
@@ -187,30 +185,20 @@ export function registerBrowserCookiesAndStorageCommands(
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
         const targetId = resolveTargetId(opts.targetId, cmd2);
-        try {
-          const result = await callBrowserRequest(
-            parent,
-            {
-              method: "POST",
-              path: `/storage/${kind}/set`,
-              query: profile ? { profile } : undefined,
-              body: {
-                key,
-                value,
-                targetId,
-              },
+        await runMutationRequest({
+          parent,
+          request: {
+            method: "POST",
+            path: `/storage/${kind}/set`,
+            query: profile ? { profile } : undefined,
+            body: {
+              key,
+              value,
+              targetId,
             },
-            { timeoutMs: 20000 },
-          );
-          if (parent?.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
-          defaultRuntime.log(`${kind}Storage set: ${key}`);
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
-        }
+          },
+          successMessage: `${kind}Storage set: ${key}`,
+        });
       });
 
     cmd
@@ -221,28 +209,18 @@ export function registerBrowserCookiesAndStorageCommands(
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
         const targetId = resolveTargetId(opts.targetId, cmd2);
-        try {
-          const result = await callBrowserRequest(
-            parent,
-            {
-              method: "POST",
-              path: `/storage/${kind}/clear`,
-              query: profile ? { profile } : undefined,
-              body: {
-                targetId,
-              },
+        await runMutationRequest({
+          parent,
+          request: {
+            method: "POST",
+            path: `/storage/${kind}/clear`,
+            query: profile ? { profile } : undefined,
+            body: {
+              targetId,
             },
-            { timeoutMs: 20000 },
-          );
-          if (parent?.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
-          defaultRuntime.log(`${kind}Storage cleared`);
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
-        }
+          },
+          successMessage: `${kind}Storage cleared`,
+        });
       });
   }
 
