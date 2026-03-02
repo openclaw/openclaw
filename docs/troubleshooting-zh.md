@@ -7,6 +7,7 @@
 **症状**: `openclaw gateway start` 报错
 
 **检查**:
+
 ```bash
 # 查看端口占用
 lsof -i :3000
@@ -19,6 +20,7 @@ openclaw config show
 ```
 
 **解决**:
+
 - 确保端口未被占用
 - 检查配置文件语法
 - 重启 gateway
@@ -30,6 +32,7 @@ openclaw config show
 **症状**: `prompt is too long` 错误
 
 **解决**:
+
 ```bash
 # 清理会话历史
 openclaw sessions cleanup
@@ -45,6 +48,7 @@ openclaw config edit
 **症状**: `openclaw memory search` 返回空
 
 **检查**:
+
 ```bash
 # 查看索引状态
 openclaw memory status
@@ -54,6 +58,7 @@ ls -la ~/.openclaw/workspace/memory/
 ```
 
 **解决**:
+
 ```bash
 # 重建索引
 openclaw memory index --force
@@ -66,11 +71,13 @@ openclaw memory index --force
 **症状**: 消息不送达
 
 **检查**:
+
 1. Token是否有效
 2. Channel配置是否正确
 3. Gateway是否运行
 
 **解决**:
+
 ```bash
 # 重新配置channel
 openclaw onboard --install-daemon
@@ -86,6 +93,7 @@ openclaw logs --follow
 **症状**: 401/429/500 错误
 
 **检查**:
+
 ```bash
 # 查看当前模型配置
 openclaw status
@@ -96,6 +104,7 @@ curl https://api.openai.com/v1/models \
 ```
 
 **解决**:
+
 - 验证API Key
 - 检查配额
 - 配置fallback模型
@@ -107,6 +116,7 @@ curl https://api.openai.com/v1/models \
 **症状**: npm install 失败
 
 **解决**:
+
 ```bash
 # 清理缓存
 npm cache clean --force
@@ -126,6 +136,7 @@ npm install
 4. **GitHub Issues**: https://github.com/openclaw/openclaw/issues
 
 提交Issue时请附上:
+
 - OpenClaw版本 (`openclaw --version`)
 - 操作系统
 - 错误日志
