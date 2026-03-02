@@ -1217,6 +1217,34 @@ describe("custom provider header sanitization (#31720)", () => {
     expect(headers?.["X-Stainless-Retry-Count"]).toBeNull();
   });
 
+  it("applyExtraParamsToAgent preserves user-supplied User-Agent over sanitized default", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "custom-akc", "gpt-4");
+
+    const model = {
+      api: "openai-completions",
+      provider: "custom-akc",
+      id: "gpt-4",
+      baseUrl: "https://api.akc.to/v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { headers: { "User-Agent": "MyCustomAgent/2.0" } });
+
+    expect(calls).toHaveLength(1);
+    const headers = calls[0]?.headers as Record<string, string | null> | undefined;
+    expect(headers).toBeDefined();
+    // User-supplied User-Agent must win over the sanitizer's benign default
+    expect(headers?.["User-Agent"]).toBe("MyCustomAgent/2.0");
+    // X-Stainless-* must still be nulled out even when user headers are present
+    expect(headers?.["X-Stainless-Retry-Count"]).toBeNull();
+  });
+
   it("applyExtraParamsToAgent does NOT inject sanitized headers for api.openai.com", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

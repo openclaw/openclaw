@@ -114,6 +114,29 @@ function appendNodeModulesBinCandidates(
   appendDistCandidates(candidates, seen, packageRoot);
 }
 
+/**
+ * Infer the package root (working directory) from a compiled dist entrypoint path.
+ * Given e.g. `/usr/lib/node_modules/openclaw/dist/index.js`, returns
+ * `/usr/lib/node_modules/openclaw` so the daemon's CWD resolves dist/control-ui
+ * and other relative assets correctly under systemd/LaunchAgent.
+ * Returns undefined when the entrypoint is not inside a `dist/` directory.
+ */
+async function inferWorkingDirFromEntrypoint(
+  entrypointPath: string,
+): Promise<string | undefined> {
+  const dir = path.dirname(entrypointPath);
+  if (path.basename(dir) !== "dist") {
+    return undefined;
+  }
+  const packageRoot = path.dirname(dir);
+  try {
+    await fs.access(packageRoot);
+    return packageRoot;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveRepoRootForDev(): string {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -170,8 +193,12 @@ async function resolveCliProgramArguments(params: {
     const nodePath =
       params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
+    // Set WorkingDirectory to package root so Control UI (dist/control-ui) and other
+    // relative paths resolve correctly when the daemon runs under systemd/LaunchAgent.
+    const workingDirectory = await inferWorkingDirFromEntrypoint(cliEntrypointPath);
     return {
       programArguments: [nodePath, cliEntrypointPath, ...params.args],
+      ...(workingDirectory ? { workingDirectory } : {}),
     };
   }
 
@@ -189,16 +216,20 @@ async function resolveCliProgramArguments(params: {
 
     const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
+    const workingDirectory = await inferWorkingDirFromEntrypoint(cliEntrypointPath);
     return {
       programArguments: [bunPath, cliEntrypointPath, ...params.args],
+      ...(workingDirectory ? { workingDirectory } : {}),
     };
   }
 
   if (!params.dev) {
     try {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
+      const workingDirectory = await inferWorkingDirFromEntrypoint(cliEntrypointPath);
       return {
         programArguments: [execPath, cliEntrypointPath, ...params.args],
+        ...(workingDirectory ? { workingDirectory } : {}),
       };
     } catch (error) {
       // If running under bun or another runtime that can execute TS directly

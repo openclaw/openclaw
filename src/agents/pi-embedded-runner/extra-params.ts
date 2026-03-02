@@ -115,9 +115,10 @@ function createCustomProviderHeadersSanitizerWrapper(baseStreamFn: StreamFn | un
       return underlying(model, context, options);
     }
     const sanitized = getSanitizedHeadersForCustomProviderUpstream();
+    // sanitized first so user-supplied headers win (e.g. custom User-Agent is preserved).
     const mergedHeaders = {
-      ...options?.headers,
       ...sanitized,
+      ...options?.headers,
     };
     return underlying(model, context, {
       ...options,
