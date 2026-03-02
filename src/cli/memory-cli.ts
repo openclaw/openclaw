@@ -585,7 +585,10 @@ export function registerMemoryCli(program: Command) {
           ["openclaw memory status --deep", "Deep check including embedding provider."],
           ["openclaw memory index --force", "Force a full reindex."],
           ['openclaw memory search "meeting notes"', "Search for meeting notes."],
-          ['openclaw memory search --query "deployment" --max-results 20', "Search with more results."],
+          [
+            'openclaw memory search --query "deployment" --max-results 20',
+            "Search with more results.",
+          ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
