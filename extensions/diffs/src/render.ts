@@ -52,13 +52,15 @@ function resolveBeforeAfterFileName(input: Extract<DiffInput, { kind: "before_af
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   const fontFamily = escapeCssString(options.presentation.fontFamily);
   const fontSize = Math.max(10, Math.floor(options.presentation.fontSize));
-  const lineHeight = Math.max(20, Math.round(fontSize * 1.6));
+  const lineHeight = Math.max(20, Math.round(fontSize * options.presentation.lineSpacing));
   return {
     theme: {
       light: "pierre-light",
       dark: "pierre-dark",
     },
     diffStyle: options.presentation.layout,
+    diffIndicators: options.presentation.diffIndicators,
+    disableLineNumbers: !options.presentation.showLineNumbers,
     expandUnchanged: options.expandUnchanged,
     themeType: options.presentation.theme,
     backgroundEnabled: options.presentation.background,
