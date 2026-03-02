@@ -25,6 +25,11 @@ describe("normalizeFeishuTarget", () => {
     expect(normalizeFeishuTarget("feishu:chat:oc_123")).toBe("oc_123");
   });
 
+  it("strips provider and group prefixes (alias for chat)", () => {
+    expect(normalizeFeishuTarget("feishu:group:oc_123")).toBe("oc_123");
+    expect(normalizeFeishuTarget("group:oc_123")).toBe("oc_123");
+  });
+
   it("accepts provider-prefixed raw ids", () => {
     expect(normalizeFeishuTarget("feishu:ou_123")).toBe("ou_123");
   });
@@ -37,5 +42,10 @@ describe("looksLikeFeishuId", () => {
 
   it("accepts provider-prefixed chat targets", () => {
     expect(looksLikeFeishuId("lark:chat:oc_123")).toBe(true);
+  });
+
+  it("accepts provider-prefixed group targets (alias for chat)", () => {
+    expect(looksLikeFeishuId("feishu:group:oc_123")).toBe(true);
+    expect(looksLikeFeishuId("group:oc_123")).toBe(true);
   });
 });

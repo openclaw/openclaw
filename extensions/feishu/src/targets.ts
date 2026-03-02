@@ -33,6 +33,9 @@ export function normalizeFeishuTarget(raw: string): string | null {
   if (lowered.startsWith("chat:")) {
     return withoutProvider.slice("chat:".length).trim() || null;
   }
+  if (lowered.startsWith("group:")) {
+    return withoutProvider.slice("group:".length).trim() || null;
+  }
   if (lowered.startsWith("user:")) {
     return withoutProvider.slice("user:".length).trim() || null;
   }
@@ -70,7 +73,7 @@ export function looksLikeFeishuId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  if (/^(chat|user|open_id):/i.test(trimmed)) {
+  if (/^(chat|group|user|open_id):/i.test(trimmed)) {
     return true;
   }
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
