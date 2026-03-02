@@ -66,6 +66,33 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "agents.gateway->gateway",
+    describe: "Move misplaced agents.gateway to top-level gateway",
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      if (!agents) {
+        return;
+      }
+      const misplacedGateway = getRecord(agents.gateway);
+      if (!misplacedGateway) {
+        return;
+      }
+
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        raw.gateway = structuredClone(misplacedGateway);
+        changes.push("Moved agents.gateway → gateway.");
+      } else {
+        mergeMissing(gateway, misplacedGateway);
+        raw.gateway = gateway;
+        changes.push("Merged missing keys from agents.gateway → gateway.");
+      }
+
+      delete agents.gateway;
+      raw.agents = agents;
+    },
+  },
+  {
     id: "memorySearch->agents.defaults.memorySearch",
     describe: "Move top-level memorySearch to agents.defaults.memorySearch",
     apply: (raw, changes) => {

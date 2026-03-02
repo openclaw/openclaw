@@ -185,6 +185,19 @@ describe("legacy config detection", () => {
     expect(res.config?.tools?.media?.audio).toBeUndefined();
     expect(res.config?.audio).toBeUndefined();
   });
+  it("migrates misplaced agents.gateway to top-level gateway", async () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        gateway: {
+          auth: { mode: "token", token: "abc123" },
+        },
+      },
+    });
+    expect(res.changes).toContain("Moved agents.gateway → gateway.");
+    expect(res.config?.gateway?.auth).toEqual({ mode: "token", token: "abc123" });
+    expect((res.config?.agents as Record<string, unknown> | undefined)?.gateway).toBeUndefined();
+  });
+
   it("migrates agent config into agents.defaults and tools", async () => {
     const res = migrateLegacyConfig({
       agent: {
