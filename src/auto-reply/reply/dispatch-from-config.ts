@@ -574,6 +574,29 @@ export async function dispatchReplyFromConfig(params: {
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed");
+
+    // Emit message:sent internal hook after successful dispatch.
+    // This fires regardless of whether the channel plugin uses the standard
+    // deliverOutboundPayloads path (which has its own emitMessageSent) or a
+    // custom deliver callback (e.g., Feishu's streaming card sender).
+    // Channels using deliverOutboundPayloads may fire message:sent more than once;
+    // hooks should be idempotent.
+    const deliveredCount = counts.tool + counts.block + counts.final;
+    if (sessionKey && deliveredCount > 0) {
+      void triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, {
+          to: ctx.To ?? ctx.From ?? "",
+          content: "",
+          success: true,
+          channelId: channel,
+          accountId: ctx.AccountId,
+          conversationId: chatId,
+        }),
+      ).catch((err) => {
+        logVerbose(`dispatch-from-config: message_sent internal hook failed: ${String(err)}`);
+      });
+    }
+
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {

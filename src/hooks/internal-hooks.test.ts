@@ -455,4 +455,18 @@ describe("hooks", () => {
       expect(keys).toEqual([]);
     });
   });
+
+  describe("global singleton registry", () => {
+    it("stores handlers in globalThis via Symbol.for", () => {
+      const key = Symbol.for("openclaw.internal-hooks.handlers");
+      const g = globalThis as Record<symbol, unknown>;
+
+      const handler = vi.fn();
+      registerInternalHook("message:sent", handler);
+
+      const map = g[key] as Map<string, unknown[]>;
+      expect(map).toBeInstanceOf(Map);
+      expect(map.get("message:sent")).toContain(handler);
+    });
+  });
 });

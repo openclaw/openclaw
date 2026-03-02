@@ -110,8 +110,23 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
-/** Registry of hook handlers by event key */
-const handlers = new Map<string, InternalHookHandler[]>();
+/**
+ * Registry of hook handlers by event key.
+ *
+ * Use a global singleton so register/trigger share one Map even when
+ * bundling splits code across multiple chunks/entrypoints.
+ */
+const HOOK_REGISTRY_KEY = Symbol.for("openclaw.internal-hooks.handlers");
+
+function getHandlers(): Map<string, InternalHookHandler[]> {
+  const g = globalThis as Record<symbol, unknown>;
+  if (!g[HOOK_REGISTRY_KEY]) {
+    g[HOOK_REGISTRY_KEY] = new Map<string, InternalHookHandler[]>();
+  }
+  return g[HOOK_REGISTRY_KEY] as Map<string, InternalHookHandler[]>;
+}
+
+const handlers = getHandlers();
 const log = createSubsystemLogger("internal-hooks");
 
 /**
