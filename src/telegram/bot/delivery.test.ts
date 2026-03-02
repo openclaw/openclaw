@@ -372,7 +372,12 @@ describe("deliverReplies", () => {
 
     await deliverWith({
       replies: [
-        { mediaUrl: "https://example.com/note.ogg", text: "chunk-one\n\nchunk-two", replyToId: "77" },
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "chunk-one\n\nchunk-two",
+          replyToId: "77",
+          audioAsVoice: true,
+        },
       ],
       runtime,
       bot,
