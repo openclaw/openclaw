@@ -811,6 +811,16 @@ public struct NodeRenameParams: Codable, Sendable {
 }
 
 public struct NodeListParams: Codable, Sendable {
+    public let connectedonly: Bool?
+
+    public init(
+        connectedonly: Bool?
+    ) {
+        self.connectedonly = connectedonly
+    }
+    private enum CodingKeys: String, CodingKey {
+        case connectedonly = "connectedOnly"
+    }
 }
 
 public struct NodeDescribeParams: Codable, Sendable {
@@ -2330,14 +2340,9 @@ public struct CronJob: Codable, Sendable {
         wakemode: AnyCodable,
         payload: AnyCodable,
         delivery: AnyCodable?,
-<<<<<<< HEAD:apps/shared/BotKit/Sources/BotProtocol/GatewayModels.swift
+        failurealert: AnyCodable?,
         state: [String: AnyCodable]
     ) {
-=======
-        failurealert: AnyCodable?,
-        state: [String: AnyCodable])
-    {
->>>>>>> 0d672e43b (chore(protocol): sync generated swift models):apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
         self.id = id
         self.agentid = agentid
         self.sessionkey = sessionkey
@@ -2440,14 +2445,9 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-<<<<<<< HEAD:apps/shared/BotKit/Sources/BotProtocol/GatewayModels.swift
-        delivery: AnyCodable?
-    ) {
-=======
         delivery: AnyCodable?,
-        failurealert: AnyCodable?)
-    {
->>>>>>> 0d672e43b (chore(protocol): sync generated swift models):apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
+        failurealert: AnyCodable?
+    ) {
         self.name = name
         self.agentid = agentid
         self.sessionkey = sessionkey
