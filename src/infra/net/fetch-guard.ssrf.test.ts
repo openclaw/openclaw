@@ -1,6 +1,6 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard } from "./fetch-guard.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "./fetch-guard.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -180,7 +180,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://public.example/resource",
       fetchImpl,
       lookupFn,
-      proxy: "env",
+      mode: GUARDED_FETCH_MODE.STRICT,
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -202,8 +202,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       url: "https://public.example/resource",
       fetchImpl,
       lookupFn,
-      proxy: "env",
-      dangerouslyAllowEnvProxyWithoutPinnedDns: true,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);

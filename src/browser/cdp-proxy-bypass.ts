@@ -10,6 +10,7 @@
 import http from "node:http";
 import https from "node:https";
 import { isLoopbackHost } from "../gateway/net.js";
+import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
 /** HTTP agent that never uses a proxy — for localhost CDP connections. */
 const directHttpAgent = new http.Agent();
@@ -39,15 +40,7 @@ export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | un
  * interfere with loopback connections.
  */
 export function hasProxyEnv(): boolean {
-  const env = process.env;
-  return Boolean(
-    env.HTTP_PROXY ||
-    env.http_proxy ||
-    env.HTTPS_PROXY ||
-    env.https_proxy ||
-    env.ALL_PROXY ||
-    env.all_proxy,
-  );
+  return hasProxyEnvConfigured();
 }
 
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
