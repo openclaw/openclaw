@@ -114,7 +114,9 @@ export function createTelegramDraftStream(params: {
       if (nativeStreaming) {
         // Use Bot API 9.5 sendMessageDraft for smooth streaming without flicker.
         // No message_id tracking needed — draft slot is identified by draftId.
-        await params.api.sendMessageDraft({
+        // Cast to any: grammy typings may lag behind Bot API 9.5.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (params.api as any).sendMessageDraft({
           chat_id: chatId,
           draft_id: draftId,
           text: renderedText,
