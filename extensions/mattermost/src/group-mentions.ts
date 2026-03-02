@@ -8,6 +8,12 @@ export function resolveMattermostGroupRequireMention(
     cfg: params.cfg,
     accountId: params.accountId,
   });
+  if (account.chatmode === "onmessage") {
+    return false;
+  }
+  if (account.chatmode === "oncall" || account.chatmode === "onchar") {
+    return true;
+  }
   if (typeof account.requireMention === "boolean") {
     return account.requireMention;
   }
