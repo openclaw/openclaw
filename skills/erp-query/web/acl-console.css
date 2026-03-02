@@ -98,6 +98,12 @@ h2 {
   font-family: var(--font-display);
 }
 
+h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.94rem;
+}
+
 h1 {
   margin-top: 4px;
   font-size: clamp(1.56rem, 3.1vw, 2.5rem);
@@ -320,6 +326,30 @@ h2 {
   font-weight: 800;
   cursor: pointer;
   line-height: 1;
+}
+
+.precheck-panel {
+  border: 1px solid #d8e8df;
+  border-radius: 12px;
+  background: #f7fcf9;
+  padding: 10px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.precheck-chip {
+  border-color: #b9d7c8;
+  background: #e9f6ef;
+}
+
+.intent-ok {
+  color: #176645;
+}
+
+.intent-warn {
+  color: #8b2f21;
 }
 
 .inline-form {

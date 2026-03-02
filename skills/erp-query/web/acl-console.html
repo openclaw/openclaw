@@ -71,6 +71,19 @@
             <select id="assign-role" required></select>
             <button class="btn primary" type="submit">分配角色</button>
           </form>
+          <div class="precheck-panel">
+            <div class="card-head">
+              <h3>角色预检</h3>
+              <span class="tiny">按当前角色动态提示</span>
+            </div>
+            <input
+              id="assign-intent-input"
+              placeholder="可选：输入查询语句预检（例如：查一下GB其他入库单）"
+            />
+            <div id="assign-role-summary" class="role-meta">选择角色后显示该角色可查询单据映射。</div>
+            <div id="assign-role-vouchers" class="chips"></div>
+            <div id="assign-intent-result" class="role-meta">输入查询语句后显示语义预检结果。</div>
+          </div>
           <div id="users" class="user-list"></div>
         </article>
 

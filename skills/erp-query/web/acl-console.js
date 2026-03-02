@@ -17,6 +17,10 @@ const el = {
   assignUserId: document.getElementById("assign-user-id"),
   assignName: document.getElementById("assign-name"),
   assignRole: document.getElementById("assign-role"),
+  assignIntentInput: document.getElementById("assign-intent-input"),
+  assignRoleSummary: document.getElementById("assign-role-summary"),
+  assignRoleVouchers: document.getElementById("assign-role-vouchers"),
+  assignIntentResult: document.getElementById("assign-intent-result"),
   permissionView: document.getElementById("permission-view"),
   formGroupFilter: document.getElementById("form-group-filter"),
   activeOnly: document.getElementById("active-only"),
@@ -146,6 +150,122 @@ function fmtNum(value) {
   return Number(value || 0).toLocaleString("zh-CN");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function upperVoucherType(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function getRoleById(roleId) {
+  const roles = state.policy?.roles || [];
+  return roles.find((item) => item.roleId === roleId) || null;
+}
+
+function buildFormsByVoucherType() {
+  const map = new Map();
+  const forms = state.policy?.forms || [];
+  for (const item of forms) {
+    const code = upperVoucherType(item.voucherType);
+    if (!code) {
+      continue;
+    }
+    map.set(code, item);
+  }
+  return map;
+}
+
+function renderAssignRolePrecheck() {
+  const roleId = (el.assignRole.value || "").trim();
+  const role = getRoleById(roleId);
+
+  if (!role) {
+    el.assignRoleSummary.textContent = "选择角色后显示该角色可查询单据映射。";
+    el.assignRoleVouchers.innerHTML = "";
+    el.assignIntentResult.className = "role-meta";
+    el.assignIntentResult.textContent = "输入查询语句后显示语义预检结果。";
+    return;
+  }
+
+  const formsByType = buildFormsByVoucherType();
+  const allowed = [
+    ...new Set((role.allowedVoucherTypes || []).map(upperVoucherType).filter(Boolean)),
+  ].sort();
+  const groups = (role.autoGroups || []).join(", ") || "-";
+
+  el.assignRoleSummary.textContent = `角色 ${roleId} | 分组: ${groups} | 单据权限: ${allowed.length}`;
+
+  el.assignRoleVouchers.innerHTML = allowed.length
+    ? allowed
+        .map((type) => {
+          const item = formsByType.get(type);
+          const label = item ? `${type} · ${item.voucherName}` : type;
+          return `<span class="chip precheck-chip">${escapeHtml(label)}</span>`;
+        })
+        .join("")
+    : "<span class='tiny'>当前角色没有单据权限。</span>";
+
+  const intent = (el.assignIntentInput.value || "").trim();
+  if (!intent) {
+    el.assignIntentResult.className = "role-meta";
+    if (allowed.includes("GA") || allowed.includes("GB")) {
+      el.assignIntentResult.textContent = "仓储提醒：GA=其他入库单，GB=其他出库单。";
+    } else {
+      el.assignIntentResult.textContent = "输入查询语句后显示语义预检结果。";
+    }
+    return;
+  }
+
+  const upperIntent = intent.toUpperCase();
+  const hasInKeyword = /入库/.test(intent);
+  const hasOutKeyword = /出库/.test(intent);
+  const mentionedCodes = [
+    ...new Set((upperIntent.match(/\b[A-Z]{2}\b/g) || []).map(upperVoucherType)),
+  ];
+  const warnings = [];
+  const hints = [];
+
+  for (const code of mentionedCodes) {
+    const form = formsByType.get(code);
+    if (form) {
+      hints.push(`${code}=${form.voucherName}`);
+    }
+    if (!allowed.includes(code)) {
+      warnings.push(`${code} 不在角色 ${roleId} 的权限内`);
+    }
+  }
+
+  if (hasInKeyword && upperIntent.includes("GB")) {
+    warnings.push("语义冲突：文本包含“入库”但代码是 GB（其他出库单）");
+  }
+  if (hasOutKeyword && upperIntent.includes("GA")) {
+    warnings.push("语义冲突：文本包含“出库”但代码是 GA（其他入库单）");
+  }
+
+  if (warnings.length > 0) {
+    el.assignIntentResult.className = "role-meta intent-warn";
+    el.assignIntentResult.textContent = `预检警告：${warnings.join("；")}。${
+      hints.length > 0 ? `已识别映射：${hints.join("，")}。` : ""
+    }`;
+    return;
+  }
+
+  el.assignIntentResult.className = "role-meta intent-ok";
+  if (hints.length > 0) {
+    el.assignIntentResult.textContent = `预检通过：${hints.join("，")}。`;
+    return;
+  }
+  el.assignIntentResult.textContent = "预检通过：未识别到冲突代码。";
+}
+
 function renderStats() {
   const stats = state.policy?.stats;
   if (!stats) {
@@ -166,12 +286,17 @@ function renderStats() {
 function renderRoles() {
   const roles = state.policy?.roles || [];
   el.roleCount.textContent = String(roles.length);
+  const prevRole = (el.assignRole.value || "").trim();
   el.assignRole.innerHTML = roles
     .map((r) => `<option value="${r.roleId}">${r.roleId}</option>`)
     .join("");
+  if (roles.some((role) => role.roleId === prevRole)) {
+    el.assignRole.value = prevRole;
+  }
 
   if (!roles.length) {
     el.roles.innerHTML = `<div class="role-item">暂无角色</div>`;
+    renderAssignRolePrecheck();
     return;
   }
 
@@ -192,6 +317,8 @@ function renderRoles() {
       `;
     })
     .join("");
+
+  renderAssignRolePrecheck();
 }
 
 function selectUser(userId) {
@@ -374,6 +501,8 @@ el.assignForm.addEventListener("submit", async (event) => {
 
 el.formGroupFilter.addEventListener("change", renderForms);
 el.activeOnly.addEventListener("change", renderForms);
+el.assignRole.addEventListener("change", renderAssignRolePrecheck);
+el.assignIntentInput.addEventListener("input", renderAssignRolePrecheck);
 
 el.btnRefresh.addEventListener("click", () => loadPolicy());
 el.btnSyncForms.addEventListener("click", async () => {
