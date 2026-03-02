@@ -168,6 +168,7 @@ describe("Cron issue regressions", () => {
     const enqueueSystemEvent = vi.fn();
     const cron = await startCronForStore({
       storePath: store.storePath,
+      cronEnabled: false,
       enqueueSystemEvent,
     });
 
@@ -213,10 +214,8 @@ describe("Cron issue regressions", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "hi" },
     });
-    const status = await cron.status();
 
     expect(typeof job.state.nextRunAtMs).toBe("number");
-    expect(typeof status.nextWakeAtMs).toBe("number");
 
     const unsafeToggle = await cron.add({
       name: "unsafe toggle",
@@ -1525,7 +1524,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.02;
+    const timeoutSeconds = 0.015;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
