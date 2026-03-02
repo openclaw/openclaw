@@ -29,6 +29,7 @@ import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
   createGatewayPluginRequestHandler,
+  isRegisteredPluginHttpRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
@@ -121,6 +122,9 @@ export async function createGatewayRuntimeState(params: {
   const shouldEnforcePluginGatewayAuth = (requestPath: string): boolean => {
     return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, requestPath);
   };
+  const shouldBypassControlUiForPath = (requestPath: string): boolean => {
+    return isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath);
+  };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
@@ -144,6 +148,7 @@ export async function createGatewayRuntimeState(params: {
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleHooksRequest,
       handlePluginRequest,
+      shouldBypassControlUiForPath,
       shouldEnforcePluginGatewayAuth,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,

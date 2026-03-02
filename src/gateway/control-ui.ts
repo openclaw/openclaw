@@ -27,6 +27,7 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  shouldBypassPath?: (pathname: string) => boolean;
 };
 
 export type ControlUiRootState =
@@ -275,6 +276,7 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
+  const isReadMethod = req.method === "GET" || req.method === "HEAD";
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
@@ -293,6 +295,16 @@ export function handleControlUiHttpRequest(
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return false;
     }
+    if (!isReadMethod && opts?.shouldBypassPath?.(pathname)) {
+      return false;
+    }
+  }
+
+  if (!isReadMethod) {
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
   }
 
   if (basePath) {

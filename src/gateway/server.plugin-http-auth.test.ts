@@ -559,6 +559,57 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("serves root-level plugin webhook routes before control ui method guard", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-control-ui-webhook-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/bluebubbles-webhook" && req.method === "POST") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("webhook-ok");
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          shouldBypassControlUiForPath: (requestPath) => requestPath === "/bluebubbles-webhook",
+          resolvedAuth,
+        });
+
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/bluebubbles-webhook", method: "POST" }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain("webhook-ok");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test("does not let plugin handlers shadow control ui routes", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -582,6 +633,53 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
       run: async (server) => {
         const response = await sendRequest(server, { path: "/chat" });
+
+        expect(response.res.statusCode).toBe(503);
+        expect(response.getBody()).toContain("Control UI assets not found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("does not let registered plugin routes shadow control ui read routes", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-control-ui-route-shadow-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/chat") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("plugin-route-shadow");
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          shouldBypassControlUiForPath: (requestPath) => requestPath === "/chat",
+          resolvedAuth,
+        });
+
+        const response = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/chat" }), response.res);
 
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");

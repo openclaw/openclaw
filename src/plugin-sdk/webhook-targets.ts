@@ -6,13 +6,28 @@ export type RegisteredWebhookTarget<T> = {
   unregister: () => void;
 };
 
+export type RegisterWebhookTargetOptions = {
+  onFirstTargetForPath?: (normalizedPath: string) => void | (() => void);
+};
+
+const cleanupByTargetsMap = new WeakMap<object, Map<string, () => void>>();
+
 export function registerWebhookTarget<T extends { path: string }>(
   targetsByPath: Map<string, T[]>,
   target: T,
+  opts?: RegisterWebhookTargetOptions,
 ): RegisteredWebhookTarget<T> {
   const key = normalizeWebhookPath(target.path);
   const normalizedTarget = { ...target, path: key };
   const existing = targetsByPath.get(key) ?? [];
+  if (existing.length === 0) {
+    const cleanup = opts?.onFirstTargetForPath?.(key);
+    if (cleanup) {
+      const pathCleanups = cleanupByTargetsMap.get(targetsByPath) ?? new Map<string, () => void>();
+      pathCleanups.set(key, cleanup);
+      cleanupByTargetsMap.set(targetsByPath, pathCleanups);
+    }
+  }
   targetsByPath.set(key, [...existing, normalizedTarget]);
   const unregister = () => {
     const updated = (targetsByPath.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
@@ -21,6 +36,10 @@ export function registerWebhookTarget<T extends { path: string }>(
       return;
     }
     targetsByPath.delete(key);
+    const pathCleanups = cleanupByTargetsMap.get(targetsByPath);
+    const cleanup = pathCleanups?.get(key);
+    pathCleanups?.delete(key);
+    cleanup?.();
   };
   return { target: normalizedTarget, unregister };
 }

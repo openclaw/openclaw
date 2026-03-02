@@ -31,6 +31,32 @@ describe("registerWebhookTarget", () => {
     registered.unregister();
     expect(targets.has("/hook")).toBe(false);
   });
+
+  it("runs path activation once and cleans up after the last unregister", () => {
+    const targets = new Map<string, Array<{ path: string; id: string }>>();
+    const cleanup = vi.fn();
+    const onFirstTargetForPath = vi.fn(() => cleanup);
+
+    const first = registerWebhookTarget(
+      targets,
+      { path: "hook", id: "A" },
+      { onFirstTargetForPath },
+    );
+    const second = registerWebhookTarget(
+      targets,
+      { path: "/hook/", id: "B" },
+      { onFirstTargetForPath },
+    );
+
+    expect(onFirstTargetForPath).toHaveBeenCalledTimes(1);
+    expect(onFirstTargetForPath).toHaveBeenCalledWith("/hook");
+
+    first.unregister();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    second.unregister();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("resolveWebhookTargets", () => {
