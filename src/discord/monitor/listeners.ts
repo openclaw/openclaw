@@ -482,6 +482,33 @@ async function handleDiscordReactionEvent(params: {
         parentSlug,
         scope: "thread",
       });
+    const authorizeReactionIngressForChannel = async (
+      channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
+    ) =>
+      await authorizeDiscordReactionIngress({
+        accountId: params.accountId,
+        user,
+        isDirectMessage,
+        isGroupDm,
+        isGuildMessage,
+        channelId: data.channel_id,
+        channelName,
+        channelSlug,
+        dmEnabled: params.dmEnabled,
+        groupDmEnabled: params.groupDmEnabled,
+        groupDmChannels: params.groupDmChannels,
+        dmPolicy: params.dmPolicy,
+        allowFrom: params.allowFrom,
+        groupPolicy: params.groupPolicy,
+        allowNameMatching: params.allowNameMatching,
+        guildInfo,
+        channelConfig,
+      });
+    const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
+      parentId = channelInfo?.parentId;
+      await loadThreadParentInfo();
+      return await authorizeReactionIngressForChannel(resolveThreadChannelConfig());
+    };
 
     // Parallelize async operations for thread channels
     if (isThreadChannel) {
@@ -499,29 +526,7 @@ async function handleDiscordReactionEvent(params: {
       // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
       if (reactionMode === "all" || reactionMode === "allowlist") {
         const channelInfo = await channelInfoPromise;
-        parentId = channelInfo?.parentId;
-        await loadThreadParentInfo();
-
-        const channelConfig = resolveThreadChannelConfig();
-        const threadAccess = await authorizeDiscordReactionIngress({
-          accountId: params.accountId,
-          user,
-          isDirectMessage,
-          isGroupDm,
-          isGuildMessage,
-          channelId: data.channel_id,
-          channelName,
-          channelSlug,
-          dmEnabled: params.dmEnabled,
-          groupDmEnabled: params.groupDmEnabled,
-          groupDmChannels: params.groupDmChannels,
-          dmPolicy: params.dmPolicy,
-          allowFrom: params.allowFrom,
-          groupPolicy: params.groupPolicy,
-          allowNameMatching: params.allowNameMatching,
-          guildInfo,
-          channelConfig,
-        });
+        const threadAccess = await authorizeThreadChannelAccess(channelInfo);
         if (!threadAccess.allowed) {
           return;
         }
@@ -542,29 +547,7 @@ async function handleDiscordReactionEvent(params: {
       const messagePromise = data.message.fetch().catch(() => null);
 
       const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
-      parentId = channelInfo?.parentId;
-      await loadThreadParentInfo();
-
-      const channelConfig = resolveThreadChannelConfig();
-      const threadAccess = await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
-        channelConfig,
-      });
+      const threadAccess = await authorizeThreadChannelAccess(channelInfo);
       if (!threadAccess.allowed) {
         return;
       }
@@ -590,25 +573,7 @@ async function handleDiscordReactionEvent(params: {
       scope: "channel",
     });
     if (isGuildMessage) {
-      const channelAccess = await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
-        channelConfig,
-      });
+      const channelAccess = await authorizeReactionIngressForChannel(channelConfig);
       if (!channelAccess.allowed) {
         return;
       }

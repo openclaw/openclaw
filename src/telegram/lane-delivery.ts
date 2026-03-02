@@ -171,6 +171,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     previewMessageId: previewMessageIdOverride,
     previewTextSnapshot,
   }: TryUpdatePreviewParams): Promise<boolean> => {
+    const editPreview = (messageId: number, treatEditFailureAsDelivered: boolean) =>
+      tryEditPreviewMessage({
+        laneName,
+        messageId,
+        text,
+        context,
+        previewButtons,
+        updateLaneSnapshot,
+        lane,
+        treatEditFailureAsDelivered,
+      });
     if (!lane.stream) {
       return false;
     }
@@ -198,16 +209,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.markDelivered();
         return true;
       }
-      return tryEditPreviewMessage({
-        laneName,
-        messageId: previewMessageId,
-        text,
-        context,
-        previewButtons,
-        updateLaneSnapshot,
-        lane,
-        treatEditFailureAsDelivered: true,
-      });
+      return editPreview(previewMessageId, true);
     }
     if (stopBeforeEdit) {
       await params.stopDraftLane(lane);
@@ -230,16 +232,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       params.markDelivered();
       return true;
     }
-    return tryEditPreviewMessage({
-      laneName,
-      messageId: previewMessageId,
-      text,
-      context,
-      previewButtons,
-      updateLaneSnapshot,
-      lane,
-      treatEditFailureAsDelivered: false,
-    });
+    return editPreview(previewMessageId, false);
   };
 
   const consumeArchivedAnswerPreviewForFinal = async ({

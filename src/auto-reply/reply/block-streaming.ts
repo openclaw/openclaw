@@ -66,8 +66,8 @@ export type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-function clampPositiveInteger(
-  value: number | undefined,
+export function clampPositiveInteger(
+  value: unknown,
   fallback: number,
   bounds: { min: number; max: number },
 ): number {
