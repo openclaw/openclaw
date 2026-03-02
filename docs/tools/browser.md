@@ -200,9 +200,10 @@ Notes:
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
 headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
-solving, stealth mode, and residential proxies. You can point an
-OpenClaw browser profile at Browserbase's connect endpoint and authenticate
-with your API key.
+solving, stealth mode, and residential proxies. Unlike Browserless (which
+exposes a standard HTTP-based CDP discovery endpoint), Browserbase uses a
+direct WebSocket connection — OpenClaw connects to `wss://connect.browserbase.com`
+and authenticates via your API key in the query string.
 
 Example:
 
@@ -228,6 +229,8 @@ Notes:
 - [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
   from the [Overview dashboard](https://www.browserbase.com/overview).
 - Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
+- Browserbase auto-creates a browser session on WebSocket connect, so no
+  manual session creation step is needed.
 - The free tier allows one concurrent session and one browser hour per month.
   See [pricing](https://www.browserbase.com/pricing) for paid plan limits.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API

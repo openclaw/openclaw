@@ -129,14 +129,16 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
 export function parseHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`);
+  const allowed = ["http:", "https:", "ws:", "wss:"];
+  if (!allowed.includes(parsed.protocol)) {
+    throw new Error(`${label} must be http(s) or ws(s), got: ${parsed.protocol.replace(":", "")}`);
   }
 
+  const isSecure = parsed.protocol === "https:" || parsed.protocol === "wss:";
   const port =
     parsed.port && Number.parseInt(parsed.port, 10) > 0
       ? Number.parseInt(parsed.port, 10)
-      : parsed.protocol === "https:"
+      : isSecure
         ? 443
         : 80;
 

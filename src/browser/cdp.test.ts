@@ -95,6 +95,34 @@ describe("cdp", () => {
     expect(created.targetId).toBe("TARGET_123");
   });
 
+  it("creates a target via direct WebSocket URL (skips /json/version)", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method !== "Target.createTarget") {
+        return;
+      }
+      socket.send(
+        JSON.stringify({
+          id: msg.id,
+          result: { targetId: "TARGET_WS_DIRECT" },
+        }),
+      );
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const created = await createTargetViaCdp({
+        cdpUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+        url: "https://example.com",
+      });
+
+      expect(created.targetId).toBe("TARGET_WS_DIRECT");
+      // /json/version should NOT have been called — direct WS skips HTTP discovery
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("blocks private navigation targets by default", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
