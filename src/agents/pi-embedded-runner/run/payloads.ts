@@ -158,7 +158,11 @@ export function buildEmbeddedRunPayloads(params: {
   // Suppress transient API errors (rate limit, overload) when configured.
   // Billing errors are never suppressed even if they match rate-limit patterns
   // (e.g. "exceeded your current quota") because they require user action.
-  const rawMsgForSuppress = params.lastAssistant?.errorMessage?.trim() ?? "";
+  // Some providers leave errorMessage empty and embed the raw API payload in
+  // the assistant text instead — fall back to that so suppression still fires.
+  const rawMsgForSuppress =
+    params.lastAssistant?.errorMessage?.trim() ||
+    (lastAssistantErrored ? params.assistantTexts.join("\n").trim() : "");
   const isTransientApiError =
     !isBillingErrorMessage(rawMsgForSuppress) &&
     (isRateLimitErrorMessage(rawMsgForSuppress) || isOverloadedErrorMessage(rawMsgForSuppress));
