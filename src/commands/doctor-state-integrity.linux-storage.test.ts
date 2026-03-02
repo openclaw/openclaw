@@ -1,6 +1,17 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { detectLinuxSdBackedStateDir } from "./doctor-state-integrity.js";
+import {
+  detectLinuxSdBackedStateDir,
+  formatLinuxSdBackedStateDirWarning,
+} from "./doctor-state-integrity.js";
+
+function encodeMountInfoPath(value: string): string {
+  return value
+    .replace(/\\/g, "\\134")
+    .replace(/\n/g, "\\012")
+    .replace(/\t/g, "\\011")
+    .replace(/ /g, "\\040");
+}
 
 describe("detectLinuxSdBackedStateDir", () => {
   it("detects state dir on mmc-backed mount", () => {
@@ -84,5 +95,31 @@ describe("detectLinuxSdBackedStateDir", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("escapes decoded mountinfo control characters in warning output", () => {
+    const mountRoot = "/home/pi/mnt\nspoofed";
+    const stateDir = `${mountRoot}/.openclaw`;
+    const encodedSource = "/dev/disk/by-uuid/mmc\\012source";
+    const mountInfo = `30 24 179:2 / ${encodeMountInfoPath(mountRoot)} rw,relatime - ext4 ${encodedSource} rw`;
+
+    const result = detectLinuxSdBackedStateDir(stateDir, {
+      platform: "linux",
+      mountInfo,
+      resolveRealPath: () => stateDir,
+      resolveDeviceRealPath: (devicePath) => {
+        if (devicePath === "/dev/disk/by-uuid/mmc\nsource") {
+          return "/dev/mmcblk0p2";
+        }
+        return null;
+      },
+    });
+
+    expect(result).not.toBeNull();
+    const warning = formatLinuxSdBackedStateDirWarning(stateDir, result!);
+    expect(warning).toContain("device /dev/disk/by-uuid/mmc\\nsource");
+    expect(warning).toContain("mount /home/pi/mnt\\nspoofed");
+    expect(warning).not.toContain("device /dev/disk/by-uuid/mmc\nsource");
+    expect(warning).not.toContain("mount /home/pi/mnt\nspoofed");
   });
 });
