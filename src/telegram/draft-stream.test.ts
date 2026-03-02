@@ -125,6 +125,21 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it("supports forcing message transport in dm threads", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it("does not edit or delete messages after DM draft stream finalization", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });

@@ -1086,6 +1086,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     },
   );
 
+  it("uses message preview transport for DM reasoning lane when answer preview lane is active", async () => {
+    setupDraftStreams({ answerMessageId: 999, reasoningMessageId: 111 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_Working on it..._" });
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    expect(createTelegramDraftStream.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        thread: { id: 777, scope: "dm" },
+        previewTransport: "auto",
+      }),
+    );
+    expect(createTelegramDraftStream.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        thread: { id: 777, scope: "dm" },
+        previewTransport: "message",
+      }),
+    );
+  });
+
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 999,

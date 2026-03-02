@@ -59,6 +59,7 @@ export function createTelegramDraftStream(params: {
   chatId: number;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
+  previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
@@ -77,8 +78,16 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
-  const isDirectStream = params.thread?.scope === "dm";
-  const threadParams = buildTelegramThreadParams(params.thread);
+  const requestedPreviewTransport = params.previewTransport ?? "auto";
+  const isDirectStream =
+    requestedPreviewTransport === "draft"
+      ? true
+      : requestedPreviewTransport === "message"
+        ? false
+        : params.thread?.scope === "dm";
+  const resolvedThread =
+    !isDirectStream && params.thread?.scope === "dm" ? undefined : params.thread;
+  const threadParams = buildTelegramThreadParams(resolvedThread);
   const replyParams =
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
