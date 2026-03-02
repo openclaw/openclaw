@@ -174,6 +174,10 @@ function resolveConfigRestartRequest(params: unknown): {
   };
 }
 
+function shouldReturnFullConfig(params: unknown): boolean {
+  return (params as { returnFull?: unknown }).returnFull === true;
+}
+
 function buildConfigRestartSentinelPayload(params: {
   kind: RestartSentinelPayload["kind"];
   mode: string;
@@ -388,12 +392,17 @@ export const configHandlers: GatewayRequestHandlers = {
         `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
       );
     }
+    const includeFullConfig = shouldReturnFullConfig(params);
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        changedPaths,
+        restarting: true,
+        ...(includeFullConfig
+          ? { config: redactConfigObject(validated.config, schemaPatch.uiHints) }
+          : {}),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -448,12 +457,17 @@ export const configHandlers: GatewayRequestHandlers = {
         `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
       );
     }
+    const includeFullConfig = shouldReturnFullConfig(params);
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        changedPaths,
+        restarting: true,
+        ...(includeFullConfig
+          ? { config: redactConfigObject(parsed.config, parsed.schema.uiHints) }
+          : {}),
         restart,
         sentinel: {
           path: sentinelPath,

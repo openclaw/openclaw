@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -26,7 +27,13 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
 beforeAll(async () => {
   sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
   startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
-  await connectOk(requireWs());
+  await connectOk(requireWs(), {
+    deviceIdentityPath: path.join(os.tmpdir(), "openclaw-test-device-config-patch.json"),
+  });
+});
+
+beforeEach(() => {
+  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
 });
 
 afterAll(async () => {
@@ -72,6 +79,54 @@ describe("gateway config methods", () => {
     const issues = (res.error as { details?: { issues?: Array<{ path?: string }> } } | undefined)
       ?.details?.issues;
     expect(issues?.some((issue) => issue.path === "gateway.bind")).toBe(true);
+  });
+
+  it("omits full config from config.patch response by default", async () => {
+    const snapshot = await rpcReq<{ hash?: unknown }>(requireWs(), "config.get", {});
+    const baseHash = snapshot.payload?.hash;
+    const res = await rpcReq<{ config?: unknown; changedPaths?: string[] }>(
+      requireWs(),
+      "config.patch",
+      {
+        raw: JSON.stringify({
+          channels: {
+            telegram: {
+              groups: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        }),
+        restartDelayMs: 60_000,
+        ...(typeof baseHash === "string" ? { baseHash } : {}),
+      },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.payload?.config).toBeUndefined();
+    expect(Array.isArray(res.payload?.changedPaths)).toBe(true);
+  });
+
+  it("returns full config when config.patch sets returnFull=true", async () => {
+    const snapshot = await rpcReq<{ hash?: unknown }>(requireWs(), "config.get", {});
+    const baseHash = snapshot.payload?.hash;
+    const res = await rpcReq<{ config?: unknown }>(requireWs(), "config.patch", {
+      raw: JSON.stringify({
+        channels: {
+          telegram: {
+            groups: {
+              "*": { requireMention: true },
+            },
+          },
+        },
+      }),
+      restartDelayMs: 60_000,
+      ...(typeof baseHash === "string" ? { baseHash } : {}),
+      returnFull: true,
+    });
+    if (!res.ok) {
+      throw new Error(`config.patch failed: ${res.error?.message ?? "unknown error"}`);
+    }
+    expect(res.payload?.config).toBeTruthy();
   });
 });
 

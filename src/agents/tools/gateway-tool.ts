@@ -55,6 +55,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
+  returnFull: Type.Optional(Type.Boolean()),
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -152,6 +153,7 @@ export function createGatewayTool(opts?: {
       const resolveConfigWriteParams = async (): Promise<{
         raw: string;
         baseHash: string;
+        returnFull: boolean | undefined;
         sessionKey: string | undefined;
         note: string | undefined;
         restartDelayMs: number | undefined;
@@ -165,7 +167,8 @@ export function createGatewayTool(opts?: {
         if (!baseHash) {
           throw new Error("Missing baseHash from config snapshot.");
         }
-        return { raw, baseHash, ...resolveGatewayWriteMeta() };
+        const returnFull = typeof params.returnFull === "boolean" ? params.returnFull : undefined;
+        return { raw, baseHash, returnFull, ...resolveGatewayWriteMeta() };
       };
 
       if (action === "config.get") {
@@ -177,11 +180,12 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, returnFull, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.apply", gatewayOpts, {
           raw,
           baseHash,
+          returnFull,
           sessionKey,
           note,
           restartDelayMs,
@@ -189,11 +193,12 @@ export function createGatewayTool(opts?: {
         return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
-        const { raw, baseHash, sessionKey, note, restartDelayMs } =
+        const { raw, baseHash, returnFull, sessionKey, note, restartDelayMs } =
           await resolveConfigWriteParams();
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
           baseHash,
+          returnFull,
           sessionKey,
           note,
           restartDelayMs,
