@@ -452,8 +452,7 @@ async function createSandboxContainer(params: {
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
-  const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
+  const mainMountSuffix = params.workspaceAccess === "rw" ? "" : ":ro";
   args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
   if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
