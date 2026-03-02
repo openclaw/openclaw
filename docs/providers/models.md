@@ -11,15 +11,6 @@ title: "Model Provider Quickstart"
 OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
 model as `provider/model`.
 
-## Highlight: Venice (Venice AI)
-
-Venice is our recommended Venice AI setup for privacy-first inference with an option to use Opus for the hardest tasks.
-
-- Default: `venice/llama-3.3-70b`
-- Best overall: `venice/claude-opus-45` (Opus remains the strongest)
-
-See [Venice AI](/providers/venice).
-
 ## Quick start (two steps)
 
 1. Authenticate with the provider (usually via `openclaw onboard`).
