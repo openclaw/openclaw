@@ -132,9 +132,10 @@ export async function deliverReplies(params: {
         }
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
+        const chunkReplyTo = i === 0 ? replyToMessageIdForPayload : undefined;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId: replyToMessageIdForPayload,
-          replyQuoteText,
+          replyToMessageId: chunkReplyTo,
+          replyQuoteText: i === 0 ? replyQuoteText : undefined,
           thread,
           textMode: "html",
           plainText: chunk.text,
@@ -287,8 +288,9 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
+          const followUpReplyTo = i === 0 && !hasReplied ? replyToMessageIdForPayload : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdForPayload,
+            replyToMessageId: followUpReplyTo,
             thread,
             textMode: "html",
             plainText: chunk.text,
