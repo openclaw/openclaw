@@ -2,6 +2,8 @@ import type { DirectoryConfigParams } from "../channels/plugins/directory-config
 import {
   buildMessagingTarget,
   ensureTargetId,
+  parseTargetMention,
+  parseTargetPrefixes,
   requireTargetKind,
   type MessagingTarget,
   type MessagingTargetKind,
@@ -23,21 +25,24 @@ export function parseDiscordTarget(
   if (!trimmed) {
     return undefined;
   }
-  const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
-  if (mentionMatch) {
-    return buildMessagingTarget("user", mentionMatch[1], trimmed);
+  const mentionTarget = parseTargetMention({
+    raw: trimmed,
+    mentionPattern: /^<@!?(\d+)>$/,
+    kind: "user",
+  });
+  if (mentionTarget) {
+    return mentionTarget;
   }
-  if (trimmed.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
-  }
-  if (trimmed.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
-    return id ? buildMessagingTarget("channel", id, trimmed) : undefined;
-  }
-  if (trimmed.startsWith("discord:")) {
-    const id = trimmed.slice("discord:".length).trim();
-    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
+  const prefixedTarget = parseTargetPrefixes({
+    raw: trimmed,
+    prefixes: [
+      { prefix: "user:", kind: "user" },
+      { prefix: "channel:", kind: "channel" },
+      { prefix: "discord:", kind: "user" },
+    ],
+  });
+  if (prefixedTarget) {
+    return prefixedTarget;
   }
   if (trimmed.startsWith("@")) {
     const candidate = trimmed.slice(1).trim();
@@ -86,10 +91,14 @@ export async function resolveDiscordTarget(
 
   const likelyUsername = isLikelyUsername(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+
+  // Parse directly if it's already a known format. Use a safe parse so ambiguous
+  // numeric targets don't throw when we still want to attempt username lookup.
   const directParse = safeParseDiscordTarget(trimmed, parseOptions);
   if (directParse && directParse.kind !== "channel" && !likelyUsername) {
     return directParse;
   }
+
   if (!shouldLookup) {
     return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }

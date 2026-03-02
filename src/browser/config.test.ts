@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 
 describe("browser config", () => {
@@ -25,9 +26,7 @@ describe("browser config", () => {
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
-    const prev = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = "19001";
-    try {
+    withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
       expect(resolved.controlPort).toBe(19003);
       const chrome = resolveProfile(resolved, "chrome");
@@ -38,19 +37,11 @@ describe("browser config", () => {
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19012);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19012");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PORT;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PORT = prev;
-      }
-    }
+    });
   });
 
   it("derives default ports from gateway.port when env is unset", () => {
-    const prev = process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    try {
+    withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
       const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
       expect(resolved.controlPort).toBe(19013);
       const chrome = resolveProfile(resolved, "chrome");
@@ -61,13 +52,7 @@ describe("browser config", () => {
       const openclaw = resolveProfile(resolved, "openclaw");
       expect(openclaw?.cdpPort).toBe(19022);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PORT;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PORT = prev;
-      }
-    }
+    });
   });
 
   it("normalizes hex colors", () => {
@@ -148,5 +133,129 @@ describe("browser config", () => {
     });
     expect(resolveProfile(resolved, "chrome")).toBe(null);
     expect(resolved.defaultProfile).toBe("openclaw");
+  });
+
+  it("defaults extraArgs to empty array when not provided", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.extraArgs).toEqual([]);
+  });
+
+  it("passes through valid extraArgs strings", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--no-sandbox", "--disable-gpu"],
+    });
+    expect(resolved.extraArgs).toEqual(["--no-sandbox", "--disable-gpu"]);
+  });
+
+  it("filters out empty strings and whitespace-only entries from extraArgs", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--flag", "", "  ", "--other"],
+    });
+    expect(resolved.extraArgs).toEqual(["--flag", "--other"]);
+  });
+
+  it("filters out non-string entries from extraArgs", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: ["--flag", 42, null, undefined, true, "--other"] as unknown as string[],
+    });
+    expect(resolved.extraArgs).toEqual(["--flag", "--other"]);
+  });
+
+  it("defaults extraArgs to empty array when set to non-array", () => {
+    const resolved = resolveBrowserConfig({
+      extraArgs: "not-an-array" as unknown as string[],
+    });
+    expect(resolved.extraArgs).toEqual([]);
+  });
+
+  it("resolves browser SSRF policy when configured", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: [" localhost ", ""],
+        hostnameAllowlist: [" *.trusted.example ", " "],
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["localhost"],
+      hostnameAllowlist: ["*.trusted.example"],
+    });
+  });
+
+  it("defaults browser SSRF policy to trusted-network mode", () => {
+    const resolved = resolveBrowserConfig({});
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+  });
+
+  it("supports explicit strict mode by disabling private network access", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
+  });
+
+  // Tests for headless/noSandbox profile preference (issue #14895)
+  describe("headless/noSandbox profile preference", () => {
+    it("defaults to chrome profile when headless=false and noSandbox=false", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        noSandbox: false,
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("prefers openclaw profile when headless=true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("prefers openclaw profile when noSandbox=true", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("prefers openclaw profile when both headless and noSandbox are true", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        noSandbox: true,
+      });
+      expect(resolved.defaultProfile).toBe("openclaw");
+    });
+
+    it("explicit defaultProfile config overrides headless preference", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("explicit defaultProfile config overrides noSandbox preference", () => {
+      const resolved = resolveBrowserConfig({
+        noSandbox: true,
+        defaultProfile: "chrome",
+      });
+      expect(resolved.defaultProfile).toBe("chrome");
+    });
+
+    it("allows custom profile as default even in headless mode", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        defaultProfile: "custom",
+        profiles: {
+          custom: { cdpPort: 19999, color: "#00FF00" },
+        },
+      });
+      expect(resolved.defaultProfile).toBe("custom");
+    });
   });
 });

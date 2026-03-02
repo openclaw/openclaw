@@ -1,74 +1,73 @@
-import { describe, expect, it, vi } from "vitest";
-import type { DiscordActionConfig } from "../../config/config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscordActionConfig, OpenClawConfig } from "../../config/config.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
+import { handleDiscordAction } from "./discord-actions.js";
 
-const createChannelDiscord = vi.fn(async () => ({
-  id: "new-channel",
-  name: "test",
-  type: 0,
+const discordSendMocks = vi.hoisted(() => ({
+  banMemberDiscord: vi.fn(async () => ({})),
+  createChannelDiscord: vi.fn(async () => ({
+    id: "new-channel",
+    name: "test",
+    type: 0,
+  })),
+  createThreadDiscord: vi.fn(async () => ({})),
+  deleteChannelDiscord: vi.fn(async () => ({ ok: true, channelId: "C1" })),
+  deleteMessageDiscord: vi.fn(async () => ({})),
+  editChannelDiscord: vi.fn(async () => ({
+    id: "C1",
+    name: "edited",
+  })),
+  editMessageDiscord: vi.fn(async () => ({})),
+  fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
+  fetchMessageDiscord: vi.fn(async () => ({})),
+  fetchReactionsDiscord: vi.fn(async () => ({})),
+  kickMemberDiscord: vi.fn(async () => ({})),
+  listGuildChannelsDiscord: vi.fn(async () => []),
+  listPinsDiscord: vi.fn(async () => ({})),
+  listThreadsDiscord: vi.fn(async () => ({})),
+  moveChannelDiscord: vi.fn(async () => ({ ok: true })),
+  pinMessageDiscord: vi.fn(async () => ({})),
+  reactMessageDiscord: vi.fn(async () => ({})),
+  readMessagesDiscord: vi.fn(async () => []),
+  removeChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
+  removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
+  removeReactionDiscord: vi.fn(async () => ({})),
+  searchMessagesDiscord: vi.fn(async () => ({})),
+  sendMessageDiscord: vi.fn(async () => ({})),
+  sendPollDiscord: vi.fn(async () => ({})),
+  sendStickerDiscord: vi.fn(async () => ({})),
+  sendVoiceMessageDiscord: vi.fn(async () => ({})),
+  setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
+  timeoutMemberDiscord: vi.fn(async () => ({})),
+  unpinMessageDiscord: vi.fn(async () => ({})),
 }));
-const createThreadDiscord = vi.fn(async () => ({}));
-const deleteChannelDiscord = vi.fn(async () => ({ ok: true, channelId: "C1" }));
-const deleteMessageDiscord = vi.fn(async () => ({}));
-const editChannelDiscord = vi.fn(async () => ({
-  id: "C1",
-  name: "edited",
-}));
-const editMessageDiscord = vi.fn(async () => ({}));
-const fetchMessageDiscord = vi.fn(async () => ({}));
-const fetchChannelPermissionsDiscord = vi.fn(async () => ({}));
-const fetchReactionsDiscord = vi.fn(async () => ({}));
-const listGuildChannelsDiscord = vi.fn(async () => []);
-const listPinsDiscord = vi.fn(async () => ({}));
-const listThreadsDiscord = vi.fn(async () => ({}));
-const moveChannelDiscord = vi.fn(async () => ({ ok: true }));
-const pinMessageDiscord = vi.fn(async () => ({}));
-const reactMessageDiscord = vi.fn(async () => ({}));
-const readMessagesDiscord = vi.fn(async () => []);
-const removeChannelPermissionDiscord = vi.fn(async () => ({ ok: true }));
-const removeOwnReactionsDiscord = vi.fn(async () => ({ removed: ["👍"] }));
-const removeReactionDiscord = vi.fn(async () => ({}));
-const searchMessagesDiscord = vi.fn(async () => ({}));
-const sendMessageDiscord = vi.fn(async () => ({}));
-const sendPollDiscord = vi.fn(async () => ({}));
-const sendStickerDiscord = vi.fn(async () => ({}));
-const setChannelPermissionDiscord = vi.fn(async () => ({ ok: true }));
-const unpinMessageDiscord = vi.fn(async () => ({}));
-const timeoutMemberDiscord = vi.fn(async () => ({}));
-const kickMemberDiscord = vi.fn(async () => ({}));
-const banMemberDiscord = vi.fn(async () => ({}));
+
+const {
+  createChannelDiscord,
+  createThreadDiscord,
+  deleteChannelDiscord,
+  editChannelDiscord,
+  fetchMessageDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listPinsDiscord,
+  moveChannelDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeChannelPermissionDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
+  searchMessagesDiscord,
+  sendMessageDiscord,
+  sendVoiceMessageDiscord,
+  setChannelPermissionDiscord,
+  timeoutMemberDiscord,
+} = discordSendMocks;
 
 vi.mock("../../discord/send.js", () => ({
-  banMemberDiscord: (...args: unknown[]) => banMemberDiscord(...args),
-  createChannelDiscord: (...args: unknown[]) => createChannelDiscord(...args),
-  createThreadDiscord: (...args: unknown[]) => createThreadDiscord(...args),
-  deleteChannelDiscord: (...args: unknown[]) => deleteChannelDiscord(...args),
-  deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
-  editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
-  editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
-  fetchMessageDiscord: (...args: unknown[]) => fetchMessageDiscord(...args),
-  fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
-  fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
-  kickMemberDiscord: (...args: unknown[]) => kickMemberDiscord(...args),
-  listGuildChannelsDiscord: (...args: unknown[]) => listGuildChannelsDiscord(...args),
-  listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
-  listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
-  moveChannelDiscord: (...args: unknown[]) => moveChannelDiscord(...args),
-  pinMessageDiscord: (...args: unknown[]) => pinMessageDiscord(...args),
-  reactMessageDiscord: (...args: unknown[]) => reactMessageDiscord(...args),
-  readMessagesDiscord: (...args: unknown[]) => readMessagesDiscord(...args),
-  removeChannelPermissionDiscord: (...args: unknown[]) => removeChannelPermissionDiscord(...args),
-  removeOwnReactionsDiscord: (...args: unknown[]) => removeOwnReactionsDiscord(...args),
-  removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
-  searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
-  sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
-  sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
-  sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
-  setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
-  timeoutMemberDiscord: (...args: unknown[]) => timeoutMemberDiscord(...args),
-  unpinMessageDiscord: (...args: unknown[]) => unpinMessageDiscord(...args),
+  ...discordSendMocks,
 }));
 
 const enableAllActions = () => true;
@@ -78,31 +77,37 @@ const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelI
 const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
 
 describe("handleDiscordMessagingAction", () => {
-  it("adds reactions", async () => {
-    await handleDiscordMessagingAction(
-      "react",
-      {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    {
+      name: "without account",
+      params: {
         channelId: "C1",
         messageId: "M1",
         emoji: "✅",
       },
-      enableAllActions,
-    );
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
-  });
-
-  it("forwards accountId for reactions", async () => {
-    await handleDiscordMessagingAction(
-      "react",
-      {
+      expectedOptions: undefined,
+    },
+    {
+      name: "with accountId",
+      params: {
         channelId: "C1",
         messageId: "M1",
         emoji: "✅",
         accountId: "ops",
       },
-      enableAllActions,
-    );
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", { accountId: "ops" });
+      expectedOptions: { accountId: "ops" },
+    },
+  ])("adds reactions $name", async ({ params, expectedOptions }) => {
+    await handleDiscordMessagingAction("react", params, enableAllActions);
+    if (expectedOptions) {
+      expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
+      return;
+    }
+    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -162,7 +167,9 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
-    readMessagesDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T10:00:00.000Z" }]);
+    readMessagesDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+    ] as never);
 
     const result = await handleDiscordMessagingAction(
       "readMessages",
@@ -234,12 +241,94 @@ describe("handleDiscordMessagingAction", () => {
       new Date(expectedMs).toISOString(),
     );
   });
+
+  it("sends voice messages from a local file path", async () => {
+    sendVoiceMessageDiscord.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        path: "/tmp/voice.mp3",
+        asVoice: true,
+        silent: true,
+      },
+      enableAllActions,
+    );
+
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
+      replyTo: undefined,
+      silent: true,
+    });
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
+    sendMessageDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/image.png",
+      },
+      enableAllActions,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("rejects voice messages that include content", async () => {
+    await expect(
+      handleDiscordMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          mediaUrl: "/tmp/voice.mp3",
+          asVoice: true,
+          content: "hello",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow(/Voice messages cannot include text content/);
+  });
+
+  it("forwards optional thread content", async () => {
+    createThreadDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "Forum thread",
+        content: "Initial forum post body",
+      },
+      enableAllActions,
+    );
+    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
+      name: "Forum thread",
+      messageId: undefined,
+      autoArchiveMinutes: undefined,
+      content: "Initial forum post body",
+    });
+  });
 });
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
 const channelsDisabled = () => false;
 
 describe("handleDiscordGuildAction - channel management", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("creates a channel", async () => {
     const result = await handleDiscordGuildAction(
       "channelCreate",
@@ -296,15 +385,46 @@ describe("handleDiscordGuildAction - channel management", () => {
       parentId: undefined,
       nsfw: undefined,
       rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
     });
   });
 
-  it("clears the channel parent when parentId is null", async () => {
+  it("forwards thread edit fields", async () => {
     await handleDiscordGuildAction(
       "channelEdit",
       {
         channelId: "C1",
-        parentId: null,
+        archived: true,
+        locked: false,
+        autoArchiveDuration: 1440,
+      },
+      channelsEnabled,
+    );
+    expect(editChannelDiscord).toHaveBeenCalledWith({
+      channelId: "C1",
+      name: undefined,
+      topic: undefined,
+      position: undefined,
+      parentId: undefined,
+      nsfw: undefined,
+      rateLimitPerUser: undefined,
+      archived: true,
+      locked: false,
+      autoArchiveDuration: 1440,
+    });
+  });
+
+  it.each([
+    ["parentId is null", { parentId: null }],
+    ["clearParent is true", { clearParent: true }],
+  ])("clears the channel parent when %s", async (_label, payload) => {
+    await handleDiscordGuildAction(
+      "channelEdit",
+      {
+        channelId: "C1",
+        ...payload,
       },
       channelsEnabled,
     );
@@ -316,26 +436,9 @@ describe("handleDiscordGuildAction - channel management", () => {
       parentId: null,
       nsfw: undefined,
       rateLimitPerUser: undefined,
-    });
-  });
-
-  it("clears the channel parent when clearParent is true", async () => {
-    await handleDiscordGuildAction(
-      "channelEdit",
-      {
-        channelId: "C1",
-        clearParent: true,
-      },
-      channelsEnabled,
-    );
-    expect(editChannelDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      name: undefined,
-      topic: undefined,
-      position: undefined,
-      parentId: null,
-      nsfw: undefined,
-      rateLimitPerUser: undefined,
+      archived: undefined,
+      locked: undefined,
+      autoArchiveDuration: undefined,
     });
   });
 
@@ -363,31 +466,16 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
   });
 
-  it("clears the channel parent on move when parentId is null", async () => {
+  it.each([
+    ["parentId is null", { parentId: null }],
+    ["clearParent is true", { clearParent: true }],
+  ])("clears the channel parent on move when %s", async (_label, payload) => {
     await handleDiscordGuildAction(
       "channelMove",
       {
         guildId: "G1",
         channelId: "C1",
-        parentId: null,
-      },
-      channelsEnabled,
-    );
-    expect(moveChannelDiscord).toHaveBeenCalledWith({
-      guildId: "G1",
-      channelId: "C1",
-      parentId: null,
-      position: undefined,
-    });
-  });
-
-  it("clears the channel parent on move when clearParent is true", async () => {
-    await handleDiscordGuildAction(
-      "channelMove",
-      {
-        guildId: "G1",
-        channelId: "C1",
-        clearParent: true,
+        ...payload,
       },
       channelsEnabled,
     );
@@ -431,45 +519,43 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 
-  it("sets channel permissions for role", async () => {
-    await handleDiscordGuildAction(
-      "channelPermissionSet",
-      {
+  it.each([
+    {
+      name: "role",
+      params: {
         channelId: "C1",
         targetId: "R1",
-        targetType: "role",
+        targetType: "role" as const,
         allow: "1024",
         deny: "2048",
       },
-      channelsEnabled,
-    );
-    expect(setChannelPermissionDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      targetId: "R1",
-      targetType: 0,
-      allow: "1024",
-      deny: "2048",
-    });
-  });
-
-  it("sets channel permissions for member", async () => {
-    await handleDiscordGuildAction(
-      "channelPermissionSet",
-      {
+      expected: {
+        channelId: "C1",
+        targetId: "R1",
+        targetType: 0,
+        allow: "1024",
+        deny: "2048",
+      },
+    },
+    {
+      name: "member",
+      params: {
         channelId: "C1",
         targetId: "U1",
-        targetType: "member",
+        targetType: "member" as const,
         allow: "1024",
       },
-      channelsEnabled,
-    );
-    expect(setChannelPermissionDiscord).toHaveBeenCalledWith({
-      channelId: "C1",
-      targetId: "U1",
-      targetType: 1,
-      allow: "1024",
-      deny: undefined,
-    });
+      expected: {
+        channelId: "C1",
+        targetId: "U1",
+        targetType: 1,
+        allow: "1024",
+        deny: undefined,
+      },
+    },
+  ])("sets channel permissions for $name", async ({ params, expected }) => {
+    await handleDiscordGuildAction("channelPermissionSet", params, channelsEnabled);
+    expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected);
   });
 
   it("removes channel permissions", async () => {
@@ -500,6 +586,114 @@ describe("handleDiscordModerationAction", () => {
         userId: "U1",
         durationMinutes: 5,
       }),
+      { accountId: "ops" },
+    );
+  });
+});
+
+describe("handleDiscordAction per-account gating", () => {
+  it("allows moderation when account config enables it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      cfg,
+    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", userId: "U1" }),
+      { accountId: "ops" },
+    );
+  });
+
+  it("blocks moderation when account omits it", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            chat: { token: "tok-chat" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "chat" },
+        cfg,
+      ),
+    ).rejects.toThrow(/Discord moderation is disabled/);
+  });
+
+  it("uses account-merged config, not top-level config", async () => {
+    // Top-level has no moderation, but the account does
+    const cfg = {
+      channels: {
+        discord: {
+          token: "tok-base",
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "kick", guildId: "G1", userId: "U1", accountId: "ops" },
+      cfg,
+    );
+    expect(kickMemberDiscord).toHaveBeenCalled();
+  });
+
+  it("inherits top-level channel gate when account overrides moderation only", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: { token: "tok-ops", actions: { moderation: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      handleDiscordAction(
+        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+        cfg,
+      ),
+    ).rejects.toThrow(/channel management is disabled/i);
+  });
+
+  it("allows account to explicitly re-enable top-level disabled channel gate", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: false },
+          accounts: {
+            ops: {
+              token: "tok-ops",
+              actions: { moderation: true, channels: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await handleDiscordAction(
+      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      cfg,
+    );
+
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", name: "alerts" }),
       { accountId: "ops" },
     );
   });

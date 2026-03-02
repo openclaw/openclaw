@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { analyzeConfigSchema, renderConfigForm } from "./views/config-form";
+import { analyzeConfigSchema, renderConfigForm } from "./views/config-form.ts";
 
 const rootSchema = {
   type: "object",
@@ -51,7 +51,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    const tokenInput = container.querySelector("input[type='password']");
+    const tokenInput: HTMLInputElement | null = container.querySelector("input[type='password']");
     expect(tokenInput).not.toBeNull();
     if (!tokenInput) {
       return;
@@ -67,7 +67,7 @@ describe("config form renderer", () => {
     tokenButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
-    const checkbox = container.querySelector("input[type='checkbox']");
+    const checkbox: HTMLInputElement | null = container.querySelector("input[type='checkbox']");
     expect(checkbox).not.toBeNull();
     if (!checkbox) {
       return;
@@ -195,6 +195,113 @@ describe("config form renderer", () => {
     );
 
     expect(container.textContent).toContain("Plugin Enabled");
+  });
+
+  it("renders tags from uiHints metadata", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { tags: ["security", "secret"] },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(tags).toContain("security");
+    expect(tags).toContain("secret");
+  });
+
+  it("filters by tag query", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { tags: ["security"] },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        searchQuery: "tag:security",
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Gateway");
+    expect(container.textContent).toContain("Token");
+    expect(container.textContent).not.toContain("Allow From");
+    expect(container.textContent).not.toContain("Mode");
+  });
+
+  it("does not treat plain text as tag filter", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { tags: ["security"] },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        searchQuery: "security",
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain('No settings match "security"');
+  });
+
+  it("requires both text and tag when combined", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { tags: ["security"] },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        searchQuery: "token tag:security",
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Token");
+    expect(container.textContent).not.toContain('No settings match "token tag:security"');
+
+    const noMatchContainer = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "gateway.auth.token": { tags: ["security"] },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        searchQuery: "mode tag:security",
+        onPatch,
+      }),
+      noMatchContainer,
+    );
+    expect(noMatchContainer.textContent).toContain('No settings match "mode tag:security"');
   });
 
   it("flags unsupported unions", () => {

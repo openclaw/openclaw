@@ -4,9 +4,9 @@
  * Handles tool-based actions for Twitch, such as sending messages.
  */
 
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 
 /**
  * Create a tool result with error content.
@@ -15,7 +15,7 @@ function errorResponse(error: string) {
   return {
     content: [
       {
-        type: "text",
+        type: "text" as const,
         text: JSON.stringify({ ok: false, error }),
       },
     ],
@@ -120,11 +120,12 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
    *   accountId: "default",
    * });
    */
-  handleAction: async (
-    ctx: ChannelMessageActionContext,
-  ): Promise<{ content: Array<{ type: string; text: string }> } | null> => {
+  handleAction: async (ctx: ChannelMessageActionContext) => {
     if (ctx.action !== "send") {
-      return null;
+      return {
+        content: [{ type: "text" as const, text: "Unsupported action" }],
+        details: { ok: false, error: "Unsupported action" },
+      };
     }
 
     const message = readStringParam(ctx.params, "message", { required: true });
@@ -159,7 +160,7 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
       return {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify(result),
           },
         ],

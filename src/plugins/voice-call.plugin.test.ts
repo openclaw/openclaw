@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,12 +31,19 @@ const noopLogger = {
 };
 
 type Registered = {
-  methods: Map<string, (ctx: Record<string, unknown>) => unknown>;
+  methods: Map<string, unknown>;
   tools: unknown[];
+};
+type RegisterVoiceCall = (api: Record<string, unknown>) => void | Promise<void>;
+type RegisterCliContext = {
+  program: Command;
+  config: Record<string, unknown>;
+  workspaceDir?: string;
+  logger: typeof noopLogger;
 };
 
 function setup(config: Record<string, unknown>): Registered {
-  const methods = new Map<string, (ctx: Record<string, unknown>) => unknown>();
+  const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
   plugin.register({
     id: "voice-call",
@@ -43,15 +53,45 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } },
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as Parameters<
+      typeof plugin.register
+    >[0]["runtime"],
     logger: noopLogger,
-    registerGatewayMethod: (method, handler) => methods.set(method, handler),
-    registerTool: (tool) => tools.push(tool),
+    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
+    registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: () => {},
     resolvePath: (p: string) => p,
-  });
+  } as unknown as Parameters<typeof plugin.register>[0]);
   return { methods, tools };
+}
+
+async function registerVoiceCallCli(program: Command) {
+  const { register } = plugin as unknown as {
+    register: RegisterVoiceCall;
+  };
+  await register({
+    id: "voice-call",
+    name: "Voice Call",
+    description: "test",
+    version: "0",
+    source: "test",
+    config: {},
+    pluginConfig: { provider: "mock" },
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } },
+    logger: noopLogger,
+    registerGatewayMethod: () => {},
+    registerTool: () => {},
+    registerCli: (fn: (ctx: RegisterCliContext) => void) =>
+      fn({
+        program,
+        config: {},
+        workspaceDir: undefined,
+        logger: noopLogger,
+      }),
+    registerService: () => {},
+    resolvePath: (p: string) => p,
+  });
 }
 
 describe("voice-call plugin", () => {
@@ -87,7 +127,12 @@ describe("voice-call plugin", () => {
 
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
-    const handler = methods.get("voicecall.initiate");
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
     const respond = vi.fn();
     await handler?.({ params: { message: "Hi" }, respond });
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalled();
@@ -98,7 +143,12 @@ describe("voice-call plugin", () => {
 
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
-    const handler = methods.get("voicecall.status");
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
     const respond = vi.fn();
     await handler?.({ params: { callId: "call-1" }, respond });
     const [ok, payload] = respond.mock.calls[0];
@@ -129,41 +179,42 @@ describe("voice-call plugin", () => {
     expect(String(result.details.error)).toContain("sid required");
   });
 
+  it("CLI latency summarizes turn metrics from JSONL", async () => {
+    const program = new Command();
+    const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
+    fs.writeFileSync(
+      tmpFile,
+      [
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } }),
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      await registerVoiceCallCli(program);
+
+      await program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "10"], {
+        from: "user",
+      });
+
+      expect(logSpy).toHaveBeenCalled();
+      const printed = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+      expect(printed).toContain('"recordsScanned": 2');
+      expect(printed).toContain('"p50Ms": 100');
+      expect(printed).toContain('"p95Ms": 200');
+    } finally {
+      logSpy.mockRestore();
+      fs.unlinkSync(tmpFile);
+    }
+  });
+
   it("CLI start prints JSON", async () => {
-    const { register } = plugin as unknown as {
-      register: (api: Record<string, unknown>) => void | Promise<void>;
-    };
     const program = new Command();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    await register({
-      id: "voice-call",
-      name: "Voice Call",
-      description: "test",
-      version: "0",
-      source: "test",
-      config: {},
-      pluginConfig: { provider: "mock" },
-      runtime: { tts: { textToSpeechTelephony: vi.fn() } },
-      logger: noopLogger,
-      registerGatewayMethod: () => {},
-      registerTool: () => {},
-      registerCli: (
-        fn: (ctx: {
-          program: Command;
-          config: Record<string, unknown>;
-          workspaceDir?: string;
-          logger: typeof noopLogger;
-        }) => void,
-      ) =>
-        fn({
-          program,
-          config: {},
-          workspaceDir: undefined,
-          logger: noopLogger,
-        }),
-      registerService: () => {},
-      resolvePath: (p: string) => p,
-    });
+    await registerVoiceCallCli(program);
 
     await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
       from: "user",

@@ -1,6 +1,6 @@
 import type { loadConfig } from "../config/config.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 export function loadGatewayPlugins(params: {
   cfg: ReturnType<typeof loadConfig>;

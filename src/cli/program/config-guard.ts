@@ -1,8 +1,9 @@
-import type { RuntimeEnv } from "../../runtime.js";
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
+import { shouldMigrateStateFromPath } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -19,26 +20,58 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "restart",
 ]);
 let didRunDoctorConfigFlow = false;
+let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
+  null;
 
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
   return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
 }
 
+async function getConfigSnapshot() {
+  // Tests often mutate config fixtures; caching can make those flaky.
+  if (process.env.VITEST === "true") {
+    return readConfigFileSnapshot();
+  }
+  configSnapshotPromise ??= readConfigFileSnapshot();
+  return configSnapshotPromise;
+}
+
 export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
+  suppressDoctorStdout?: boolean;
 }): Promise<void> {
-  if (!didRunDoctorConfigFlow) {
+  const commandPath = params.commandPath ?? [];
+  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    await loadAndMaybeMigrateDoctorConfig({
-      options: { nonInteractive: true },
-      confirm: async () => false,
-    });
+    const runDoctorConfigFlow = async () =>
+      loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true },
+        confirm: async () => false,
+      });
+    if (!params.suppressDoctorStdout) {
+      await runDoctorConfigFlow();
+    } else {
+      const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+      const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
+      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
+      process.env.OPENCLAW_SUPPRESS_NOTES = "1";
+      try {
+        await runDoctorConfigFlow();
+      } finally {
+        process.stdout.write = originalStdoutWrite;
+        if (originalSuppressNotes === undefined) {
+          delete process.env.OPENCLAW_SUPPRESS_NOTES;
+        } else {
+          process.env.OPENCLAW_SUPPRESS_NOTES = originalSuppressNotes;
+        }
+      }
+    }
   }
 
-  const snapshot = await readConfigFileSnapshot();
-  const commandName = params.commandPath?.[0];
-  const subcommandName = params.commandPath?.[1];
+  const snapshot = await getConfigSnapshot();
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
   const allowInvalid = commandName
     ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
       (commandName === "gateway" &&

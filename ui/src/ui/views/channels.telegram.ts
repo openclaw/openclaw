@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, TelegramStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { formatAgo } from "../format";
-import { renderChannelConfigSection } from "./channels.config";
+import { formatRelativeTimestamp } from "../format.ts";
+import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
+import type { ChannelsProps } from "./channels.types.ts";
 
 export function renderTelegramCard(params: {
   props: ChannelsProps;
@@ -36,7 +36,7 @@ export function renderTelegramCard(params: {
           </div>
           <div>
             <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+            <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
           </div>
           ${
             account.lastError
@@ -81,11 +81,11 @@ export function renderTelegramCard(params: {
               </div>
               <div>
                 <span class="label">Last start</span>
-                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : "n/a"}</span>
+                <span>${telegram?.lastStartAt ? formatRelativeTimestamp(telegram.lastStartAt) : "n/a"}</span>
               </div>
               <div>
                 <span class="label">Last probe</span>
-                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : "n/a"}</span>
+                <span>${telegram?.lastProbeAt ? formatRelativeTimestamp(telegram.lastProbeAt) : "n/a"}</span>
               </div>
             </div>
           `

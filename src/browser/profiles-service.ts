@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -14,6 +13,7 @@ import {
   getUsedPorts,
   isValidProfileName,
 } from "./profiles.js";
+import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 export type CreateProfileParams = {

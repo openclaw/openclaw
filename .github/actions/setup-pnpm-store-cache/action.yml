@@ -1,0 +1,47 @@
+name: Setup pnpm + store cache
+description: Prepare pnpm via corepack and restore pnpm store cache.
+inputs:
+  pnpm-version:
+    description: pnpm version to activate via corepack.
+    required: false
+    default: "10.23.0"
+  cache-key-suffix:
+    description: Suffix appended to the cache key.
+    required: false
+    default: "node22"
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm (corepack retry)
+      shell: bash
+      env:
+        PNPM_VERSION: ${{ inputs.pnpm-version }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
+          exit 2
+        fi
+        corepack enable
+        for attempt in 1 2 3; do
+          if corepack prepare "pnpm@$PNPM_VERSION" --activate; then
+            pnpm -v
+            exit 0
+          fi
+          echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+          sleep $((attempt * 10))
+        done
+        exit 1
+
+    - name: Resolve pnpm store path
+      id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm store cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-

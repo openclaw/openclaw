@@ -16,19 +16,27 @@ export const BindingsSchema = z
     z
       .object({
         agentId: z.string(),
+        comment: z.string().optional(),
         match: z
           .object({
             channel: z.string(),
             accountId: z.string().optional(),
             peer: z
               .object({
-                kind: z.union([z.literal("dm"), z.literal("group"), z.literal("channel")]),
+                kind: z.union([
+                  z.literal("direct"),
+                  z.literal("group"),
+                  z.literal("channel"),
+                  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+                  z.literal("dm"),
+                ]),
                 id: z.string(),
               })
               .strict()
               .optional(),
             guildId: z.string().optional(),
             teamId: z.string().optional(),
+            roles: z.array(z.string()).optional(),
           })
           .strict(),
       })

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
@@ -10,21 +10,12 @@ import {
   resolveAuthProfileOrder,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 
 export type ModelAuthDetailMode = "compact" | "verbose";
-
-const maskApiKey = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "missing";
-  }
-  if (trimmed.length <= 16) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
-};
 
 export const resolveAuthLabel = async (
   provider: string,
@@ -39,37 +30,11 @@ export const resolveAuthLabel = async (
   });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
   const providerKey = normalizeProviderId(provider);
-  const lastGood = (() => {
-    const map = store.lastGood;
-    if (!map) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(map)) {
-      if (normalizeProviderId(key) === providerKey) {
-        return value;
-      }
-    }
-    return undefined;
-  })();
+  const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
   const nextProfileId = order[0];
   const now = Date.now();
-
-  const formatUntil = (timestampMs: number) => {
-    const remainingMs = Math.max(0, timestampMs - now);
-    const minutes = Math.round(remainingMs / 60_000);
-    if (minutes < 1) {
-      return "soon";
-    }
-    if (minutes < 60) {
-      return `${minutes}m`;
-    }
-    const hours = Math.round(minutes / 60);
-    if (hours < 48) {
-      return `${hours}h`;
-    }
-    const days = Math.round(hours / 24);
-    return `${days}d`;
-  };
+  const formatUntil = (timestampMs: number) =>
+    formatRemainingShort(timestampMs - now, { underMinuteLabel: "soon" });
 
   if (order.length > 0) {
     if (mode === "compact") {
@@ -93,7 +58,7 @@ export const resolveAuthLabel = async (
 
       if (profile.type === "api_key") {
         return {
-          label: `${profileId} api-key ${maskApiKey(profile.key)}${more}`,
+          label: `${profileId} api-key ${maskApiKey(profile.key ?? "")}${more}`,
           source: "",
         };
       }
@@ -154,7 +119,7 @@ export const resolveAuthLabel = async (
       }
       if (profile.type === "api_key") {
         const suffix = flags.length > 0 ? ` (${flags.join(", ")})` : "";
-        return `${profileId}=${maskApiKey(profile.key)}${suffix}`;
+        return `${profileId}=${maskApiKey(profile.key ?? "")}${suffix}`;
       }
       if (profile.type === "token") {
         if (
