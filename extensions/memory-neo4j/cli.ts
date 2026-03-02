@@ -417,6 +417,7 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                     noiseCleanup: "Phase 5: Noise Cleanup",
                     credentialScan: "Phase 5b: Credential Scan",
                     taskLedger: "Phase 6: Task Ledger Cleanup",
+                    tipGeneration: "Phase 8: Tip Generation",
                   };
                   console.log(`\n▶ ${phaseNames[phase] ?? phase}`);
                   console.log("─────────────────────────────────────────────────────────────");
@@ -457,6 +458,9 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                   (result.taskLedger.archivedIds.length > 0
                     ? ` (${result.taskLedger.archivedIds.join(", ")})`
                     : ""),
+              );
+              console.log(
+                `  ⚡ Tip Generation: ${result.tipGeneration.sessionsScanned} sessions, ${result.tipGeneration.failurePatternsFound} patterns, ${result.tipGeneration.tipsStored} tips stored`,
               );
               if (result.aborted) {
                 console.log("\n⚠️  Sleep cycle was aborted before completion.");

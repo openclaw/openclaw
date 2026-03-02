@@ -41,7 +41,7 @@ Extract entities and relationships from the memory text provided by the user, an
 
 Return JSON:
 {
-  "category": "preference|fact|decision|entity|other",
+  "category": "preference|fact|decision|entity|lesson|other",
   "entities": [
     {"name": "alice", "type": "person", "aliases": ["manager"], "description": "brief description"}
   ],
@@ -66,7 +66,7 @@ Rules:
 - Bad entities: "python", "ai", "automation", "email", "docker", "machine learning", "api"
 - When in doubt, do NOT extract — fewer high-quality entities beat many generic ones
 - Keep entity descriptions brief (1 sentence max)
-- Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "other" for miscellaneous
+- Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "lesson" for actionable lessons learned from failures ("X approach failed because Y, use Z instead"), "other" for miscellaneous
 - ALWAYS generate at least 2 tags. Every memory has a topic — there are no exceptions.
 - Tags describe the TOPIC or DOMAIN of the memory, not the entities themselves.
 - Do NOT use entity names as tags (e.g., don't tag "tarun" if Tarun is already an entity).

@@ -17,7 +17,14 @@ export type Logger = {
 // Node Types
 // ============================================================================
 
-export type MemoryCategory = "core" | "preference" | "fact" | "decision" | "entity" | "other";
+export type MemoryCategory =
+  | "core"
+  | "preference"
+  | "fact"
+  | "decision"
+  | "entity"
+  | "lesson"
+  | "other";
 export type EntityType = "person" | "organization" | "location" | "event" | "concept";
 export type ExtractionStatus = "pending" | "complete" | "failed" | "skipped";
 export type MemorySource =
@@ -162,6 +169,7 @@ export const MEMORY_CATEGORIES = [
   "fact",
   "decision",
   "entity",
+  "lesson",
   "other",
 ] as const;
 
