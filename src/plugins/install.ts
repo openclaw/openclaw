@@ -43,6 +43,8 @@ type PackageManifest = {
   dependencies?: Record<string, string>;
 } & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
 
+const LEGACY_EXTENSION_FALLBACK_ENTRIES = ["./index.ts", "./index.js", "./dist/index.js"] as const;
+
 export type InstallPluginResult =
   | {
       ok: true;
@@ -81,16 +83,41 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-async function ensureOpenClawExtensions(manifest: PackageManifest) {
-  const extensions = manifest[MANIFEST_KEY]?.extensions;
+async function resolveLegacyExtensionsFallback(packageDir: string): Promise<string[]> {
+  const manifestResult = loadPluginManifest(packageDir);
+  if (!manifestResult.ok) {
+    return [];
+  }
+  const resolvedEntries = await Promise.all(
+    LEGACY_EXTENSION_FALLBACK_ENTRIES.map(async (entry) => ({
+      entry,
+      exists: await fileExists(path.join(packageDir, entry)),
+    })),
+  );
+  return resolvedEntries.filter((item) => item.exists).map((item) => item.entry);
+}
+
+async function ensureOpenClawExtensions(params: {
+  manifest: PackageManifest;
+  packageDir: string;
+}): Promise<string[]> {
+  const extensions = params.manifest[MANIFEST_KEY]?.extensions;
+  if (Array.isArray(extensions)) {
+    const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
+    if (list.length > 0) {
+      return list;
+    }
+  }
+
+  const fallback = await resolveLegacyExtensionsFallback(params.packageDir);
+  if (fallback.length > 0) {
+    return fallback;
+  }
+
   if (!Array.isArray(extensions)) {
     throw new Error("package.json missing openclaw.extensions");
   }
-  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
-  if (list.length === 0) {
-    throw new Error("package.json openclaw.extensions is empty");
-  }
-  return list;
+  throw new Error("package.json openclaw.extensions is empty");
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -148,7 +175,10 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureOpenClawExtensions(manifest);
+    extensions = await ensureOpenClawExtensions({
+      manifest,
+      packageDir: params.packageDir,
+    });
   } catch (err) {
     return { ok: false, error: String(err) };
   }
