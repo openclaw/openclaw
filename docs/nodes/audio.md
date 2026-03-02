@@ -109,6 +109,23 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### Echo transcript to chat (opt-in)
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        echoTranscript: true, // default is false
+        echoFormat: '📝 "{transcript}"', // optional, supports {transcript}
+        models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+      },
+    },
+  },
+}
+```
+
 ## Notes & limits
 
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
@@ -117,11 +134,25 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 - Mistral setup details: [Mistral](/providers/mistral).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
+- Tiny/empty audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - OpenAI auto default is `gpt-4o-mini-transcribe`; set `model: "gpt-4o-transcribe"` for higher accuracy.
 - Use `tools.media.audio.attachments` to process multiple voice notes (`mode: "all"` + `maxAttachments`).
 - Transcript is available to templates as `{{Transcript}}`.
+- `tools.media.audio.echoTranscript` is off by default; enable it to send transcript confirmation back to the originating chat before agent processing.
+- `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`).
 - CLI stdout is capped (5MB); keep CLI output concise.
+
+### Proxy environment support
+
+Provider-based audio transcription honors standard outbound proxy env vars:
+
+- `HTTPS_PROXY`
+- `HTTP_PROXY`
+- `https_proxy`
+- `http_proxy`
+
+If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
 
 ## Mention Detection in Groups
 
