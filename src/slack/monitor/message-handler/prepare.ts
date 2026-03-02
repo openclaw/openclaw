@@ -379,9 +379,11 @@ export async function prepareSlackMessage(params: {
   // For bot messages with empty text but non-empty attachments, extract text from attachments
   // This handles cases like monitoring webhooks (Prometheus Alertmanager, Gatus, etc.) that send
   // Slack messages with empty `text` and content in `attachments[#].text` or `attachments[#].fallback`.
+  // Skip is_share attachments to avoid duplicating content that's already in the message body.
   const botMessageAttachmentText =
     isBotMessage && !message.text && message.attachments?.length
       ? message.attachments
+          .filter((att) => !att.is_share)
           .map((att) => att.text?.trim() || att.fallback?.trim())
           .filter(Boolean)
           .join("\n")
