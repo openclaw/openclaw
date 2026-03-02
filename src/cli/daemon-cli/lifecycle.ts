@@ -1,5 +1,12 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import {
+  formatDoctorNonInteractiveHint,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -75,6 +82,41 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   );
   const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+
+  // Optional: write a restart sentinel so the gateway can announce restart completion
+  // back to the configured main session after it comes back up.
+  if (opts.notify) {
+    const mainSessionKey = resolveMainSessionKeyFromConfig();
+    if (mainSessionKey) {
+      const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey);
+      const note = typeof opts.note === "string" && opts.note.trim() ? opts.note.trim() : null;
+      const payload: RestartSentinelPayload = {
+        kind: "restart",
+        status: "ok",
+        ts: Date.now(),
+        sessionKey: mainSessionKey,
+        deliveryContext,
+        threadId,
+        message: note,
+        doctorHint: formatDoctorNonInteractiveHint(),
+        stats: {
+          mode: "gateway.restart",
+          reason: note ?? "cli --notify",
+        },
+      };
+      try {
+        await writeRestartSentinel(payload);
+      } catch {
+        // best-effort
+      }
+    } else if (!json) {
+      defaultRuntime.log(
+        theme.warn(
+          "--notify requested but no main session is configured; skipping post-restart notification.",
+        ),
+      );
+    }
+  }
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
