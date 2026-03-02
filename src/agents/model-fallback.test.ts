@@ -803,6 +803,35 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back when context-overflow text wraps a DNS transport failure", async () => {
+    const dnsCause = Object.assign(new Error("getaddrinfo ENOTFOUND ollama.run"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+      hostname: "ollama.run",
+    });
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Ollama API error 400: context window exceeds limit"), {
+          cause: dnsCause,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "ollama",
+      model: "minimax-m2.5:cloud",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["ollama", "minimax-m2.5:cloud"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("ollama");
+  });
+
   it("does not fall back on user aborts", async () => {
     const cfg = makeCfg();
     const run = vi
