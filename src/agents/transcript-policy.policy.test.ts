@@ -13,6 +13,17 @@ describe("resolveTranscriptPolicy e2e smoke", () => {
     expect(policy.toolCallIdMode).toBeUndefined();
   });
 
+  it("uses strict tool-call id rewriting for OpenAI-compatible chat-completions models", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeMode).toBe("images-only");
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("uses strict9 tool-call sanitization for Mistral-family models", () => {
     const policy = resolveTranscriptPolicy({
       provider: "mistral",
