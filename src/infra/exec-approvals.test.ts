@@ -32,6 +32,21 @@ function buildNestedEnvShellCommand(params: {
   return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
 }
 
+function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; cwd: string }) {
+  const analysis = analyzeArgvCommand({
+    argv: params.argv,
+    cwd: params.cwd,
+    env: makePathEnv(params.envPath),
+  });
+  const allowlistEval = evaluateExecAllowlist({
+    analysis,
+    allowlist: [{ pattern: params.envPath }],
+    safeBins: normalizeSafeBins([]),
+    cwd: params.cwd,
+  });
+  return { analysis, allowlistEval };
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -67,13 +82,35 @@ describe("exec approvals allowlist matching", () => {
     expect(match?.pattern).toBe("*");
   });
 
-  it("requires a resolved path", () => {
-    const match = matchAllowlist([{ pattern: "bin/rg" }], {
-      rawExecutable: "bin/rg",
-      resolvedPath: undefined,
-      executableName: "rg",
+  it("matches absolute paths containing regex metacharacters", () => {
+    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"];
+    for (const candidatePath of plusPathCases) {
+      const match = matchAllowlist([{ pattern: candidatePath }], {
+        rawExecutable: candidatePath,
+        resolvedPath: candidatePath,
+        executableName: candidatePath.split("/").at(-1) ?? candidatePath,
+      });
+      expect(match?.pattern).toBe(candidatePath);
+    }
+  });
+
+  it("does not throw when wildcard globs are mixed with + in path", () => {
+    const match = matchAllowlist([{ pattern: "/usr/bin/*++" }], {
+      rawExecutable: "/usr/bin/g++",
+      resolvedPath: "/usr/bin/g++",
+      executableName: "g++",
     });
-    expect(match).toBeNull();
+    expect(match?.pattern).toBe("/usr/bin/*++");
+  });
+
+  it("matches paths containing []() regex tokens literally", () => {
+    const literalPattern = "/opt/builds/tool[1](stable)";
+    const match = matchAllowlist([{ pattern: literalPattern }], {
+      rawExecutable: literalPattern,
+      resolvedPath: literalPattern,
+      executableName: "tool[1](stable)",
+    });
+    expect(match?.pattern).toBe(literalPattern);
   });
 });
 
@@ -288,16 +325,9 @@ describe("exec approvals command resolution", () => {
     if (process.platform !== "win32") {
       fs.chmodSync(envPath, 0o755);
     }
-
-    const analysis = analyzeArgvCommand({
+    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
       argv: [envPath, "-S", 'sh -c "echo pwned"'],
-      cwd: dir,
-      env: makePathEnv(binDir),
-    });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: [{ pattern: envPath }],
-      safeBins: normalizeSafeBins([]),
+      envPath: envPath,
       cwd: dir,
     });
 
@@ -317,20 +347,13 @@ describe("exec approvals command resolution", () => {
     const envPath = path.join(binDir, "env");
     fs.writeFileSync(envPath, "#!/bin/sh\n");
     fs.chmodSync(envPath, 0o755);
-
-    const analysis = analyzeArgvCommand({
+    const { analysis, allowlistEval } = analyzeEnvWrapperAllowlist({
       argv: buildNestedEnvShellCommand({
         envExecutable: envPath,
         depth: 5,
         payload: "echo pwned",
       }),
-      cwd: dir,
-      env: makePathEnv(binDir),
-    });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: [{ pattern: envPath }],
-      safeBins: normalizeSafeBins([]),
+      envPath,
       cwd: dir,
     });
 
@@ -624,6 +647,36 @@ describe("exec approvals shell allowlist (chained commands)", () => {
 });
 
 describe("exec approvals allowlist evaluation", () => {
+  function evaluateAutoAllowSkills(params: {
+    analysis: {
+      ok: boolean;
+      segments: Array<{
+        raw: string;
+        argv: string[];
+        resolution: {
+          rawExecutable: string;
+          executableName: string;
+          resolvedPath?: string;
+        };
+      }>;
+    };
+    resolvedPath: string;
+  }) {
+    return evaluateExecAllowlist({
+      analysis: params.analysis,
+      allowlist: [],
+      safeBins: new Set(),
+      skillBins: [{ name: "skill-bin", resolvedPath: params.resolvedPath }],
+      autoAllowSkills: true,
+      cwd: "/tmp",
+    });
+  }
+
+  function expectAutoAllowSkillsMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+  }
+
   it("satisfies allowlist on exact match", () => {
     const analysis = {
       ok: true,
@@ -695,13 +748,9 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/opt/skills/skill-bin",
     });
     expect(result.allowlistSatisfied).toBe(true);
   });
@@ -721,16 +770,11 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/tmp/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/tmp/skill-bin",
     });
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expectAutoAllowSkillsMiss(result);
   });
 
   it("does not satisfy auto-allow skills when command resolution is missing", () => {
@@ -747,16 +791,11 @@ describe("exec approvals allowlist evaluation", () => {
         },
       ],
     };
-    const result = evaluateExecAllowlist({
+    const result = evaluateAutoAllowSkills({
       analysis,
-      allowlist: [],
-      safeBins: new Set(),
-      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
-      autoAllowSkills: true,
-      cwd: "/tmp",
+      resolvedPath: "/opt/skills/skill-bin",
     });
-    expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expectAutoAllowSkillsMiss(result);
   });
 
   it("returns empty segment details for chain misses", () => {

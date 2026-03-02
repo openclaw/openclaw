@@ -15,6 +15,14 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 
 const NODE_ID = "mac-1";
 const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
+const JPG_PAYLOAD = {
+  format: "jpg",
+  base64: "aGVsbG8=",
+  width: 1,
+  height: 1,
+} as const;
+
+type GatewayCall = { method: string; params?: unknown };
 
 function unexpectedGatewayMethod(method: unknown): never {
   throw new Error(`unexpected method: ${String(method)}`);
@@ -32,10 +40,88 @@ async function executeNodes(input: Record<string, unknown>) {
   return getNodesTool().execute("call1", input as never);
 }
 
+type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
+type GatewayMockResult = Record<string, unknown> | null | undefined;
+
 function mockNodeList(commands?: string[]) {
   return {
     nodes: [{ nodeId: NODE_ID, ...(commands ? { commands } : {}) }],
   };
+}
+
+function expectSingleImage(result: NodesToolResult, params?: { mimeType?: string }) {
+  const images = (result.content ?? []).filter((block) => block.type === "image");
+  expect(images).toHaveLength(1);
+  if (params?.mimeType) {
+    expect(images[0]?.mimeType).toBe(params.mimeType);
+  }
+}
+
+function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
+  expect(result.content?.[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining(expectedText),
+  });
+}
+
+function setupNodeInvokeMock(params: {
+  commands?: string[];
+  onInvoke?: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  invokePayload?: unknown;
+}) {
+  callGateway.mockImplementation(async ({ method, params: invokeParams }: GatewayCall) => {
+    if (method === "node.list") {
+      return mockNodeList(params.commands);
+    }
+    if (method === "node.invoke") {
+      if (params.onInvoke) {
+        return await params.onInvoke(invokeParams);
+      }
+      if (params.invokePayload !== undefined) {
+        return { payload: params.invokePayload };
+      }
+      return { payload: {} };
+    }
+    return unexpectedGatewayMethod(method);
+  });
+}
+
+function createSystemRunPreparePayload(cwd: string | null) {
+  return {
+    payload: {
+      cmdText: "echo hi",
+      plan: {
+        argv: ["echo", "hi"],
+        cwd,
+        rawCommand: "echo hi",
+        agentId: null,
+        sessionKey: null,
+      },
+    },
+  };
+}
+
+function setupSystemRunGateway(params: {
+  onRunInvoke: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  onApprovalRequest?: (approvalParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
+  prepareCwd?: string | null;
+}) {
+  callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
+    if (method === "node.list") {
+      return mockNodeList(["system.run"]);
+    }
+    if (method === "node.invoke") {
+      const command = (gatewayParams as { command?: string } | undefined)?.command;
+      if (command === "system.run.prepare") {
+        return createSystemRunPreparePayload(params.prepareCwd ?? null);
+      }
+      return await params.onRunInvoke(gatewayParams);
+    }
+    if (method === "exec.approval.request" && params.onApprovalRequest) {
+      return await params.onApprovalRequest(gatewayParams);
+    }
+    return unexpectedGatewayMethod(method);
+  });
 }
 
 beforeEach(() => {
@@ -43,22 +129,32 @@ beforeEach(() => {
 });
 
 describe("nodes camera_snap", () => {
-  it("maps jpg payloads to image/jpeg", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
-      if (method === "node.list") {
-        return mockNodeList();
-      }
-      if (method === "node.invoke") {
-        return {
-          payload: {
-            format: "jpg",
-            base64: "aGVsbG8=",
-            width: 1,
-            height: 1,
+  it("uses front/high-quality defaults when params are omitted", async () => {
+    setupNodeInvokeMock({
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          command: "camera.snap",
+          params: {
+            facing: "front",
+            maxWidth: 1600,
+            quality: 0.95,
           },
-        };
-      }
-      return unexpectedGatewayMethod(method);
+        });
+        return { payload: JPG_PAYLOAD };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "camera_snap",
+      node: NODE_ID,
+    });
+
+    expectSingleImage(result);
+  });
+
+  it("maps jpg payloads to image/jpeg", async () => {
+    setupNodeInvokeMock({
+      invokePayload: JPG_PAYLOAD,
     });
 
     const result = await executeNodes({
@@ -67,31 +163,18 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    const images = (result.content ?? []).filter((block) => block.type === "image");
-    expect(images).toHaveLength(1);
-    expect(images[0]?.mimeType).toBe("image/jpeg");
+    expectSingleImage(result, { mimeType: "image/jpeg" });
   });
 
   it("passes deviceId when provided", async () => {
-    callGateway.mockImplementation(async ({ method, params }) => {
-      if (method === "node.list") {
-        return mockNodeList();
-      }
-      if (method === "node.invoke") {
-        expect(params).toMatchObject({
+    setupNodeInvokeMock({
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
           command: "camera.snap",
           params: { deviceId: "cam-123" },
         });
-        return {
-          payload: {
-            format: "jpg",
-            base64: "aGVsbG8=",
-            width: 1,
-            height: 1,
-          },
-        };
-      }
-      return unexpectedGatewayMethod(method);
+        return { payload: JPG_PAYLOAD };
+      },
     });
 
     await executeNodes({
@@ -101,16 +184,189 @@ describe("nodes camera_snap", () => {
       deviceId: "cam-123",
     });
   });
+
+  it("rejects facing both when deviceId is provided", async () => {
+    await expect(
+      executeNodes({
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "both",
+        deviceId: "cam-123",
+      }),
+    ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+  });
+});
+
+describe("nodes notifications_list", () => {
+  it("invokes notifications.list and returns payload", async () => {
+    setupNodeInvokeMock({
+      commands: ["notifications.list"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "notifications.list",
+          params: {},
+        });
+        return {
+          payload: {
+            enabled: true,
+            connected: true,
+            count: 1,
+            notifications: [{ key: "n1", packageName: "com.example.app" }],
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "notifications_list",
+      node: NODE_ID,
+    });
+
+    expectFirstTextContains(result, '"notifications"');
+  });
+});
+
+describe("nodes notifications_action", () => {
+  it("invokes notifications.actions dismiss", async () => {
+    setupNodeInvokeMock({
+      commands: ["notifications.actions"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "notifications.actions",
+          params: {
+            key: "n1",
+            action: "dismiss",
+          },
+        });
+        return { payload: { ok: true, key: "n1", action: "dismiss" } };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "notifications_action",
+      node: NODE_ID,
+      notificationKey: "n1",
+      notificationAction: "dismiss",
+    });
+
+    expectFirstTextContains(result, '"dismiss"');
+  });
+});
+
+describe("nodes device_status and device_info", () => {
+  it("invokes device.status and returns payload", async () => {
+    setupNodeInvokeMock({
+      commands: ["device.status", "device.info"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.status",
+          params: {},
+        });
+        return {
+          payload: {
+            battery: { state: "charging", lowPowerModeEnabled: false },
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "device_status",
+      node: NODE_ID,
+    });
+
+    expectFirstTextContains(result, '"battery"');
+  });
+
+  it("invokes device.info and returns payload", async () => {
+    setupNodeInvokeMock({
+      commands: ["device.status", "device.info"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.info",
+          params: {},
+        });
+        return {
+          payload: {
+            systemName: "Android",
+            appVersion: "1.0.0",
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "device_info",
+      node: NODE_ID,
+    });
+
+    expectFirstTextContains(result, '"systemName"');
+  });
+
+  it("invokes device.permissions and returns payload", async () => {
+    setupNodeInvokeMock({
+      commands: ["device.permissions"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.permissions",
+          params: {},
+        });
+        return {
+          payload: {
+            permissions: {
+              camera: { status: "granted", promptable: false },
+            },
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "device_permissions",
+      node: NODE_ID,
+    });
+
+    expectFirstTextContains(result, '"permissions"');
+  });
+
+  it("invokes device.health and returns payload", async () => {
+    setupNodeInvokeMock({
+      commands: ["device.health"],
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.health",
+          params: {},
+        });
+        return {
+          payload: {
+            memory: { pressure: "normal" },
+            battery: { chargingType: "usb" },
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "device_health",
+      node: NODE_ID,
+    });
+
+    expectFirstTextContains(result, '"memory"');
+  });
 });
 
 describe("nodes run", () => {
   it("passes invoke and command timeouts", async () => {
-    callGateway.mockImplementation(async ({ method, params }) => {
-      if (method === "node.list") {
-        return mockNodeList(["system.run"]);
-      }
-      if (method === "node.invoke") {
-        expect(params).toMatchObject({
+    setupSystemRunGateway({
+      prepareCwd: "/tmp",
+      onRunInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "system.run",
           timeoutMs: 45_000,
@@ -124,8 +380,7 @@ describe("nodes run", () => {
         return {
           payload: { stdout: "", stderr: "", exitCode: 0, success: true },
         };
-      }
-      return unexpectedGatewayMethod(method);
+      },
     });
 
     await executeNodes({
@@ -140,16 +395,13 @@ describe("nodes run", () => {
   it("requests approval and retries with allow-once decision", async () => {
     let invokeCalls = 0;
     let approvalId: string | null = null;
-    callGateway.mockImplementation(async ({ method, params }) => {
-      if (method === "node.list") {
-        return mockNodeList(["system.run"]);
-      }
-      if (method === "node.invoke") {
+    setupSystemRunGateway({
+      onRunInvoke: (invokeParams) => {
         invokeCalls += 1;
         if (invokeCalls === 1) {
           throw new Error("SYSTEM_RUN_DENIED: approval required");
         }
-        expect(params).toMatchObject({
+        expect(invokeParams).toMatchObject({
           nodeId: NODE_ID,
           command: "system.run",
           params: {
@@ -160,22 +412,25 @@ describe("nodes run", () => {
           },
         });
         return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
-      }
-      if (method === "exec.approval.request") {
-        expect(params).toMatchObject({
+      },
+      onApprovalRequest: (approvalParams) => {
+        expect(approvalParams).toMatchObject({
           id: expect.any(String),
           command: "echo hi",
+          commandArgv: ["echo", "hi"],
+          systemRunPlan: expect.objectContaining({
+            argv: ["echo", "hi"],
+          }),
           nodeId: NODE_ID,
           host: "node",
           timeoutMs: 120_000,
         });
         approvalId =
-          typeof (params as { id?: unknown } | undefined)?.id === "string"
-            ? ((params as { id: string }).id ?? null)
+          typeof (approvalParams as { id?: unknown } | undefined)?.id === "string"
+            ? ((approvalParams as { id: string }).id ?? null)
             : null;
         return { decision: "allow-once" };
-      }
-      return unexpectedGatewayMethod(method);
+      },
     });
 
     await executeNodes(BASE_RUN_INPUT);
@@ -183,48 +438,36 @@ describe("nodes run", () => {
   });
 
   it("fails with user denied when approval decision is deny", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
-      if (method === "node.list") {
-        return mockNodeList(["system.run"]);
-      }
-      if (method === "node.invoke") {
+    setupSystemRunGateway({
+      onRunInvoke: () => {
         throw new Error("SYSTEM_RUN_DENIED: approval required");
-      }
-      if (method === "exec.approval.request") {
+      },
+      onApprovalRequest: () => {
         return { decision: "deny" };
-      }
-      return unexpectedGatewayMethod(method);
+      },
     });
 
     await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: user denied");
   });
 
   it("fails closed for timeout and invalid approval decisions", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
-      if (method === "node.list") {
-        return mockNodeList(["system.run"]);
-      }
-      if (method === "node.invoke") {
+    setupSystemRunGateway({
+      onRunInvoke: () => {
         throw new Error("SYSTEM_RUN_DENIED: approval required");
-      }
-      if (method === "exec.approval.request") {
+      },
+      onApprovalRequest: () => {
         return {};
-      }
-      return unexpectedGatewayMethod(method);
+      },
     });
     await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: approval timed out");
 
-    callGateway.mockImplementation(async ({ method }) => {
-      if (method === "node.list") {
-        return mockNodeList(["system.run"]);
-      }
-      if (method === "node.invoke") {
+    setupSystemRunGateway({
+      onRunInvoke: () => {
         throw new Error("SYSTEM_RUN_DENIED: approval required");
-      }
-      if (method === "exec.approval.request") {
+      },
+      onApprovalRequest: () => {
         return { decision: "allow-never" };
-      }
-      return unexpectedGatewayMethod(method);
+      },
     });
     await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow(
       "exec denied: invalid approval decision",

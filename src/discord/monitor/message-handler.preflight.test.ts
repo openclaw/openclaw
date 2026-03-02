@@ -1,5 +1,15 @@
 import { ChannelType } from "@buape/carbon";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../media-understanding/audio-preflight.js", () => ({
+  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+}));
+import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+} from "../../infra/outbound/session-binding-service.js";
 import {
   preflightDiscordMessage,
   resolvePreflightMentionRequirement,
@@ -7,25 +17,35 @@ import {
 } from "./message-handler.preflight.js";
 import {
   __testing as threadBindingTesting,
+  createNoopThreadBindingManager,
   createThreadBindingManager,
 } from "./thread-bindings.js";
 
 function createThreadBinding(
-  overrides?: Partial<import("./thread-bindings.js").ThreadBindingRecord>,
+  overrides?: Partial<
+    import("../../infra/outbound/session-binding-service.js").SessionBindingRecord
+  >,
 ) {
   return {
-    accountId: "default",
-    channelId: "parent-1",
-    threadId: "thread-1",
-    targetKind: "subagent",
+    bindingId: "default:thread-1",
     targetSessionKey: "agent:main:subagent:child-1",
-    agentId: "main",
-    boundBy: "test",
+    targetKind: "subagent",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      parentConversationId: "parent-1",
+    },
+    status: "active",
     boundAt: 1,
-    webhookId: "wh-1",
-    webhookToken: "tok-1",
+    metadata: {
+      agentId: "main",
+      boundBy: "test",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    },
     ...overrides,
-  } satisfies import("./thread-bindings.js").ThreadBindingRecord;
+  } satisfies import("../../infra/outbound/session-binding-service.js").SessionBindingRecord;
 }
 
 describe("resolvePreflightMentionRequirement", () => {
@@ -58,6 +78,11 @@ describe("resolvePreflightMentionRequirement", () => {
 });
 
 describe("preflightDiscordMessage", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    transcribeFirstAudioMock.mockReset();
+  });
+
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
     const threadBinding = createThreadBinding();
     const threadId = "thread-bot-focus";
@@ -99,6 +124,13 @@ describe("preflightDiscordMessage", () => {
       },
     } as unknown as import("@buape/carbon").Message;
 
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
+    });
+
     const result = await preflightDiscordMessage({
       cfg: {
         session: {
@@ -122,9 +154,7 @@ describe("preflightDiscordMessage", () => {
       groupDmEnabled: true,
       ackReactionScope: "direct",
       groupPolicy: "open",
-      threadBindings: {
-        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
-      } as import("./thread-bindings.js").ThreadBindingManager,
+      threadBindings: createNoopThreadBindingManager("default"),
       data: {
         channel_id: threadId,
         guild_id: "guild-1",
@@ -142,10 +172,106 @@ describe("preflightDiscordMessage", () => {
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
     expect(result?.shouldRequireMention).toBe(false);
   });
+
+  it("uses attachment content_type for guild audio preflight mention detection", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
+
+    const channelId = "channel-audio-1";
+    const client = {
+      fetchChannel: async (id: string) => {
+        if (id === channelId) {
+          return {
+            id: channelId,
+            type: ChannelType.GuildText,
+            name: "general",
+          };
+        }
+        return null;
+      },
+    } as unknown as import("@buape/carbon").Client;
+
+    const message = {
+      id: "m-audio-1",
+      content: "",
+      timestamp: new Date().toISOString(),
+      channelId,
+      attachments: [
+        {
+          id: "att-1",
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          content_type: "audio/ogg",
+          filename: "voice.ogg",
+        },
+      ],
+      mentionedUsers: [],
+      mentionedRoles: [],
+      mentionedEveryone: false,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    } as unknown as import("@buape/carbon").Message;
+
+    const result = await preflightDiscordMessage({
+      cfg: {
+        session: {
+          mainKey: "main",
+          scope: "per-sender",
+        },
+        messages: {
+          groupChat: {
+            mentionPatterns: ["openclaw"],
+          },
+        },
+      } as import("../../config/config.js").OpenClawConfig,
+      discordConfig: {} as NonNullable<
+        import("../../config/config.js").OpenClawConfig["channels"]
+      >["discord"],
+      accountId: "default",
+      token: "token",
+      runtime: {} as import("../../runtime.js").RuntimeEnv,
+      botUserId: "openclaw-bot",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 1_000_000,
+      textLimit: 2_000,
+      replyToMode: "all",
+      dmEnabled: true,
+      groupDmEnabled: true,
+      ackReactionScope: "direct",
+      groupPolicy: "open",
+      threadBindings: createNoopThreadBindingManager("default"),
+      data: {
+        channel_id: channelId,
+        guild_id: "guild-1",
+        guild: {
+          id: "guild-1",
+          name: "Guild One",
+        },
+        author: message.author,
+        message,
+      } as unknown as import("./listeners.js").DiscordMessageEvent,
+      client,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        }),
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.wasMentioned).toBe(true);
+  });
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
@@ -171,7 +297,11 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
         webhookId: "wh-1",
-        threadBinding: createThreadBinding({ webhookId: undefined }),
+        threadBinding: createThreadBinding({
+          metadata: {
+            webhookId: undefined,
+          },
+        }),
       }),
     ).toBe(false);
   });

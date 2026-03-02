@@ -120,6 +120,9 @@ function createMockRuntime(): PluginRuntime {
     tts: {
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
     },
+    stt: {
+      transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
+    },
     tools: {
       createMemoryGetTool: vi.fn() as unknown as PluginRuntime["tools"]["createMemoryGetTool"],
       createMemorySearchTool:
@@ -162,6 +165,24 @@ function createMockRuntime(): PluginRuntime {
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"],
         dispatchReplyFromConfig:
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
+        withReplyDispatcher: vi.fn(
+          async ({
+            dispatcher,
+            run,
+            onSettled,
+          }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+            try {
+              return await run();
+            } finally {
+              dispatcher.markComplete();
+              try {
+                await dispatcher.waitForIdle();
+              } finally {
+                await onSettled?.();
+              }
+            }
+          },
+        ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
         finalizeInboundContext: vi.fn(
           (ctx: Record<string, unknown>) => ctx,
         ) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
@@ -517,7 +538,7 @@ describe("BlueBubbles webhook monitor", () => {
         // Create a request that never sends data or ends (simulates slow-loris)
         const req = new EventEmitter() as IncomingMessage;
         req.method = "POST";
-        req.url = "/bluebubbles-webhook";
+        req.url = "/bluebubbles-webhook?password=test-password";
         req.headers = {};
         (req as unknown as { socket: { remoteAddress: string } }).socket = {
           remoteAddress: "127.0.0.1",
@@ -538,6 +559,37 @@ describe("BlueBubbles webhook monitor", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("rejects unauthorized requests before reading the body", async () => {
+      const account = createMockAccount({ password: "secret-token" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const req = new EventEmitter() as IncomingMessage;
+      req.method = "POST";
+      req.url = "/bluebubbles-webhook?password=wrong-token";
+      req.headers = {};
+      const onSpy = vi.spyOn(req, "on");
+      (req as unknown as { socket: { remoteAddress: string } }).socket = {
+        remoteAddress: "127.0.0.1",
+      };
+
+      const res = createMockResponse();
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+      expect(onSpy).not.toHaveBeenCalledWith("data", expect.any(Function));
     });
 
     it("authenticates via password query parameter", async () => {
@@ -2286,6 +2338,51 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
+      mockHasControlCommand.mockReturnValue(true);
+
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: [],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "/status",
+          handle: { address: "+15559999999" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-dm-open-unauthorized",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const latestDispatch =
+        mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[
+          mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.length - 1
+        ]?.[0];
+      expect(latestDispatch?.ctx?.CommandAuthorized).toBe(false);
     });
   });
 

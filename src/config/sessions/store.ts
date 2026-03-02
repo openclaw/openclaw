@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -9,6 +8,7 @@ import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
 } from "../../gateway/session-utils.fs.js";
+import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   deliveryContextFromSession,
@@ -17,7 +17,7 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
-import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { loadConfig } from "../config.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
@@ -39,9 +39,12 @@ type SessionStoreCacheEntry = {
   loadedAt: number;
   storePath: string;
   mtimeMs?: number;
+  sizeBytes?: number;
+  serialized?: string;
 };
 
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
+const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
@@ -67,6 +70,7 @@ function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
 
 function invalidateSessionStoreCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
+  SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -170,6 +174,7 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
 
 export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
+  SESSION_STORE_SERIALIZED_CACHE.clear();
   for (const queue of LOCK_QUEUES.values()) {
     for (const task of queue.pending) {
       task.reject(new Error("session store queue cleared for test"));
@@ -203,8 +208,11 @@ export function loadSessionStore(
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
     if (cached && isSessionStoreCacheValid(cached)) {
-      const currentMtimeMs = getFileMtimeMs(storePath);
-      if (currentMtimeMs === cached.mtimeMs) {
+      const currentFileStat = getFileStatSnapshot(storePath);
+      if (
+        currentFileStat?.mtimeMs === cached.mtimeMs &&
+        currentFileStat?.sizeBytes === cached.sizeBytes
+      ) {
         // Return a deep copy to prevent external mutations affecting cache
         return structuredClone(cached.store);
       }
@@ -219,7 +227,9 @@ export function loadSessionStore(
   // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
   // writer to finish.
   let store: Record<string, SessionEntry> = {};
-  let mtimeMs = getFileMtimeMs(storePath);
+  let fileStat = getFileStatSnapshot(storePath);
+  let mtimeMs = fileStat?.mtimeMs;
+  let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
@@ -233,8 +243,10 @@ export function loadSessionStore(
       const parsed = JSON.parse(raw);
       if (isSessionStoreRecord(parsed)) {
         store = parsed;
+        serializedFromDisk = raw;
       }
-      mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
+      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+      mtimeMs = fileStat?.mtimeMs;
       break;
     } catch {
       // File missing, locked, or transiently corrupt — retry on Windows.
@@ -244,6 +256,11 @@ export function loadSessionStore(
       }
       // Final attempt failed; proceed with an empty store.
     }
+  }
+  if (serializedFromDisk !== undefined) {
+    SESSION_STORE_SERIALIZED_CACHE.set(storePath, serializedFromDisk);
+  } else {
+    SESSION_STORE_SERIALIZED_CACHE.delete(storePath);
   }
 
   // Best-effort migration: message provider → channel naming.
@@ -277,6 +294,8 @@ export function loadSessionStore(
       loadedAt: Date.now(),
       storePath,
       mtimeMs,
+      sizeBytes: fileStat?.sizeBytes,
+      serialized: serializedFromDisk,
     });
   }
 
@@ -639,14 +658,32 @@ type SaveSessionStoreOptions = {
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
 };
 
+function updateSessionStoreWriteCaches(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  serialized: string;
+}): void {
+  const fileStat = getFileStatSnapshot(params.storePath);
+  SESSION_STORE_SERIALIZED_CACHE.set(params.storePath, params.serialized);
+  if (!isSessionStoreCacheEnabled()) {
+    SESSION_STORE_CACHE.delete(params.storePath);
+    return;
+  }
+  SESSION_STORE_CACHE.set(params.storePath, {
+    store: structuredClone(params.store),
+    loadedAt: Date.now(),
+    storePath: params.storePath,
+    mtimeMs: fileStat?.mtimeMs,
+    sizeBytes: fileStat?.sizeBytes,
+    serialized: params.serialized,
+  });
+}
+
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
   opts?: SaveSessionStoreOptions,
 ): Promise<void> {
-  // Invalidate cache on write to ensure consistency
-  invalidateSessionStoreCache(storePath);
-
   normalizeSessionStore(store);
 
   if (!opts?.skipMaintenance) {
@@ -770,58 +807,41 @@ async function saveSessionStoreUnlocked(
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
+  if (SESSION_STORE_SERIALIZED_CACHE.get(storePath) === json) {
+    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    return;
+  }
 
-  // Windows: use temp-file + rename for atomic writes, same as other platforms.
-  // Direct `writeFile` truncates the target to 0 bytes before writing, which
-  // allows concurrent `readFileSync` calls (from unlocked `loadSessionStore`)
-  // to observe an empty file and lose the session store contents.
+  // Windows: keep retry semantics because rename can fail while readers hold locks.
   if (process.platform === "win32") {
-    const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    try {
-      await fs.promises.writeFile(tmp, json, "utf-8");
-      // Retry rename up to 5 times with increasing backoff — rename can fail
-      // on Windows when the target is locked by a concurrent reader.  We do
-      // NOT fall back to writeFile or copyFile because both use CREATE_ALWAYS
-      // on Windows, which truncates the target to 0 bytes before writing —
-      // reintroducing the exact race this fix addresses.  If all attempts
-      // fail, the temp file is cleaned up and the next save cycle (which is
-      // serialized by the write lock) will succeed.
-      for (let i = 0; i < 5; i++) {
-        try {
-          await fs.promises.rename(tmp, storePath);
-          break;
-        } catch {
-          if (i < 4) {
-            await new Promise((r) => setTimeout(r, 50 * (i + 1)));
-          }
-          // Final attempt failed — skip this save.  The write lock ensures
-          // the next save will retry with fresh data.  Log for diagnostics.
-          if (i === 4) {
-            log.warn(`rename failed after 5 attempts: ${storePath}`);
-          }
-        }
-      }
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOENT") {
+    for (let i = 0; i < 5; i++) {
+      try {
+        await writeTextAtomic(storePath, json, { mode: 0o600 });
+        updateSessionStoreWriteCaches({ storePath, store, serialized: json });
         return;
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code)
+            : null;
+        if (code === "ENOENT") {
+          return;
+        }
+        if (i < 4) {
+          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          continue;
+        }
+        // Final attempt failed — skip this save. The write lock ensures
+        // the next save will retry with fresh data. Log for diagnostics.
+        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
       }
-      throw err;
-    } finally {
-      await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
     }
     return;
   }
 
-  const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
-    await fs.promises.rename(tmp, storePath);
-    // Ensure permissions are set even if rename loses them
-    await fs.promises.chmod(storePath, 0o600);
+    await writeTextAtomic(storePath, json, { mode: 0o600 });
+    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
   } catch (err) {
     const code =
       err && typeof err === "object" && "code" in err
@@ -832,9 +852,8 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-        await fs.promises.writeFile(storePath, json, { mode: 0o600, encoding: "utf-8" });
-        await fs.promises.chmod(storePath, 0o600);
+        await writeTextAtomic(storePath, json, { mode: 0o600 });
+        updateSessionStoreWriteCaches({ storePath, store, serialized: json });
       } catch (err2) {
         const code2 =
           err2 && typeof err2 === "object" && "code" in err2
@@ -849,8 +868,6 @@ async function saveSessionStoreUnlocked(
     }
 
     throw err;
-  } finally {
-    await fs.promises.rm(tmp, { force: true });
   }
 }
 

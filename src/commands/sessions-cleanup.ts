@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import { loadConfig } from "../config/config.js";
 import {
   capEntryCount,
   enforceSessionDiskBudget,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   loadSessionStore,
   pruneStaleEntries,
   resolveMaintenanceConfig,
@@ -11,7 +14,10 @@ import {
 } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { resolveSessionStoreTargets, type SessionStoreTarget } from "./session-store-targets.js";
+import {
+  resolveSessionStoreTargetsOrExit,
+  type SessionStoreTarget,
+} from "./session-store-targets.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
@@ -33,9 +39,15 @@ export type SessionsCleanupOptions = {
   enforce?: boolean;
   activeKey?: string;
   json?: boolean;
+  fixMissing?: boolean;
 };
 
-type SessionCleanupAction = "keep" | "prune-stale" | "cap-overflow" | "evict-budget";
+type SessionCleanupAction =
+  | "keep"
+  | "prune-missing"
+  | "prune-stale"
+  | "cap-overflow"
+  | "evict-budget";
 
 const ACTION_PAD = 12;
 
@@ -50,6 +62,7 @@ type SessionCleanupSummary = {
   dryRun: boolean;
   beforeCount: number;
   afterCount: number;
+  missing: number;
   pruned: number;
   capped: number;
   diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
@@ -60,10 +73,14 @@ type SessionCleanupSummary = {
 
 function resolveSessionCleanupAction(params: {
   key: string;
+  missingKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
 }): SessionCleanupAction {
+  if (params.missingKeys.has(params.key)) {
+    return "prune-missing";
+  }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
   }
@@ -84,6 +101,9 @@ function formatCleanupActionCell(action: SessionCleanupAction, rich: boolean): s
   if (action === "keep") {
     return theme.muted(label);
   }
+  if (action === "prune-missing") {
+    return theme.error(label);
+  }
   if (action === "prune-stale") {
     return theme.warn(label);
   }
@@ -95,6 +115,7 @@ function formatCleanupActionCell(action: SessionCleanupAction, rich: boolean): s
 
 function buildActionRows(params: {
   beforeStore: Record<string, SessionEntry>;
+  missingKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -103,6 +124,7 @@ function buildActionRows(params: {
     ...row,
     action: resolveSessionCleanupAction({
       key: row.key,
+      missingKeys: params.missingKeys,
       staleKeys: params.staleKeys,
       cappedKeys: params.cappedKeys,
       budgetEvictedKeys: params.budgetEvictedKeys,
@@ -110,17 +132,52 @@ function buildActionRows(params: {
   }));
 }
 
+function pruneMissingTranscriptEntries(params: {
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  onPruned?: (key: string) => void;
+}): number {
+  const sessionPathOpts = resolveSessionFilePathOptions({
+    storePath: params.storePath,
+  });
+  let removed = 0;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry?.sessionId) {
+      continue;
+    }
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    if (!fs.existsSync(transcriptPath)) {
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
+    }
+  }
+  return removed;
+}
+
 async function previewStoreCleanup(params: {
   target: SessionStoreTarget;
   mode: "warn" | "enforce";
   dryRun: boolean;
   activeKey?: string;
+  fixMissing?: boolean;
 }) {
   const maintenance = resolveMaintenanceConfig();
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
+  const missingKeys = new Set<string>();
+  const missing =
+    params.fixMissing === true
+      ? pruneMissingTranscriptEntries({
+          store: previewStore,
+          storePath: params.target.storePath,
+          onPruned: (key) => {
+            missingKeys.add(key);
+          },
+        })
+      : 0;
   const pruned = pruneStaleEntries(previewStore, maintenance.pruneAfterMs, {
     log: false,
     onPruned: ({ key }) => {
@@ -151,6 +208,7 @@ async function previewStoreCleanup(params: {
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
+    missing > 0 ||
     pruned > 0 ||
     capped > 0 ||
     Boolean((diskBudget?.removedEntries ?? 0) > 0 || (diskBudget?.removedFiles ?? 0) > 0);
@@ -162,6 +220,7 @@ async function previewStoreCleanup(params: {
     dryRun: params.dryRun,
     beforeCount,
     afterCount: afterPreviewCount,
+    missing,
     pruned,
     capped,
     diskBudget,
@@ -175,6 +234,7 @@ async function previewStoreCleanup(params: {
       staleKeys,
       cappedKeys,
       budgetEvictedKeys,
+      missingKeys,
     }),
   };
 }
@@ -196,6 +256,7 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
+  params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.diskBudget) {
@@ -233,16 +294,16 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
-  let targets: SessionStoreTarget[];
-  try {
-    targets = resolveSessionStoreTargets(cfg, {
+  const targets = resolveSessionStoreTargetsOrExit({
+    cfg,
+    opts: {
       store: opts.store,
       agent: opts.agent,
       allAgents: opts.allAgents,
-    });
-  } catch (error) {
-    runtime.error(error instanceof Error ? error.message : String(error));
-    runtime.exit(1);
+    },
+    runtime,
+  });
+  if (!targets) {
     return;
   }
 
@@ -256,6 +317,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       mode,
       dryRun: Boolean(opts.dryRun),
       activeKey: opts.activeKey,
+      fixMissing: Boolean(opts.fixMissing),
     });
     previewResults.push(result);
   }
@@ -303,10 +365,16 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
     const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
       current: null,
     };
-    await updateSessionStore(
+    const missingApplied = await updateSessionStore(
       target.storePath,
-      async () => {
-        // Maintenance runs in saveSessionStoreUnlocked(); no direct store mutation needed here.
+      async (store) => {
+        if (!opts.fixMissing) {
+          return 0;
+        }
+        return pruneMissingTranscriptEntries({
+          store,
+          storePath: target.storePath,
+        });
       },
       {
         activeSessionKey: opts.activeKey,
@@ -331,6 +399,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
               dryRun: false,
               beforeCount: 0,
               afterCount: 0,
+              missing: 0,
               pruned: 0,
               capped: 0,
               diskBudget: null,
@@ -347,10 +416,12 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
             dryRun: false,
             beforeCount: appliedReport.beforeCount,
             afterCount: appliedReport.afterCount,
+            missing: missingApplied,
             pruned: appliedReport.pruned,
             capped: appliedReport.capped,
             diskBudget: appliedReport.diskBudget,
             wouldMutate:
+              missingApplied > 0 ||
               appliedReport.pruned > 0 ||
               appliedReport.capped > 0 ||
               Boolean(
