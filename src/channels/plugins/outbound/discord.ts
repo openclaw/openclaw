@@ -101,7 +101,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return discordOutbound.sendText!({ ...ctx });
+    return discordOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
