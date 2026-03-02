@@ -68,7 +68,7 @@ describe("expandHomePrefix", () => {
     const value = expandHomePrefix("~/x", {
       env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
     });
-    expect(value).toBe(`${path.resolve("/srv/openclaw-home")}/x`);
+    expect(value).toBe("/srv/openclaw-home/x");
   });
 
   it("keeps non-tilde values unchanged", () => {
