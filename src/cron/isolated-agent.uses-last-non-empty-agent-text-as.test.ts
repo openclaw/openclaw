@@ -323,7 +323,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(loadModelCatalog).mockResolvedValue([
+      const deterministicCatalog = [
         {
           id: "gpt-4.1-mini",
           name: "GPT-4.1 Mini",
@@ -334,7 +334,8 @@ describe("runCronIsolatedAgentTurn", () => {
           name: "Claude Opus 4.5",
           provider: "anthropic",
         },
-      ]);
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
 
       let res = (
         await runCronTurn(home, {
@@ -348,7 +349,8 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
-      vi.clearAllMocks();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
       res = (
         await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
@@ -359,7 +361,8 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
-      vi.clearAllMocks();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
       res = (
         await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
@@ -382,7 +385,7 @@ describe("runCronIsolatedAgentTurn", () => {
         model: GMAIL_MODEL.replace("openrouter/", ""),
       });
 
-      vi.clearAllMocks();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
       res = (
         await runGmailHookTurn(home, {
           "agent:main:hook:gmail:msg-1": {
