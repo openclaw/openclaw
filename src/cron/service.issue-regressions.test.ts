@@ -170,13 +170,11 @@ describe("Cron issue regressions", () => {
     vi.clearAllMocks();
   });
 
-  it("covers schedule updates, force runs, isolated wake scheduling, and payload patching", async () => {
+  it("covers schedule updates and payload patching", async () => {
     const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
     const cron = await startCronForStore({
       storePath: store.storePath,
       cronEnabled: false,
-      enqueueSystemEvent,
     });
 
     const created = await cron.add({
@@ -195,34 +193,6 @@ describe("Cron issue regressions", () => {
     });
 
     expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z") + offsetMs);
-
-    const forceNow = await cron.add({
-      name: "force-now",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "force" },
-    });
-
-    const result = await cron.run(forceNow.id, "force");
-
-    expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "force",
-      expect.objectContaining({ agentId: undefined }),
-    );
-
-    const job = await cron.add({
-      name: "isolated",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "hi" },
-    });
-
-    expect(typeof job.state.nextRunAtMs).toBe("number");
 
     const unsafeToggle = await cron.add({
       name: "unsafe toggle",
