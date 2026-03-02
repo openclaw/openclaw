@@ -433,7 +433,7 @@ async function processMessageWithPipeline(params: {
     channel: "zalo",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: chatId,
     },
     runtime: core.channel,
