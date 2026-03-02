@@ -79,7 +79,7 @@ describe("collectUfwFindings", () => {
       title: "UFW status unknown",
     });
     expect(out[0].detail).toContain("UFW enabled (per /etc/ufw/ufw.conf)");
-    expect(out[0].detail).toContain("status check requires sudo or PATH including /usr/sbin:/sbin");
+    expect(out[0].detail).toContain("status check requires sudo");
   });
 
   it("reports UFW status unknown with sbin hint when status fails and config not ENABLED=yes", async () => {
@@ -97,8 +97,8 @@ describe("collectUfwFindings", () => {
       severity: "info",
       title: "UFW status unknown",
     });
-    expect(out[0].detail).toContain("UFW installed (binary in sbin)");
-    expect(out[0].remediation).toContain('PATH="$PATH:/usr/sbin:/sbin"');
+    expect(out[0].detail).toContain("UFW installed (binary at /usr/sbin/ufw)");
+    expect(out[0].remediation).toContain("sudo ufw status");
   });
 
   it("reports UFW status unknown when ufw runs but stderr contains 'not found' (e.g. dependency)", async () => {

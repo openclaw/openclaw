@@ -129,12 +129,15 @@ export async function collectUfwFindings(params: {
     return [];
   }
 
+  const binaryLocation = `binary at ${binary}`;
   const confEnabledStr =
-    confEnabled === true ? "UFW enabled (per /etc/ufw/ufw.conf)" : "UFW installed (binary in sbin)";
+    confEnabled === true
+      ? "UFW enabled (per /etc/ufw/ufw.conf)"
+      : `UFW installed (${binaryLocation})`;
   const detail =
     confEnabled === true
-      ? `${confEnabledStr}; status check requires sudo or PATH including /usr/sbin:/sbin.`
-      : `${confEnabledStr}; run PATH="$PATH:/usr/sbin:/sbin" openclaw security audit to check status, or use sudo ufw status.`;
+      ? `${confEnabledStr}; status check requires sudo.`
+      : `${confEnabledStr}; status check failed — may require sudo.`;
 
   return [
     {
@@ -142,7 +145,7 @@ export async function collectUfwFindings(params: {
       severity: "info",
       title: "UFW status unknown",
       detail,
-      remediation: `Add sbin to PATH or run: PATH="$PATH:/usr/sbin:/sbin" openclaw security audit`,
+      remediation: `Run: sudo ufw status`,
     },
   ];
 }
