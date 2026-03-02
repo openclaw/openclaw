@@ -7,6 +7,10 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
@@ -63,6 +67,23 @@ function resolveWindowsCommandShim(command: string): string {
     return `${trimmed}.cmd`;
   }
   return command;
+}
+
+function resolveSpawnInvocation(params: {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  packageName: string;
+}) {
+  const program = resolveWindowsSpawnProgram({
+    command: resolveWindowsCommandShim(params.command),
+    platform: process.platform,
+    env: params.env,
+    execPath: process.execPath,
+    packageName: params.packageName,
+    allowShellFallback: true,
+  });
+  return materializeWindowsSpawnProgram(program, params.args);
 }
 
 function hasHanScript(value: string): boolean {
@@ -1066,9 +1087,17 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
+      const spawnInvocation = resolveSpawnInvocation({
+        command: this.qmd.command,
+        args,
+        env: this.env,
+        packageName: "qmd",
+      });
+      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
         env: this.env,
         cwd: this.workspaceDir,
+        shell: spawnInvocation.shell,
+        windowsHide: spawnInvocation.windowsHide,
       });
       let stdout = "";
       let stderr = "";
@@ -1164,10 +1193,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const child = spawn(resolveWindowsCommandShim("mcporter"), args, {
+      const spawnInvocation = resolveSpawnInvocation({
+        command: "mcporter",
+        args,
+        env: this.env,
+        packageName: "mcporter",
+      });
+      const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
         // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
         env: this.env,
         cwd: this.workspaceDir,
+        shell: spawnInvocation.shell,
+        windowsHide: spawnInvocation.windowsHide,
       });
       let stdout = "";
       let stderr = "";
