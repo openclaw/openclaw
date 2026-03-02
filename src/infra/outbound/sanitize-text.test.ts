@@ -85,6 +85,12 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
   });
 
+  it("preserves angle-bracket autolinks", () => {
+    expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
+      "See https://example.com/path?q=1 now",
+    );
+  });
+
   // --- passthrough --------------------------------------------------------
 
   it("passes through clean text unchanged", () => {
