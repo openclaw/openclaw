@@ -82,8 +82,12 @@ export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
       if (!cfg.channels["typex"].accounts) cfg.channels["typex"].accounts = {};
 
       // save config
+      const existingAccount = ((
+        cfg.channels["typex"].accounts as Record<string, Record<string, unknown>>
+      )[userId] ?? {}) as Record<string, unknown>;
       cfg.channels["typex"].accounts[userId] = {
-        token: token,
+        ...existingAccount,
+        token,
       };
       cfg.channels["typex"].defaultAccount = userId;
 

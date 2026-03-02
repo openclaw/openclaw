@@ -2,6 +2,8 @@ import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
 
 const allowFromEntry = z.union([z.string(), z.number()]);
+const dmPolicySchema = z.enum(["open", "pairing", "allowlist", "disabled"]);
+const groupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const toolsBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
 const TypeXGroupSchema = z
@@ -23,7 +25,10 @@ const TypeXAccountSchema = z
     appSecret: z.string().optional(),
     botName: z.string().optional(),
     markdown: MarkdownConfigSchema.optional(),
+    dmPolicy: dmPolicySchema.optional(),
+    groupPolicy: groupPolicySchema.optional(),
     allowFrom: z.array(allowFromEntry).optional(),
+    groupAllowFrom: z.array(allowFromEntry).optional(),
     responsePrefix: z.string().optional(),
     groups: z.record(z.string(), TypeXGroupSchema.optional()).optional(),
   })

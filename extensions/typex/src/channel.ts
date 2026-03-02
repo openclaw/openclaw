@@ -185,8 +185,20 @@ export const typexPlugin = {
       configured: acc.configured,
       tokenSource: acc.tokenSource,
     }),
-    resolveAllowFrom: () => [],
-    formatAllowFrom: () => [],
+    resolveAllowFrom: ({ cfg, accountId }) => {
+      const resolvedAccountId =
+        accountId ?? resolveConfiguredDefaultAccountId(cfg) ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.typex?.accounts?.[resolvedAccountId]);
+      const source = useAccountPath
+        ? cfg.channels?.typex?.accounts?.[resolvedAccountId]?.allowFrom
+        : cfg.channels?.typex?.allowFrom;
+      return Array.isArray(source) ? source.map((entry) => String(entry)) : [];
+    },
+    formatAllowFrom: ({ allowFrom }) =>
+      allowFrom
+        .map((entry) => String(entry).trim())
+        .filter(Boolean)
+        .map((entry) => entry.toLowerCase()),
   },
 
   gateway: {
