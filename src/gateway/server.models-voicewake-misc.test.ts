@@ -13,6 +13,7 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { canBindToHost } from "./net.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -458,10 +459,45 @@ describe("gateway server misc", () => {
 
   test("refuses to start when port already bound", async () => {
     const { server: blocker, port: blockedPort } = await occupyPort();
+    let blockerV6: ReturnType<typeof createServer> | null = null;
+    if (await canBindToHost("::1")) {
+      blockerV6 = createServer();
+      await new Promise<void>((resolve, reject) => {
+        blockerV6?.once("error", reject);
+        blockerV6?.listen(blockedPort, "::1", () => resolve());
+      });
+    }
     const startup = startGatewayServer(blockedPort);
     await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
     await expect(startup).rejects.toThrow(/already listening/i);
-    blocker.close();
+    await new Promise<void>((resolve, reject) =>
+      blocker.close((err) => (err ? reject(err) : resolve())),
+    );
+    await new Promise<void>(
+      (resolve, reject) => blockerV6?.close((err) => (err ? reject(err) : resolve())) ?? resolve(),
+    );
+  });
+
+  test("falls back to ipv6 loopback when ipv4 loopback is already occupied", async () => {
+    if (!(await canBindToHost("::1"))) {
+      return;
+    }
+    const { server: blocker, port: blockedPort } = await occupyPort();
+    let fallbackServer: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+    try {
+      fallbackServer = await startGatewayServer(blockedPort, { host: "127.0.0.1" });
+      const probe = new WebSocket(`ws://[::1]:${blockedPort}`);
+      await new Promise<void>((resolve, reject) => {
+        probe.once("open", () => resolve());
+        probe.once("error", reject);
+      });
+      probe.close();
+    } finally {
+      await fallbackServer?.close();
+      await new Promise<void>((resolve, reject) =>
+        blocker.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
   });
 
   test("releases port after close", async () => {

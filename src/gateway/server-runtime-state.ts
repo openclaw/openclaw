@@ -138,6 +138,7 @@ export async function createGatewayRuntimeState(params: {
   }
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  let firstBindError: unknown = null;
   for (const host of bindHosts) {
     const httpServer = createGatewayHttpServer({
       canvasHost,
@@ -165,16 +166,23 @@ export async function createGatewayRuntimeState(params: {
       httpServers.push(httpServer);
       httpBindHosts.push(host);
     } catch (err) {
-      if (host === bindHosts[0]) {
+      firstBindError ??= err;
+      if (bindHosts.length === 1) {
         throw err;
       }
       params.log.warn(
-        `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+        `gateway: failed to bind listen host ${host}:${params.port} (${String(err)})`,
       );
+      await new Promise<void>((resolve) => {
+        httpServer.close(() => resolve());
+      });
     }
   }
   const httpServer = httpServers[0];
   if (!httpServer) {
+    if (firstBindError) {
+      throw firstBindError;
+    }
     throw new Error("Gateway HTTP server failed to start");
   }
 
