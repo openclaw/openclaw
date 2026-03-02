@@ -230,22 +230,30 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ## Feature reference
 
 <AccordionGroup>
-  <Accordion title="Live stream preview (message edits)">
-    OpenClaw can stream partial replies by sending a temporary Telegram message and editing it as text arrives.
+  <Accordion title="Live stream preview (native drafts + message edits)">
+    OpenClaw can stream partial replies in real time:
+
+    - direct chats: Telegram native draft streaming via `sendMessageDraft`
+    - groups/topics: preview message + `editMessageText`
 
     Requirement:
 
-    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `off`)
+    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
-    This works in direct chats and groups/topics.
+    Telegram enabled `sendMessageDraft` for all bots in Bot API 9.5 (March 1, 2026).
 
-    For text-only replies, OpenClaw keeps the same preview message and performs a final edit in place (no second message).
+    For text-only replies:
+
+    - DM: OpenClaw updates the draft in place (no extra preview message)
+    - group/topic: OpenClaw keeps the same preview message and performs a final edit in place (no second message)
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
     Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
+
+    If native draft transport is unavailable/rejected, OpenClaw automatically falls back to `sendMessage` + `editMessageText`.
 
     Telegram-only reasoning stream:
 
@@ -751,7 +759,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `off`; `progress` maps to `partial`; `block` is legacy preview mode compatibility).
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). In DMs, `partial` uses native `sendMessageDraft` when available.
 - `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
