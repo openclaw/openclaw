@@ -49,20 +49,22 @@ export function registerSlackMessageEvents(params: {
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     await handleIncomingMessageEvent({ event, body });
   });
-  // Slack may dispatch channel/group message subscriptions under typed event
-  // names. Register explicit handlers so both delivery styles are supported.
-  ctx.app.event(
-    "message.channels",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.channels">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
-  ctx.app.event(
-    "message.groups",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.groups">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
+  // Note: We intentionally do NOT register "message.channels" or "message.groups"
+  // handlers here. While these are valid event types to SUBSCRIBE TO in your Slack
+  // App's Event Subscriptions settings, @slack/bolt v4.6.0+ does not support
+  // registering handlers for these specific sub-types using app.event().
+  //
+  // Bolt v4.6.0 validates handler registration and rejects these with:
+  // "Although the document mentions 'message.channels', it is not a valid event type.
+  //  Use 'message' instead. If you want to filter message events, you can use
+  //  event.channel_type for it."
+  //
+  // The generic "message" handler above receives all message events. To distinguish
+  // between channels, groups, DMs, etc., check event.channel_type in the handler.
+  //
+  // This is a Bolt framework change, not a Slack API deprecation. The event types
+  // are still valid for subscription in Slack App settings, but Bolt only allows
+  // registering handlers for the base "message" type.
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {

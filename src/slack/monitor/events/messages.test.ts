@@ -33,8 +33,7 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
-    channelHandler: harness.getHandler("message.channels") as MessageHandler | null,
-    groupHandler: harness.getHandler("message.groups") as MessageHandler | null,
+    appMentionHandler: harness.getHandler("app_mention") as MessageHandler | null,
     handleSlackMessage,
   };
 }
@@ -159,31 +158,37 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("registers and forwards message.channels and message.groups events", async () => {
+  it("forwards channel and group messages via the generic message handler", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { channelHandler, groupHandler, handleSlackMessage } = createMessageHandlers({
+    const { handler, handleSlackMessage } = createMessageHandlers({
       dmPolicy: "open",
       channelType: "channel",
     });
 
-    expect(channelHandler).toBeTruthy();
-    expect(groupHandler).toBeTruthy();
+    expect(handler).toBeTruthy();
 
-    const channelMessage = {
-      type: "message",
-      channel: "C1",
-      channel_type: "channel",
-      user: "U1",
-      text: "hello channel",
-      ts: "123.100",
-    };
-    await channelHandler!({ event: channelMessage, body: {} });
-    await groupHandler!({
+    // Test channel message
+    await handler!({
       event: {
-        ...channelMessage,
-        channel_type: "group",
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        user: "U1",
+        text: "hello channel",
+        ts: "123.100",
+      },
+      body: {},
+    });
+
+    // Test group message
+    await handler!({
+      event: {
+        type: "message",
         channel: "G1",
+        channel_type: "group",
+        user: "U1",
+        text: "hello group",
         ts: "123.200",
       },
       body: {},
