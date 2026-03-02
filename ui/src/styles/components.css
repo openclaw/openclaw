@@ -599,7 +599,7 @@
   grid-template-rows: 1fr;
   gap: 16px;
   align-items: stretch;
-  height: calc(100vh - 200px);
+  height: calc(100dvh - 200px);
   min-height: 400px;
   max-height: calc(100dvh - 180px);
 }
