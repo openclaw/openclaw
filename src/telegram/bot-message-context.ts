@@ -471,9 +471,15 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
+  // Exclude forum-topic system messages (auto-generated "Topic created" messages by the
+  // bot that have empty text) so that every message inside a bot-created topic does not
+  // incorrectly bypass requireMention (#32256).
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const implicitMention = botId != null && replyFromId === botId;
+  const replyToBotMessage = botId != null && replyFromId === botId;
+  const isReplyToSystemMessage =
+    replyToBotMessage && msg.reply_to_message?.from?.is_bot === true && !msg.reply_to_message?.text;
+  const implicitMention = replyToBotMessage && !isReplyToSystemMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup,
