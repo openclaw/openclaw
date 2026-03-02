@@ -59,6 +59,9 @@ Optional env vars:
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
+- `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
+- `OPENCLAW_INSTALL_DOCKER_CLI` — build arg passthrough for local image builds (`1` installs Docker CLI in the image). `docker-setup.sh` sets this automatically when `OPENCLAW_SANDBOX=1` for local builds.
+- `OPENCLAW_DOCKER_SOCKET` — override Docker socket path (default: `DOCKER_HOST=unix://...` path, else `/var/run/docker.sock`)
 - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` — break-glass: allow trusted private-network
   `ws://` targets for CLI/onboarding client paths (default is loopback-only)
 
@@ -67,6 +70,38 @@ After it finishes:
 - Open `http://127.0.0.1:18789/` in your browser.
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
+
+### Enable agent sandbox for Docker gateway (opt-in)
+
+`docker-setup.sh` can also bootstrap `agents.defaults.sandbox.*` for Docker
+deployments.
+
+Enable with:
+
+```bash
+export OPENCLAW_SANDBOX=1
+./docker-setup.sh
+```
+
+Custom socket path (for example rootless Docker):
+
+```bash
+export OPENCLAW_SANDBOX=1
+export OPENCLAW_DOCKER_SOCKET=/run/user/1000/docker.sock
+./docker-setup.sh
+```
+
+Notes:
+
+- The script mounts `docker.sock` only after sandbox prerequisites pass.
+- If sandbox setup cannot be completed, the script resets
+  `agents.defaults.sandbox.mode` to `off` to avoid stale/broken sandbox config
+  on reruns.
+- If `Dockerfile.sandbox` is missing, the script prints a warning and continues;
+  build `openclaw-sandbox:bookworm-slim` with `scripts/sandbox-setup.sh` if
+  needed.
+- For non-local `OPENCLAW_IMAGE` values, the image must already contain Docker
+  CLI support for sandbox execution.
 
 ### Automation/CI (non-interactive, no TTY noise)
 
