@@ -2,13 +2,11 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
-import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
-import { appendCdpPath } from "./cdp.helpers.js";
-import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import { appendCdpPath, fetchCdpChecked, openCdpWebSocket } from "./cdp.helpers.js";
+import { normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -84,16 +82,7 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    // Bypass proxy for loopback CDP connections (#31219)
-    const res = await withNoProxyForLocalhost(() =>
-      fetch(versionUrl, {
-        signal: ctrl.signal,
-        headers: getHeadersWithAuth(versionUrl),
-      }),
-    );
-    if (!res.ok) {
-      return null;
-    }
+    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
     const data = (await res.json()) as ChromeVersion;
     if (!data || typeof data !== "object") {
       return null;
@@ -120,13 +109,8 @@ export async function getChromeWebSocketUrl(
 
 async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
-    const headers = getHeadersWithAuth(wsUrl);
-    // Bypass proxy for loopback CDP connections (#31219)
-    const wsAgent = getDirectAgentForCdp(wsUrl);
-    const ws = new WebSocket(wsUrl, {
-      handshakeTimeout: timeoutMs,
-      ...(Object.keys(headers).length ? { headers } : {}),
-      ...(wsAgent ? { agent: wsAgent } : {}),
+    const ws = openCdpWebSocket(wsUrl, {
+      handshakeTimeoutMs: timeoutMs,
     });
     const timer = setTimeout(
       () => {
