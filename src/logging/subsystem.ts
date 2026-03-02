@@ -279,6 +279,13 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   };
   const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
+    const consoleEnabled =
+      shouldLogToConsole(level, { level: consoleSettings.level }) &&
+      shouldLogSubsystemToConsole(subsystem);
+    const fileEnabled = isFileLogLevelEnabled(level);
+    if (!consoleEnabled && !fileEnabled) {
+      return;
+    }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
     if (meta && Object.keys(meta).length > 0) {
@@ -290,11 +297,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
-    logToFile(getFileLogger(), level, message, fileMeta);
-    if (!shouldLogToConsole(level, { level: consoleSettings.level })) {
-      return;
+    if (fileEnabled) {
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
-    if (!shouldLogSubsystemToConsole(subsystem)) {
+    if (!consoleEnabled) {
       return;
     }
     const consoleMessage = consoleMessageOverride ?? message;
@@ -341,8 +347,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     error: (message, meta) => emit("error", message, meta),
     fatal: (message, meta) => emit("fatal", message, meta),
     raw: (message) => {
-      logToFile(getFileLogger(), "info", message, { raw: true });
-      if (shouldLogSubsystemToConsole(subsystem)) {
+      if (isFileEnabled("info")) {
+        logToFile(getFileLogger(), "info", message, { raw: true });
+      }
+      if (isConsoleEnabled("info")) {
         if (
           !isVerbose() &&
           subsystem === "agent/embedded" &&

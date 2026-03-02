@@ -11,17 +11,21 @@ type RegisteredRoute = {
 const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  DEFAULT_ACCOUNT_ID: "default",
-  setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
-  buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
-  createFixedWindowRateLimiter: vi.fn(() => ({
-    isRateLimited: vi.fn(() => false),
-    size: vi.fn(() => 0),
-    clear: vi.fn(),
-  })),
-}));
+vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk")>();
+  return {
+    ...actual,
+    DEFAULT_ACCOUNT_ID: "default",
+    setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
+    registerPluginHttpRoute: registerPluginHttpRouteMock,
+    buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
+    createFixedWindowRateLimiter: vi.fn(() => ({
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    })),
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
@@ -98,6 +102,8 @@ describe("Synology channel wiring integration", () => {
     expect(res._body).toContain("not authorized");
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
 
-    started.stop();
+    if (started && typeof started === "object" && "stop" in started) {
+      (started as { stop: () => void }).stop();
+    }
   });
 });

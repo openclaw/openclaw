@@ -33,6 +33,7 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -445,13 +446,41 @@ async function deliverOutboundPayloadsCore(
       text: normalizedText,
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads).flatMap((payload) => {
-    if (channel !== "whatsapp") {
-      return [payload];
+  const normalizeEmptyTextPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const rawText = typeof payload.text === "string" ? payload.text : "";
+    if (!rawText.trim()) {
+      if (!hasMedia) {
+        return null;
+      }
+      return {
+        ...payload,
+        text: "",
+      };
     }
-    const normalized = normalizeWhatsAppPayload(payload);
-    return normalized ? [normalized] : [];
-  });
+    return payload;
+  };
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
+    .map((payload) => {
+      // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
+      // Models occasionally produce <br>, <b>, etc. that render as literal text.
+      // See https://github.com/openclaw/openclaw/issues/31884
+      if (!isPlainTextSurface(channel) || !payload.text) {
+        return payload;
+      }
+      // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
+      if (channel === "telegram" && payload.channelData) {
+        return payload;
+      }
+      return { ...payload, text: sanitizeForPlainText(payload.text) };
+    })
+    .flatMap((payload) => {
+      const normalized =
+        channel === "whatsapp"
+          ? normalizeWhatsAppPayload(payload)
+          : normalizeEmptyTextPayload(payload);
+      return normalized ? [normalized] : [];
+    });
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   if (

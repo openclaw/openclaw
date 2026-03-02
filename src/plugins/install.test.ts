@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as skillScanner from "../security/skill-scanner.js";
@@ -20,9 +19,11 @@ vi.mock("../process/exec.js", () => ({
 let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
 let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
 let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
+let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let tempDirCounter = 0;
+const pluginFixturesDir = path.resolve(process.cwd(), "test", "fixtures", "plugins-install");
 
 function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
@@ -61,57 +62,8 @@ async function packToArchive({
   return dest;
 }
 
-function writePluginPackage(params: {
-  pkgDir: string;
-  name: string;
-  version: string;
-  extensions: string[];
-}) {
-  fs.mkdirSync(path.join(params.pkgDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pkgDir, "package.json"),
-    JSON.stringify(
-      {
-        name: params.name,
-        version: params.version,
-        openclaw: { extensions: params.extensions },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(params.pkgDir, "dist", "index.js"), "export {};", "utf-8");
-}
-
-async function createVoiceCallArchive(params: {
-  workDir: string;
-  outName: string;
-  version: string;
-}) {
-  const pkgDir = path.join(params.workDir, "package");
-  writePluginPackage({
-    pkgDir,
-    name: "@openclaw/voice-call",
-    version: params.version,
-    extensions: ["./dist/index.js"],
-  });
-  const archivePath = await packToArchive({
-    pkgDir,
-    outDir: params.workDir,
-    outName: params.outName,
-  });
-  return { pkgDir, archivePath };
-}
-
 async function createVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
-  const workDir = makeTempDir();
-  const { archivePath } = await createVoiceCallArchive({
-    workDir,
-    outName: `plugin-${version}.tgz`,
-    version,
-  });
-  return fs.readFileSync(archivePath);
+  return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
 }
 
 function writeArchiveBuffer(params: { outName: string; buffer: Buffer }): string {
@@ -122,17 +74,7 @@ function writeArchiveBuffer(params: { outName: string; buffer: Buffer }): string
 }
 
 async function createZipperArchiveBuffer(): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file(
-    "package/package.json",
-    JSON.stringify({
-      name: "@openclaw/zipper",
-      version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-  );
-  zip.file("package/dist/index.js", "export {};");
-  return zip.generateAsync({ type: "nodebuffer" });
+  return fs.readFileSync(path.join(pluginFixturesDir, "zipper-0.0.1.zip"));
 }
 
 const VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.1");
@@ -308,8 +250,12 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
-  ({ installPluginFromArchive, installPluginFromDir, installPluginFromNpmSpec } =
-    await import("./install.js"));
+  ({
+    installPluginFromArchive,
+    installPluginFromDir,
+    installPluginFromNpmSpec,
+    installPluginFromPath,
+  } = await import("./install.js"));
   ({ runCommandWithTimeout } = await import("../process/exec.js"));
 });
 
@@ -426,6 +372,40 @@ describe("installPluginFromArchive", () => {
       return;
     }
     expect(result.error).toContain("openclaw.extensions");
+  });
+
+  it("rejects legacy plugin package shape when openclaw.extensions is missing", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/legacy-entry-fallback",
+        version: "0.0.1",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "legacy-entry-fallback",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export {};\n", "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("package.json missing openclaw.extensions");
+      expect(result.error).toContain("update the plugin package");
+      return;
+    }
+    expect.unreachable("expected install to fail without openclaw.extensions");
   });
 
   it("warns when plugin contains dangerous code patterns", async () => {
@@ -595,6 +575,37 @@ describe("installPluginFromDir", () => {
     }
     expect(res.pluginId).toBe("memory-cognee");
     expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+  });
+});
+
+describe("installPluginFromPath", () => {
+  it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
+    const baseDir = makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    const outsideDir = path.join(baseDir, "outside");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+    const victimPath = path.join(outsideDir, "victim.js");
+    fs.writeFileSync(victimPath, "ORIGINAL", "utf-8");
+
+    const targetPath = path.join(extensionsDir, "payload.js");
+    fs.linkSync(victimPath, targetPath);
+
+    const result = await installPluginFromPath({
+      path: sourcePath,
+      extensionsDir,
+      mode: "update",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error.toLowerCase()).toMatch(/hardlink|path alias escape/);
+    expect(fs.readFileSync(victimPath, "utf-8")).toBe("ORIGINAL");
   });
 });
 
