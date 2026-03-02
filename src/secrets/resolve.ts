@@ -308,6 +308,14 @@ type ExecRunResult = {
   termination: "exit" | "timeout" | "no-output-timeout";
 };
 
+function isIgnorableStdinWriteError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  const code = String(error.code);
+  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
+}
+
 async function runExecResolver(params: {
   command: string;
   args: string[];
@@ -405,7 +413,20 @@ async function runExecResolver(params: {
       });
     });
 
-    child.stdin?.end(params.input);
+    const handleStdinError = (error: unknown) => {
+      if (isIgnorableStdinWriteError(error) || settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    child.stdin?.on("error", handleStdinError);
+    try {
+      child.stdin?.end(params.input);
+    } catch (error) {
+      handleStdinError(error);
+    }
   });
 }
 
