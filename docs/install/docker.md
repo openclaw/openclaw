@@ -107,6 +107,22 @@ Common tags:
 - `<version>` — release tag builds (for example `2026.2.26`)
 - `latest` — latest stable release tag
 
+### Base image metadata
+
+The main Docker image currently uses:
+
+- `node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+
+The image now publishes OCI base-image annotations:
+
+- `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
+- `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+
+Reference: [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+
+Release context: this repository's tagged history already uses Bookworm in
+`v2026.2.22` and earlier 2026 tags (for example `v2026.2.21`, `v2026.2.9`).
+
 By default the setup script builds the image from source. To pull a pre-built
 image instead, set `OPENCLAW_IMAGE` before running the script:
 
