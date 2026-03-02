@@ -1,0 +1,88 @@
+{
+  "id": "memory-hybrid",
+  "kind": "memory",
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-... or AIzaSy...",
+      "help": "API key for embeddings. Supports OpenAI and Google Gemini (use ${GEMINI_API_KEY} for env var)"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "gemini-embedding-001",
+      "help": "Embedding model: gemini-embedding-001 (Google, free) or text-embedding-3-small (OpenAI)"
+    },
+    "chatModel": {
+      "label": "Chat Model",
+      "placeholder": "auto (gemma-3-27b-it / gpt-4o-mini)",
+      "help": "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
+      "advanced": true
+    },
+    "dbPath": {
+      "label": "Database Path",
+      "placeholder": "~/.openclaw/memory/lancedb",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    },
+    "smartCapture": {
+      "label": "Smart Capture (LLM)",
+      "help": "Use LLM to intelligently extract facts (1 API call per message, more accurate than regex)",
+      "advanced": true
+    },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum message length eligible for auto-capture",
+      "advanced": true,
+      "placeholder": "500"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string",
+            "enum": ["gemini-embedding-001", "text-embedding-3-small", "text-embedding-3-large"]
+          }
+        },
+        "required": ["apiKey"]
+      },
+      "chatModel": {
+        "type": "string"
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "smartCapture": {
+        "type": "boolean"
+      },
+      "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      }
+    },
+    "required": ["embedding"]
+  }
+}

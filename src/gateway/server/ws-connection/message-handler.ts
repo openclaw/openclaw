@@ -429,7 +429,7 @@ export function attachGatewayWsMessageHandler(params: {
           });
           close(1008, truncateCloseReason(authMessage));
         };
-        if (!device) {
+        if (!device && !disableControlUiDeviceAuth) {
           if (scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
