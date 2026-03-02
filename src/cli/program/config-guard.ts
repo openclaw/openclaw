@@ -52,12 +52,19 @@ export async function ensureConfigReady(params: {
     if (!params.suppressDoctorStdout) {
       await runDoctorConfigFlow();
     } else {
-      const originalStdoutWrite = process.stdout.write;
-      process.stdout.write = ((() => true) as unknown) as typeof process.stdout.write;
+      const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+      const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
+      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
+      process.env.OPENCLAW_SUPPRESS_NOTES = "1";
       try {
         await runDoctorConfigFlow();
       } finally {
         process.stdout.write = originalStdoutWrite;
+        if (originalSuppressNotes === undefined) {
+          delete process.env.OPENCLAW_SUPPRESS_NOTES;
+        } else {
+          process.env.OPENCLAW_SUPPRESS_NOTES = originalSuppressNotes;
+        }
       }
     }
   }
