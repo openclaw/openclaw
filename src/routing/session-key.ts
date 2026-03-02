@@ -139,6 +139,14 @@ export function buildAgentPeerSessionKey(params: {
       peerId = linkedPeerId;
     }
     peerId = peerId.toLowerCase();
+
+    // identityLinks intentionally collapses direct-message sessions to a canonical
+    // peer identity across channels/accounts. This keeps dmScope isolation for
+    // unrelated users while allowing explicitly linked identities to share memory.
+    if (linkedPeerId && peerId) {
+      return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
+    }
+
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       const accountId = normalizeAccountId(params.accountId);

@@ -52,7 +52,13 @@ describe("resolveAgentRoute", () => {
         dmScope: "per-channel-peer" as const,
         channel: "discord",
         peerId: "222222222222222222",
-        expected: "agent:main:discord:direct:alice",
+        expected: "agent:main:direct:alice",
+      },
+      {
+        dmScope: "per-account-channel-peer" as const,
+        channel: "webchat",
+        peerId: "+15551234567",
+        expected: "agent:main:direct:alice",
       },
     ];
     for (const testCase of cases) {
@@ -60,7 +66,7 @@ describe("resolveAgentRoute", () => {
         session: {
           dmScope: testCase.dmScope,
           identityLinks: {
-            alice: ["telegram:111111111", "discord:222222222222222222"],
+            alice: ["telegram:111111111", "discord:222222222222222222", "webchat:+15551234567"],
           },
         },
       };
