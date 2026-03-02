@@ -10,6 +10,20 @@ import type { ChannelChoice } from "./onboard-types.js";
 import { getChannelOnboardingAdapter } from "./onboarding/registry.js";
 import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
+type ChannelOnboardingAdapterPatch = Partial<
+  Pick<
+    ChannelOnboardingAdapter,
+    "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
+  >
+>;
+
+type PatchedOnboardingAdapterFields = {
+  configure?: ChannelOnboardingAdapter["configure"];
+  configureInteractive?: ChannelOnboardingAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelOnboardingAdapter["configureWhenConfigured"];
+  getStatus?: ChannelOnboardingAdapter["getStatus"];
+};
+
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [
     { pluginId: "discord", plugin: discordPlugin, source: "test" },
@@ -24,23 +38,44 @@ export function setDefaultChannelPluginRegistryForTests(): void {
 
 export function patchChannelOnboardingAdapter(
   channel: ChannelChoice,
-  patch: Partial<ChannelOnboardingAdapter>,
+  patch: ChannelOnboardingAdapterPatch,
 ): () => void {
   const adapter = getChannelOnboardingAdapter(channel);
   if (!adapter) {
     throw new Error(`missing onboarding adapter for ${channel}`);
   }
-  const keys = Object.keys(patch);
-  const adapterRecord = adapter as unknown as Record<string, unknown>;
-  const patchRecord = patch as Record<string, unknown>;
-  const previous = new Map<string, unknown>();
-  for (const key of keys) {
-    previous.set(key, adapterRecord[key]);
-    adapterRecord[key] = patchRecord[key];
+
+  const previous: PatchedOnboardingAdapterFields = {};
+
+  if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+    previous.getStatus = adapter.getStatus;
+    adapter.getStatus = patch.getStatus ?? adapter.getStatus;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+    previous.configure = adapter.configure;
+    adapter.configure = patch.configure ?? adapter.configure;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+    previous.configureInteractive = adapter.configureInteractive;
+    adapter.configureInteractive = patch.configureInteractive;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    previous.configureWhenConfigured = adapter.configureWhenConfigured;
+    adapter.configureWhenConfigured = patch.configureWhenConfigured;
+  }
+
   return () => {
-    for (const key of keys) {
-      adapterRecord[key] = previous.get(key);
+    if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+      adapter.getStatus = previous.getStatus!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+      adapter.configure = previous.configure!;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+      adapter.configureInteractive = previous.configureInteractive;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+      adapter.configureWhenConfigured = previous.configureWhenConfigured;
     }
   };
 }
