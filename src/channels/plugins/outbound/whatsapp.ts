@@ -12,6 +12,40 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (!text && urls.length === 0) {
+      return { channel: "whatsapp", messageId: "" };
+    }
+    if (urls.length > 0) {
+      let lastResult = await whatsappOutbound.sendMedia!({
+        ...ctx,
+        text,
+        mediaUrl: urls[0],
+      });
+      for (let i = 1; i < urls.length; i++) {
+        lastResult = await whatsappOutbound.sendMedia!({
+          ...ctx,
+          text: "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult;
+    }
+    const limit = whatsappOutbound.textChunkLimit;
+    const chunks =
+      limit && whatsappOutbound.chunker ? whatsappOutbound.chunker(text, limit) : [text];
+    let lastResult: Awaited<ReturnType<NonNullable<typeof whatsappOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await whatsappOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
+  },
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;

@@ -50,7 +50,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Multi-agent routing](/concepts/multi-agent)
 - [Compaction](/concepts/compaction)
 - [Sessions](/concepts/session)
-- [Sessions (alias)](/concepts/sessions)
 - [Session pruning](/concepts/session-pruning)
 - [Session tools](/concepts/session-tool)
 - [Queue](/concepts/queue)

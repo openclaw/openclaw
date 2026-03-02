@@ -4,22 +4,13 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
+import { readDiscordParentIdParam } from "../../../../agents/tools/discord-actions-shared.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 import type { ChannelMessageActionContext } from "../../types.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 
 const providerId = "discord";
-
-function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) {
-    return null;
-  }
-  if (params.parentId === null) {
-    return null;
-  }
-  return readStringParam(params, "parentId");
-}
 
 export async function handleDiscordMessageAction(
   ctx: Pick<
@@ -230,6 +221,7 @@ export async function handleDiscordMessageAction(
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
+    const appliedTags = readStringArrayParam(params, "appliedTags");
     return await handleDiscordAction(
       {
         action: "threadCreate",
@@ -239,6 +231,7 @@ export async function handleDiscordMessageAction(
         messageId,
         content,
         autoArchiveMinutes,
+        appliedTags: appliedTags ?? undefined,
       },
       cfg,
       actionOptions,
@@ -283,7 +276,7 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
-    readParentIdParam,
+    readParentIdParam: readDiscordParentIdParam,
   });
   if (adminResult !== undefined) {
     return adminResult;

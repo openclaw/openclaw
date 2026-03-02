@@ -84,12 +84,14 @@ describe("createFeishuWSClient proxy handling", () => {
 
     createFeishuWSClient(baseAccount);
 
-    const expectedHttpsProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    // On Windows env keys are case-insensitive, so setting HTTPS_PROXY may
+    // overwrite https_proxy. We assert https proxies still win over http.
+    const expectedProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    expect(expectedProxy).toBeTruthy();
     expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(expectedHttpsProxy).toBeTruthy();
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedHttpsProxy);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedProxy);
     const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxyUrl: expectedHttpsProxy });
+    expect(options.agent).toEqual({ proxyUrl: expectedProxy });
   });
 
   it("passes HTTP_PROXY to ws client when https vars are unset", () => {

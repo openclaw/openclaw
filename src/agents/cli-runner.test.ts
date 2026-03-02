@@ -153,6 +153,50 @@ describe("runCliAgent with process supervisor", () => {
     ).rejects.toThrow("exceeded timeout");
   });
 
+  it("rethrows the retry failure when session-expired recovery retry also fails", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "session expired",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "rate limit exceeded",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expect(
+      runCliAgent({
+        sessionId: "s1",
+        sessionKey: "agent:main:subagent:retry",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-retry-failure",
+        cliSessionId: "thread-123",
+      }),
+    ).rejects.toThrow("rate limit exceeded");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
     const fallbackWorkspace = path.join(tempDir, "workspace-main");

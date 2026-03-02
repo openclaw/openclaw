@@ -8,6 +8,7 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
@@ -461,6 +462,43 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("respects fsPolicy.workspaceOnly for non-sandbox image paths", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+      try {
+        const cfg = createMinimaxImageConfig();
+
+        const tool = requireImageTool(
+          createImageTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true },
+          }),
+        );
+
+        // File inside workspace is allowed.
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+
+        // File outside workspace is rejected even without sandbox.
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-outside-"));
+        const outsideImage = path.join(outsideDir, "secret.png");
+        await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+        try {
+          await expect(
+            tool.execute("t2", { prompt: "Describe.", image: outsideImage }),
+          ).rejects.toThrow(/not under an allowed directory/i);
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
     await withTempWorkspacePng(async ({ imagePath }) => {
       const fetch = stubMinimaxOkFetch();
@@ -729,23 +767,6 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
-  function zeroUsage() {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    };
-  }
-
   function createAssistantMessage(
     overrides: Partial<{
       api: string;
@@ -763,7 +784,7 @@ describe("image tool response validation", () => {
       model: "gpt-5-mini",
       stopReason: "stop",
       timestamp: Date.now(),
-      usage: zeroUsage(),
+      usage: makeZeroUsageSnapshot(),
       content: [] as unknown[],
       ...overrides,
     };

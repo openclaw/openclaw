@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -290,23 +291,8 @@ describe("gateway server chat", () => {
       });
       expect(defaultRes.ok).toBe(true);
       const defaultMsgs = defaultRes.payload?.messages ?? [];
-      const firstContentText = (msg: unknown): string | undefined => {
-        if (!msg || typeof msg !== "object") {
-          return undefined;
-        }
-        const content = (msg as { content?: unknown }).content;
-        if (!Array.isArray(content) || content.length === 0) {
-          return undefined;
-        }
-        const first = content[0];
-        if (!first || typeof first !== "object") {
-          return undefined;
-        }
-        const text = (first as { text?: unknown }).text;
-        return typeof text === "string" ? text : undefined;
-      };
       expect(defaultMsgs.length).toBe(200);
-      expect(firstContentText(defaultMsgs[0])).toBe("m100");
+      expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m100");
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;

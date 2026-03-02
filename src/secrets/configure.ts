@@ -210,6 +210,53 @@ function assertNoCancel<T>(value: T | symbol, message: string): T {
   return value;
 }
 
+function validateEnvNameCsv(value: string): string | undefined {
+  const entries = parseCsv(value);
+  for (const entry of entries) {
+    if (!ENV_NAME_PATTERN.test(entry)) {
+      return `Invalid env name: ${entry}`;
+    }
+  }
+  return undefined;
+}
+
+async function promptEnvNameCsv(params: {
+  message: string;
+  initialValue: string;
+}): Promise<string[]> {
+  const raw = assertNoCancel(
+    await text({
+      message: params.message,
+      initialValue: params.initialValue,
+      validate: (value) => validateEnvNameCsv(String(value ?? "")),
+    }),
+    "Secrets configure cancelled.",
+  );
+  return parseCsv(String(raw ?? ""));
+}
+
+async function promptOptionalPositiveInt(params: {
+  message: string;
+  initialValue?: number;
+  max: number;
+}): Promise<number | undefined> {
+  const raw = assertNoCancel(
+    await text({
+      message: params.message,
+      initialValue: params.initialValue ? String(params.initialValue) : "",
+      validate: (value) => {
+        const parsed = parseOptionalPositiveInt(String(value ?? ""), params.max);
+        if (String(value ?? "").trim() && parsed === undefined) {
+          return `Must be an integer between 1 and ${params.max}`;
+        }
+        return undefined;
+      },
+    }),
+    "Secrets configure cancelled.",
+  );
+  return parseOptionalPositiveInt(String(raw ?? ""), params.max);
+}
+
 async function promptProviderAlias(params: { existingAliases: Set<string> }): Promise<string> {
   const alias = assertNoCancel(
     await text({
@@ -253,23 +300,10 @@ async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRe
 async function promptEnvProvider(
   base?: Extract<SecretProviderConfig, { source: "env" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "env" }>> {
-  const allowlistRaw = assertNoCancel(
-    await text({
-      message: "Env allowlist (comma-separated, blank for unrestricted)",
-      initialValue: base?.allowlist?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-  const allowlist = parseCsv(String(allowlistRaw ?? ""));
+  const allowlist = await promptEnvNameCsv({
+    message: "Env allowlist (comma-separated, blank for unrestricted)",
+    initialValue: base?.allowlist?.join(",") ?? "",
+  });
   return {
     source: "env",
     ...(allowlist.length > 0 ? { allowlist } : {}),
@@ -309,43 +343,16 @@ async function promptFileProvider(
     "Secrets configure cancelled.",
   );
 
-  const timeoutMsRaw = assertNoCancel(
-    await text({
-      message: "Timeout ms (blank for default)",
-      initialValue: base?.timeoutMs ? String(base.timeoutMs) : "",
-      validate: (value) => {
-        const trimmed = String(value ?? "").trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        if (parseOptionalPositiveInt(trimmed, 120000) === undefined) {
-          return "Must be an integer between 1 and 120000";
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-  const maxBytesRaw = assertNoCancel(
-    await text({
-      message: "Max bytes (blank for default)",
-      initialValue: base?.maxBytes ? String(base.maxBytes) : "",
-      validate: (value) => {
-        const trimmed = String(value ?? "").trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        if (parseOptionalPositiveInt(trimmed, 20 * 1024 * 1024) === undefined) {
-          return "Must be an integer between 1 and 20971520";
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
-
-  const timeoutMs = parseOptionalPositiveInt(String(timeoutMsRaw ?? ""), 120000);
-  const maxBytes = parseOptionalPositiveInt(String(maxBytesRaw ?? ""), 20 * 1024 * 1024);
+  const timeoutMs = await promptOptionalPositiveInt({
+    message: "Timeout ms (blank for default)",
+    initialValue: base?.timeoutMs,
+    max: 120000,
+  });
+  const maxBytes = await promptOptionalPositiveInt({
+    message: "Max bytes (blank for default)",
+    initialValue: base?.maxBytes,
+    max: 20 * 1024 * 1024,
+  });
 
   return {
     source: "file",
@@ -415,59 +422,23 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const timeoutMsRaw = assertNoCancel(
-    await text({
-      message: "Timeout ms (blank for default)",
-      initialValue: base?.timeoutMs ? String(base.timeoutMs) : "",
-      validate: (value) => {
-        const trimmed = String(value ?? "").trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        if (parseOptionalPositiveInt(trimmed, 120000) === undefined) {
-          return "Must be an integer between 1 and 120000";
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const timeoutMs = await promptOptionalPositiveInt({
+    message: "Timeout ms (blank for default)",
+    initialValue: base?.timeoutMs,
+    max: 120000,
+  });
 
-  const noOutputTimeoutMsRaw = assertNoCancel(
-    await text({
-      message: "No-output timeout ms (blank for default)",
-      initialValue: base?.noOutputTimeoutMs ? String(base.noOutputTimeoutMs) : "",
-      validate: (value) => {
-        const trimmed = String(value ?? "").trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        if (parseOptionalPositiveInt(trimmed, 120000) === undefined) {
-          return "Must be an integer between 1 and 120000";
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const noOutputTimeoutMs = await promptOptionalPositiveInt({
+    message: "No-output timeout ms (blank for default)",
+    initialValue: base?.noOutputTimeoutMs,
+    max: 120000,
+  });
 
-  const maxOutputBytesRaw = assertNoCancel(
-    await text({
-      message: "Max output bytes (blank for default)",
-      initialValue: base?.maxOutputBytes ? String(base.maxOutputBytes) : "",
-      validate: (value) => {
-        const trimmed = String(value ?? "").trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        if (parseOptionalPositiveInt(trimmed, 20 * 1024 * 1024) === undefined) {
-          return "Must be an integer between 1 and 20971520";
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const maxOutputBytes = await promptOptionalPositiveInt({
+    message: "Max output bytes (blank for default)",
+    initialValue: base?.maxOutputBytes,
+    max: 20 * 1024 * 1024,
+  });
 
   const jsonOnly = assertNoCancel(
     await confirm({
@@ -477,22 +448,10 @@ async function promptExecProvider(
     "Secrets configure cancelled.",
   );
 
-  const passEnvRaw = assertNoCancel(
-    await text({
-      message: "Pass-through env vars (comma-separated, blank for none)",
-      initialValue: base?.passEnv?.join(",") ?? "",
-      validate: (value) => {
-        const entries = parseCsv(String(value ?? ""));
-        for (const entry of entries) {
-          if (!ENV_NAME_PATTERN.test(entry)) {
-            return `Invalid env name: ${entry}`;
-          }
-        }
-        return undefined;
-      },
-    }),
-    "Secrets configure cancelled.",
-  );
+  const passEnv = await promptEnvNameCsv({
+    message: "Pass-through env vars (comma-separated, blank for none)",
+    initialValue: base?.passEnv?.join(",") ?? "",
+  });
 
   const trustedDirsRaw = assertNoCancel(
     await text({
@@ -527,13 +486,6 @@ async function promptExecProvider(
   );
 
   const args = await parseArgsInput(String(argsRaw ?? ""));
-  const timeoutMs = parseOptionalPositiveInt(String(timeoutMsRaw ?? ""), 120000);
-  const noOutputTimeoutMs = parseOptionalPositiveInt(String(noOutputTimeoutMsRaw ?? ""), 120000);
-  const maxOutputBytes = parseOptionalPositiveInt(
-    String(maxOutputBytesRaw ?? ""),
-    20 * 1024 * 1024,
-  );
-  const passEnv = parseCsv(String(passEnvRaw ?? ""));
   const trustedDirs = parseCsv(String(trustedDirsRaw ?? ""));
 
   return {
