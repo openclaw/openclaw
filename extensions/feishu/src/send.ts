@@ -9,6 +9,16 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
+const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+
+function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
+  if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
+    return true;
+  }
+  const msg = response.msg?.toLowerCase() ?? "";
+  return msg.includes("withdrawn") || msg.includes("not found");
+}
+
 export type FeishuMessageInfo = {
   messageId: string;
   chatId: string;
@@ -238,6 +248,18 @@ export async function sendMessageFeishu(
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
+    if (shouldFallbackFromReplyTarget(response)) {
+      const fallback = await client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: msgType,
+        },
+      });
+      assertFeishuMessageApiSuccess(fallback, "Feishu send failed");
+      return toFeishuSendResult(fallback, receiveId);
+    }
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
     return toFeishuSendResult(response, receiveId);
   }
@@ -278,6 +300,18 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
         ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
+    if (shouldFallbackFromReplyTarget(response)) {
+      const fallback = await client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          content,
+          msg_type: "interactive",
+        },
+      });
+      assertFeishuMessageApiSuccess(fallback, "Feishu card send failed");
+      return toFeishuSendResult(fallback, receiveId);
+    }
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
     return toFeishuSendResult(response, receiveId);
   }
