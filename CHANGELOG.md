@@ -27,6 +27,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sandbox/workspace mount permissions: make primary `/workspace` bind mounts read-only whenever `workspaceAccess` is not `rw` (including `none`) across both core sandbox container and sandbox browser create flows. (#32227) Thanks @guanyu-zhang.
+- Signal/message actions: allow `react` to fall back to `toolContext.currentMessageId` when `messageId` is omitted, matching Telegram behavior and unblocking agent-initiated reactions on inbound turns. (#32217) Thanks @dunamismax.
 - Gateway/OpenAI chat completions: honor `x-openclaw-message-channel` when building `agentCommand` input for `/v1/chat/completions`, preserving caller channel identity instead of forcing `webchat`. (#30462) Thanks @bmendonca3.
 - Secrets/exec resolver timeout defaults: use provider `timeoutMs` as the default inactivity (`noOutputTimeoutMs`) watchdog for exec secret providers, preventing premature no-output kills for resolvers that start producing output after 2s. (#32235) Thanks @bmendonca3.
 - Feishu/File upload filenames: percent-encode non-ASCII/special-character `file_name` values in Feishu multipart uploads so Chinese/symbol-heavy filenames are sent as proper attachments instead of plain text links. (#31179) Thanks @Kay-051.
