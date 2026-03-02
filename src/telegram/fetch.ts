@@ -37,6 +37,14 @@ function isProxyLikeDispatcher(dispatcher: unknown): boolean {
   return typeof ctorName === "string" && ctorName.includes("ProxyAgent");
 }
 
+const FALLBACK_RETRY_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
 // See: https://github.com/nodejs/node/issues/54359
@@ -106,20 +114,92 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   }
 }
 
+function collectErrorCodes(err: unknown): Set<string> {
+  const codes = new Set<string>();
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    if (typeof current === "object") {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === "string" && code.trim()) {
+        codes.add(code.trim().toUpperCase());
+      }
+      const cause = (current as { cause?: unknown }).cause;
+      if (cause && !seen.has(cause)) {
+        queue.push(cause);
+      }
+      const errors = (current as { errors?: unknown }).errors;
+      if (Array.isArray(errors)) {
+        for (const nested of errors) {
+          if (nested && !seen.has(nested)) {
+            queue.push(nested);
+          }
+        }
+      }
+    }
+  }
+
+  return codes;
+}
+
+function shouldRetryWithIpv4Fallback(err: unknown): boolean {
+  const message =
+    err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "";
+  if (!message.includes("fetch failed")) {
+    return false;
+  }
+  const codes = collectErrorCodes(err);
+  if (codes.size === 0) {
+    return false;
+  }
+  for (const code of codes) {
+    if (FALLBACK_RETRY_ERROR_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function applyTelegramIpv4Fallback(): void {
+  applyTelegramNetworkWorkarounds({
+    autoSelectFamily: false,
+    dnsResultOrder: "ipv4first",
+  });
+  log.warn("fetch fallback: forcing autoSelectFamily=false + dnsResultOrder=ipv4first");
+}
+
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
 export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
   applyTelegramNetworkWorkarounds(options?.network);
-  if (proxyFetch) {
-    return resolveFetch(proxyFetch);
-  }
-  const fetchImpl = resolveFetch();
-  if (!fetchImpl) {
+  const sourceFetch = proxyFetch ? resolveFetch(proxyFetch) : resolveFetch();
+  if (!sourceFetch) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  return fetchImpl;
+  // When Telegram media fetch hits dual-stack edge cases (ENETUNREACH/ETIMEDOUT),
+  // switch to IPv4-safe network mode and retry once.
+  if (proxyFetch) {
+    return sourceFetch;
+  }
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    try {
+      return await sourceFetch(input, init);
+    } catch (err) {
+      if (shouldRetryWithIpv4Fallback(err)) {
+        applyTelegramIpv4Fallback();
+        return sourceFetch(input, init);
+      }
+      throw err;
+    }
+  }) as typeof fetch;
 }
 
 export function resetTelegramFetchStateForTests(): void {
