@@ -337,7 +337,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.hasBodyContent) {
       return false;
     }
-    if (params.reaction.isRemove) {
+    if (params.reaction.isRemove === true || params.reaction.remove === true) {
       return true; // Ignore reaction removals
     }
     const emojiLabel = params.reaction.emoji?.trim() || "emoji";

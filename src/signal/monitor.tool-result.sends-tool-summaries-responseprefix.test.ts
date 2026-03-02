@@ -378,6 +378,23 @@ describe("monitorSignalProvider tool results", () => {
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
+  it("ignores remove-only reactions that use the remove field", async () => {
+    setReactionNotificationConfig("all");
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthorNumber: "+15550002222",
+        targetSentTimestamp: "2",
+        remove: true,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(false);
+    expectNoReplyDeliveryOrRouteUpdate();
+  });
+
   it.each([
     {
       name: "blocks reaction notifications from unauthorized senders when dmPolicy is allowlist",
