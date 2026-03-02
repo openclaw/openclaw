@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseByteSize } from "../cli/parse-bytes.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
@@ -92,6 +93,19 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
+            forceFlushTranscriptBytes: z
+              .union([
+                z.number().int().nonnegative(),
+                z.string().refine((value) => {
+                  try {
+                    parseByteSize(value.trim(), { defaultUnit: "b" });
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                }, "Expected byte size string like 2mb"),
+              ])
+              .optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
