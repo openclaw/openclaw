@@ -1,16 +1,9 @@
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-
-export const SYSTEM_MARK = "⚙️";
+import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
-  if (!text) {
-    return text;
-  }
-  if (text.startsWith(SYSTEM_MARK)) {
-    return text;
-  }
-  return `${SYSTEM_MARK} ${text}`;
+  return prefixSystemMessage(text);
 };
 
 export const formatOptionsLine = (options: string) => `Options: ${options}.`;
@@ -39,6 +32,29 @@ export const formatReasoningEvent = (level: ReasoningLevel) => {
   }
   return "Reasoning OFF — hide <think>.";
 };
+
+export function enqueueModeSwitchEvents(params: {
+  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
+  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
+  sessionKey: string;
+  elevatedChanged?: boolean;
+  reasoningChanged?: boolean;
+}): void {
+  if (params.elevatedChanged) {
+    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:elevated",
+    });
+  }
+  if (params.reasoningChanged) {
+    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:reasoning",
+    });
+  }
+}
 
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;

@@ -1,3 +1,37 @@
 #content > h1:first-of-type {
   display: none !important;
 }
+
+.nav-tabs {
+  position: relative;
+}
+
+.nav-tabs-item > div {
+  opacity: 0;
+}
+
+.nav-tabs-underline {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 1.5px;
+  width: var(--nav-tab-underline-width, 0);
+  transform: translateX(var(--nav-tab-underline-x, 0));
+  background-color: rgb(var(--primary));
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    transform 260ms ease-in-out,
+    width 260ms ease-in-out,
+    opacity 160ms ease-in-out;
+  will-change: transform, width;
+}
+
+html.dark .nav-tabs-underline {
+  background-color: rgb(var(--primary-light));
+}
+
+.nav-tabs-underline-ready .nav-tabs-underline {
+  opacity: 1;
+}

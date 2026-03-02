@@ -1,6 +1,6 @@
 import { Cron } from "croner";
-import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import type { CronSchedule } from "./types.js";
 
 function resolveCronTimezone(tz?: string) {
   const trimmed = typeof tz === "string" ? tz.trim() : "";
@@ -41,7 +41,12 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  const expr = schedule.expr.trim();
+  const cronSchedule = schedule as { expr?: unknown; cron?: unknown };
+  const exprSource = typeof cronSchedule.expr === "string" ? cronSchedule.expr : cronSchedule.cron;
+  if (typeof exprSource !== "string") {
+    throw new Error("invalid cron schedule: expr is required");
+  }
+  const expr = exprSource.trim();
   if (!expr) {
     return undefined;
   }
@@ -49,17 +54,39 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  // Cron operates at second granularity, so floor nowMs to the start of the
-  // current second.  This prevents the lookback from landing inside a matching
-  // second — if nowMs is e.g. 12:00:00.500 and the pattern fires at second 0,
-  // a 1ms lookback (12:00:00.499) is still *within* that second, causing
-  // croner to skip ahead to the next occurrence (e.g. the following day).
-  // Flooring first ensures the lookback always falls in the *previous* second.
-  const nowSecondMs = Math.floor(nowMs / 1000) * 1000;
-  const next = cron.nextRun(new Date(nowSecondMs - 1));
+  let next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
-  const nextMs = next.getTime();
-  return Number.isFinite(nextMs) && nextMs >= nowSecondMs ? nextMs : undefined;
+  let nextMs = next.getTime();
+  if (!Number.isFinite(nextMs)) {
+    return undefined;
+  }
+
+  // Workaround for croner year-rollback bug: some timezone/date combinations
+  // (e.g. Asia/Shanghai) cause nextRun to return a timestamp in a past year.
+  // Retry from a later reference point when the returned time is not in the
+  // future.
+  if (nextMs <= nowMs) {
+    const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
+    const retry = cron.nextRun(new Date(nextSecondMs));
+    if (retry) {
+      const retryMs = retry.getTime();
+      if (Number.isFinite(retryMs) && retryMs > nowMs) {
+        return retryMs;
+      }
+    }
+    // Still in the past — try from start of tomorrow (UTC) as a broader reset.
+    const tomorrowMs = new Date(nowMs).setUTCHours(24, 0, 0, 0);
+    const retry2 = cron.nextRun(new Date(tomorrowMs));
+    if (retry2) {
+      const retry2Ms = retry2.getTime();
+      if (Number.isFinite(retry2Ms) && retry2Ms > nowMs) {
+        return retry2Ms;
+      }
+    }
+    return undefined;
+  }
+
+  return nextMs;
 }

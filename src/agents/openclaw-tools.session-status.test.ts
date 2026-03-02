@@ -79,24 +79,33 @@ vi.mock("../infra/provider-usage.js", () => ({
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
+function resetSessionStore(store: Record<string, unknown>) {
+  loadSessionStoreMock.mockClear();
+  updateSessionStoreMock.mockClear();
+  loadSessionStoreMock.mockReturnValue(store);
+}
+
+function getSessionStatusTool(agentSessionKey = "main") {
+  const tool = createOpenClawTools({ agentSessionKey }).find(
+    (candidate) => candidate.name === "session_status",
+  );
+  expect(tool).toBeDefined();
+  if (!tool) {
+    throw new Error("missing session_status tool");
+  }
+  return tool;
+}
+
 describe("session_status tool", () => {
   it("returns a status card for the current session", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       main: {
         sessionId: "s1",
         updatedAt: 10,
       },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool();
 
     const result = await tool.execute("call1", {});
     const details = result.details as { ok?: boolean; statusText?: string };
@@ -107,19 +116,11 @@ describe("session_status tool", () => {
   });
 
   it("errors for unknown session keys", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool();
 
     await expect(tool.execute("call2", { sessionKey: "nope" })).rejects.toThrow(
       "Unknown sessionId",
@@ -128,23 +129,15 @@ describe("session_status tool", () => {
   });
 
   it("resolves sessionId inputs", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
     const sessionId = "sess-main";
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       "agent:main:main": {
         sessionId,
         updatedAt: 10,
       },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool();
 
     const result = await tool.execute("call3", { sessionKey: sessionId });
     const details = result.details as { ok?: boolean; sessionKey?: string };
@@ -153,22 +146,14 @@ describe("session_status tool", () => {
   });
 
   it("uses non-standard session keys without sessionId resolution", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       "temp:slug-generator": {
         sessionId: "sess-temp",
         updatedAt: 10,
       },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool();
 
     const result = await tool.execute("call4", { sessionKey: "temp:slug-generator" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
@@ -177,22 +162,14 @@ describe("session_status tool", () => {
   });
 
   it("blocks cross-agent session_status without agent-to-agent access", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       "agent:other:main": {
         sessionId: "s2",
         updatedAt: 10,
       },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "agent:main:main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool("agent:main:main");
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
       "Agent-to-agent status is disabled",
@@ -200,8 +177,8 @@ describe("session_status tool", () => {
   });
 
   it("scopes bare session keys to the requester agent", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockClear();
+    updateSessionStoreMock.mockClear();
     const stores = new Map<string, Record<string, unknown>>([
       [
         "/tmp/main/sessions.json",
@@ -228,13 +205,7 @@ describe("session_status tool", () => {
       },
     );
 
-    const tool = createOpenClawTools({ agentSessionKey: "agent:support:main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool("agent:support:main");
 
     const result = await tool.execute("call6", { sessionKey: "main" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
@@ -243,9 +214,7 @@ describe("session_status tool", () => {
   });
 
   it("resets per-session model override via model=default", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
+    resetSessionStore({
       main: {
         sessionId: "s1",
         updatedAt: 10,
@@ -255,13 +224,7 @@ describe("session_status tool", () => {
       },
     });
 
-    const tool = createOpenClawTools({ agentSessionKey: "main" }).find(
-      (candidate) => candidate.name === "session_status",
-    );
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing session_status tool");
-    }
+    const tool = getSessionStatusTool();
 
     await tool.execute("call3", { model: "default" });
     expect(updateSessionStoreMock).toHaveBeenCalled();

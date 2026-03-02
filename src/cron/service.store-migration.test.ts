@@ -1,40 +1,33 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+  prefix: "openclaw-cron-",
+  baseTimeIso: "2026-02-06T17:00:00.000Z",
+});
 
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
+function createStartedCron(storePath: string) {
+  const cron = new CronService({
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  });
   return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
+    cron,
+    start: async () => {
+      await cron.start();
+      return cron;
     },
   };
 }
 
 describe("CronService store migrations", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-06T17:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("migrates legacy top-level agentTurn fields and initializes missing state", async () => {
     const store = await makeStorePath();
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -71,16 +64,7 @@ describe("CronService store migrations", () => {
       "utf-8",
     );
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok", summary: "ok" })),
-    });
-
-    await cron.start();
+    const cron = await createStartedCron(store.storePath).start();
 
     const status = await cron.status();
     expect(status.enabled).toBe(true);
@@ -117,6 +101,104 @@ describe("CronService store migrations", () => {
     expect(persistedJob?.channel).toBeUndefined();
     expect(persistedJob?.to).toBeUndefined();
     expect(persistedJob?.bestEffortDeliver).toBeUndefined();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("preserves legacy timeoutSeconds=0 during top-level agentTurn field migration", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "legacy-agentturn-no-timeout",
+              name: "legacy no-timeout",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-05T12:00:00.000Z"),
+              schedule: { kind: "cron", expr: "0 23 * * *", tz: "UTC" },
+              sessionTarget: "isolated",
+              wakeMode: "next-heartbeat",
+              timeoutSeconds: 0,
+              payload: { kind: "agentTurn", message: "legacy payload fields" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = await createStartedCron(store.storePath).start();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const job = jobs.find((entry) => entry.id === "legacy-agentturn-no-timeout");
+    expect(job).toBeDefined();
+    expect(job?.payload.kind).toBe("agentTurn");
+    if (job?.payload.kind === "agentTurn") {
+      expect(job.payload.timeoutSeconds).toBe(0);
+    }
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("migrates legacy cron fields (jobId + schedule.cron) and defaults wakeMode", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-cron-field-job",
+              name: "legacy cron field",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-05T12:00:00.000Z"),
+              schedule: { kind: "cron", cron: "*/5 * * * *", tz: "UTC" },
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = await createStartedCron(store.storePath).start();
+    const jobs = await cron.list({ includeDisabled: true });
+    const job = jobs.find((entry) => entry.id === "legacy-cron-field-job");
+    expect(job).toBeDefined();
+    expect(job?.wakeMode).toBe("now");
+    expect(job?.schedule.kind).toBe("cron");
+    if (job?.schedule.kind === "cron") {
+      expect(job.schedule.expr).toBe("*/5 * * * *");
+    }
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    const persistedJob = persisted.jobs.find((entry) => entry.id === "legacy-cron-field-job");
+    expect(persistedJob).toBeDefined();
+    expect(persistedJob?.jobId).toBeUndefined();
+    expect(persistedJob?.wakeMode).toBe("now");
+    const persistedSchedule =
+      persistedJob?.schedule && typeof persistedJob.schedule === "object"
+        ? (persistedJob.schedule as Record<string, unknown>)
+        : null;
+    expect(persistedSchedule?.cron).toBeUndefined();
+    expect(persistedSchedule?.expr).toBe("*/5 * * * *");
 
     cron.stop();
     await store.cleanup();

@@ -1,41 +1,29 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
-import type { ExecApprovalDecision } from "./exec-approvals.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
+import { compileSafeRegex } from "../security/safe-regex.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+  type DeliverableMessageChannel,
+} from "../utils/message-channel.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+} from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 
-export type ExecApprovalRequest = {
-  id: string;
-  request: {
-    command: string;
-    cwd?: string | null;
-    host?: string | null;
-    security?: string | null;
-    ask?: string | null;
-    agentId?: string | null;
-    resolvedPath?: string | null;
-    sessionKey?: string | null;
-  };
-  createdAtMs: number;
-  expiresAtMs: number;
-};
-
-export type ExecApprovalResolved = {
-  id: string;
-  decision: ExecApprovalDecision;
-  resolvedBy?: string | null;
-  ts: number;
-};
+export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
@@ -46,7 +34,7 @@ type PendingApproval = {
 };
 
 export type ExecApprovalForwarder = {
-  handleRequested: (request: ExecApprovalRequest) => Promise<void>;
+  handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
   stop: () => void;
 };
@@ -69,11 +57,11 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
 
 function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
-    try {
-      return sessionKey.includes(pattern) || new RegExp(pattern).test(sessionKey);
-    } catch {
-      return sessionKey.includes(pattern);
+    if (sessionKey.includes(pattern)) {
+      return true;
     }
+    const regex = compileSafeRegex(pattern);
+    return regex ? regex.test(sessionKey) : false;
   });
 }
 
@@ -115,6 +103,51 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
   return [channel, target.to, accountId, threadId].join(":");
 }
 
+function resolveChannelAccountConfig<T>(
+  accounts: Record<string, T> | undefined,
+  accountId?: string,
+): T | undefined {
+  if (!accounts || !accountId?.trim()) {
+    return undefined;
+  }
+  const normalized = normalizeAccountId(accountId);
+  const direct = accounts[normalized];
+  if (direct) {
+    return direct;
+  }
+  const fallbackKey = Object.keys(accounts).find(
+    (key) => key.toLowerCase() === normalized.toLowerCase(),
+  );
+  return fallbackKey ? accounts[fallbackKey] : undefined;
+}
+
+// Discord has component-based exec approvals; skip text fallback only when the
+// Discord-specific handler is enabled for the same target account.
+function shouldSkipDiscordForwarding(
+  target: ExecApprovalForwardTarget,
+  cfg: OpenClawConfig,
+): boolean {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  if (channel !== "discord") {
+    return false;
+  }
+  const discord = cfg.channels?.discord as
+    | {
+        execApprovals?: { enabled?: boolean; approvers?: Array<string | number> };
+        accounts?: Record<
+          string,
+          { execApprovals?: { enabled?: boolean; approvers?: Array<string | number> } }
+        >;
+      }
+    | undefined;
+  if (!discord) {
+    return false;
+  }
+  const account = resolveChannelAccountConfig(discord.accounts, target.accountId);
+  const execApprovals = account?.execApprovals ?? discord.execApprovals;
+  return Boolean(execApprovals?.enabled && (execApprovals.approvers?.length ?? 0) > 0);
+}
+
 function formatApprovalCommand(command: string): { inline: boolean; text: string } {
   if (!command.includes("\n") && !command.includes("`")) {
     return { inline: true, text: `\`${command}\`` };
@@ -138,6 +171,12 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   }
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);
+  }
+  if (request.request.nodeId) {
+    lines.push(`Node: ${request.request.nodeId}`);
+  }
+  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
+    lines.push(`Env overrides: ${request.request.envKeys.join(", ")}`);
   }
   if (request.request.host) {
     lines.push(`Host: ${request.request.host}`);
@@ -177,6 +216,11 @@ function buildExpiredMessage(request: ExecApprovalRequest) {
   return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
+function normalizeTurnSourceChannel(value?: string | null): DeliverableMessageChannel | undefined {
+  const normalized = value ? normalizeMessageChannel(value) : undefined;
+  return normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
+}
+
 function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
@@ -193,7 +237,14 @@ function defaultResolveSessionTarget(params: {
   if (!entry) {
     return null;
   }
-  const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
+  const target = resolveSessionDeliveryTarget({
+    entry,
+    requestedChannel: "last",
+    turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
+    turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
+    turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
+    turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+  });
   if (!target.channel || !target.to) {
     return null;
   }
@@ -239,6 +290,48 @@ async function deliverToTargets(params: {
   await Promise.allSettled(deliveries);
 }
 
+function resolveForwardTargets(params: {
+  cfg: OpenClawConfig;
+  config?: ExecApprovalForwardingConfig;
+  request: ExecApprovalRequest;
+  resolveSessionTarget: (params: {
+    cfg: OpenClawConfig;
+    request: ExecApprovalRequest;
+  }) => ExecApprovalForwardTarget | null;
+}): ForwardTarget[] {
+  const mode = normalizeMode(params.config?.mode);
+  const targets: ForwardTarget[] = [];
+  const seen = new Set<string>();
+
+  if (mode === "session" || mode === "both") {
+    const sessionTarget = params.resolveSessionTarget({
+      cfg: params.cfg,
+      request: params.request,
+    });
+    if (sessionTarget) {
+      const key = buildTargetKey(sessionTarget);
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ ...sessionTarget, source: "session" });
+      }
+    }
+  }
+
+  if (mode === "targets" || mode === "both") {
+    const explicitTargets = params.config?.targets ?? [];
+    for (const target of explicitTargets) {
+      const key = buildTargetKey(target);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      targets.push({ ...target, source: "target" });
+    }
+  }
+
+  return targets;
+}
+
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
@@ -248,42 +341,21 @@ export function createExecApprovalForwarder(
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const pending = new Map<string, PendingApproval>();
 
-  const handleRequested = async (request: ExecApprovalRequest) => {
+  const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
     const cfg = getConfig();
     const config = cfg.approvals?.exec;
     if (!shouldForward({ config, request })) {
-      return;
+      return false;
     }
+    const filteredTargets = resolveForwardTargets({
+      cfg,
+      config,
+      request,
+      resolveSessionTarget,
+    }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
 
-    const mode = normalizeMode(config?.mode);
-    const targets: ForwardTarget[] = [];
-    const seen = new Set<string>();
-
-    if (mode === "session" || mode === "both") {
-      const sessionTarget = resolveSessionTarget({ cfg, request });
-      if (sessionTarget) {
-        const key = buildTargetKey(sessionTarget);
-        if (!seen.has(key)) {
-          seen.add(key);
-          targets.push({ ...sessionTarget, source: "session" });
-        }
-      }
-    }
-
-    if (mode === "targets" || mode === "both") {
-      const explicitTargets = config?.targets ?? [];
-      for (const target of explicitTargets) {
-        const key = buildTargetKey(target);
-        if (seen.has(key)) {
-          continue;
-        }
-        seen.add(key);
-        targets.push({ ...target, source: "target" });
-      }
-    }
-
-    if (targets.length === 0) {
-      return;
+    if (filteredTargets.length === 0) {
+      return false;
     }
 
     const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
@@ -300,36 +372,59 @@ export function createExecApprovalForwarder(
     }, expiresInMs);
     timeoutId.unref?.();
 
-    const pendingEntry: PendingApproval = { request, targets, timeoutId };
+    const pendingEntry: PendingApproval = { request, targets: filteredTargets, timeoutId };
     pending.set(request.id, pendingEntry);
 
     if (pending.get(request.id) !== pendingEntry) {
-      return;
+      return false;
     }
 
     const text = buildRequestMessage(request, nowMs());
-    await deliverToTargets({
+    void deliverToTargets({
       cfg,
-      targets,
+      targets: filteredTargets,
       text,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
+    }).catch((err) => {
+      log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
     });
+    return true;
   };
 
   const handleResolved = async (resolved: ExecApprovalResolved) => {
     const entry = pending.get(resolved.id);
-    if (!entry) {
+    if (entry) {
+      if (entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+      }
+      pending.delete(resolved.id);
+    }
+    const cfg = getConfig();
+    let targets = entry?.targets;
+
+    if (!targets && resolved.request) {
+      const request: ExecApprovalRequest = {
+        id: resolved.id,
+        request: resolved.request,
+        createdAtMs: resolved.ts,
+        expiresAtMs: resolved.ts,
+      };
+      const config = cfg.approvals?.exec;
+      if (shouldForward({ config, request })) {
+        targets = resolveForwardTargets({
+          cfg,
+          config,
+          request,
+          resolveSessionTarget,
+        }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
+      }
+    }
+    if (!targets || targets.length === 0) {
       return;
     }
-    if (entry.timeoutId) {
-      clearTimeout(entry.timeoutId);
-    }
-    pending.delete(resolved.id);
-
-    const cfg = getConfig();
     const text = buildResolvedMessage(resolved);
-    await deliverToTargets({ cfg, targets: entry.targets, text, deliver });
+    await deliverToTargets({ cfg, targets, text, deliver });
   };
 
   const stop = () => {

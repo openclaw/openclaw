@@ -11,6 +11,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelDock,
   type ChannelMessageActionAdapter,
@@ -178,6 +180,8 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         .map((entry) => String(entry))
         .filter(Boolean)
         .map(formatAllowFromEntry),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveGoogleChatAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -196,8 +200,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.googlechat !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy === "open") {
         warnings.push(
           `- Google Chat spaces: groupPolicy="open" allows any space to trigger (mention-gated). Set channels.googlechat.groupPolicy="allowlist" and configure channels.googlechat.groups.`,
@@ -375,40 +383,23 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     chunker: (text, limit) => getGoogleChatRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    resolveTarget: ({ to, allowFrom, mode }) => {
+    resolveTarget: ({ to }) => {
       const trimmed = to?.trim() ?? "";
-      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-      const allowList = allowListRaw
-        .filter((entry) => entry !== "*")
-        .map((entry) => normalizeGoogleChatTarget(entry))
-        .filter((entry): entry is string => Boolean(entry));
 
       if (trimmed) {
         const normalized = normalizeGoogleChatTarget(trimmed);
         if (!normalized) {
-          if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
-            return { ok: true, to: allowList[0] };
-          }
           return {
             ok: false,
-            error: missingTargetError(
-              "Google Chat",
-              "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
-            ),
+            error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
           };
         }
         return { ok: true, to: normalized };
       }
 
-      if (allowList.length > 0) {
-        return { ok: true, to: allowList[0] };
-      }
       return {
         ok: false,
-        error: missingTargetError(
-          "Google Chat",
-          "<spaces/{space}|users/{user}> or channels.googlechat.dm.allowFrom[0]",
-        ),
+        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
       };
     },
     sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
@@ -572,14 +563,20 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         webhookUrl: account.config.webhookUrl,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
-        unregister?.();
-        ctx.setStatus({
-          accountId: account.accountId,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      };
+      // Keep the promise pending until abort (webhook mode is passive).
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      unregister?.();
+      ctx.setStatus({
+        accountId: account.accountId,
+        running: false,
+        lastStopAt: Date.now(),
+      });
     },
   },
 };

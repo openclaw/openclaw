@@ -4,6 +4,30 @@ import ai.openclaw.android.chat.ChatSessionEntry
 
 private const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
 
+/**
+ * Derive a human-friendly label from a raw session key.
+ * Examples:
+ *   "telegram:g-agent-main-main" -> "Main"
+ *   "agent:main:main" -> "Main"
+ *   "discord:g-server-channel" -> "Server Channel"
+ *   "my-custom-session" -> "My Custom Session"
+ */
+fun friendlySessionName(key: String): String {
+  // Strip common prefixes like "telegram:", "agent:", "discord:" etc.
+  val stripped = key.substringAfterLast(":")
+
+  // Remove leading "g-" prefix (gateway artifact)
+  val cleaned = if (stripped.startsWith("g-")) stripped.removePrefix("g-") else stripped
+
+  // Split on hyphens/underscores, title-case each word, collapse "main main" -> "Main"
+  val words = cleaned.split('-', '_').filter { it.isNotBlank() }.map { word ->
+    word.replaceFirstChar { it.uppercaseChar() }
+  }.distinct()
+
+  val result = words.joinToString(" ")
+  return result.ifBlank { key }
+}
+
 fun resolveSessionChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,

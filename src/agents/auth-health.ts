@@ -43,14 +43,23 @@ export function resolveAuthProfileSource(_profileId: string): AuthProfileSource 
   return "store";
 }
 
-export function formatRemainingShort(remainingMs?: number): string {
+export function formatRemainingShort(
+  remainingMs?: number,
+  opts?: {
+    underMinuteLabel?: string;
+  },
+): string {
   if (remainingMs === undefined || Number.isNaN(remainingMs)) {
     return "unknown";
   }
   if (remainingMs <= 0) {
     return "0m";
   }
-  const minutes = Math.max(1, Math.round(remainingMs / 60_000));
+  const roundedMinutes = Math.round(remainingMs / 60_000);
+  if (roundedMinutes < 1) {
+    return opts?.underMinuteLabel ?? "1m";
+  }
+  const minutes = roundedMinutes;
   if (minutes < 60) {
     return `${minutes}m`;
   }

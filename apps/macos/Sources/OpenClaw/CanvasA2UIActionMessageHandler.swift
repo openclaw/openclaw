@@ -1,7 +1,7 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 import WebKit
 
 final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {

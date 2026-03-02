@@ -1,12 +1,7 @@
 import { fetchDiscord } from "./api.js";
+import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
-
-type DiscordGuildSummary = {
-  id: string;
-  name: string;
-  slug: string;
-};
 
 type DiscordChannelSummary = {
   id: string;
@@ -66,24 +61,14 @@ function parseDiscordChannelInput(raw: string): {
       return guild ? { guild: guild.trim(), guildOnly: true } : {};
     }
     if (guild && /^\d+$/.test(guild)) {
+      if (/^\d+$/.test(channel)) {
+        return { guildId: guild, channelId: channel };
+      }
       return { guildId: guild, channel };
     }
     return { guild, channel };
   }
   return { guild: trimmed, guildOnly: true };
-}
-
-async function listGuilds(token: string, fetcher: typeof fetch): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id: string; name: string }>>(
-    "/users/@me/guilds",
-    token,
-    fetcher,
-  );
-  return raw.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    slug: normalizeDiscordSlug(guild.name),
-  }));
 }
 
 async function listGuildChannels(
@@ -209,6 +194,22 @@ export async function resolveDiscordChannelAllowlist(params: {
     if (parsed.channelId) {
       const channel = await fetchChannel(token, fetcher, parsed.channelId);
       if (channel?.guildId) {
+        if (parsed.guildId && parsed.guildId !== channel.guildId) {
+          const expectedGuild = guilds.find((entry) => entry.id === parsed.guildId);
+          const actualGuild = guilds.find((entry) => entry.id === channel.guildId);
+          results.push({
+            input,
+            resolved: false,
+            guildId: parsed.guildId,
+            guildName: expectedGuild?.name,
+            channelId: parsed.channelId,
+            channelName: channel.name,
+            note: actualGuild?.name
+              ? `channel belongs to guild ${actualGuild.name}`
+              : "channel belongs to a different guild",
+          });
+          continue;
+        }
         const guild = guilds.find((entry) => entry.id === channel.guildId);
         results.push({
           input,

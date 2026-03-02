@@ -1,8 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
 // NOTE: This extension is intended to be bundled with OpenClaw.
 // When running from source (tests/dev), OpenClaw internals live under src/.
 // When running from a built install, internals live under dist/ (no src/ tree).
@@ -96,7 +96,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const primary = api.config?.agents?.defaults?.model?.primary;
+      const defaultsModel = api.config?.agents?.defaults?.model;
+      const primary =
+        typeof defaultsModel === "string"
+          ? defaultsModel.trim()
+          : (defaultsModel?.primary?.trim() ?? undefined);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -176,7 +180,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       let tmpDir: string | null = null;
       try {
-        tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-llm-task-"));
+        tmpDir = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
+        );
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 

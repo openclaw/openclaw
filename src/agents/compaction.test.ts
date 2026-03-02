@@ -14,14 +14,25 @@ function makeMessage(id: number, size: number): AgentMessage {
   };
 }
 
+function makeMessages(count: number, size: number): AgentMessage[] {
+  return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
+}
+
+function pruneLargeSimpleHistory() {
+  const messages = makeMessages(4, 4000);
+  const maxContextTokens = 2000; // budget is 1000 tokens (50%)
+  const pruned = pruneHistoryForContextShare({
+    messages,
+    maxContextTokens,
+    maxHistoryShare: 0.5,
+    parts: 2,
+  });
+  return { messages, pruned, maxContextTokens };
+}
+
 describe("splitMessagesByTokenShare", () => {
   it("splits messages into two non-empty parts", () => {
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeMessage(2, 4000),
-      makeMessage(3, 4000),
-      makeMessage(4, 4000),
-    ];
+    const messages = makeMessages(4, 4000);
 
     const parts = splitMessagesByTokenShare(messages, 2);
     expect(parts.length).toBeGreaterThanOrEqual(2);
@@ -31,14 +42,7 @@ describe("splitMessagesByTokenShare", () => {
   });
 
   it("preserves message order across parts", () => {
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeMessage(2, 4000),
-      makeMessage(3, 4000),
-      makeMessage(4, 4000),
-      makeMessage(5, 4000),
-      makeMessage(6, 4000),
-    ];
+    const messages = makeMessages(6, 4000);
 
     const parts = splitMessagesByTokenShare(messages, 3);
     expect(parts.flat().map((msg) => msg.timestamp)).toEqual(messages.map((msg) => msg.timestamp));
@@ -47,19 +51,7 @@ describe("splitMessagesByTokenShare", () => {
 
 describe("pruneHistoryForContextShare", () => {
   it("drops older chunks until the history budget is met", () => {
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeMessage(2, 4000),
-      makeMessage(3, 4000),
-      makeMessage(4, 4000),
-    ];
-    const maxContextTokens = 2000; // budget is 1000 tokens (50%)
-    const pruned = pruneHistoryForContextShare({
-      messages,
-      maxContextTokens,
-      maxHistoryShare: 0.5,
-      parts: 2,
-    });
+    const { pruned, maxContextTokens } = pruneLargeSimpleHistory();
 
     expect(pruned.droppedChunks).toBeGreaterThan(0);
     expect(pruned.keptTokens).toBeLessThanOrEqual(Math.floor(maxContextTokens * 0.5));
@@ -67,14 +59,7 @@ describe("pruneHistoryForContextShare", () => {
   });
 
   it("keeps the newest messages when pruning", () => {
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeMessage(2, 4000),
-      makeMessage(3, 4000),
-      makeMessage(4, 4000),
-      makeMessage(5, 4000),
-      makeMessage(6, 4000),
-    ];
+    const messages = makeMessages(6, 4000);
     const totalTokens = estimateMessagesTokens(messages);
     const maxContextTokens = Math.max(1, Math.floor(totalTokens * 0.5)); // budget = 25%
     const pruned = pruneHistoryForContextShare({
@@ -110,19 +95,7 @@ describe("pruneHistoryForContextShare", () => {
     // When orphaned tool_results exist, droppedMessages may exceed
     // droppedMessagesList.length since orphans are counted but not
     // added to the list (they lack context for summarization).
-    const messages: AgentMessage[] = [
-      makeMessage(1, 4000),
-      makeMessage(2, 4000),
-      makeMessage(3, 4000),
-      makeMessage(4, 4000),
-    ];
-    const maxContextTokens = 2000; // budget is 1000 tokens (50%)
-    const pruned = pruneHistoryForContextShare({
-      messages,
-      maxContextTokens,
-      maxHistoryShare: 0.5,
-      parts: 2,
-    });
+    const { messages, pruned } = pruneLargeSimpleHistory();
 
     expect(pruned.droppedChunks).toBeGreaterThan(0);
     // Without orphaned tool_results, counts match exactly
@@ -161,10 +134,10 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "x".repeat(4000) },
-          { type: "toolUse", id: "call_123", name: "test_tool", input: {} },
+          { type: "toolCall", id: "call_123", name: "test_tool", arguments: {} },
         ],
         timestamp: 1,
-      },
+      } as unknown as AgentMessage,
       // Chunk 2 (will be kept) - contains orphaned tool_result
       {
         role: "toolResult",
@@ -172,7 +145,7 @@ describe("pruneHistoryForContextShare", () => {
         toolName: "test_tool",
         content: [{ type: "text", text: "result".repeat(500) }],
         timestamp: 2,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "user",
         content: "x".repeat(500),
@@ -212,17 +185,17 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "y".repeat(500) },
-          { type: "toolUse", id: "call_456", name: "kept_tool", input: {} },
+          { type: "toolCall", id: "call_456", name: "kept_tool", arguments: {} },
         ],
         timestamp: 2,
-      },
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_456",
         toolName: "kept_tool",
         content: [{ type: "text", text: "result" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
     ];
 
     const pruned = pruneHistoryForContextShare({
@@ -247,11 +220,11 @@ describe("pruneHistoryForContextShare", () => {
         role: "assistant",
         content: [
           { type: "text", text: "x".repeat(4000) },
-          { type: "toolUse", id: "call_a", name: "tool_a", input: {} },
-          { type: "toolUse", id: "call_b", name: "tool_b", input: {} },
+          { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
+          { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
         ],
         timestamp: 1,
-      },
+      } as unknown as AgentMessage,
       // Chunk 2 (will be kept) - contains orphaned tool_results
       {
         role: "toolResult",
@@ -259,14 +232,14 @@ describe("pruneHistoryForContextShare", () => {
         toolName: "tool_a",
         content: [{ type: "text", text: "result_a" }],
         timestamp: 2,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "toolResult",
         toolCallId: "call_b",
         toolName: "tool_b",
         content: [{ type: "text", text: "result_b" }],
         timestamp: 3,
-      } as AgentMessage,
+      } as unknown as AgentMessage,
       {
         role: "user",
         content: "x".repeat(500),

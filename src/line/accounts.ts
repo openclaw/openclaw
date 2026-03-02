@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId as normalizeSharedAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/account-id.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import type {
   LineConfig,
   LineAccountConfig,
@@ -7,7 +13,7 @@ import type {
   LineTokenSource,
 } from "./types.js";
 
-export const DEFAULT_ACCOUNT_ID = "default";
+export { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 
 function readFileIfExists(filePath: string | undefined): string | undefined {
   if (!filePath) {
@@ -100,10 +106,12 @@ export function resolveLineAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedLineAccount {
-  const { cfg, accountId = DEFAULT_ACCOUNT_ID } = params;
+  const cfg = params.cfg;
+  const accountId = normalizeSharedAccountId(params.accountId);
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
-  const accountConfig = accountId !== DEFAULT_ACCOUNT_ID ? accounts?.[accountId] : undefined;
+  const accountConfig =
+    accountId !== DEFAULT_ACCOUNT_ID ? resolveAccountEntry(accounts, accountId) : undefined;
 
   const { token, tokenSource } = resolveToken({
     accountId,
@@ -117,8 +125,16 @@ export function resolveLineAccount(params: {
     accountConfig,
   });
 
+  const {
+    accounts: _ignoredAccounts,
+    defaultAccount: _ignoredDefaultAccount,
+    ...lineBase
+  } = (lineConfig ?? {}) as LineConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
   const mergedConfig: LineConfig & LineAccountConfig = {
-    ...lineConfig,
+    ...lineBase,
     ...accountConfig,
   };
 
@@ -165,6 +181,15 @@ export function listLineAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
+  const preferred = normalizeOptionalAccountId(
+    (cfg.channels?.line as LineConfig | undefined)?.defaultAccount,
+  );
+  if (
+    preferred &&
+    listLineAccountIds(cfg).some((accountId) => normalizeSharedAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listLineAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -173,9 +198,5 @@ export function resolveDefaultLineAccountId(cfg: OpenClawConfig): string {
 }
 
 export function normalizeAccountId(accountId: string | undefined): string {
-  const trimmed = accountId?.trim().toLowerCase();
-  if (!trimmed || trimmed === "default") {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return trimmed;
+  return normalizeSharedAccountId(accountId);
 }

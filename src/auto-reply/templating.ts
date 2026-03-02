@@ -18,6 +18,15 @@ export type MsgContext = {
    */
   BodyForAgent?: string;
   /**
+   * Recent chat history for context (untrusted user content). Prefer passing this
+   * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
+   */
+  InboundHistory?: Array<{
+    sender: string;
+    body: string;
+    timestamp?: number;
+  }>;
+  /**
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
@@ -45,11 +54,23 @@ export type MsgContext = {
   MessageSidFirst?: string;
   MessageSidLast?: string;
   ReplyToId?: string;
+  /**
+   * Root message id for thread reconstruction (used by Feishu for root_id).
+   * When a message is part of a thread, this is the id of the first message.
+   */
+  RootMessageId?: string;
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
   ReplyToIsQuote?: boolean;
+  /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
+  ReplyToForwardedFrom?: string;
+  ReplyToForwardedFromType?: string;
+  ReplyToForwardedFromId?: string;
+  ReplyToForwardedFromUsername?: string;
+  ReplyToForwardedFromTitle?: string;
+  ReplyToForwardedDate?: number;
   ForwardedFrom?: string;
   ForwardedFromType?: string;
   ForwardedFromId?: string;
@@ -60,6 +81,9 @@ export type MsgContext = {
   ForwardedFromMessageId?: number;
   ForwardedDate?: number;
   ThreadStarterBody?: string;
+  /** Full thread history when starting a new thread session. */
+  ThreadHistoryBody?: string;
+  IsFirstThreadTurn?: boolean;
   ThreadLabel?: string;
   MediaPath?: string;
   MediaUrl?: string;
@@ -70,6 +94,8 @@ export type MsgContext = {
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerMetadata;
+  /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
+  StickerMediaIncluded?: boolean;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */
@@ -113,6 +139,8 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
+  /** Warning: DM has topics enabled but this message is not in a topic. */
+  TopicRequiredButMissing?: boolean;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

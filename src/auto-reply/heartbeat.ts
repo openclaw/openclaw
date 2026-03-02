@@ -1,3 +1,4 @@
+import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
@@ -65,6 +66,9 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   }
 
   const token = HEARTBEAT_TOKEN;
+  const tokenAtEndWithOptionalTrailingPunctuation = new RegExp(
+    `${escapeRegExp(token)}[^\\w]{0,4}$`,
+  );
   if (!text.includes(token)) {
     return { text, didStrip: false };
   }
@@ -81,9 +85,19 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
       changed = true;
       continue;
     }
-    if (next.endsWith(token)) {
-      const before = next.slice(0, Math.max(0, next.length - token.length));
-      text = before.trimEnd();
+    // Strip the token when it appears at the end of the text.
+    // Also strip up to 4 trailing non-word characters the model may have appended
+    // (e.g. ".", "!!!", "---"). Keep trailing punctuation only when real
+    // sentence text exists before the token.
+    if (tokenAtEndWithOptionalTrailingPunctuation.test(next)) {
+      const idx = next.lastIndexOf(token);
+      const before = next.slice(0, idx).trimEnd();
+      if (!before) {
+        text = "";
+      } else {
+        const after = next.slice(idx + token.length).trimStart();
+        text = `${before}${after}`.trimEnd();
+      }
       didStrip = true;
       changed = true;
     }

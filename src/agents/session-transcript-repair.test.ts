@@ -4,9 +4,49 @@ import {
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
+  stripToolResultDetails,
 } from "./session-transcript-repair.js";
 
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+function getAssistantToolCallBlocks(messages: AgentMessage[]) {
+  const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
+  if (!assistant || !Array.isArray(assistant.content)) {
+    return [] as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+  }
+  return assistant.content.filter((block) => {
+    const type = (block as { type?: unknown }).type;
+    return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+  }) as Array<{ type?: unknown; id?: unknown; name?: unknown }>;
+}
+
 describe("sanitizeToolUseResultPairing", () => {
+  const buildDuplicateToolResultInput = (opts?: {
+    middleMessage?: unknown;
+    secondText?: string;
+  }): AgentMessage[] =>
+    [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      },
+      ...(opts?.middleMessage ? [opts.middleMessage as AgentMessage] : []),
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: opts?.secondText ?? "second" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
   it("moves tool results directly after tool calls and inserts missing results", () => {
     const input = [
       {
@@ -24,7 +64,7 @@ describe("sanitizeToolUseResultPairing", () => {
         content: [{ type: "text", text: "ok" }],
         isError: false,
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeToolUseResultPairing(input);
     expect(out[0]?.role).toBe("assistant");
@@ -35,7 +75,7 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out[3]?.role).toBe("user");
   });
 
-  it("drops duplicate tool results for the same id within a span", () => {
+  it("repairs blank tool result names from matching tool calls", () => {
     const input = [
       {
         role: "assistant",
@@ -44,46 +84,35 @@ describe("sanitizeToolUseResultPairing", () => {
       {
         role: "toolResult",
         toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
+        toolName: "   ",
+        content: [{ type: "text", text: "ok" }],
         isError: false,
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "second" }],
-        isError: false,
-      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    const toolResult = out.find((message) => message.role === "toolResult") as {
+      toolName?: string;
+    };
+
+    expect(toolResult?.toolName).toBe("read");
+  });
+
+  it("drops duplicate tool results for the same id within a span", () => {
+    const input = [
+      ...buildDuplicateToolResultInput(),
       { role: "user", content: "ok" },
-    ] satisfies AgentMessage[];
+    ] as AgentMessage[];
 
     const out = sanitizeToolUseResultPairing(input);
     expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
   });
 
   it("drops duplicate tool results for the same id across the transcript", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      },
-      { role: "assistant", content: [{ type: "text", text: "ok" }] },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "second (duplicate)" }],
-        isError: false,
-      },
-    ] satisfies AgentMessage[];
+    const input = buildDuplicateToolResultInput({
+      middleMessage: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      secondText: "second (duplicate)",
+    });
 
     const out = sanitizeToolUseResultPairing(input);
     const results = out.filter((m) => m.role === "toolResult") as Array<{
@@ -107,7 +136,7 @@ describe("sanitizeToolUseResultPairing", () => {
         role: "assistant",
         content: [{ type: "text", text: "ok" }],
       },
-    ] satisfies AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeToolUseResultPairing(input);
     expect(out.some((m) => m.role === "toolResult")).toBe(false);
@@ -125,7 +154,7 @@ describe("sanitizeToolUseResultPairing", () => {
         stopReason: "error",
       },
       { role: "user", content: "something went wrong" },
-    ] as AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const result = repairToolUseResultPairing(input);
 
@@ -147,7 +176,7 @@ describe("sanitizeToolUseResultPairing", () => {
         stopReason: "aborted",
       },
       { role: "user", content: "retrying after abort" },
-    ] as AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const result = repairToolUseResultPairing(input);
 
@@ -168,7 +197,7 @@ describe("sanitizeToolUseResultPairing", () => {
         stopReason: "toolUse",
       },
       { role: "user", content: "user message" },
-    ] as AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const result = repairToolUseResultPairing(input);
 
@@ -195,7 +224,7 @@ describe("sanitizeToolUseResultPairing", () => {
         isError: false,
       },
       { role: "user", content: "retrying" },
-    ] as AgentMessage[];
+    ] as unknown as AgentMessage[];
 
     const result = repairToolUseResultPairing(input);
 
@@ -211,20 +240,87 @@ describe("sanitizeToolUseResultPairing", () => {
 
 describe("sanitizeToolCallInputs", () => {
   it("drops tool calls missing input or arguments", () => {
-    const input: AgentMessage[] = [
+    const input = [
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read" }],
       },
       { role: "user", content: "hello" },
-    ];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
 
+  it("drops tool calls with missing or blank name/id", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_empty_name", name: "", arguments: {} },
+          { type: "toolUse", id: "call_blank_name", name: "   ", input: {} },
+          { type: "functionCall", id: "", name: "exec", arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_ok");
+  });
+
+  it("drops tool calls with malformed or overlong names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          {
+            type: "toolCall",
+            id: "call_bad_chars",
+            name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
+            arguments: {},
+          },
+          {
+            type: "toolUse",
+            id: "call_too_long",
+            name: `read_${"x".repeat(80)}`,
+            input: {},
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("drops unknown tool names when an allowlist is provided", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_unknown", name: "write", arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
   it("keeps valid tool calls and preserves text blocks", () => {
-    const input: AgentMessage[] = [
+    const input = [
       {
         role: "assistant",
         content: [
@@ -233,7 +329,7 @@ describe("sanitizeToolCallInputs", () => {
           { type: "toolCall", id: "call_drop", name: "read" },
         ],
       },
-    ];
+    ] as unknown as AgentMessage[];
 
     const out = sanitizeToolCallInputs(input);
     const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
@@ -241,5 +337,184 @@ describe("sanitizeToolCallInputs", () => {
       ? assistant.content.map((block) => (block as { type?: unknown }).type)
       : [];
     expect(types).toEqual(["text", "toolUse"]);
+  });
+
+  it("trims leading whitespace from tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("trims trailing whitespace from tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("exec");
+  });
+
+  it("trims both leading and trailing whitespace from tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+          { type: "toolUse", id: "call_2", name: "  exec  ", input: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(2);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+    expect((toolCalls[1] as { name?: unknown }).name).toBe("exec");
+  });
+
+  it("trims tool names and matches against allowlist", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+          { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  });
+
+  it("preserves toolUse input shape for sessions_spawn when no attachments are present", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "sessions_spawn",
+            input: { task: "hello" },
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    expect(Object.hasOwn(toolCalls[0] ?? {}, "input")).toBe(true);
+    expect(Object.hasOwn(toolCalls[0] ?? {}, "arguments")).toBe(false);
+    expect((toolCalls[0] ?? {}).input).toEqual({ task: "hello" });
+  });
+
+  it("redacts sessions_spawn attachments for mixed-case and padded tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "  SESSIONS_SPAWN  ",
+            input: {
+              task: "hello",
+              attachments: [{ name: "a.txt", content: "SECRET" }],
+            },
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] ?? {}).name).toBe("SESSIONS_SPAWN");
+    const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
+  });
+  it("preserves other block properties when trimming tool names", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
+        ],
+      },
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out);
+
+    expect(toolCalls).toHaveLength(1);
+    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
+    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+  });
+});
+
+describe("stripToolResultDetails", () => {
+  it("removes details only from toolResult messages", () => {
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        details: { internal: true },
+      },
+      { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
+      { role: "user", content: "hello" },
+    ] as unknown as AgentMessage[];
+
+    const out = stripToolResultDetails(input) as unknown as Array<Record<string, unknown>>;
+
+    expect(Object.hasOwn(out[0] ?? {}, "details")).toBe(false);
+    expect((out[0] ?? {}).role).toBe("toolResult");
+
+    // Non-toolResult messages are preserved as-is.
+    expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
+    expect((out[1] ?? {}).role).toBe("assistant");
+    expect((out[2] ?? {}).role).toBe("user");
+  });
+
+  it("returns the same array reference when there are no toolResult details", () => {
+    const input = [
+      { role: "assistant", content: [{ type: "text", text: "a" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+      },
+      { role: "user", content: "b" },
+    ] as unknown as AgentMessage[];
+
+    const out = stripToolResultDetails(input);
+    expect(out).toBe(input);
   });
 });
