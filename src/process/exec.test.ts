@@ -79,10 +79,10 @@ describe("runCommandWithTimeout", () => {
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 80)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 60)"],
       {
         timeoutMs: 500,
-        noOutputTimeoutMs: 25,
+        noOutputTimeoutMs: 20,
       },
     );
 
@@ -105,13 +105,13 @@ describe("runCommandWithTimeout", () => {
           "clearInterval(ticker);",
           "process.exit(0);",
           "}",
-          "}, 15);",
+          "}, 10);",
         ].join(" "),
       ],
       {
-        timeoutMs: 3_000,
+        timeoutMs: 2_000,
         // Keep a healthy margin above the emit interval while avoiding long idle waits.
-        noOutputTimeoutMs: 120,
+        noOutputTimeoutMs: 70,
       },
     );
 
