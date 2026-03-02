@@ -24,15 +24,22 @@ const BACKSPACE_CHAR = "\u0008";
 
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
-function normalizeMentionPattern(pattern: string): string {
-  if (!pattern.includes(BACKSPACE_CHAR)) {
-    return pattern;
+function normalizeMentionPattern(pattern: unknown): string | null {
+  if (typeof pattern !== "string") {
+    return null;
   }
-  return pattern.split(BACKSPACE_CHAR).join("\\b");
+  const trimmed = pattern.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!trimmed.includes(BACKSPACE_CHAR)) {
+    return trimmed;
+  }
+  return trimmed.split(BACKSPACE_CHAR).join("\\b");
 }
 
-function normalizeMentionPatterns(patterns: string[]): string[] {
-  return patterns.map(normalizeMentionPattern);
+function normalizeMentionPatterns(patterns: Array<unknown>): string[] {
+  return patterns.map(normalizeMentionPattern).filter((value): value is string => Boolean(value));
 }
 
 function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
