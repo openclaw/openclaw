@@ -280,4 +280,38 @@ describe("gateway run option collisions", () => {
       "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
     );
   });
+
+  it("applies --token before config snapshot validation", async () => {
+    const previousGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    readConfigFileSnapshot.mockImplementation(async () => {
+      if (process.env.OPENCLAW_GATEWAY_TOKEN === "tok_prevalidate") {
+        return {
+          exists: true,
+          valid: true,
+          path: "/tmp/openclaw-test-missing-config.json",
+        };
+      }
+      return {
+        exists: true,
+        valid: false,
+        path: "/tmp/openclaw-test-missing-config.json",
+        issues: [{ path: "", message: "Env var substitution failed: Missing required env var" }],
+      };
+    });
+
+    try {
+      await runGatewayCli(["gateway", "run", "--token", "tok_prevalidate", "--allow-unconfigured"]);
+      expect(startGatewayServer).toHaveBeenCalled();
+      expect(runtimeErrors).not.toContain(
+        "Gateway start blocked: invalid config at /tmp/openclaw-test-missing-config.json.",
+      );
+    } finally {
+      if (previousGatewayToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousGatewayToken;
+      }
+    }
+  });
 });

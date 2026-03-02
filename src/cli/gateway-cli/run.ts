@@ -198,6 +198,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (opts.rawStream) {
     process.env.OPENCLAW_RAW_STREAM = "1";
   }
+  const tokenRaw = toOptionString(opts.token);
+  if (tokenRaw) {
+    // Apply CLI token override before config snapshot reads so ${OPENCLAW_GATEWAY_TOKEN}
+    // interpolation succeeds during startup validation.
+    process.env.OPENCLAW_GATEWAY_TOKEN = tokenRaw;
+  }
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
@@ -284,12 +290,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       return;
     }
   }
-  if (opts.token) {
-    const token = toOptionString(opts.token);
-    if (token) {
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-    }
-  }
   const authModeRaw = toOptionString(opts.auth);
   const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
@@ -307,7 +307,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   const passwordRaw = toOptionString(opts.password);
-  const tokenRaw = toOptionString(opts.token);
 
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const mode = cfg.gateway?.mode;
