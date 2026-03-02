@@ -388,6 +388,12 @@ export async function runPreparedReply(
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
+    // Discord native slash interactions must always send an interaction response.
+    // Keep final payload delivery enabled even when message.send posts to same target.
+    skipMessagingToolReplySuppression:
+      ctx.CommandSource === "native" &&
+      typeof ctx.To === "string" &&
+      ctx.To.trim().toLowerCase().startsWith("slash:"),
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,

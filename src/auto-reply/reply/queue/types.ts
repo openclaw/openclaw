@@ -25,6 +25,11 @@ export type FollowupRun = {
   summaryLine?: string;
   enqueuedAt: number;
   /**
+   * Preserve a reply payload even when a same-target messaging tool send happened.
+   * Used by native slash interactions that must send an interaction response.
+   */
+  skipMessagingToolReplySuppression?: boolean;
+  /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
    * instead of using the session's lastChannel.

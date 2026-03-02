@@ -43,4 +43,30 @@ describe("buildReplyPayloads media filter integration", () => {
     // Text filter removes the payload entirely (text matched), so nothing remains.
     expect(replyPayloads).toHaveLength(0);
   });
+
+  it("suppresses same-target replies when messaging tool already sent", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "done" }],
+      messageProvider: "discord",
+      originatingTo: "channel:C1",
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps same-target replies when suppression bypass is enabled", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "done" }],
+      messageProvider: "discord",
+      originatingTo: "channel:C1",
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      skipMessagingToolReplySuppression: true,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("done");
+  });
 });

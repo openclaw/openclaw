@@ -256,12 +256,14 @@ export function createFollowupRunner(params: {
         payloads: dedupedPayloads,
         sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
       });
-      const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: queued.run.messageProvider,
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingTo: queued.originatingTo,
-        accountId: queued.run.agentAccountId,
-      });
+      const suppressMessagingToolReplies = queued.skipMessagingToolReplySuppression
+        ? false
+        : shouldSuppressMessagingToolReplies({
+            messageProvider: queued.run.messageProvider,
+            messagingToolSentTargets: runResult.messagingToolSentTargets,
+            originatingTo: queued.originatingTo,
+            accountId: queued.run.agentAccountId,
+          });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {

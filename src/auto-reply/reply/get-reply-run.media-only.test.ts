@@ -190,4 +190,35 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
+
+  it("marks native slash runs to keep interaction reply delivery", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "run slash command",
+          RawBody: "run slash command",
+          CommandBody: "run slash command",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C123",
+          ChatType: "channel",
+          CommandSource: "native",
+          To: "slash:user-1",
+        },
+        sessionCtx: {
+          Body: "run slash command",
+          BodyStripped: "run slash command",
+          ThreadHistoryBody: "Earlier message in this thread",
+          Provider: "discord",
+          ChatType: "channel",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C123",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.skipMessagingToolReplySuppression).toBe(true);
+  });
 });

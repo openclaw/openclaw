@@ -32,6 +32,7 @@ export function buildReplyPayloads(params: {
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
+  skipMessagingToolReplySuppression?: boolean;
   originatingTo?: string;
   accountId?: string;
 }): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
@@ -85,12 +86,14 @@ export function buildReplyPayloads(params: {
     !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
-  const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: params.messageProvider,
-    messagingToolSentTargets,
-    originatingTo: params.originatingTo,
-    accountId: params.accountId,
-  });
+  const suppressMessagingToolReplies = params.skipMessagingToolReplySuppression
+    ? false
+    : shouldSuppressMessagingToolReplies({
+        messageProvider: params.messageProvider,
+        messagingToolSentTargets,
+        originatingTo: params.originatingTo,
+        accountId: params.accountId,
+      });
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,
     sentTexts: messagingToolSentTexts,
