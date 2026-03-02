@@ -218,70 +218,71 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
             ctx.log(`[sim] inbound: conv=${conv.id} sender=${senderId} id=${recorded.id}`);
           }
 
-          // Enqueue a simulated agent run.
+          // Enqueue a simulated agent run for each configured agent.
           // NOTE: This calls fakeStreamFn directly instead of runEmbeddedPiAgent,
           // so it exercises queue/lane concurrency but not the full agent pipeline
           // (model resolution, auth profiles, failover/retry, rate limiting).
-          const enqueueTs = Date.now();
-          void enqueueCommandInLane(laneName, async () => {
-            const queueWaitMs = Date.now() - enqueueTs;
-            const runStart = Date.now();
-            const model = scenario.agents[0];
-            const streamOrPromise = ctx.fakeStreamFn(
-              { id: model.model, contextWindow: 8192 } as never,
-              {
-                messages: [{ role: "user", content: recorded.text }],
-              } as never,
-              {} as never,
-            );
-            const stream =
-              streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
+          for (const model of scenario.agents) {
+            const enqueueTs = Date.now();
+            void enqueueCommandInLane(laneName, async () => {
+              const queueWaitMs = Date.now() - enqueueTs;
+              const runStart = Date.now();
+              const streamOrPromise = ctx.fakeStreamFn(
+                { id: model.model, contextWindow: 8192 } as never,
+                {
+                  messages: [{ role: "user", content: recorded.text }],
+                } as never,
+                {} as never,
+              );
+              const stream =
+                streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
-            // Consume the async iterable to drive the stream to completion
-            let responseText: string | undefined;
-            for await (const evt of stream) {
-              if (evt.type === "done") {
-                responseText = evt.message.content
-                  .filter((c): c is { type: "text"; text: string } => c.type === "text")
-                  .map((c) => c.text)
-                  .join("");
-                break;
+              // Consume the async iterable to drive the stream to completion
+              let responseText: string | undefined;
+              for await (const evt of stream) {
+                if (evt.type === "done") {
+                  responseText = evt.message.content
+                    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+                    .map((c) => c.text)
+                    .join("");
+                  break;
+                }
+                if (ctx.controller.signal.aborted || evt.type === "error") {
+                  break;
+                }
               }
-              if (ctx.controller.signal.aborted || evt.type === "error") {
-                break;
-              }
-            }
 
-            // Only record outbound for successful completions — errors/aborts
-            // should not count as replies (they distort symptom ratios)
-            if (responseText !== undefined) {
-              const outbound: Omit<SimOutboundMessage, "seq"> = {
-                id: uuidv7(),
-                ts: Date.now(),
-                direction: "outbound",
-                conversationId: conv.id,
-                text: responseText,
-                agentId: model.id,
-                causalParentId: recorded.id,
-                causalParentTs: recorded.ts,
-                queueWaitMs,
-                runDurationMs: Date.now() - runStart,
-              };
-              ctx.tracker.record(outbound);
+              // Only record outbound for successful completions — errors/aborts
+              // should not count as replies (they distort symptom ratios)
+              if (responseText !== undefined) {
+                const outbound: Omit<SimOutboundMessage, "seq"> = {
+                  id: uuidv7(),
+                  ts: Date.now(),
+                  direction: "outbound",
+                  conversationId: conv.id,
+                  text: responseText,
+                  agentId: model.id,
+                  causalParentId: recorded.id,
+                  causalParentTs: recorded.ts,
+                  queueWaitMs,
+                  runDurationMs: Date.now() - runStart,
+                };
+                ctx.tracker.record(outbound);
 
-              if (ctx.verbose) {
-                ctx.log(
-                  `[sim] outbound: conv=${conv.id} agent=${model.id} wait=${queueWaitMs}ms id=${outbound.id}`,
-                );
+                if (ctx.verbose) {
+                  ctx.log(
+                    `[sim] outbound: conv=${conv.id} agent=${model.id} wait=${queueWaitMs}ms id=${outbound.id}`,
+                  );
+                }
               }
-            }
-          }).catch((err: unknown) => {
-            // Lane cleared errors are expected on abort — surface all others
-            if (!(err instanceof CommandLaneClearedError)) {
-              ctx.log(`[sim] lane task error: ${String(err)}`);
-              throw err;
-            }
-          });
+            }).catch((err: unknown) => {
+              // Lane cleared errors are expected on abort — surface all others
+              if (!(err instanceof CommandLaneClearedError)) {
+                ctx.log(`[sim] lane task error: ${String(err)}`);
+                throw err;
+              }
+            });
+          }
 
           resolve();
         }, startAtMs);
