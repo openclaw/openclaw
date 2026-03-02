@@ -94,4 +94,26 @@ describe("bundled plugin sources", () => {
     expect(resolved?.localPath).toBe("/app/extensions/feishu");
     expect(missing).toBeUndefined();
   });
+
+  it("finds bundled source by plugin id when npm spec does not match (#32019)", () => {
+    discoverOpenClawPluginsMock.mockReturnValue({
+      candidates: [
+        {
+          origin: "bundled",
+          rootDir: "/app/extensions/diffs",
+          packageName: "@openclaw/diffs",
+          packageManifest: {},
+        },
+      ],
+      diagnostics: [],
+    });
+    loadPluginManifestMock.mockReturnValue({ ok: true, manifest: { id: "diffs" } });
+
+    // Searching by unscoped name "diffs" should match by pluginId even though
+    // the npmSpec is "@openclaw/diffs".
+    const resolved = findBundledPluginByNpmSpec({ spec: "diffs" });
+
+    expect(resolved?.pluginId).toBe("diffs");
+    expect(resolved?.localPath).toBe("/app/extensions/diffs");
+  });
 });
