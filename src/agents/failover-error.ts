@@ -7,6 +7,24 @@ import {
 const TIMEOUT_HINT_RE =
   /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const OAUTH_PERMISSION_ERROR_RE = /\bpermission[_ ]error\b/i;
+
+function isOAuthPermissionPermanentErrorMessage(message: string): boolean {
+  if (!message) {
+    return false;
+  }
+  const lower = message.toLowerCase();
+  if (!lower.includes("oauth")) {
+    return false;
+  }
+  if (
+    lower.includes("oauth authentication is currently not allowed for this organization") ||
+    lower.includes("not allowed for this organization")
+  ) {
+    return true;
+  }
+  return OAUTH_PERMISSION_ERROR_RE.test(lower);
+}
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -168,6 +186,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 401 || status === 403) {
     const msg = getErrorMessage(err);
     if (msg && isAuthPermanentErrorMessage(msg)) {
+      return "auth_permanent";
+    }
+    if (status === 403 && msg && isOAuthPermissionPermanentErrorMessage(msg)) {
       return "auth_permanent";
     }
     return "auth";
