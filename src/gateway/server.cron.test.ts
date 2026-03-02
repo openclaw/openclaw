@@ -645,7 +645,7 @@ describe("gateway server cron", () => {
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
       fetchWithSsrFGuardMock.mockClear();
-      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "delivery failed" });
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
       const failureDestRes = await rpcReq(ws, "cron.add", {
         name: "failure destination webhook",
         enabled: true,
@@ -693,7 +693,7 @@ describe("gateway server cron", () => {
       expect(failureDestArgs.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = JSON.parse(failureDestArgs.init?.body ?? "{}");
       expect(failureDestBody.message).toBe(
-        'Cron job "failure destination webhook" failed: delivery failed',
+        'Cron job "failure destination webhook" failed: unknown error',
       );
 
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
