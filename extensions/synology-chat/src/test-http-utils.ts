@@ -2,10 +2,22 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export function makeReq(method: string, body: string): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage;
+  const req = new EventEmitter() as IncomingMessage & { destroyed: boolean };
   req.method = method;
+  req.headers = {};
   req.socket = { remoteAddress: "127.0.0.1" } as unknown as IncomingMessage["socket"];
+  req.destroyed = false;
+  req.destroy = ((_: Error | undefined) => {
+    if (req.destroyed) {
+      return req;
+    }
+    req.destroyed = true;
+    return req;
+  }) as IncomingMessage["destroy"];
   process.nextTick(() => {
+    if (req.destroyed) {
+      return;
+    }
     req.emit("data", Buffer.from(body));
     req.emit("end");
   });
