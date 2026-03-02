@@ -300,9 +300,14 @@ export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  provider: "minimax" | "minimax-cn" = "minimax",
 ): Promise<ProviderUsageSnapshot> {
+  const endpoint = provider === "minimax-cn"
+    ? "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+    : "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+  
   const res = await fetchJson(
-    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    endpoint,
     {
       method: "GET",
       headers: {
@@ -317,7 +322,7 @@ export async function fetchMinimaxUsage(
 
   if (!res.ok) {
     return buildUsageHttpErrorSnapshot({
-      provider: "minimax",
+      provider,
       status: res.status,
     });
   }
@@ -325,8 +330,8 @@ export async function fetchMinimaxUsage(
   const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;
   if (!isRecord(data)) {
     return {
-      provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      provider,
+      displayName: PROVIDER_LABELS[provider],
       windows: [],
       error: "Invalid JSON",
     };
@@ -335,8 +340,8 @@ export async function fetchMinimaxUsage(
   const baseResp = isRecord(data.base_resp) ? data.base_resp : undefined;
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
-      provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      provider,
+      displayName: PROVIDER_LABELS[provider],
       windows: [],
       error: baseResp.status_msg?.trim() || "API error",
     };
@@ -359,8 +364,8 @@ export async function fetchMinimaxUsage(
   }
   if (usedPercent === null) {
     return {
-      provider: "minimax",
-      displayName: PROVIDER_LABELS.minimax,
+      provider,
+      displayName: PROVIDER_LABELS[provider],
       windows: [],
       error: "Unsupported response shape",
     };
@@ -380,8 +385,8 @@ export async function fetchMinimaxUsage(
   ];
 
   return {
-    provider: "minimax",
-    displayName: PROVIDER_LABELS.minimax,
+    provider,
+    displayName: PROVIDER_LABELS[provider],
     windows,
     plan: pickString(usageRecord, PLAN_KEYS) ?? pickString(payload, PLAN_KEYS),
   };
