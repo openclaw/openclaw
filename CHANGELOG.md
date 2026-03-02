@@ -102,6 +102,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/FS workspace default: honor documented host file-tool default `tools.fs.workspaceOnly=false` when unset so host `write`/`edit` calls are not incorrectly workspace-restricted unless explicitly enabled. Landed from contributor PR #31128 by @SaucePackets. Thanks @SaucePackets.
 - Gateway/CLI session recovery: handle expired CLI session IDs gracefully by clearing stale session state and retrying without crashing gateway runs. Landed from contributor PR #31090 by @frankekn. Thanks @frankekn.
 - Slack/Subagent completion delivery: stop forcing bound conversation IDs into `threadId` so Slack completion announces do not send invalid `thread_ts` for DMs/top-level channels. Landed from contributor PR #31105 by @stakeswky. Thanks @stakeswky.
 - Signal/Loop protection: evaluate own-account detection before sync-message filtering (including UUID-only `accountUuid` configs) so `sentTranscript` sync events cannot bypass loop protection and self-reply loops. Landed from contributor PR #31093 by @kevinWangSheng. Thanks @kevinWangSheng.
