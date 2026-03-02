@@ -1095,8 +1095,7 @@
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
-                  "providers/openai",
-                  "providers/openrouter",
+                  "providers/bedrock",
                   "providers/cloudflare-ai-gateway",
                   "providers/claude-max-api-proxy",
                   "providers/deepgram",
@@ -1104,23 +1103,24 @@
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
-                  "providers/bedrock",
-                  "providers/vercel-ai-gateway",
+                  "providers/glm",
+                  "providers/minimax",
                   "providers/moonshot",
                   "providers/mistral",
-                  "providers/minimax",
                   "providers/nvidia",
                   "providers/ollama",
+                  "providers/openai",
                   "providers/opencode",
+                  "providers/openrouter",
+                  "providers/qianfan",
                   "providers/qwen",
+                  "providers/synthetic",
                   "providers/together",
+                  "providers/vercel-ai-gateway",
                   "providers/venice",
                   "providers/vllm",
                   "providers/xiaomi",
-                  "providers/glm",
-                  "providers/zai",
-                  "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/zai"
                 ]
               }
             ]
@@ -1687,24 +1687,24 @@
                 "group": "提供商",
                 "pages": [
                   "zh-CN/providers/anthropic",
-                  "zh-CN/providers/openai",
-                  "zh-CN/providers/openrouter",
                   "zh-CN/providers/bedrock",
-                  "zh-CN/providers/vercel-ai-gateway",
                   "zh-CN/providers/claude-max-api-proxy",
                   "zh-CN/providers/deepgram",
                   "zh-CN/providers/github-copilot",
+                  "zh-CN/providers/glm",
                   "zh-CN/providers/moonshot",
                   "zh-CN/providers/minimax",
-                  "zh-CN/providers/ollama",
                   "zh-CN/providers/opencode",
+                  "zh-CN/providers/ollama",
+                  "zh-CN/providers/openai",
+                  "zh-CN/providers/openrouter",
+                  "zh-CN/providers/qianfan",
                   "zh-CN/providers/qwen",
-                  "zh-CN/providers/venice",
-                  "zh-CN/providers/xiaomi",
-                  "zh-CN/providers/glm",
-                  "zh-CN/providers/zai",
                   "zh-CN/providers/synthetic",
-                  "zh-CN/providers/qianfan"
+                  "zh-CN/providers/venice",
+                  "zh-CN/providers/vercel-ai-gateway",
+                  "zh-CN/providers/xiaomi",
+                  "zh-CN/providers/zai"
                 ]
               }
             ]
