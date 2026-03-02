@@ -67,6 +67,15 @@ vi.mock("./queue.js", async () => {
   };
 });
 
+const loadCronStoreMock = vi.fn();
+vi.mock("../../cron/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+  return {
+    ...actual,
+    loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+  };
+});
+
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -80,6 +89,9 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  loadCronStoreMock.mockClear();
+  // Default: no cron jobs in store.
+  loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
@@ -1178,6 +1190,87 @@ describe("runReplyAgent reminder commitment guard", () => {
     const result = await createRun();
     expect(result).toMatchObject({
       text: "I'll remind you tomorrow morning.",
+    });
+  });
+
+  it("suppresses guard note when session already has an active cron job", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "existing-job",
+          name: "monitor-task",
+          enabled: true,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll ping you when it's done." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll ping you when it's done.",
+    });
+  });
+
+  it("still appends guard note when cron jobs exist but not for the current session", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "unrelated-job",
+          name: "daily-news",
+          enabled: true,
+          sessionKey: "other-session",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow morning." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    });
+  });
+
+  it("still appends guard note when cron jobs for session exist but are disabled", async () => {
+    loadCronStoreMock.mockResolvedValueOnce({
+      version: 1,
+      jobs: [
+        {
+          id: "disabled-job",
+          name: "old-monitor",
+          enabled: false,
+          sessionKey: "main",
+          createdAtMs: Date.now() - 60_000,
+          updatedAtMs: Date.now() - 60_000,
+        },
+      ],
+    });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll check back in an hour." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
     });
   });
 });
