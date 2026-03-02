@@ -81,3 +81,52 @@ Notes
 - The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.
 - URL responses from the API expire quickly; the script uses base64 to avoid this.
+
+---
+
+# Video Generation
+
+Generate videos from text, animate images, or edit existing videos.
+
+Generate (text-to-video)
+
+```bash
+uv run {baseDir}/scripts/generate_video.py --prompt "a cat lounging on a sunny windowsill" --filename "cat.mp4"
+```
+
+Image-to-video (animate an image)
+
+```bash
+uv run {baseDir}/scripts/generate_video.py --prompt "the dog starts running" --filename "dog-run.mp4" -i photo.png
+```
+
+Video edit
+
+```bash
+uv run {baseDir}/scripts/generate_video.py --prompt "make it nighttime" --filename "night.mp4" --video daytime.mp4
+```
+
+Custom duration and resolution
+
+```bash
+uv run {baseDir}/scripts/generate_video.py --prompt "ocean waves crashing" --filename "waves.mp4" --duration 10 --resolution 720p --aspect-ratio 16:9
+```
+
+## Video Model
+
+| Model | Cost | Rate limit |
+| ----- | ---- | ---------- |
+| `grok-imagine-video` (default) | $0.05/second | 60 RPM |
+
+## Video Parameters
+
+- Duration: 1–15 seconds.
+- Resolution: `480p` (default), `720p`.
+- Aspect ratio: `16:9`, `1:1`, `9:16`, etc.
+- Input videos for editing must be ≤ 8.7 seconds, MP4 (H.264/H.265/AV1).
+
+Video Notes
+
+- Video generation is **asynchronous**: the script submits, polls for completion, then downloads the MP4.
+- The script prints a `MEDIA:` line for OpenClaw to auto-attach on supported chat providers.
+- Do not read the video back; report the saved path only.
