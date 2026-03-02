@@ -157,6 +157,18 @@ describe("agent event handler", () => {
     return payload;
   }
 
+  function expectSingleErrorChatPayload(broadcast: ReturnType<typeof vi.fn>) {
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      errorMessage?: string;
+      usage?: unknown;
+    };
+    expect(payload.state).toBe("error");
+    return payload;
+  }
+
   it("emits chat delta for assistant text-only events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
@@ -216,6 +228,40 @@ describe("agent event handler", () => {
 
     const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("includes lifecycle usage in chat error payload", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_100,
+    });
+    chatRunState.registry.add("run-usage-error", {
+      sessionKey: "session-usage-error",
+      clientRunId: "client-usage-error",
+    });
+
+    handler({
+      runId: "run-usage-error",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: {
+        phase: "error",
+        error: "provider failed",
+        usage: { input: 12, output: 34, cacheRead: 2, cacheWrite: 1, total: 49 },
+      },
+    });
+
+    const payload = expectSingleErrorChatPayload(broadcast);
+    expect(payload.errorMessage).toContain("provider failed");
+    expect(payload.usage).toEqual({
+      input: 12,
+      output: 34,
+      cacheRead: 2,
+      cacheWrite: 1,
+      total: 49,
+    });
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
   });

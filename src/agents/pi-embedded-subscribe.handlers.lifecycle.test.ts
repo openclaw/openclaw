@@ -31,6 +31,7 @@ function createContext(
       debug: vi.fn(),
       warn: vi.fn(),
     },
+    getUsageTotals: vi.fn(() => undefined),
     flushBlockReplyBuffer: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
@@ -56,13 +57,15 @@ describe("handleAgentEnd", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain("runId=run-1");
     expect(warn.mock.calls[0]?.[0]).toContain("error=connection refused");
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: "connection refused",
-      },
-    });
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          error: "connection refused",
+        }),
+      }),
+    );
   });
 
   it("keeps non-error run-end logging on debug only", () => {
