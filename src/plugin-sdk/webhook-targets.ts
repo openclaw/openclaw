@@ -152,6 +152,57 @@ export async function resolveSingleWebhookTargetAsync<T>(
   return { kind: "single", target: matched };
 }
 
+export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean | Promise<boolean>;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): Promise<T | null> {
+  const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
+    Boolean(await params.isMatch(target)),
+  );
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): T | null {
+  const match = resolveSingleWebhookTarget(params.targets, params.isMatch);
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+function resolveWebhookTargetMatchOrReject<T>(
+  params: {
+    res: ServerResponse;
+    unauthorizedStatusCode?: number;
+    unauthorizedMessage?: string;
+    ambiguousStatusCode?: number;
+    ambiguousMessage?: string;
+  },
+  match: WebhookTargetMatchResult<T>,
+): T | null {
+  if (match.kind === "single") {
+    return match.target;
+  }
+  if (match.kind === "ambiguous") {
+    params.res.statusCode = params.ambiguousStatusCode ?? 401;
+    params.res.end(params.ambiguousMessage ?? "ambiguous webhook target");
+    return null;
+  }
+  params.res.statusCode = params.unauthorizedStatusCode ?? 401;
+  params.res.end(params.unauthorizedMessage ?? "unauthorized");
+  return null;
+}
+
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "POST") {
     return false;
