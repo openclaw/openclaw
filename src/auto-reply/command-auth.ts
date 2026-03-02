@@ -136,7 +136,7 @@ function resolveOwnerAllowFromList(params: {
           continue;
         }
         let remainder = trimmed.slice(separatorIndex + 1).trim();
-        
+
         // For Discord/Telegram, normalize IDs (strip mentions, prefixes) before validation
         const isNumericOnlyChannel = channel === "discord" || channel === "telegram";
         if (isNumericOnlyChannel && channel === "discord") {
@@ -149,7 +149,7 @@ function resolveOwnerAllowFromList(params: {
             .replace(/^pk:/i, "")
             .trim();
         }
-        
+
         // For Discord/Telegram, only accept numeric IDs to prevent nickname spoofing
         // For other channels (WhatsApp, Signal, Slack, etc), allow native ID formats
         if (remainder && (isNumericOnlyChannel ? /^\d+$/.test(remainder) : true)) {
@@ -157,7 +157,9 @@ function resolveOwnerAllowFromList(params: {
         } else if (remainder && isNumericOnlyChannel) {
           const warnKey = `prefix:${channel}:${remainder}`;
           if (!warnedInvalidEntries.has(warnKey)) {
-            console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' for ${channel} (use numeric user ID, not nickname)`);
+            console.warn(
+              `[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' for ${channel} (use numeric user ID, not nickname)`,
+            );
             warnedInvalidEntries.add(warnKey);
           }
         }
@@ -166,11 +168,12 @@ function resolveOwnerAllowFromList(params: {
     }
     // For unprefixed entries in Discord/Telegram context, normalize then validate numeric IDs
     // For other channels or unknown context, accept as-is (will be validated by channel logic)
-    const isNumericOnlyContext = params.providerId === "discord" || params.providerId === "telegram";
-    
+    const isNumericOnlyContext =
+      params.providerId === "discord" || params.providerId === "telegram";
+
     if (isNumericOnlyContext) {
       let normalized = trimmed;
-      
+
       // Normalize mention formats for unprefixed entries
       if (params.providerId === "discord") {
         // Discord: Strip mention formats and prefixes
@@ -183,17 +186,17 @@ function resolveOwnerAllowFromList(params: {
           .trim();
       } else if (params.providerId === "telegram") {
         // Telegram: Strip tg: prefix
-        normalized = normalized
-          .replace(/^tg:/i, "")
-          .trim();
+        normalized = normalized.replace(/^tg:/i, "").trim();
       }
-      
+
       if (/^\d+$/.test(normalized)) {
         filtered.push(normalized);
       } else {
         const warnKey = `bare:${params.providerId}:${trimmed}`;
         if (!warnedInvalidEntries.has(warnKey)) {
-          console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' for ${params.providerId} (use user ID, not nickname)`);
+          console.warn(
+            `[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' for ${params.providerId} (use user ID, not nickname)`,
+          );
           warnedInvalidEntries.add(warnKey);
         }
       }

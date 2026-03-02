@@ -189,60 +189,62 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const hasDiscordToken = Boolean(
     cfg.channels?.discord?.token?.trim() ||
     process.env.DISCORD_BOT_TOKEN?.trim() ||
-    (cfg.channels?.discord?.accounts && Object.keys(cfg.channels.discord.accounts).length > 0)
+    (cfg.channels?.discord?.accounts && Object.keys(cfg.channels.discord.accounts).length > 0),
   );
   const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
   const ownerConfigured = Array.isArray(ownerAllowFrom) && ownerAllowFrom.length > 0;
-  const hasNumericOwner = ownerConfigured && ownerAllowFrom.some(entry => {
-    const trimmed = String(entry).trim();
-    // Accept bare numeric IDs (assumes Discord context)
-    if (/^\d+$/.test(trimmed)) return true;
-    
-    // Check for Discord-prefixed format only
-    const separatorIndex = trimmed.indexOf(":");
-    if (separatorIndex > 0) {
-      const prefix = trimmed.slice(0, separatorIndex);
-      const remainder = trimmed.slice(separatorIndex + 1).trim();
-      
-      // For Discord, normalize mention formats before checking
-      if (prefix.toLowerCase() === "discord") {
-        const normalized = remainder
-          .replace(/^<@!?/, "")
-          .replace(/>$/, "")
-          .replace(/^discord:/i, "")
-          .replace(/^user:/i, "")
-          .replace(/^pk:/i, "")
-          .trim();
-        return /^\d+$/.test(normalized);
+  const hasNumericOwner =
+    ownerConfigured &&
+    ownerAllowFrom.some((entry) => {
+      const trimmed = String(entry).trim();
+      // Accept bare numeric IDs (assumes Discord context)
+      if (/^\d+$/.test(trimmed)) return true;
+
+      // Check for Discord-prefixed format only
+      const separatorIndex = trimmed.indexOf(":");
+      if (separatorIndex > 0) {
+        const prefix = trimmed.slice(0, separatorIndex);
+        const remainder = trimmed.slice(separatorIndex + 1).trim();
+
+        // For Discord, normalize mention formats before checking
+        if (prefix.toLowerCase() === "discord") {
+          const normalized = remainder
+            .replace(/^<@!?/, "")
+            .replace(/>$/, "")
+            .replace(/^discord:/i, "")
+            .replace(/^user:/i, "")
+            .replace(/^pk:/i, "")
+            .trim();
+          return /^\d+$/.test(normalized);
+        }
+
+        // Only Discord prefixes count as valid System Owner for Discord warnings
+        return false;
       }
-      
-      // Only Discord prefixes count as valid System Owner for Discord warnings
-      return false;
-    }
-    
-    // Check for unprefixed Discord mention formats
-    const normalized = trimmed
-      .replace(/^<@!?/, "")
-      .replace(/>$/, "")
-      .replace(/^discord:/i, "")
-      .replace(/^user:/i, "")
-      .replace(/^pk:/i, "")
-      .trim();
-    return /^\d+$/.test(normalized);
-  });
+
+      // Check for unprefixed Discord mention formats
+      const normalized = trimmed
+        .replace(/^<@!?/, "")
+        .replace(/>$/, "")
+        .replace(/^discord:/i, "")
+        .replace(/^user:/i, "")
+        .replace(/^pk:/i, "")
+        .trim();
+      return /^\d+$/.test(normalized);
+    });
 
   if (hasDiscordToken && !ownerConfigured) {
     warnings.push(
       "- CRITICAL: Discord enabled but System Owner not configured (commands.ownerAllowFrom).",
       "  Anyone on Discord can run privileged commands (/restart, /config, owner-only tools).",
-      `  Fix: Add your Discord User ID: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+      `  Fix: Add your Discord User ID: ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"YOUR_DISCORD_ID\"]'")}`,
       "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
     );
   } else if (hasDiscordToken && ownerConfigured && !hasNumericOwner) {
     warnings.push(
       "- WARNING: System Owner configured with names instead of numeric IDs.",
       "  Nicknames can be spoofed! Use Discord User IDs (numeric) instead of usernames.",
-      `  Fix: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+      `  Fix: ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"YOUR_DISCORD_ID\"]'")}`,
       "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
     );
   }

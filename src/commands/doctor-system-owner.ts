@@ -32,7 +32,7 @@ export async function maybePromptForSystemOwner(params: {
     note(
       [
         "- Discord enabled but System Owner not configured.",
-        `  Set manually: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+        `  Set manually: ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"YOUR_DISCORD_ID\"]'")}`,
         "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
       ].join("\n"),
       "System Owner",
@@ -50,7 +50,7 @@ export async function maybePromptForSystemOwner(params: {
     note(
       [
         "- Skipped System Owner configuration.",
-        `  Configure later: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+        `  Configure later: ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"YOUR_DISCORD_ID\"]'")}`,
         "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
       ].join("\n"),
       "System Owner",
@@ -69,10 +69,10 @@ export async function maybePromptForSystemOwner(params: {
       "   - Right-click your profile → Copy User ID",
       "",
       "2. Configure System Owner:",
-      `   ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+      `   ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"YOUR_DISCORD_ID\"]'")}`,
       "",
       "Example:",
-      `   ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["119510072865980419"]\'')}`,
+      `   ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"119510072865980419\"]'")}`,
     ].join("\n"),
     "System Owner Setup",
   );
