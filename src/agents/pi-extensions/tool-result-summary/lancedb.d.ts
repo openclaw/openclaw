@@ -4,15 +4,25 @@
  */
 
 declare module "@lancedb/lancedb" {
-  interface Table {
+  /**
+   * Search result row with distance score from vector search.
+   */
+  export interface LanceDBSearchRow<T = Record<string, unknown>> {
+    _distance: number;
+    [key: string]: T[keyof T] | undefined;
+  }
+
+  export interface Table {
     add(rows: unknown[]): Promise<void>;
-    vectorSearch(vector: number[]): { limit(n: number): { toArray(): Promise<unknown[]> } };
+    vectorSearch(vector: number[]): {
+      limit(n: number): { toArray(): Promise<LanceDBSearchRow[]> };
+    };
     query(): { where(condition: string): { toArray(): Promise<unknown[]> } };
     delete(condition: string): Promise<void>;
     countRows(): Promise<number>;
   }
 
-  interface Connection {
+  export interface Connection {
     tableNames(): Promise<string[]>;
     openTable(name: string): Promise<Table>;
     createTable(name: string, data: unknown[]): Promise<Table>;

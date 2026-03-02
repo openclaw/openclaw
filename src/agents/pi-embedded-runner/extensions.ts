@@ -1,7 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ToolResultSummaryRuntimeValue } from "../pi-extensions/tool-result-summary/types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -13,6 +12,7 @@ import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tool
 import toolResultSummaryExtension from "../pi-extensions/tool-result-summary/index.js";
 import { setToolResultSummaryRuntime } from "../pi-extensions/tool-result-summary/runtime.js";
 import { computeEffectiveSettings as computeToolResultSummarySettings } from "../pi-extensions/tool-result-summary/settings.js";
+import type { ToolResultSummaryRuntimeValue } from "../pi-extensions/tool-result-summary/types.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 

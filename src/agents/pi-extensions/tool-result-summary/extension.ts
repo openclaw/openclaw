@@ -19,14 +19,14 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
-import type { ToolResultSummaryConfig, ToolResultSummaryRuntimeValue } from "./types.js";
 import { createEmbeddingProvider } from "../../../memory/embeddings.js";
 import { createRetriever, buildSearchQuery, formatResultsForContext } from "./retriever.js";
 import { getToolResultSummaryRuntime, updateToolResultSummaryRuntime } from "./runtime.js";
-import { ToolResultSummaryStore } from "./store.js";
 import { cacheStore } from "./store-cache.js";
+import { ToolResultSummaryStore } from "./store.js";
 import { createSummarizer, createLLMClient } from "./summarizer.js";
 import { makeToolFilterPredicate, estimateContentLength } from "./tools.js";
+import type { ToolResultSummaryConfig, ToolResultSummaryRuntimeValue } from "./types.js";
 
 /**
  * Cached services per runtime.
@@ -68,6 +68,14 @@ async function ensureServices(runtime: ToolResultSummaryRuntimeValue): Promise<{
       fallback: "none",
     });
     const embeddings = embeddingResult.provider;
+
+    // Check if embeddings provider is available
+    if (!embeddings) {
+      console.error(
+        `tool-result-summary: embedding provider not available (${embeddingResult.providerUnavailableReason ?? "unknown reason"})`,
+      );
+      return null;
+    }
 
     // Resolve database path
     const resolvedDbPath = runtime.resolvedDbPath ?? config.storage.dbPath;

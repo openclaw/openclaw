@@ -6,8 +6,8 @@
 
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
 import type { ToolResultSummaryStore } from "./store.js";
-import type { ToolResultSearchResult, RetrievalConfig } from "./types.js";
 import { extractTextContent } from "./summarizer.js";
+import type { ToolResultSearchResult, RetrievalConfig } from "./types.js";
 
 /**
  * Formatted retrieval result for context injection.
@@ -27,7 +27,7 @@ export type FormattedRetrievalResult = {
 export function createRetriever(
   config: RetrievalConfig,
   store: ToolResultSummaryStore,
-  embeddings: EmbeddingProvider,
+  _embeddings: EmbeddingProvider,
 ) {
   return {
     /**

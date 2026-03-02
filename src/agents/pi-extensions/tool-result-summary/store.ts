@@ -4,11 +4,11 @@
  * Uses LanceDB for vector storage and retrieval.
  */
 
-import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
+import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import type { EmbeddingProvider } from "../../../memory/embeddings.js";
-import type { ToolResultEntry, ToolResultSearchResult, StorageConfig } from "./types.js";
 import { truncateContent } from "./tools.js";
+import type { ToolResultEntry, ToolResultSearchResult, StorageConfig } from "./types.js";
 
 /**
  * LanceDB types (loaded dynamically).

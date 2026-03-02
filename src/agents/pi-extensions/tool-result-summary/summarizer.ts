@@ -5,9 +5,9 @@
  * Supports caching and batch processing to reduce LLM API calls.
  */
 
-import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import { createHash } from "crypto";
-import type { SummaryConfig, SummaryCacheConfig, SummaryBatchConfig } from "./types.js";
+import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
+import type { SummaryConfig, SummaryCacheConfig } from "./types.js";
 
 /**
  * Result of summarization.
@@ -226,7 +226,7 @@ async function processBatch(config: SummaryConfig, llmClient: LLMClient): Promis
         });
       }
     }
-  } catch (err) {
+  } catch {
     // On error, fall back to truncation for all items
     for (const item of uncachedItems) {
       item.resolve({
@@ -351,7 +351,7 @@ export function createSummarizer(config: SummaryConfig, llmClient: LLMClient) {
           truncated: true,
           cached: false,
         };
-      } catch (err) {
+      } catch {
         // On error, fall back to truncation
         return {
           ok: true,
@@ -451,7 +451,7 @@ function safeStringify(obj: unknown, maxLength: number): string {
 /**
  * Create an LLM client using the existing model infrastructure.
  */
-export function createLLMClient(params: { model: unknown; sessionId: string }): LLMClient {
+export function createLLMClient(_params: { model: unknown; sessionId: string }): LLMClient {
   return {
     async generate(
       prompt: string,
