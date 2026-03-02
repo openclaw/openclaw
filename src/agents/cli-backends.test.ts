@@ -33,4 +33,31 @@ describe("resolveCliBackendConfig reliability merge", () => {
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
     expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
+
+  it("sets CLAUDE_CODE_DISABLE_1M_CONTEXT=1 by default for claude-cli", () => {
+    const resolved = resolveCliBackendConfig("claude-cli");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT).toBe("1");
+  });
+
+  it("allows claude-cli env override to re-enable 1M context", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "0" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT).toBe("0");
+  });
 });

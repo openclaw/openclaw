@@ -54,6 +54,7 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   systemPromptArg: "--append-system-prompt",
   systemPromptMode: "append",
   systemPromptWhen: "first",
+  env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" },
   clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
   reliability: {
     watchdog: {
