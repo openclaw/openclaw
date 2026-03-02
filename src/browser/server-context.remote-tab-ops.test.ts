@@ -98,6 +98,24 @@ function createJsonListFetchMock(entries: JsonListEntry[]) {
   });
 }
 
+function makeManagedTab(id: string, ordinal: number): JsonListEntry {
+  return {
+    id,
+    title: String(ordinal),
+    url: `http://127.0.0.1:300${ordinal}`,
+    webSocketDebuggerUrl: `ws://127.0.0.1/devtools/page/${id}`,
+    type: "page",
+  };
+}
+
+function makeManagedTabsWithNew(params?: { newFirst?: boolean }): JsonListEntry[] {
+  const oldTabs = Array.from({ length: 8 }, (_, index) =>
+    makeManagedTab(`OLD${index + 1}`, index + 1),
+  );
+  const newTab = makeManagedTab("NEW", 9);
+  return params?.newFirst ? [newTab, ...oldTabs] : [...oldTabs, newTab];
+}
+
 describe("browser server-context remote profile tab operations", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {
     const state = makeState("openclaw");
@@ -397,71 +415,7 @@ describe("browser server-context tab selection state", () => {
   it("closes excess managed tabs after opening a new tab", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
 
-    const existingTabs = [
-      {
-        id: "OLD1",
-        title: "1",
-        url: "http://127.0.0.1:3001",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
-        type: "page",
-      },
-      {
-        id: "OLD2",
-        title: "2",
-        url: "http://127.0.0.1:3002",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
-        type: "page",
-      },
-      {
-        id: "OLD3",
-        title: "3",
-        url: "http://127.0.0.1:3003",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
-        type: "page",
-      },
-      {
-        id: "OLD4",
-        title: "4",
-        url: "http://127.0.0.1:3004",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
-        type: "page",
-      },
-      {
-        id: "OLD5",
-        title: "5",
-        url: "http://127.0.0.1:3005",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
-        type: "page",
-      },
-      {
-        id: "OLD6",
-        title: "6",
-        url: "http://127.0.0.1:3006",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
-        type: "page",
-      },
-      {
-        id: "OLD7",
-        title: "7",
-        url: "http://127.0.0.1:3007",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
-        type: "page",
-      },
-      {
-        id: "OLD8",
-        title: "8",
-        url: "http://127.0.0.1:3008",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
-        type: "page",
-      },
-      {
-        id: "NEW",
-        title: "9",
-        url: "http://127.0.0.1:3009",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-        type: "page",
-      },
-    ];
+    const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
@@ -497,71 +451,7 @@ describe("browser server-context tab selection state", () => {
   it("never closes the just-opened managed tab during cap cleanup", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
 
-    const existingTabs = [
-      {
-        id: "NEW",
-        title: "9",
-        url: "http://127.0.0.1:3009",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-        type: "page",
-      },
-      {
-        id: "OLD1",
-        title: "1",
-        url: "http://127.0.0.1:3001",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
-        type: "page",
-      },
-      {
-        id: "OLD2",
-        title: "2",
-        url: "http://127.0.0.1:3002",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
-        type: "page",
-      },
-      {
-        id: "OLD3",
-        title: "3",
-        url: "http://127.0.0.1:3003",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
-        type: "page",
-      },
-      {
-        id: "OLD4",
-        title: "4",
-        url: "http://127.0.0.1:3004",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
-        type: "page",
-      },
-      {
-        id: "OLD5",
-        title: "5",
-        url: "http://127.0.0.1:3005",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
-        type: "page",
-      },
-      {
-        id: "OLD6",
-        title: "6",
-        url: "http://127.0.0.1:3006",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
-        type: "page",
-      },
-      {
-        id: "OLD7",
-        title: "7",
-        url: "http://127.0.0.1:3007",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
-        type: "page",
-      },
-      {
-        id: "OLD8",
-        title: "8",
-        url: "http://127.0.0.1:3008",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
-        type: "page",
-      },
-    ];
+    const existingTabs = makeManagedTabsWithNew({ newFirst: true });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
@@ -645,71 +535,7 @@ describe("browser server-context tab selection state", () => {
   it("does not run managed tab cleanup in attachOnly mode", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
 
-    const existingTabs = [
-      {
-        id: "OLD1",
-        title: "1",
-        url: "http://127.0.0.1:3001",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
-        type: "page",
-      },
-      {
-        id: "OLD2",
-        title: "2",
-        url: "http://127.0.0.1:3002",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
-        type: "page",
-      },
-      {
-        id: "OLD3",
-        title: "3",
-        url: "http://127.0.0.1:3003",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
-        type: "page",
-      },
-      {
-        id: "OLD4",
-        title: "4",
-        url: "http://127.0.0.1:3004",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
-        type: "page",
-      },
-      {
-        id: "OLD5",
-        title: "5",
-        url: "http://127.0.0.1:3005",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
-        type: "page",
-      },
-      {
-        id: "OLD6",
-        title: "6",
-        url: "http://127.0.0.1:3006",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
-        type: "page",
-      },
-      {
-        id: "OLD7",
-        title: "7",
-        url: "http://127.0.0.1:3007",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
-        type: "page",
-      },
-      {
-        id: "OLD8",
-        title: "8",
-        url: "http://127.0.0.1:3008",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
-        type: "page",
-      },
-      {
-        id: "NEW",
-        title: "9",
-        url: "http://127.0.0.1:3009",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-        type: "page",
-      },
-    ];
+    const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
@@ -739,71 +565,7 @@ describe("browser server-context tab selection state", () => {
   it("does not block openTab on slow best-effort cleanup closes", async () => {
     vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
 
-    const existingTabs = [
-      {
-        id: "OLD1",
-        title: "1",
-        url: "http://127.0.0.1:3001",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
-        type: "page",
-      },
-      {
-        id: "OLD2",
-        title: "2",
-        url: "http://127.0.0.1:3002",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
-        type: "page",
-      },
-      {
-        id: "OLD3",
-        title: "3",
-        url: "http://127.0.0.1:3003",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
-        type: "page",
-      },
-      {
-        id: "OLD4",
-        title: "4",
-        url: "http://127.0.0.1:3004",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
-        type: "page",
-      },
-      {
-        id: "OLD5",
-        title: "5",
-        url: "http://127.0.0.1:3005",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
-        type: "page",
-      },
-      {
-        id: "OLD6",
-        title: "6",
-        url: "http://127.0.0.1:3006",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
-        type: "page",
-      },
-      {
-        id: "OLD7",
-        title: "7",
-        url: "http://127.0.0.1:3007",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
-        type: "page",
-      },
-      {
-        id: "OLD8",
-        title: "8",
-        url: "http://127.0.0.1:3008",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
-        type: "page",
-      },
-      {
-        id: "NEW",
-        title: "9",
-        url: "http://127.0.0.1:3009",
-        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
-        type: "page",
-      },
-    ];
+    const existingTabs = makeManagedTabsWithNew();
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const value = String(url);
