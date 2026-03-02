@@ -1513,4 +1513,83 @@ describe("Cron issue regressions", () => {
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
   });
+
+  // Regression: isolated cron runs must not abort at 1/3 of configured timeoutSeconds.
+  // The bug (issue #29774) caused the CLI-provider resume watchdog (ratio 0.3, maxMs 180 s)
+  // to be applied on fresh sessions because a persisted cliSessionId was passed to
+  // runCliAgent even when isNewSession=true.  At the service level this manifests as a
+  // job abort that fires much sooner than the configured outer timeout.
+  it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
+    vi.useRealTimers();
+    const store = await makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+
+    // Use a short but observable timeout: 300 ms.
+    // Before the fix, premature timeout would fire at ~100 ms (1/3 of 300 ms).
+    const timeoutSeconds = 0.3;
+    const cronJob = createIsolatedRegressionJob({
+      id: "timeout-fraction-29774",
+      name: "timeout fraction regression",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "work", timeoutSeconds },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const tempFile = path.join(os.tmpdir(), `cron-29774-${Date.now()}.txt`);
+    let now = scheduledAt;
+    const wallStart = Date.now();
+    let abortWallMs: number | undefined;
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        // Real side effect: confirm the job actually started.
+        await fs.writeFile(tempFile, "started", "utf-8");
+        await new Promise<void>((resolve) => {
+          if (!abortSignal) {
+            resolve();
+            return;
+          }
+          if (abortSignal.aborted) {
+            abortWallMs = Date.now();
+            resolve();
+            return;
+          }
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              abortWallMs = Date.now();
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        now += 5;
+        return { status: "ok" as const, summary: "done" };
+      }),
+    });
+
+    await onTimer(state);
+
+    // Confirm job started (real side effect).
+    await expect(fs.readFile(tempFile, "utf-8")).resolves.toBe("started");
+    await fs.unlink(tempFile).catch(() => {});
+
+    // The outer cron timeout fires at timeoutSeconds * 1000 = 300 ms.
+    // The abort must not have fired at ~100 ms (the 1/3 regression value).
+    // Allow generous lower bound (80%) to keep the test stable on loaded CI runners.
+    const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.8);
+
+    const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.lastError).toContain("timed out");
+  });
 });
