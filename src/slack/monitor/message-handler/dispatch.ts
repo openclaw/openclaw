@@ -21,12 +21,7 @@ import {
   resolveSlackStreamingConfig,
 } from "../../stream-mode.js";
 import type { SlackStreamSession } from "../../streaming.js";
-import {
-  abandonSlackStream,
-  appendSlackStream,
-  startSlackStream,
-  stopSlackStream,
-} from "../../streaming.js";
+import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
@@ -462,19 +457,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const anyReplyDelivered =
     queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0 || (counts.tool ?? 0) > 0;
-
-  // If a stream was started but no replies of any kind were delivered, delete
-  // the stream message. This is a last-resort safety net for cases where
-  // sentinel text leaked past prefix detection. We intentionally gate on
-  // !anyReplyDelivered (not just !hasFinalReply) to avoid deleting streams
-  // that carry legitimate block-only replies (e.g. ACP flows).
-  if (finalStream && !anyReplyDelivered) {
-    try {
-      await abandonSlackStream(finalStream);
-    } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to abandon stream: ${String(err)}`));
-    }
-  }
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
