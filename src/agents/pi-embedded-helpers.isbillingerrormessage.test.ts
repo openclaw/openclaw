@@ -532,4 +532,14 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+  it("classifies GLM Chinese model-not-found errors", () => {
+    expect(classifyFailoverReason("模型不存在，请检查模型代码")).toBe("model_not_found");
+    expect(classifyFailoverReason("Error: 模型不存在")).toBe("model_not_found");
+  });
+  it("classifies GLM Chinese quota/rate-limit errors", () => {
+    expect(classifyFailoverReason("您已达到每周/每月使用上限")).toBe("rate_limit");
+    expect(classifyFailoverReason("达到使用上限")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额已用完")).toBe("rate_limit");
+    expect(classifyFailoverReason("用量已超出限制")).toBe("rate_limit");
+  });
 });

@@ -628,6 +628,11 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    // Chinese provider quota messages (e.g. GLM error 1310)
+    "使用上限", // "usage limit"
+    /达到.*上限/, // "reached...limit"
+    /用量.*超/, // "usage...exceeded"
+    "配额", // "quota"
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
@@ -869,6 +874,11 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     (lower.includes("does not exist") && lower.includes("model")) ||
     (lower.includes("invalid model") && !lower.includes("invalid model reference"))
   ) {
+    return true;
+  }
+
+  // GLM (Zhipu AI) Chinese error: "模型不存在，请检查模型代码"
+  if (lower.includes("模型不存在") || lower.includes("模型代码")) {
     return true;
   }
 
