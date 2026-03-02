@@ -177,6 +177,12 @@ describe("web_search country and language parameters", () => {
     return new URL(mockFetch.mock.calls[0][0] as string);
   }
 
+  it("uses the current Brave Search endpoint path", async () => {
+    const url = await runBraveSearchAndGetUrl({});
+    expect(url.origin).toBe("https://api.search.brave.com");
+    expect(url.pathname).toBe("/res/v1/web/search");
+  });
+
   it.each([
     { key: "country", value: "DE" },
     { key: "search_lang", value: "de" },
