@@ -128,6 +128,57 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   return list.map((v) => String(v).trim()).filter(Boolean);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
+  const channels = asRecord(cfg.channels);
+  const feishu = asRecord(channels?.feishu);
+  if (!feishu || feishu.enabled === false) {
+    return false;
+  }
+
+  const baseTools = asRecord(feishu.tools);
+  const baseDocEnabled = baseTools?.doc !== false;
+  const baseAppId = hasNonEmptyString(feishu.appId);
+  const baseAppSecret = hasNonEmptyString(feishu.appSecret);
+  const baseConfigured = baseAppId && baseAppSecret;
+
+  const accounts = asRecord(feishu.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return baseDocEnabled && baseConfigured;
+  }
+
+  for (const accountValue of Object.values(accounts)) {
+    const account = asRecord(accountValue) ?? {};
+    if (account.enabled === false) {
+      continue;
+    }
+    const accountTools = asRecord(account.tools);
+    const effectiveTools = accountTools ?? baseTools;
+    const docEnabled = effectiveTools?.doc !== false;
+    if (!docEnabled) {
+      continue;
+    }
+    const accountConfigured =
+      (hasNonEmptyString(account.appId) || baseAppId) &&
+      (hasNonEmptyString(account.appSecret) || baseAppSecret);
+    if (accountConfigured) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
@@ -366,6 +417,18 @@ function collectGatewayConfigFindings(
         "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
     });
   }
+  if (controlUiAllowedOrigins.includes("*")) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_wildcard",
+      severity: exposed ? "critical" : "warn",
+      title: "Control UI allowed origins contains wildcard",
+      detail:
+        'gateway.controlUi.allowedOrigins includes "*" which effectively disables origin allowlisting for Control UI/WebChat requests.',
+      remediation:
+        "Replace wildcard origins with explicit trusted origins (for example https://control.example.com).",
+    });
+  }
   if (dangerouslyAllowHostHeaderOriginFallback) {
     const exposed = bind !== "loopback";
     findings.push({
@@ -449,6 +512,18 @@ function collectGatewayConfigFindings(
       detail:
         "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
       remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+    });
+  }
+
+  if (isFeishuDocToolEnabled(cfg)) {
+    findings.push({
+      checkId: "channels.feishu.doc_owner_open_id",
+      severity: "warn",
+      title: "Feishu doc create can grant requester permissions",
+      detail:
+        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
+      remediation:
+        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
     });
   }
 

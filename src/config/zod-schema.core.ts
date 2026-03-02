@@ -232,6 +232,7 @@ export const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
+    injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
@@ -502,6 +503,32 @@ export const requireOpenAllowFrom = (params: {
   }
   const allow = normalizeAllowFrom(params.allowFrom);
   if (allow.includes("*")) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: params.path,
+    message: params.message,
+  });
+};
+
+/**
+ * Validate that dmPolicy="allowlist" has a non-empty allowFrom array.
+ * Without this, all DMs are silently dropped because the allowlist is empty
+ * and no senders can match.
+ */
+export const requireAllowlistAllowFrom = (params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+  ctx: z.RefinementCtx;
+  path: Array<string | number>;
+  message: string;
+}) => {
+  if (params.policy !== "allowlist") {
+    return;
+  }
+  const allow = normalizeAllowFrom(params.allowFrom);
+  if (allow.length > 0) {
     return;
   }
   params.ctx.addIssue({

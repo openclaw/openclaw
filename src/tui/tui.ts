@@ -246,6 +246,30 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   };
 }
 
+export function isIgnorableTuiStopError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; syscall?: unknown; message?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  if (code === "EBADF" && syscall === "setRawMode") {
+    return true;
+  }
+  return /setRawMode/i.test(message) && /EBADF/i.test(message);
+}
+
+export function stopTuiSafely(stop: () => void): void {
+  try {
+    stop();
+  } catch (error) {
+    if (!isIgnorableTuiStopError(error)) {
+      throw error;
+    }
+  }
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -770,7 +794,7 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    tui.stop();
+    stopTuiSafely(() => tui.stop());
     process.exit(0);
   };
 

@@ -19,6 +19,21 @@ function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
   expect(typed.channels.googlechat.allowFrom).toBeUndefined();
 }
 
+async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
+  const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+  try {
+    await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    return noteSpy.mock.calls
+      .filter((call) => call[1] === "Doctor warnings")
+      .map((call) => String(call[0]));
+  } finally {
+    noteSpy.mockRestore();
+  }
+}
+
 type DiscordGuildRule = {
   users: string[];
   roles: string[];
@@ -56,31 +71,59 @@ describe("doctor config flow", () => {
   });
 
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          channels: {
-            slack: {
-              dangerouslyAllowNameMatching: true,
-              accounts: {
-                work: {
-                  allowFrom: ["alice"],
-                },
-              },
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        slack: {
+          dangerouslyAllowNameMatching: true,
+          accounts: {
+            work: {
+              allowFrom: ["alice"],
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
+      },
+    });
+    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+  });
 
-      const doctorWarnings = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor warnings")
-        .map((call) => String(call[0]));
-      expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
-    } finally {
-      noteSpy.mockRestore();
-    }
+  it("does not warn about sender-based group allowlist for googlechat", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        googlechat: {
+          groupPolicy: "allowlist",
+          accounts: {
+            work: {
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) => line.includes('groupPolicy is "allowlist"') && line.includes("groupAllowFrom"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          allowFrom: ["+15551234567"],
+        },
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('channels.imessage.groupPolicy is "allowlist"') &&
+          line.includes("does not fall back to allowFrom"),
+      ),
+    ).toBe(true);
   });
 
   it("drops unknown keys on repair", async () => {
@@ -450,6 +493,50 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
+  });
+
+  it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const credentialsDir = path.join(configDir, "credentials");
+      await fs.mkdir(credentialsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            channels: {
+              telegram: {
+                botToken: "fake-token",
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(credentialsDir, "telegram-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
+        "utf-8",
+      );
+      return await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          dmPolicy: string;
+          allowFrom: string[];
+        };
+      };
+    };
+    expect(cfg.channels.telegram.dmPolicy).toBe("allowlist");
+    expect(cfg.channels.telegram.allowFrom).toEqual(["12345"]);
   });
 
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
