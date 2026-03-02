@@ -42,7 +42,7 @@ import type {
   WebhookTarget,
 } from "./monitor-shared.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
-import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { isSupportedBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
@@ -228,21 +228,19 @@ function resolveBlueBubblesAckReaction(params: {
   if (!raw) {
     return null;
   }
-  try {
-    normalizeBlueBubblesReactionInput(raw);
+  if (isSupportedBlueBubblesReactionInput(raw)) {
     return raw;
-  } catch {
-    const key = raw.toLowerCase();
-    if (!invalidAckReactions.has(key)) {
-      invalidAckReactions.add(key);
-      logVerbose(
-        params.core,
-        params.runtime,
-        `ack reaction skipped (unsupported for BlueBubbles): ${raw}`,
-      );
-    }
-    return null;
   }
+  const key = raw.toLowerCase();
+  if (!invalidAckReactions.has(key)) {
+    invalidAckReactions.add(key);
+    logVerbose(
+      params.core,
+      params.runtime,
+      `ack reaction skipped (unsupported for BlueBubbles): ${raw}`,
+    );
+  }
+  return null;
 }
 
 /**

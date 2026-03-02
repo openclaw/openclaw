@@ -115,17 +115,30 @@ function resolveAccount(params: BlueBubblesReactionOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
-export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+function resolveBlueBubblesReactionType(emoji: string): string | null {
   const trimmed = emoji.trim();
   if (!trimmed) {
-    throw new Error("BlueBubbles reaction requires an emoji or name.");
+    return null;
   }
   let raw = trimmed.toLowerCase();
   if (raw.startsWith("-")) {
     raw = raw.slice(1);
   }
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
-  const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
+  return REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
+}
+
+export function isSupportedBlueBubblesReactionInput(emoji: string): boolean {
+  const mapped = resolveBlueBubblesReactionType(emoji);
+  return mapped !== null && REACTION_TYPES.has(mapped);
+}
+
+export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+  const trimmed = emoji.trim();
+  if (!trimmed) {
+    throw new Error("BlueBubbles reaction requires an emoji or name.");
+  }
+  const mapped = resolveBlueBubblesReactionType(trimmed);
   if (!REACTION_TYPES.has(mapped)) {
     return remove ? "-like" : "like";
   }
