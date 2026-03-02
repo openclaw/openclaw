@@ -65,8 +65,9 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
  */
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
 /**
- * Announce entries older than this are force-expired even if delivery never
- * succeeded. Guards against stale registry entries surviving gateway restarts.
+ * Non-completion announce entries older than this are force-expired even if
+ * delivery never succeeded. Completion-message flows can stay pending while
+ * descendants finish and are governed by retry limits instead.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
@@ -447,7 +448,11 @@ function resumeSubagentRun(runId: string) {
     persistSubagentRuns();
     return;
   }
-  if (typeof entry.endedAt === "number" && Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS) {
+  if (
+    entry.expectsCompletionMessage !== true &&
+    typeof entry.endedAt === "number" &&
+    Date.now() - entry.endedAt > ANNOUNCE_EXPIRY_MS
+  ) {
     logAnnounceGiveUp(entry, "expiry");
     entry.cleanupCompletedAt = Date.now();
     persistSubagentRuns();
@@ -464,6 +469,7 @@ function resumeSubagentRun(runId: string) {
   ) {
     const waitMs = Math.max(1, earliestRetryAt - now);
     setTimeout(() => {
+      resumedRuns.delete(runId);
       resumeSubagentRun(runId);
     }, waitMs).unref?.();
     resumedRuns.add(runId);
@@ -818,9 +824,10 @@ function retryDeferredCompletedAnnounces(excludeRunId?: string) {
     if (suppressAnnounceForSteerRestart(entry)) {
       continue;
     }
-    // Force-expire announces that have been pending too long (#18264).
+    // Force-expire stale non-completion announces; completion-message flows can
+    // stay pending while descendants run for a long time.
     const endedAgo = now - (entry.endedAt ?? now);
-    if (endedAgo > ANNOUNCE_EXPIRY_MS) {
+    if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
       logAnnounceGiveUp(entry, "expiry");
       entry.cleanupCompletedAt = now;
       persistSubagentRuns();

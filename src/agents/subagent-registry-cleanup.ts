@@ -40,15 +40,14 @@ export function resolveDeferredCleanupDecision(params: {
   resolveAnnounceRetryDelayMs: (retryCount: number) => number;
 }): DeferredCleanupDecision {
   const endedAgo = resolveEndedAgoMs(params.entry, params.now);
-  if (params.entry.expectsCompletionMessage === true && params.activeDescendantRuns > 0) {
-    if (endedAgo > params.announceExpiryMs) {
-      return { kind: "give-up", reason: "expiry" };
-    }
+  const ignoreExpiryForCompletionMessage = params.entry.expectsCompletionMessage === true;
+  if (ignoreExpiryForCompletionMessage && params.activeDescendantRuns > 0) {
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
   const retryCount = (params.entry.announceRetryCount ?? 0) + 1;
-  if (retryCount >= params.maxAnnounceRetryCount || endedAgo > params.announceExpiryMs) {
+  const expiryExceeded = !ignoreExpiryForCompletionMessage && endedAgo > params.announceExpiryMs;
+  if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
     return {
       kind: "give-up",
       reason: retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",
