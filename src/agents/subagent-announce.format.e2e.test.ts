@@ -147,8 +147,13 @@ describe("subagent announce formatting", () => {
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 
   beforeAll(async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    // Set FAST_TEST_MODE before importing the module to ensure the module-level
+    // constant picks it up. This fixes flaky Windows CI failures where the test
+    // timeout budget is too tight without fast mode enabled.
+    // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
@@ -160,7 +165,8 @@ describe("subagent announce formatting", () => {
   });
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    // OPENCLAW_TEST_FAST is set in beforeAll before module import
+    // to ensure the module-level constant picks it up.
     agentSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
