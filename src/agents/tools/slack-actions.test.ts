@@ -216,6 +216,33 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("passes download scope (channel/thread) to downloadSlackFile", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+        to: "channel:C1",
+        replyTo: "123.456",
+      },
+      slackConfig(),
+    );
+
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({
+        channelId: "C1",
+        threadId: "123.456",
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({ ok: false }),
+      }),
+    );
+  });
+
   it.each([
     {
       name: "JSON blocks",

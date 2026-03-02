@@ -751,6 +751,50 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on ECONNREFUSED (local server down or remote unreachable)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:11434"), {
+        code: "ECONNREFUSED",
+      }),
+    });
+  });
+
+  it("falls back on ENETUNREACH (network disconnected)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
+    });
+  });
+
+  it("falls back on EHOSTUNREACH (host unreachable)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+    });
+  });
+
+  it("falls back on EAI_AGAIN (DNS resolution failure)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("getaddrinfo EAI_AGAIN api.openai.com"), {
+        code: "EAI_AGAIN",
+      }),
+    });
+  });
+
+  it("falls back on ENETRESET (connection reset by network)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("connect ENETRESET"), { code: "ENETRESET" }),
+    });
+  });
+
   it("falls back on provider abort errors with request-aborted messages", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
