@@ -129,7 +129,7 @@ function resolveSkillEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   for (const [skillKey, skillConfig] of Object.entries(skillEntries)) {
     if (skillConfig?.env && typeof skillConfig.env === "object") {
       // Sanitize each skill's env vars through the security validation
-      const sanitized = sanitizeSkillEnvOverrides(skillConfig.env, new Set());
+      const sanitized = sanitizeSkillEnvOverrides({ overrides: skillConfig.env, allowedSensitiveKeys: new Set() });
       Object.assign(skillEnv, sanitized.allowed);
       // Log any blocked or warning env vars
       if (sanitized.blocked.length > 0) {
