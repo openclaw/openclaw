@@ -8,7 +8,7 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop
     await Promise.resolve();
   }
 }

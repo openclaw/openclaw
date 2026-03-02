@@ -25,7 +25,7 @@ const DEFAULT_MODEL_IDS = [
   "grok-code-fast-1",
 ] as const;
 
-function normalizeBaseUrl(value: string): string {
+export function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return DEFAULT_BASE_URL;
@@ -40,7 +40,7 @@ function normalizeBaseUrl(value: string): string {
   return normalized;
 }
 
-function validateBaseUrl(value: string): string | undefined {
+export function validateBaseUrl(value: string): string | undefined {
   const normalized = normalizeBaseUrl(value);
   try {
     new URL(normalized);
@@ -50,7 +50,7 @@ function validateBaseUrl(value: string): string | undefined {
   return undefined;
 }
 
-function parseModelIds(input: string): string[] {
+export function parseModelIds(input: string): string[] {
   const parsed = input
     .split(/[\n,]/)
     .map((model) => model.trim())
@@ -58,7 +58,7 @@ function parseModelIds(input: string): string[] {
   return Array.from(new Set(parsed));
 }
 
-function buildModelDefinition(modelId: string) {
+export function buildModelDefinition(modelId: string) {
   return {
     id: modelId,
     name: modelId,

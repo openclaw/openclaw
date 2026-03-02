@@ -91,7 +91,7 @@ vi.mock("./manager.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import { getMemorySearchManager } from "./search-manager.js";
-// eslint-disable-next-line @typescript-eslint/unbound-method -- mocked static function
+// oxlint-disable-next-line typescript/unbound-method -- mocked static function
 const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -147,7 +147,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(first.manager).toBe(second.manager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
   });
 
@@ -169,7 +169,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);
     expect(second.manager).not.toBe(first.manager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
@@ -182,14 +182,14 @@ describe("getMemorySearchManager caching", () => {
 
     requireManager(first);
     requireManager(second);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ agentId, mode: "status" }),
     );
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ agentId, mode: "status" }),
@@ -216,7 +216,7 @@ describe("getMemorySearchManager caching", () => {
 
     const third = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     expect(third.manager).toBe(secondManager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
+    // oxlint-disable-next-line typescript/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 

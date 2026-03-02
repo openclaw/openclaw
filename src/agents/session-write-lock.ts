@@ -198,7 +198,7 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    // eslint-disable-next-line no-console
+    // oxlint-disable-next-line no-console
     console.warn(
       `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
     );

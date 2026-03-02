@@ -150,7 +150,7 @@ describe("CronService read ops while job is running", () => {
         if (!internal.state?.running) {
           break;
         }
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop
         await Promise.resolve();
       }
       expect(internal.state?.running).toBe(false);
