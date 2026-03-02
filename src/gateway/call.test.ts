@@ -524,7 +524,12 @@ describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_URL",
+      "CLAWDBOT_GATEWAY_URL",
+    ]);
     resetGatewayCallMocks();
     setGatewayNetworkDefaults(18789);
   });
@@ -546,6 +551,18 @@ describe("callGateway url override auth requirements", () => {
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
     ).rejects.toThrow("explicit credentials");
+  });
+
+  it("throws when env URL override is set without env credentials", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://override.example/ws";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "local-token", password: "local-password" },
+      },
+    });
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
   });
 });
 

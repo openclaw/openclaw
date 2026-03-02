@@ -87,14 +87,25 @@ export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): Explicit
 export function ensureExplicitGatewayAuth(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
-  auth: ExplicitGatewayAuth;
+  explicitAuth?: ExplicitGatewayAuth;
+  resolvedAuth?: ExplicitGatewayAuth;
   errorHint: string;
   configPath?: string;
 }): void {
-  if (params.urlOverrideSource !== "cli") {
+  if (!params.urlOverride) {
     return;
   }
-  if (params.auth.token || params.auth.password) {
+  const explicitToken = params.explicitAuth?.token;
+  const explicitPassword = params.explicitAuth?.password;
+  if (params.urlOverrideSource === "cli" && (explicitToken || explicitPassword)) {
+    return;
+  }
+  const hasResolvedAuth =
+    params.resolvedAuth?.token ||
+    params.resolvedAuth?.password ||
+    explicitToken ||
+    explicitPassword;
+  if (params.urlOverrideSource === "env" && hasResolvedAuth) {
     return;
   }
   const message = [
@@ -420,10 +431,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 ): Promise<T> {
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
+  const resolvedCredentials = resolveGatewayCredentials(context);
   ensureExplicitGatewayAuth({
     urlOverride: context.urlOverride,
     urlOverrideSource: context.urlOverrideSource,
-    auth: context.explicitAuth,
+    explicitAuth: context.explicitAuth,
+    resolvedAuth: resolvedCredentials,
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
@@ -436,7 +449,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
+  const { token, password } = resolvedCredentials;
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
