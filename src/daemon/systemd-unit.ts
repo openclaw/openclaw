@@ -144,6 +144,18 @@ function consumePossiblyQuotedValue(initialValue: string, pending: string[]): st
   return value;
 }
 
+function hasUnescapedTrailingBackslash(line: string): boolean {
+  let count = 0;
+  for (let i = line.length - 1; i >= 0; i--) {
+    if (line[i] === "\\") {
+      count++;
+    } else {
+      break;
+    }
+  }
+  return count % 2 === 1;
+}
+
 export function collectSystemdExecStartValues(contents: string): string[] {
   const logicalLines: string[] = [];
   let currentLine = "";
@@ -153,8 +165,10 @@ export function collectSystemdExecStartValues(contents: string): string[] {
     if (!trimmedLine && !currentLine) {
       continue;
     }
-    const hasContinuation = /\\\s*$/.test(trimmedLine);
-    const linePart = trimmedLine.replace(/\\\s*$/, "").trim();
+    // Only an odd number of trailing backslashes is a continuation;
+    // even count (e.g. \\) represents escaped literal backslashes.
+    const hasContinuation = hasUnescapedTrailingBackslash(trimmedLine);
+    const linePart = hasContinuation ? trimmedLine.slice(0, -1).trim() : trimmedLine;
     currentLine = currentLine ? `${currentLine} ${linePart}`.trim() : linePart;
     if (hasContinuation) {
       continue;

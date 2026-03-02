@@ -46,6 +46,20 @@ describe("collectSystemdExecStartValues", () => {
     ]);
   });
 
+  it("does not treat escaped trailing backslash as continuation", () => {
+    const content = [
+      "[Service]",
+      "ExecStart=/bin/echo foo\\\\",
+      "WorkingDirectory=/home/test",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual(["/bin/echo foo\\\\"]);
+  });
+
+  it("continues after escaped backslash followed by continuation backslash", () => {
+    const content = ["[Service]", "ExecStart=/bin/echo foo\\\\\\", "  bar"].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual(["/bin/echo foo\\\\ bar"]);
+  });
+
   it("ignores ExecStart keys outside the [Service] section", () => {
     const content = [
       "[Unit]",
