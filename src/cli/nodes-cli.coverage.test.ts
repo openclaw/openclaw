@@ -12,6 +12,9 @@ type NodeInvokeCall = {
   };
 };
 
+let lastNodeInvokeCall: NodeInvokeCall | null = null;
+let lastApprovalRequestCall: { params?: Record<string, unknown> } | null = null;
+
 const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
   if (opts.method === "node.list") {
     return {
@@ -28,6 +31,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
     };
   }
   if (opts.method === "node.invoke") {
+    lastNodeInvokeCall = opts;
     const command = opts.params?.command;
     if (command === "system.run.prepare") {
       const params = (opts.params?.params ?? {}) as {
@@ -83,6 +87,7 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
     };
   }
   if (opts.method === "exec.approval.request") {
+    lastApprovalRequestCall = opts as { params?: Record<string, unknown> };
     return { decision: "allow-once" };
   }
   return { ok: true };
@@ -107,44 +112,36 @@ vi.mock("../config/config.js", () => ({
 
 describe("nodes-cli coverage", () => {
   let registerNodesCli: (program: Command) => void;
+  let sharedProgram: Command;
 
   const getNodeInvokeCall = () => {
-    const nodeInvokeCalls = callGateway.mock.calls
-      .map((call) => call[0])
-      .filter((entry): entry is NodeInvokeCall => entry?.method === "node.invoke");
-    const last = nodeInvokeCalls.at(-1);
+    const last = lastNodeInvokeCall;
     if (!last) {
       throw new Error("expected node.invoke call");
     }
     return last;
   };
 
-  const getApprovalRequestCall = () =>
-    callGateway.mock.calls.find((call) => call[0]?.method === "exec.approval.request")?.[0] as {
-      params?: Record<string, unknown>;
-    };
-
-  const createNodesProgram = () => {
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-    return program;
-  };
+  const getApprovalRequestCall = () => lastApprovalRequestCall;
 
   const runNodesCommand = async (args: string[]) => {
-    const program = createNodesProgram();
-    await program.parseAsync(args, { from: "user" });
+    await sharedProgram.parseAsync(args, { from: "user" });
     return getNodeInvokeCall();
   };
 
   beforeAll(async () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
+    sharedProgram = new Command();
+    sharedProgram.exitOverride();
+    registerNodesCli(sharedProgram);
   });
 
   beforeEach(() => {
     resetRuntimeCapture();
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
+    lastNodeInvokeCall = null;
+    lastApprovalRequestCall = null;
   });
 
   it("invokes system.run with parsed params", async () => {
