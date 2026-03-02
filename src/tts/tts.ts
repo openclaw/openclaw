@@ -55,6 +55,7 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const EDGE_OPUS_OUTPUT_FORMAT = "ogg-24khz-16bit-mono-opus";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -570,7 +571,10 @@ export async function textToSpeech(params: {
         const tempRoot = resolvePreferredOpenClawTmpDir();
         mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        let edgeOutputFormat = resolveEdgeOutputFormat(config);
+        let edgeOutputFormat =
+          channelId && VOICE_BUBBLE_CHANNELS.has(channelId)
+            ? EDGE_OPUS_OUTPUT_FORMAT
+            : resolveEdgeOutputFormat(config);
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
@@ -948,4 +952,6 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  VOICE_BUBBLE_CHANNELS,
+  EDGE_OPUS_OUTPUT_FORMAT,
 };

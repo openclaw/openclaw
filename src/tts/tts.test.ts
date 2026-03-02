@@ -53,6 +53,8 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  VOICE_BUBBLE_CHANNELS,
+  EDGE_OPUS_OUTPUT_FORMAT,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -233,6 +235,21 @@ describe("tts", () => {
         const config = resolveTtsConfig(testCase.cfg);
         expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
       }
+    });
+  });
+
+  describe("Edge TTS opus override for voice-bubble channels", () => {
+    it("VOICE_BUBBLE_CHANNELS includes feishu, telegram, and whatsapp", () => {
+      expect(VOICE_BUBBLE_CHANNELS.has("feishu")).toBe(true);
+      expect(VOICE_BUBBLE_CHANNELS.has("telegram")).toBe(true);
+      expect(VOICE_BUBBLE_CHANNELS.has("whatsapp")).toBe(true);
+    });
+
+    it("EDGE_OPUS_OUTPUT_FORMAT produces an ogg/opus extension", async () => {
+      expect(EDGE_OPUS_OUTPUT_FORMAT).toContain("opus");
+      const { inferEdgeExtension } = await import("./tts-core.js");
+      const ext = inferEdgeExtension(EDGE_OPUS_OUTPUT_FORMAT);
+      expect([".ogg", ".opus"]).toContain(ext);
     });
   });
 
