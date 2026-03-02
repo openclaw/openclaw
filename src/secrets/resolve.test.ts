@@ -19,6 +19,7 @@ describe("secret ref resolver", () => {
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
   let execInvalidJsonScriptPath = "";
+  let execFastExitScriptPath = "";
 
   const createCaseDir = async (label: string): Promise<string> => {
     const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
@@ -68,6 +69,9 @@ describe("secret ref resolver", () => {
       ["#!/bin/sh", "printf 'not-json'"].join("\n"),
       0o700,
     );
+
+    execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
+    await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
   });
 
   afterAll(async () => {
@@ -172,6 +176,30 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("plain-secret");
+  });
+
+  it("ignores EPIPE when exec provider exits before consuming stdin", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const oversizedId = `openai/${"x".repeat(120_000)}`;
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: oversizedId },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: execFastExitScriptPath,
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
   });
 
   it("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
