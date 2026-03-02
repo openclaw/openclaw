@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
 
 export type RegisteredWebhookTarget<T> = {
@@ -10,6 +11,30 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
   onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
+
+type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
+
+export type RegisterWebhookPluginRouteOptions = Omit<
+  RegisterPluginHttpRouteParams,
+  "path" | "fallbackPath"
+>;
+
+export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
+  targetsByPath: Map<string, T[]>;
+  target: T;
+  route: RegisterWebhookPluginRouteOptions;
+  onLastPathTargetRemoved?: RegisterWebhookTargetOptions<T>["onLastPathTargetRemoved"];
+}): RegisteredWebhookTarget<T> {
+  return registerWebhookTarget(params.targetsByPath, params.target, {
+    onFirstPathTarget: ({ path }) =>
+      registerPluginHttpRoute({
+        ...params.route,
+        path,
+        replaceExisting: params.route.replaceExisting ?? true,
+      }),
+    onLastPathTargetRemoved: params.onLastPathTargetRemoved,
+  });
+}
 
 const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
 

@@ -128,7 +128,7 @@ export async function sendRequest(
     authorization?: string;
     method?: string;
   },
-) {
+): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();
   await dispatchRequest(server, createRequest(params), response.res);
   return response;
