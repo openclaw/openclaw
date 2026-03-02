@@ -65,6 +65,7 @@ import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
 } from "../../session-write-lock.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
@@ -763,6 +764,25 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+
+    // Emit the inbound user message BEFORE acquiring the session write lock so
+    // that the dashboard (and any WebSocket listeners) can display it immediately
+    // rather than waiting for lock acquisition + session initialisation to complete.
+    // This is a fire-and-forget broadcast that does NOT write to the transcript
+    // file — the actual transcript write still happens inside the session as normal,
+    // ensuring no duplicate messages.
+    if (params.runId && params.sessionKey && params.prompt) {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "inbound",
+        sessionKey: params.sessionKey,
+        data: {
+          role: "user",
+          text: typeof params.prompt === "string" ? params.prompt : "",
+          timestamp: Date.now(),
+        },
+      });
+    }
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,

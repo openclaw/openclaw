@@ -453,7 +453,27 @@ export function createAgentEventHandler({
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      if (evt.stream === "inbound" && typeof evt.data?.text === "string" && evt.data.text) {
+        // Broadcast the inbound user message to the dashboard immediately —
+        // before the session write lock is acquired and before the AI responds.
+        // This eliminates the "message appears only after AI reply" delay on
+        // all channels (Telegram, Discord, Signal, etc.).
+        const now = typeof evt.data.timestamp === "number" ? evt.data.timestamp : Date.now();
+        const seq = nextChatSeq({ agentRunSeq }, clientRunId);
+        const inboundPayload = {
+          runId: clientRunId,
+          sessionKey,
+          seq,
+          state: "inbound" as const,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: evt.data.text as string }],
+            timestamp: now,
+          },
+        };
+        broadcast("chat", inboundPayload);
+        nodeSendToSession(sessionKey, "chat", inboundPayload);
+      } else if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {
