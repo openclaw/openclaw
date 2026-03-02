@@ -39,8 +39,9 @@ export function mapContainerPathToDockerHostPath(params: {
     }
     const prefix = mount.Destination === "/" ? "/" : `${mount.Destination}/`;
     if (containerPath.startsWith(prefix)) {
-      const remainder = containerPath.slice(mount.Destination.length);
-      return `${mount.Source}${remainder}`;
+      const remainder =
+        mount.Destination === "/" ? containerPath : containerPath.slice(mount.Destination.length);
+      return normalizeAbsolutePosixPath(`${mount.Source}${remainder}`);
     }
   }
 

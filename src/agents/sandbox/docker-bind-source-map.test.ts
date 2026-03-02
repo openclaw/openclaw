@@ -42,6 +42,14 @@ describe("sandbox docker bind source mapping", () => {
     expect(mapped).toBe("/opt/openclaw/sandboxes");
   });
 
+  it("preserves the leading slash when mapping from a root mount", () => {
+    const mapped = mapContainerPathToDockerHostPath({
+      containerPath: "/workspace",
+      mounts: [{ Source: "/host", Destination: "/" }],
+    });
+    expect(mapped).toBe("/host/workspace");
+  });
+
   it("returns both container and mapped roots for validation", () => {
     const roots = resolveAllowedBindSourceRoots({
       containerRoots: ["/home/node/.openclaw/sandboxes"],
