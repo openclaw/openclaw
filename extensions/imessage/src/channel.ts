@@ -37,10 +37,11 @@ function buildIMessageSetupPatch(input: {
   service?: string;
   region?: string;
 }) {
+  const service = input.service as "auto" | "imessage" | "sms" | undefined;
   return {
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
     ...(input.dbPath ? { dbPath: input.dbPath } : {}),
-    ...(input.service ? { service: input.service } : {}),
+    ...(service ? { service } : {}),
     ...(input.region ? { region: input.region } : {}),
   };
 }
