@@ -23,6 +23,7 @@ vi.mock("../infra/agent-events.js", () => ({
 function createToolHandlerCtx(params: {
   runId: string;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   onBlockReplyFlush?: unknown;
 }) {
@@ -32,6 +33,7 @@ function createToolHandlerCtx(params: {
       session: { messages: [] },
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
     state: {
@@ -83,6 +85,7 @@ describe("after_tool_call hook wiring", () => {
       runId: "test-run-1",
       agentId: "main",
       sessionKey: "test-session",
+      sessionId: "test-ephemeral-session",
     });
 
     await handleToolExecutionStart(
@@ -90,7 +93,7 @@ describe("after_tool_call hook wiring", () => {
       {
         type: "tool_execution_start",
         toolName: "read",
-        toolCallId: "call-1",
+        toolCallId: "wired-hook-call-1",
         args: { path: "/tmp/file.txt" },
       } as never,
     );
@@ -100,7 +103,7 @@ describe("after_tool_call hook wiring", () => {
       {
         type: "tool_execution_end",
         toolName: "read",
-        toolCallId: "call-1",
+        toolCallId: "wired-hook-call-1",
         isError: false,
         result: { content: [{ type: "text", text: "file contents" }] },
       } as never,
@@ -114,7 +117,9 @@ describe("after_tool_call hook wiring", () => {
     const event = firstCall?.[0] as
       | { toolName?: string; params?: unknown; error?: unknown; durationMs?: unknown }
       | undefined;
-    const context = firstCall?.[1] as { toolName?: string } | undefined;
+    const context = firstCall?.[1] as
+      | { toolName?: string; agentId?: string; sessionKey?: string; sessionId?: string }
+      | undefined;
     expect(event).toBeDefined();
     expect(context).toBeDefined();
     if (!event || !context) {
@@ -125,6 +130,9 @@ describe("after_tool_call hook wiring", () => {
     expect(event.error).toBeUndefined();
     expect(typeof event.durationMs).toBe("number");
     expect(context.toolName).toBe("read");
+    expect(context.agentId).toBe("main");
+    expect(context.sessionKey).toBe("test-session");
+    expect(context.sessionId).toBe("test-ephemeral-session");
   });
 
   it("includes error in after_tool_call event on tool failure", async () => {
@@ -163,6 +171,10 @@ describe("after_tool_call hook wiring", () => {
       throw new Error("missing hook call payload");
     }
     expect(event.error).toBeDefined();
+
+    // agentId should be undefined when not provided
+    const context = firstCall?.[1] as { agentId?: string } | undefined;
+    expect(context?.agentId).toBeUndefined();
   });
 
   it("does not call runAfterToolCall when no hooks registered", async () => {

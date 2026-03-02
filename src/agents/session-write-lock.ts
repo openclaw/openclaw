@@ -369,6 +369,21 @@ async function shouldReclaimContendedLockFile(
   }
 }
 
+function shouldTreatAsOrphanSelfLock(params: {
+  payload: LockFilePayload | null;
+  normalizedSessionFile: string;
+}): boolean {
+  const pid = isValidLockNumber(params.payload?.pid) ? params.payload.pid : null;
+  if (pid !== process.pid) {
+    return false;
+  }
+  const hasValidStarttime = isValidLockNumber(params.payload?.starttime);
+  if (hasValidStarttime) {
+    return false;
+  }
+  return !HELD_LOCKS.has(params.normalizedSessionFile);
+}
+
 export async function cleanStaleLockFiles(params: {
   sessionsDir: string;
   staleMs?: number;
@@ -509,7 +524,20 @@ export async function acquireSessionWriteLock(params: {
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
-      if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
+      const orphanSelfLock = shouldTreatAsOrphanSelfLock({
+        payload,
+        normalizedSessionFile,
+      });
+      const reclaimDetails = orphanSelfLock
+        ? {
+            ...inspected,
+            stale: true,
+            staleReasons: inspected.staleReasons.includes("orphan-self-pid")
+              ? inspected.staleReasons
+              : [...inspected.staleReasons, "orphan-self-pid"],
+          }
+        : inspected;
+      if (await shouldReclaimContendedLockFile(lockPath, reclaimDetails, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
         continue;
       }

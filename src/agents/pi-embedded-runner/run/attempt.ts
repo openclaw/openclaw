@@ -584,7 +584,8 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
           config: params.config,
@@ -751,7 +752,7 @@ export async function runEmbeddedAttempt(
       sandbox: (() => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg: params.config,
-          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionKey: sandboxSessionKey,
         });
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
@@ -858,7 +859,8 @@ export async function runEmbeddedAttempt(
             },
             {
               agentId: sessionAgentId,
-              sessionKey: params.sessionKey,
+              sessionKey: sandboxSessionKey,
+              sessionId: params.sessionId,
               loopDetection: clientToolLoopDetection,
             },
           )
@@ -1185,7 +1187,9 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
       });
 
       const {

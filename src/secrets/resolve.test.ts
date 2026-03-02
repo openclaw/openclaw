@@ -19,12 +19,53 @@ describe("secret ref resolver", () => {
   let execProtocolV2ScriptPath = "";
   let execMissingIdScriptPath = "";
   let execInvalidJsonScriptPath = "";
+  let execFastExitScriptPath = "";
 
   const createCaseDir = async (label: string): Promise<string> => {
     const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
     await fs.mkdir(dir, { recursive: true });
     return dir;
   };
+
+  type ExecProviderConfig = {
+    source: "exec";
+    command: string;
+    passEnv?: string[];
+    jsonOnly?: boolean;
+    allowSymlinkCommand?: boolean;
+    trustedDirs?: string[];
+    args?: string[];
+  };
+
+  function createExecProviderConfig(
+    command: string,
+    overrides: Partial<ExecProviderConfig> = {},
+  ): ExecProviderConfig {
+    return {
+      source: "exec",
+      command,
+      passEnv: ["PATH"],
+      ...overrides,
+    };
+  }
+
+  async function resolveExecSecret(
+    command: string,
+    overrides: Partial<ExecProviderConfig> = {},
+  ): Promise<string> {
+    return resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: createExecProviderConfig(command, overrides),
+            },
+          },
+        },
+      },
+    );
+  }
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
@@ -68,6 +109,9 @@ describe("secret ref resolver", () => {
       ["#!/bin/sh", "printf 'not-json'"].join("\n"),
       0o700,
     );
+
+    execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
+    await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
   });
 
   afterAll(async () => {
@@ -130,23 +174,45 @@ describe("secret ref resolver", () => {
       return;
     }
 
+    const value = await resolveExecSecret(execProtocolV1ScriptPath);
+    expect(value).toBe("value:openai/api-key");
+  });
+
+  it("uses timeoutMs as the default no-output timeout for exec providers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await createCaseDir("exec-delay");
+    const scriptPath = path.join(root, "resolver-delay.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "setTimeout(() => {",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { delayed: 'ok' } }));",
+        "}, 2200);",
+      ].join("\n"),
+      0o700,
+    );
+
     const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      { source: "exec", provider: "execmain", id: "delayed" },
       {
         config: {
           secrets: {
             providers: {
               execmain: {
                 source: "exec",
-                command: execProtocolV1ScriptPath,
+                command: scriptPath,
                 passEnv: ["PATH"],
+                timeoutMs: 5000,
               },
             },
           },
         },
       },
     );
-    expect(value).toBe("value:openai/api-key");
+    expect(value).toBe("ok");
   });
 
   it("supports non-JSON single-value exec output when jsonOnly is false", async () => {
@@ -154,24 +220,32 @@ describe("secret ref resolver", () => {
       return;
     }
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: execPlainScriptPath,
-                passEnv: ["PATH"],
-                jsonOnly: false,
+    const value = await resolveExecSecret(execPlainScriptPath, { jsonOnly: false });
+    expect(value).toBe("plain-secret");
+  });
+
+  it("ignores EPIPE when exec provider exits before consuming stdin", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const oversizedId = `openai/${"x".repeat(120_000)}`;
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: oversizedId },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: execFastExitScriptPath,
+                },
               },
             },
           },
         },
-      },
-    );
-    expect(value).toBe("plain-secret");
+      ),
+    ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
   });
 
   it("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
@@ -182,25 +256,9 @@ describe("secret ref resolver", () => {
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await fs.symlink(execPlainScriptPath, symlinkPath);
 
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: false,
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("must not be a symlink");
+    await expect(resolveExecSecret(symlinkPath, { jsonOnly: false })).rejects.toThrow(
+      "must not be a symlink",
+    );
   });
 
   it("allows symlink command paths when allowSymlinkCommand is enabled", async () => {
@@ -212,25 +270,11 @@ describe("secret ref resolver", () => {
     await fs.symlink(execPlainScriptPath, symlinkPath);
     const trustedRoot = await fs.realpath(fixtureRoot);
 
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: symlinkPath,
-                passEnv: ["PATH"],
-                jsonOnly: false,
-                allowSymlinkCommand: true,
-                trustedDirs: [trustedRoot],
-              },
-            },
-          },
-        },
-      },
-    );
+    const value = await resolveExecSecret(symlinkPath, {
+      jsonOnly: false,
+      allowSymlinkCommand: true,
+      trustedDirs: [trustedRoot],
+    });
     expect(value).toBe("plain-secret");
   });
 
@@ -259,44 +303,15 @@ describe("secret ref resolver", () => {
     await fs.symlink(targetCommand, symlinkCommand);
     const trustedRoot = await fs.realpath(root);
 
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkCommand,
-                  args: ["brew"],
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("must not be a symlink");
-
-    const value = await resolveSecretRefString(
-      { source: "exec", provider: "execmain", id: "openai/api-key" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: symlinkCommand,
-                args: ["brew"],
-                allowSymlinkCommand: true,
-                trustedDirs: [trustedRoot],
-              },
-            },
-          },
-        },
-      },
+    await expect(resolveExecSecret(symlinkCommand, { args: ["brew"] })).rejects.toThrow(
+      "must not be a symlink",
     );
+
+    const value = await resolveExecSecret(symlinkCommand, {
+      args: ["brew"],
+      allowSymlinkCommand: true,
+      trustedDirs: [trustedRoot],
+    });
     expect(value).toBe("brew:openai/api-key");
   });
 
@@ -309,25 +324,11 @@ describe("secret ref resolver", () => {
     await fs.symlink(execPlainScriptPath, symlinkPath);
 
     await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: symlinkPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: false,
-                  allowSymlinkCommand: true,
-                  trustedDirs: [root],
-                },
-              },
-            },
-          },
-        },
-      ),
+      resolveExecSecret(symlinkPath, {
+        jsonOnly: false,
+        allowSymlinkCommand: true,
+        trustedDirs: [root],
+      }),
     ).rejects.toThrow("outside trustedDirs");
   });
 
@@ -335,73 +336,27 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: execProtocolV2ScriptPath,
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("protocolVersion must be 1");
+    await expect(resolveExecSecret(execProtocolV2ScriptPath)).rejects.toThrow(
+      "protocolVersion must be 1",
+    );
   });
 
   it("rejects exec refs when response omits requested id", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: execMissingIdScriptPath,
-                  passEnv: ["PATH"],
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow('response missing id "openai/api-key"');
+    await expect(resolveExecSecret(execMissingIdScriptPath)).rejects.toThrow(
+      'response missing id "openai/api-key"',
+    );
   });
 
   it("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: "openai/api-key" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                execmain: {
-                  source: "exec",
-                  command: execInvalidJsonScriptPath,
-                  passEnv: ["PATH"],
-                  jsonOnly: true,
-                },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("returned invalid JSON");
+    await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
+      "returned invalid JSON",
+    );
   });
 
   it("supports file singleValue mode with id=value", async () => {

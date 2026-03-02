@@ -38,24 +38,32 @@ async function fetchDiscordApplicationMe(
   timeoutMs: number,
   fetcher: typeof fetch,
 ): Promise<{ id?: string; flags?: number } | undefined> {
+  try {
+    const appResponse = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
+    if (!appResponse || !appResponse.ok) {
+      return undefined;
+    }
+    return (await appResponse.json()) as { id?: string; flags?: number };
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchDiscordApplicationMeResponse(
+  token: string,
+  timeoutMs: number,
+  fetcher: typeof fetch,
+): Promise<Response | undefined> {
   const normalized = normalizeDiscordToken(token);
   if (!normalized) {
     return undefined;
   }
-  try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/oauth2/applications/@me`,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
-    if (!res.ok) {
-      return undefined;
-    }
-    return (await res.json()) as { id?: string; flags?: number };
-  } catch {
-    return undefined;
-  }
+  return await fetchWithTimeout(
+    `${DISCORD_API_BASE}/oauth2/applications/@me`,
+    { headers: { Authorization: `Bot ${normalized}` } },
+    timeoutMs,
+    getResolvedFetch(fetcher),
+  );
 }
 
 export function resolveDiscordPrivilegedIntentsFromFlags(
@@ -198,17 +206,14 @@ export async function fetchDiscordApplicationId(
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<string | undefined> {
-  const normalized = normalizeDiscordToken(token);
-  if (!normalized) {
+  if (!normalizeDiscordToken(token)) {
     return undefined;
   }
   try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/oauth2/applications/@me`,
-      { headers: { Authorization: `Bot ${normalized}` } },
-      timeoutMs,
-      getResolvedFetch(fetcher),
-    );
+    const res = await fetchDiscordApplicationMeResponse(token, timeoutMs, fetcher);
+    if (!res) {
+      return undefined;
+    }
     if (res.ok) {
       const json = (await res.json()) as { id?: string };
       if (json?.id) {

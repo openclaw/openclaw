@@ -25,23 +25,25 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
-import { mediaKindFromMime } from "../../media/constants.js";
 import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../../media/inbound-path-policy.js";
+import { kindFromMime } from "../../media/mime.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
+import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -222,7 +224,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // Build arrays for all attachments (for multi-image support)
     const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = mediaKindFromMime(mediaType ?? undefined);
+    const kind = kindFromMime(mediaType ?? undefined);
     const placeholder = kind
       ? `<media:${kind}>`
       : validAttachments.length
@@ -320,6 +322,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     const updateTarget = chatTarget || decision.sender;
+    const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: cfg.session?.dmScope,
+      allowFrom,
+      normalizeEntry: normalizeIMessageHandle,
+    });
     await recordInboundSession({
       storePath,
       sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
@@ -331,6 +338,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               channel: "imessage",
               to: updateTarget,
               accountId: decision.route.accountId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && decision.senderNormalized
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: decision.senderNormalized,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        logVerbose(
+                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
             }
           : undefined,
       onRecordError: (err) => {

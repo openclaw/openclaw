@@ -1,7 +1,6 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { createBrowserProgram } from "./browser-cli-test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (_opts: unknown, req: { path?: string }) =>
@@ -35,13 +34,7 @@ vi.mock("./cli-utils.js", () => ({
     _runtime: unknown,
     action: () => Promise<void>,
     onError: (err: unknown) => void,
-  ) => {
-    try {
-      await action();
-    } catch (err) {
-      onError(err);
-    }
-  },
+  ) => await action().catch(onError),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -50,13 +43,8 @@ vi.mock("../runtime.js", () => ({
 
 describe("browser manage start timeout option", () => {
   function createProgram() {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false)
-      .option("--timeout <ms>", "Timeout in ms", "30000");
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+    const { program, browser, parentOpts } = createBrowserProgram();
+    browser.option("--timeout <ms>", "Timeout in ms", "30000");
     registerBrowserManageCommands(browser, parentOpts);
     return program;
   }
