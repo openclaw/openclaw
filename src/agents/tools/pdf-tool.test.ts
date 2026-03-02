@@ -326,6 +326,34 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("respects fsPolicy.workspaceOnly for non-sandbox pdf paths", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-out-"));
+      try {
+        const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
+        const tool = createPdfTool({
+          config: cfg,
+          agentDir,
+          workspaceDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+        expect(tool).not.toBeNull();
+
+        const outsidePdf = path.join(outsideDir, "secret.pdf");
+        await fs.writeFile(outsidePdf, "%PDF-1.4 fake");
+
+        await expect(tool!.execute("t1", { prompt: "test", pdf: outsidePdf })).rejects.toThrow(
+          /not under an allowed directory/i,
+        );
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects unsupported scheme references", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");

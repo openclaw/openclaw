@@ -339,8 +339,11 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const localRoots = (() => {
-    const roots = getDefaultLocalRoots();
     const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
+    if (options?.fsPolicy?.workspaceOnly) {
+      return workspaceDir ? [workspaceDir] : [];
+    }
+    const roots = getDefaultLocalRoots();
     if (!workspaceDir) {
       return roots;
     }
