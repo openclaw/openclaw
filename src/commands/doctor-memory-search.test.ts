@@ -164,7 +164,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).not.toContain("openclaw auth add --provider");
   });
 
-  it("uses model configure hint in auto mode when no provider credentials are found", async () => {
+  it("does not warn in auto mode when default local model is available", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
@@ -173,10 +173,9 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("openclaw configure --section model");
-    expect(message).not.toContain("openclaw auth add --provider");
+    // With the default local model (hf:embeddinggemma), auto mode should
+    // consider local embeddings available and not warn.
+    expect(note).not.toHaveBeenCalled();
   });
 });
 

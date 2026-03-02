@@ -5,6 +5,7 @@ import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory/embeddings.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -136,7 +137,7 @@ export async function noteMemorySearchHealth(
 }
 
 function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
-  const modelPath = local.modelPath?.trim();
+  const modelPath = local.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
   if (!modelPath) {
     return false;
   }
