@@ -133,10 +133,7 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "node-node-2", contextKey: "exec:run-2" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
-      reason: "exec-event",
-      sessionKey: "node-node-2",
-    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -172,10 +169,7 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
-      reason: "exec-event",
-      sessionKey: "node-node-2",
-    });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("enqueues exec.denied events with reason", async () => {
