@@ -1,0 +1,35 @@
+services:
+  openclaw-gateway:
+    image: openclaw:local-lobster
+    build:
+      context: .
+      dockerfile: Dockerfile.lobster
+    networks:
+      - default
+      - shared-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+  openclaw-cli:
+    image: openclaw:local-lobster
+    build:
+      context: .
+      dockerfile: Dockerfile.lobster
+    group_add:
+      - "${OPENCLAW_DOCKER_GID:-124}"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+  opencode:
+    image: openclaw:local-lobster
+    build:
+      context: .
+      dockerfile: Dockerfile.lobster
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+networks:
+  shared-network:
+    external: true
