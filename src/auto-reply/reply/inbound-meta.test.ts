@@ -138,6 +138,17 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["conversation_label"]).toBeUndefined();
   });
 
+  it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      Provider: "whatsapp",
+      MessageSid: "provider-only-id",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("provider-only-id");
+  });
+
   it("does not treat group chats as direct based on sender id", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

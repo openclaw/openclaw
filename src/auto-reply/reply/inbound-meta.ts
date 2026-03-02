@@ -85,7 +85,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
-  const directChannelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  const directChannelValue = resolveInboundChannel(ctx);
   const includeDirectConversationInfo = Boolean(
     directChannelValue && directChannelValue !== "webchat",
   );
