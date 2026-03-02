@@ -21,6 +21,16 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const buildGatewayInstallPlan = vi.fn(
+  async (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) => ({
+    programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
+    workingDirectory: process.cwd(),
+    environment: {
+      OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
+    },
+  }),
+);
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -63,6 +73,11 @@ vi.mock("../infra/ports.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("../commands/daemon-install-helpers.js", () => ({
+  buildGatewayInstallPlan: (params: { port: number; token?: string; env?: NodeJS.ProcessEnv }) =>
+    buildGatewayInstallPlan(params),
 }));
 
 vi.mock("./deps.js", () => ({
@@ -108,6 +123,7 @@ describe("daemon-cli coverage", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
+    buildGatewayInstallPlan.mockClear();
   });
 
   afterEach(() => {
