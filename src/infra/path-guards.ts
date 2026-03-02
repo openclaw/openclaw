@@ -3,7 +3,7 @@ import path from "node:path";
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
 
-function normalizeWindowsPathForComparison(input: string): string {
+export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
   if (normalized.startsWith("\\\\?\\")) {
     normalized = normalized.slice(4);
