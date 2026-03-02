@@ -427,7 +427,7 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
-  it("flags additionalProperties true", () => {
+  it("supports additionalProperties true as editable map entries", () => {
     const schema = {
       type: "object",
       properties: {
@@ -438,6 +438,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).toContain("extra");
+    expect(analysis.unsupportedPaths).not.toContain("extra");
+    expect(analysis.schema?.properties?.extra?.additionalProperties).toEqual({});
   });
 });
