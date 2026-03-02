@@ -3,9 +3,7 @@ import {
   buildCollectPrompt,
   beginQueueDrain,
   clearQueueSummaryState,
-  drainCollectQueueStep,
   drainNextQueueItem,
-  hasCrossChannelItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
@@ -32,11 +30,18 @@ export function kickFollowupDrainIfIdle(key: string): void {
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
-  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+  | "relayMode"
+  | "relayOutput"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingThreadId"
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
   return {
+    relayMode: items.find((item) => item.relayMode)?.relayMode,
+    relayOutput: items.find((item) => item.relayOutput)?.relayOutput,
     originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
     originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
     originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
@@ -48,10 +53,29 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 }
 
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
+  if (item.relayMode === "read-only") {
+    const channel = item.relayOutput?.channel;
+    const to = item.relayOutput?.to;
+    const accountId = item.relayOutput?.accountId;
+    const threadId = item.relayOutput?.threadId;
+    if (!channel && !to && !accountId && (threadId == null || threadId === "")) {
+      return { cross: true };
+    }
+    if (!isRoutableChannel(channel) || !to) {
+      return { cross: true };
+    }
+    const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
+    return {
+      key: ["relay", channel, to, accountId || "", threadKey].join("|"),
+    };
+  }
+
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
   if (!channel && !to && !accountId && (threadId == null || threadId === "")) {
-    return {};
+    return {
+      key: ["origin", "", "", "", ""].join("|"),
+    };
   }
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
@@ -59,8 +83,44 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
   const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
   return {
-    key: [channel, to, accountId || "", threadKey].join("|"),
+    key: ["origin", channel, to, accountId || "", threadKey].join("|"),
   };
+}
+
+type FollowupCollectGroup = {
+  key: string;
+  items: FollowupRun[];
+  collectable: boolean;
+};
+
+function resolveCollectGroups(items: FollowupRun[]): FollowupCollectGroup[] {
+  const groups = new Map<string, FollowupCollectGroup>();
+  for (const [index, item] of items.entries()) {
+    const resolved = resolveCrossChannelKey(item);
+    const collectable = Boolean(resolved.key && !resolved.cross);
+    const key = collectable
+      ? (resolved.key ?? `single|${index}|${item.enqueuedAt}`)
+      : `single|${index}|${item.enqueuedAt}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+    groups.set(key, { key, items: [item], collectable });
+  }
+  return Array.from(groups.values());
+}
+
+function removeDrainedItems(items: FollowupRun[], drained: FollowupRun[]) {
+  if (drained.length === 0) {
+    return;
+  }
+  const drainedSet = new Set(drained);
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (drainedSet.has(items[index])) {
+      items.splice(index, 1);
+    }
+  }
 }
 
 export function scheduleFollowupDrain(
@@ -76,43 +136,34 @@ export function scheduleFollowupDrain(
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     try {
-      const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
-          // Once the batch is mixed, never collect again within this drain.
-          // Prevents “collect after shift” collapsing different targets.
-          //
-          // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
-          // Check if messages span multiple channels.
-          // If so, process individually to preserve per-message routing.
-          const isCrossChannel = hasCrossChannelItems(queue.items, resolveCrossChannelKey);
-
-          const collectDrainResult = await drainCollectQueueStep({
-            collectState,
-            isCrossChannel,
-            items: queue.items,
-            run: runFollowup,
-          });
-          if (collectDrainResult === "empty") {
+          const groups = resolveCollectGroups(queue.items);
+          const currentGroup = groups[0];
+          if (!currentGroup) {
             break;
           }
-          if (collectDrainResult === "drained") {
+
+          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+          const shouldCollectGroup = currentGroup.collectable && currentGroup.items.length > 1;
+          if (!shouldCollectGroup && !summary) {
+            if (!(await drainNextQueueItem(queue.items, runFollowup))) {
+              break;
+            }
             continue;
           }
 
-          const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
-          const run = items.at(-1)?.run ?? queue.lastRun;
+          const run = currentGroup.items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
           }
 
-          const routing = resolveOriginRoutingMetadata(items);
+          const routing = resolveOriginRoutingMetadata(currentGroup.items);
 
           const prompt = buildCollectPrompt({
             title: "[Queued messages while agent was busy]",
-            items,
+            items: currentGroup.items,
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
@@ -122,7 +173,7 @@ export function scheduleFollowupDrain(
             enqueuedAt: Date.now(),
             ...routing,
           });
-          queue.items.splice(0, items.length);
+          removeDrainedItems(queue.items, currentGroup.items);
           if (summary) {
             clearQueueSummaryState(queue);
           }
@@ -145,6 +196,8 @@ export function scheduleFollowupDrain(
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
+                relayMode: item.relayMode,
+                relayOutput: item.relayOutput,
               });
             }))
           ) {

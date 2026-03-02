@@ -24,6 +24,15 @@ export type FollowupRun = {
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /** Relay routing mode captured from inbound context when the run was enqueued. */
+  relayMode?: "read-write" | "read-only";
+  /** Resolved relay target captured at enqueue-time for read-only relay routing. */
+  relayOutput?: {
+    channel: OriginatingChannelType;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

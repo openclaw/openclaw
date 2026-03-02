@@ -3,6 +3,7 @@ import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
+  resolveRunDeliveryTarget,
 } from "./origin-routing.js";
 
 describe("origin-routing helpers", () => {
@@ -39,5 +40,64 @@ describe("origin-routing helpers", () => {
     });
 
     expect(accountId).toBe("work");
+  });
+});
+
+describe("resolveRunDeliveryTarget", () => {
+  it("uses relay output for read-only runs", () => {
+    const target = resolveRunDeliveryTarget({
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+        accountId: "relay-work",
+        threadId: "1739142736.000100",
+      },
+      originatingChannel: "discord",
+      originatingTo: "channel:source",
+      originatingAccountId: "source-work",
+      originatingThreadId: "1739142736.000200",
+    });
+
+    expect(target.viaRelayOutput).toBe(true);
+    expect(target.relayMode).toBe("read-only");
+    expect(target.channel).toBe("slack");
+    expect(target.to).toBe("channel:relay");
+    expect(target.accountId).toBe("relay-work");
+    expect(target.threadId).toBe("1739142736.000100");
+  });
+
+  it("returns no route for read-only runs without relay output", () => {
+    const target = resolveRunDeliveryTarget({
+      relayMode: "read-only",
+      originatingChannel: "discord",
+      originatingTo: "channel:source",
+    });
+
+    expect(target.relayMode).toBe("read-only");
+    expect(target.viaRelayOutput).toBe(false);
+    expect(target.channel).toBeUndefined();
+    expect(target.to).toBeUndefined();
+  });
+
+  it("uses originating route for read-write runs", () => {
+    const target = resolveRunDeliveryTarget({
+      relayMode: "read-write",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+      },
+      originatingChannel: "discord",
+      originatingTo: "channel:source",
+      originatingAccountId: "source-work",
+      originatingThreadId: "1739142736.000200",
+    });
+
+    expect(target.relayMode).toBe("read-write");
+    expect(target.viaRelayOutput).toBe(false);
+    expect(target.channel).toBe("discord");
+    expect(target.to).toBe("channel:source");
+    expect(target.accountId).toBe("source-work");
+    expect(target.threadId).toBe("1739142736.000200");
   });
 });

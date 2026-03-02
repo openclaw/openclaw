@@ -18,10 +18,11 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveSessionRelayRoute } from "../../sessions/relay-routing.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { MsgContext, OriginatingChannelType, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -459,11 +460,35 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const relayRoute = resolveSessionRelayRoute({
+    cfg,
+    sessionKey,
+    channel: resolveOriginMessageProvider({
+      originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+      provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
+    }),
+    chatType: ctx.ChatType ?? sessionCtx.ChatType,
+    source: {
+      to: ctx.OriginatingTo ?? sessionCtx.OriginatingTo ?? sessionCtx.To,
+      accountId: ctx.AccountId ?? sessionCtx.AccountId,
+      threadId: ctx.MessageThreadId,
+    },
+  });
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
+    relayMode: relayRoute.mode,
+    relayOutput:
+      relayRoute.mode === "read-only"
+        ? {
+            channel: relayRoute.target.channel as OriginatingChannelType,
+            to: relayRoute.target.to,
+            accountId: relayRoute.target.accountId,
+            threadId: relayRoute.target.threadId,
+          }
+        : undefined,
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,

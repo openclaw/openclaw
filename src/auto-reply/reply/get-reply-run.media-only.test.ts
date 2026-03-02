@@ -170,6 +170,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
+    expect(call?.followupRun.relayMode).toBe("read-write");
+    expect(call?.followupRun.relayOutput).toBeUndefined();
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -310,6 +312,59 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
     expect(call?.followupRun.run.messageProvider).toBe("feishu");
+  });
+
+  it("captures read-only relay target metadata on queued followups", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {
+            relayRouting: {
+              defaultMode: "read-write",
+              targets: {
+                ops: {
+                  channel: "slack",
+                  to: "channel:ops-relay",
+                  accountId: "relay-work",
+                  threadId: "1739142736.000100",
+                },
+              },
+              rules: [{ mode: "read-only", relayTo: "ops", match: { channel: "discord" } }],
+            },
+          },
+          channels: {},
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:source",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "discord",
+          ChatType: "group",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:source",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.relayMode).toBe("read-only");
+    expect(call?.followupRun.relayOutput).toEqual({
+      channel: "slack",
+      to: "channel:ops-relay",
+      accountId: "relay-work",
+      threadId: "1739142736.000100",
+    });
   });
 
   it("passes suppressTyping through typing mode resolution", async () => {

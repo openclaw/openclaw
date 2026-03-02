@@ -54,6 +54,7 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
+    relayMode: "read-write",
     originatingTo: "channel:C1",
     run: {
       sessionId: "session",
@@ -366,6 +367,95 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     });
 
     expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes read-only followups to relay output target", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+        accountId: "relay-work",
+        threadId: "1739142736.000100",
+      },
+      originatingChannel: "discord",
+      originatingTo: "channel:source",
+      originatingAccountId: "source-work",
+      originatingThreadId: "1739142736.000200",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:relay",
+        accountId: "relay-work",
+        threadId: "1739142736.000100",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to dispatcher when read-only relay routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "forced relay route failure",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "slack",
+        to: "channel:relay",
+      },
+      originatingChannel: "slack",
+      originatingTo: "channel:source",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:relay",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("drops read-only followups when relay output target is missing", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("slack"),
+      relayMode: "read-only",
+      relayOutput: undefined,
+      originatingChannel: "slack",
+      originatingTo: "channel:source",
+    } as FollowupRun);
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 

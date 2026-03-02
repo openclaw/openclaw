@@ -18,6 +18,8 @@ import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
+  resolveRunDeliveryTarget,
+  type RunDeliveryTarget,
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import {
@@ -68,12 +70,20 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
-    // Check if we should route to originating channel.
-    const { originatingChannel, originatingTo } = queued;
-    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    deliveryTarget: RunDeliveryTarget,
+  ) => {
+    const { channel, to, accountId, threadId, relayMode, viaRelayOutput } = deliveryTarget;
+    const shouldRouteToTarget = isRoutableChannel(channel) && to;
 
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+    if (relayMode === "read-only" && !shouldRouteToTarget) {
+      logVerbose("followup queue: read-only relay target unavailable; dropping payloads");
+      return;
+    }
+
+    if (!shouldRouteToTarget && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
       return;
     }
@@ -91,20 +101,24 @@ export function createFollowupRunner(params: {
       }
       await typingSignals.signalTextDelta(payload.text);
 
-      // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      // Route to resolved target if set, otherwise fall back to dispatcher.
+      if (shouldRouteToTarget) {
         const result = await routeReply({
           payload,
-          channel: originatingChannel,
-          to: originatingTo,
+          channel,
+          to,
           sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          threadId: queued.originatingThreadId,
+          accountId,
+          threadId,
           cfg: queued.run.config,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+          if (viaRelayOutput) {
+            logVerbose("followup queue: read-only relay route failed; dropping payload");
+            continue;
+          }
           // Fall back to the caller-provided dispatcher only when the
           // originating channel matches the session's message provider.
           // In that case onBlockReply was created by the same channel's
@@ -115,7 +129,7 @@ export function createFollowupRunner(params: {
             provider: queued.run.messageProvider,
           });
           const origin = resolveOriginMessageProvider({
-            originatingChannel,
+            originatingChannel: channel,
           });
           if (opts?.onBlockReply && origin && origin === provider) {
             await opts.onBlockReply(payload);
@@ -253,14 +267,22 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
+      const deliveryTarget = resolveRunDeliveryTarget({
+        relayMode: queued.relayMode,
+        relayOutput: queued.relayOutput,
         originatingChannel: queued.originatingChannel,
+        originatingTo: queued.originatingTo,
+        originatingAccountId: queued.originatingAccountId,
+        originatingThreadId: queued.originatingThreadId,
+      });
+      const replyToChannel = resolveOriginMessageProvider({
+        originatingChannel: deliveryTarget.channel ?? queued.originatingChannel,
         provider: queued.run.messageProvider,
       }) as OriginatingChannelType | undefined;
       const replyToMode = resolveReplyToMode(
         queued.run.config,
         replyToChannel,
-        queued.originatingAccountId,
+        deliveryTarget.accountId ?? queued.originatingAccountId,
         queued.originatingChatType,
       );
 
@@ -280,15 +302,15 @@ export function createFollowupRunner(params: {
       });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
+          originatingChannel: deliveryTarget.channel ?? queued.originatingChannel,
           provider: queued.run.messageProvider,
         }),
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: resolveOriginMessageTo({
-          originatingTo: queued.originatingTo,
+          originatingTo: deliveryTarget.to ?? queued.originatingTo,
         }),
         accountId: resolveOriginAccountId({
-          originatingAccountId: queued.originatingAccountId,
+          originatingAccountId: deliveryTarget.accountId ?? queued.originatingAccountId,
           accountId: queued.run.agentAccountId,
         }),
       });
@@ -315,7 +337,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, queued, deliveryTarget);
     } finally {
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the

@@ -9,6 +9,11 @@ function isRunAlreadyQueued(
   allowPromptFallback = false,
 ): boolean {
   const hasSameRouting = (item: FollowupRun) =>
+    item.relayMode === run.relayMode &&
+    item.relayOutput?.channel === run.relayOutput?.channel &&
+    item.relayOutput?.to === run.relayOutput?.to &&
+    item.relayOutput?.accountId === run.relayOutput?.accountId &&
+    item.relayOutput?.threadId === run.relayOutput?.threadId &&
     item.originatingChannel === run.originatingChannel &&
     item.originatingTo === run.originatingTo &&
     item.originatingAccountId === run.originatingAccountId &&

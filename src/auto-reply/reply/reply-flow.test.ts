@@ -598,6 +598,8 @@ afterAll(() => {
 function createRun(params: {
   prompt: string;
   messageId?: string;
+  relayMode?: FollowupRun["relayMode"];
+  relayOutput?: FollowupRun["relayOutput"];
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
@@ -607,6 +609,8 @@ function createRun(params: {
     prompt: params.prompt,
     messageId: params.messageId,
     enqueuedAt: Date.now(),
+    relayMode: params.relayMode,
+    relayOutput: params.relayOutput,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
@@ -983,6 +987,155 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.originatingThreadId).toBe("1706000000.000002");
   });
 
+  it("collects read-only runs by relay destination and preserves relay metadata", async () => {
+    const key = `test-collect-relay-same-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 1;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+          accountId: "relay-work",
+          threadId: "1739142736.000001",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source-1",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+          accountId: "relay-work",
+          threadId: "1739142736.000001",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source-2",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.relayMode).toBe("read-only");
+    expect(calls[0]?.relayOutput).toEqual({
+      channel: "slack",
+      to: "channel:relay",
+      accountId: "relay-work",
+      threadId: "1739142736.000001",
+    });
+  });
+
+  it("splits interleaved read-only and read-write collect batches by prefixed routing keys", async () => {
+    const key = `test-collect-mixed-relay-origin-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "relay one",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "origin one",
+        relayMode: "read-write",
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "relay two",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "origin two",
+        relayMode: "read-write",
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("Queued #1\nrelay one");
+    expect(calls[0]?.prompt).toContain("Queued #2\nrelay two");
+    expect(calls[0]?.relayMode).toBe("read-only");
+    expect(calls[0]?.relayOutput).toEqual({
+      channel: "slack",
+      to: "channel:relay",
+    });
+
+    expect(calls[1]?.prompt).toContain("Queued #1\norigin one");
+    expect(calls[1]?.prompt).toContain("Queued #2\norigin two");
+    expect(calls[1]?.relayMode).toBe("read-write");
+    expect(calls[1]?.originatingChannel).toBe("discord");
+    expect(calls[1]?.originatingTo).toBe("channel:source");
+  });
+
   it("retries collect-mode batches without losing queued items", async () => {
     const key = `test-collect-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1092,6 +1245,67 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+  });
+
+  it("preserves relay metadata on overflow summary followups", async () => {
+    const key = `test-overflow-summary-relay-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+          accountId: "relay-work",
+          threadId: "1739142736.000100",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "slack",
+          to: "channel:relay",
+          accountId: "relay-work",
+          threadId: "1739142736.000100",
+        },
+        originatingChannel: "discord",
+        originatingTo: "channel:source",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.relayMode).toBe("read-only");
+    expect(calls[0]?.relayOutput).toEqual({
+      channel: "slack",
+      to: "channel:relay",
+      accountId: "relay-work",
+      threadId: "1739142736.000100",
+    });
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });
 });
