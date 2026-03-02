@@ -11,6 +11,8 @@ import type {
 } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
+type SlackMessageEventName = "message" | "message.channels" | "message.groups";
+
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
   handleSlackMessage: SlackMessageHandler;
@@ -27,15 +29,19 @@ export function registerSlackMessageEvents(params: {
   const resolveThreadBroadcastSenderId = (thread: SlackThreadBroadcastEvent): string | undefined =>
     thread.user ?? thread.message?.user ?? thread.message?.bot_id;
 
-  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+  const handleMessageEvent = async (params: {
+    eventName: SlackMessageEventName;
+    event: SlackMessageEvent;
+    body: unknown;
+  }) => {
     try {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+      if (ctx.shouldDropMismatchedSlackEvent(params.body)) {
         return;
       }
 
-      const message = event as SlackMessageEvent;
+      const message = params.event;
       if (message.subtype === "message_changed") {
-        const changed = event as SlackMessageChangedEvent;
+        const changed = params.event as SlackMessageChangedEvent;
         const channelId = changed.channel;
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -54,7 +60,7 @@ export function registerSlackMessageEvents(params: {
         return;
       }
       if (message.subtype === "message_deleted") {
-        const deleted = event as SlackMessageDeletedEvent;
+        const deleted = params.event as SlackMessageDeletedEvent;
         const channelId = deleted.channel;
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -72,7 +78,7 @@ export function registerSlackMessageEvents(params: {
         return;
       }
       if (message.subtype === "thread_broadcast") {
-        const thread = event as SlackThreadBroadcastEvent;
+        const thread = params.event as SlackThreadBroadcastEvent;
         const channelId = thread.channel;
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -93,9 +99,26 @@ export function registerSlackMessageEvents(params: {
 
       await handleSlackMessage(message, { source: "message" });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
+      ctx.runtime.error?.(danger(`slack ${params.eventName} handler failed: ${String(err)}`));
     }
-  });
+  };
+
+  const registerMessageEvent = (eventName: SlackMessageEventName) => {
+    ctx.app.event(
+      eventName as "message",
+      async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
+        await handleMessageEvent({
+          eventName,
+          event: event as SlackMessageEvent,
+          body,
+        });
+      },
+    );
+  };
+
+  registerMessageEvent("message");
+  registerMessageEvent("message.channels");
+  registerMessageEvent("message.groups");
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {

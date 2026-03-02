@@ -32,7 +32,9 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
     handleSlackMessage,
   });
   return {
-    handler: harness.getHandler("message") as MessageHandler | null,
+    message: harness.getHandler("message") as MessageHandler | null,
+    channels: harness.getHandler("message.channels") as MessageHandler | null,
+    groups: harness.getHandler("message.groups") as MessageHandler | null,
     handleSlackMessage,
   };
 }
@@ -78,9 +80,9 @@ function makeThreadBroadcastEvent(overrides?: { channel?: string; user?: string 
 async function runMessageCase(input: MessageCase = {}): Promise<void> {
   messageQueueMock.mockClear();
   messageAllowMock.mockReset().mockResolvedValue([]);
-  const { handler } = createMessageHandlers(input.overrides);
-  expect(handler).toBeTruthy();
-  await handler!({
+  const { message } = createMessageHandlers(input.overrides);
+  expect(message).toBeTruthy();
+  await message!({
     event: (input.event ?? makeChangedEvent()) as Record<string, unknown>,
     body: input.body ?? {},
   });
@@ -136,24 +138,34 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).toHaveBeenCalledTimes(calls);
   });
 
-  it("passes regular message events to the message handler", async () => {
-    messageQueueMock.mockClear();
-    messageAllowMock.mockReset().mockResolvedValue([]);
-    const { handler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
-    expect(handler).toBeTruthy();
+  const inboundMessageCases = [
+    { label: "message", key: "message" },
+    { label: "message.channels", key: "channels" },
+    { label: "message.groups", key: "groups" },
+  ] as const;
 
-    await handler!({
-      event: {
-        type: "message",
-        channel: "D1",
-        user: "U1",
-        text: "hello",
-        ts: "123.456",
-      },
-      body: {},
-    });
+  it.each(inboundMessageCases)(
+    "passes regular $label events to the message handler",
+    async ({ key }) => {
+      messageQueueMock.mockClear();
+      messageAllowMock.mockReset().mockResolvedValue([]);
+      const handlers = createMessageHandlers({ dmPolicy: "open" });
+      const handler = handlers[key];
+      expect(handler).toBeTruthy();
 
-    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    expect(messageQueueMock).not.toHaveBeenCalled();
-  });
+      await handler!({
+        event: {
+          type: "message",
+          channel: "D1",
+          user: "U1",
+          text: "hello",
+          ts: "123.456",
+        },
+        body: {},
+      });
+
+      expect(handlers.handleSlackMessage).toHaveBeenCalledTimes(1);
+      expect(messageQueueMock).not.toHaveBeenCalled();
+    },
+  );
 });
