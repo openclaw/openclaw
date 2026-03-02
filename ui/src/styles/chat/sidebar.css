@@ -87,6 +87,12 @@
   border-radius: 4px;
   padding: 12px;
   overflow-x: auto;
+
+  /* See #32230 — avoid soft wrapping long tokens that later copy with spaces. */
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  word-wrap: normal;
 }
 
 .sidebar-markdown code {

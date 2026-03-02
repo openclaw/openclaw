@@ -67,11 +67,22 @@
   border-radius: 6px;
   padding: 10px 12px;
   overflow-x: auto;
+
+  /* Prevent browsers from soft-wrapping long tokens (UUIDs, keys, etc.).
+     Wrapping can cause copy/paste to inject spaces in some renderers (#32230). */
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  word-wrap: normal;
 }
 
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
+
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
 }
 
 .chat-text :where(blockquote) {
