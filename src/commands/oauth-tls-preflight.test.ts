@@ -30,6 +30,24 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
     });
   });
+
+  it("keeps generic TLS transport failures in network classification", async () => {
+    const networkFetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: new Error(
+          "Client network socket disconnected before secure TLS connection was established",
+        ),
+      });
+    });
+    const result = await runOpenAIOAuthTlsPreflight({
+      fetchImpl: networkFetchImpl,
+      timeoutMs: 20,
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      kind: "network",
+    });
+  });
 });
 
 describe("formatOpenAIOAuthTlsPreflightFix", () => {
