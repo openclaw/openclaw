@@ -31,6 +31,9 @@ export {
 
 export { SessionStore } from "./session-store.js";
 
+export { ConnectionManager } from "./connection.js";
+export type { ConnectionConfig, ConnectionHealth, ConnectionEvent } from "./connection.js";
+
 export { FloodController } from "./flood-control.js";
 export type { FloodControllerConfig, FloodControllerMetrics } from "./flood-control.js";
 
