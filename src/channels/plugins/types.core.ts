@@ -264,6 +264,15 @@ export type ChannelThreadingToolContext = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**
+   * Original source conversation for read-only relay runs.
+   * Messaging actions targeting this source must be blocked.
+   */
+  readOnlySource?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
+  /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
    * not forwarding/relaying a message from another conversation.

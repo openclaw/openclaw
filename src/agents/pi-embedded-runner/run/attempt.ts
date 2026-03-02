@@ -597,6 +597,7 @@ export async function runEmbeddedAttempt(
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
+          readOnlySource: params.readOnlySource,
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
           modelHasVision,

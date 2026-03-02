@@ -54,6 +54,12 @@ export function createOpenClawTools(options?: {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** Source conversation for read-only relay runs (explicit sends to this source are blocked). */
+  readOnlySource?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
   /** Reply-to mode for Slack auto-threading. */
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
@@ -117,6 +123,7 @@ export function createOpenClawTools(options?: {
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentMessageId: options?.currentMessageId,
+        readOnlySource: options?.readOnlySource,
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
         sandboxRoot: options?.sandboxRoot,

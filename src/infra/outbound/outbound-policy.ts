@@ -4,6 +4,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   getChannelMessageAdapter,
   type CrossContextComponentsBuilder,
@@ -92,12 +93,33 @@ export function enforceCrossContextPolicy(params: {
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
   cfg: OpenClawConfig;
+  accountId?: string | null;
 }): void {
-  const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) {
+  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
     return;
   }
-  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
+
+  const target = resolveContextGuardTarget(params.action, params.args);
+  const readOnlySource = params.toolContext?.readOnlySource;
+  const readOnlySourceChannel =
+    typeof readOnlySource?.channel === "string" ? readOnlySource.channel.trim().toLowerCase() : "";
+  const readOnlySourceTo = typeof readOnlySource?.to === "string" ? readOnlySource.to.trim() : "";
+  if (readOnlySourceChannel && readOnlySourceTo && readOnlySourceChannel === params.channel) {
+    const normalizedSource = normalizeTarget(params.channel, readOnlySourceTo);
+    const normalizedTarget = target ? normalizeTarget(params.channel, target) : undefined;
+    if (normalizedSource && normalizedTarget && normalizedSource === normalizedTarget) {
+      const sourceAccountId = normalizeOptionalAccountId(readOnlySource.accountId);
+      const targetAccountId = normalizeOptionalAccountId(params.accountId);
+      const accountMatches =
+        !sourceAccountId || !targetAccountId || sourceAccountId === targetAccountId;
+      if (accountMatches) {
+        throw new Error("Source channel is read-only; send to relay destination only.");
+      }
+    }
+  }
+
+  const currentTarget = params.toolContext?.currentChannelId?.trim();
+  if (!currentTarget) {
     return;
   }
 
@@ -124,7 +146,6 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const target = resolveContextGuardTarget(params.action, params.args);
   if (!target) {
     return;
   }

@@ -440,6 +440,11 @@ type MessageToolOptions = {
   currentChannelProvider?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  readOnlySource?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
@@ -686,6 +691,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.currentChannelProvider ||
         options?.currentThreadTs ||
         hasCurrentMessageId ||
+        options?.readOnlySource?.channel ||
+        options?.readOnlySource?.to ||
+        options?.readOnlySource?.accountId ||
         options?.replyToMode ||
         options?.hasRepliedRef
           ? {
@@ -693,6 +701,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentChannelProvider: options?.currentChannelProvider,
               currentThreadTs: options?.currentThreadTs,
               currentMessageId: options?.currentMessageId,
+              readOnlySource: options?.readOnlySource,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
               // Direct tool invocations should not add cross-context decoration.

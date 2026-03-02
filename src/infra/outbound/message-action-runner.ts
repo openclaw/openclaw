@@ -802,6 +802,7 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
+    accountId,
   });
 
   const gateway = resolveGateway(input);

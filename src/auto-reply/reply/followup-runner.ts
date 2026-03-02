@@ -177,6 +177,14 @@ export function createFollowupRunner(params: {
       const runMessageThreadId = useRelayRunRouting
         ? (deliveryTarget.threadId ?? queued.originatingThreadId)
         : queued.originatingThreadId;
+      const runReadOnlySource =
+        deliveryTarget.relayMode === "read-only"
+          ? {
+              channel: queued.originatingChannel,
+              to: queued.originatingTo,
+              accountId: queued.originatingAccountId,
+            }
+          : undefined;
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -201,6 +209,7 @@ export function createFollowupRunner(params: {
               currentChannelId: runMessageTo,
               currentThreadTs:
                 runMessageThreadId != null ? String(runMessageThreadId) : undefined,
+              readOnlySource: runReadOnlySource,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,

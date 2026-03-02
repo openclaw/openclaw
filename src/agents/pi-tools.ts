@@ -214,6 +214,12 @@ export function createOpenClawCodingTools(options?: {
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
+  /** Source conversation for read-only relay runs (explicit sends to this source are blocked). */
+  readOnlySource?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -487,6 +493,7 @@ export function createOpenClawCodingTools(options?: {
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
+      readOnlySource: options?.readOnlySource,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,

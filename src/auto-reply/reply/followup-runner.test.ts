@@ -402,6 +402,15 @@ describe("createFollowupRunner messaging tool dedupe", () => {
         threadId: "1739142736.000100",
       }),
     );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        readOnlySource: {
+          channel: "discord",
+          to: "channel:source",
+          accountId: "source-work",
+        },
+      }),
+    );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 

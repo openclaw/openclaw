@@ -388,6 +388,52 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
+  it("blocks explicit sends to a read-only source target", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          target: "channel:C12345678",
+          accountId: "source-work",
+          message: "hi",
+        },
+        toolContext: {
+          currentChannelId: "C99999999",
+          currentChannelProvider: "slack",
+          readOnlySource: {
+            channel: "slack",
+            to: "channel:C12345678",
+            accountId: "source-work",
+          },
+        },
+      }),
+    ).rejects.toThrow(/Source channel is read-only; send to relay destination only/);
+  });
+
+  it("allows sends to non-source targets during read-only runs", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "channel:C99999999",
+        accountId: "source-work",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "C99999999",
+        currentChannelProvider: "slack",
+        readOnlySource: {
+          channel: "slack",
+          to: "channel:C12345678",
+          accountId: "source-work",
+        },
+      },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
   it.each([
     {
       name: "send",
