@@ -723,16 +723,17 @@ describe("CronService", () => {
 
     await cron.start();
 
+    // main sessions now support both systemEvent and agentTurn payloads
     await expect(
       cron.add({
-        name: "bad combo (main/agentTurn)",
+        name: "valid combo (main/agentTurn)",
         enabled: true,
         schedule: { kind: "every", everyMs: 1000 },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "nope" },
+        payload: { kind: "agentTurn", message: "run skill" },
       }),
-    ).rejects.toThrow(/main cron jobs require/);
+    ).resolves.toBeDefined();
 
     await expect(
       cron.add({
@@ -749,7 +750,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("skips invalid main jobs with agentTurn payloads from disk", async () => {
+  it("fires main jobs with agentTurn payloads via the system event pipeline", async () => {
     ensureDir(fixturesRoot);
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
@@ -768,7 +769,7 @@ describe("CronService", () => {
           schedule: { kind: "at", at: new Date(atMs).toISOString() },
           sessionTarget: "main",
           wakeMode: "now",
-          payload: { kind: "agentTurn", message: "bad" },
+          payload: { kind: "agentTurn", message: "run skill" },
           state: {},
         },
       ],
@@ -790,16 +791,13 @@ describe("CronService", () => {
 
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await vi.runOnlyPendingTimersAsync();
-    await events.waitFor(
-      (evt) => evt.jobId === "job-1" && evt.action === "finished" && evt.status === "skipped",
+    await events.waitFor((evt) => evt.jobId === "job-1" && evt.action === "finished");
+
+    // agentTurn message is routed through enqueueSystemEvent (same as systemEvent)
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "run skill",
+      expect.objectContaining({ contextKey: "cron:job-1" }),
     );
-
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
-
-    const jobs = await cron.list({ includeDisabled: true });
-    expect(jobs[0]?.state.lastStatus).toBe("skipped");
-    expect(jobs[0]?.state.lastError).toMatch(/main job requires/i);
 
     cron.stop();
     await store.cleanup();

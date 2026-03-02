@@ -833,13 +833,9 @@ export async function executeJobCore(
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {
-      const kind = job.payload.kind;
       return {
         status: "skipped",
-        error:
-          kind === "systemEvent"
-            ? "main job requires non-empty systemEvent text"
-            : 'main job requires payload.kind="systemEvent"',
+        error: "main job requires non-empty payload text",
       };
     }
     // Preserve the job session namespace for main-target reminders so heartbeat

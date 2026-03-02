@@ -211,9 +211,6 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("Choose --delete-after-run or --keep-after-run, not both");
           }
 
-          if (sessionTarget === "main" && payload.kind !== "systemEvent") {
-            throw new Error("Main jobs require --system-event (systemEvent).");
-          }
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }

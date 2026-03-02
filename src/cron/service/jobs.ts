@@ -84,12 +84,11 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
-    throw new Error('main cron jobs require payload.kind="systemEvent"');
-  }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
   }
+  // main sessions support both systemEvent and agentTurn payloads.
+  // agentTurn.message is routed through the system event / heartbeat pipeline.
 }
 
 function assertMainSessionAgentId(
@@ -733,9 +732,6 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {
-  if (job.payload.kind !== "systemEvent") {
-    return undefined;
-  }
   const text = normalizePayloadToSystemText(job.payload);
   return text.trim() ? text : undefined;
 }
