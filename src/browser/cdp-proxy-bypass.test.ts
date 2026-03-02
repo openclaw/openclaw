@@ -157,3 +157,49 @@ describe("cdp-proxy-bypass", () => {
     });
   });
 });
+
+describe("withNoProxyForLocalhost concurrency", () => {
+  it("does not leak NO_PROXY when called concurrently", async () => {
+    const origNoProxy = process.env.NO_PROXY;
+    const origNoProxyLower = process.env.no_proxy;
+    delete process.env.NO_PROXY;
+    delete process.env.no_proxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      // Simulate concurrent calls
+      const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const callA = withNoProxyForLocalhost(async () => {
+        // While A is running, NO_PROXY should be set
+        expect(process.env.NO_PROXY).toContain("localhost");
+        expect(process.env.NO_PROXY).toContain("[::1]");
+        await delay(50);
+        return "a";
+      });
+      const callB = withNoProxyForLocalhost(async () => {
+        await delay(20);
+        return "b";
+      });
+
+      await Promise.all([callA, callB]);
+
+      // After both complete, NO_PROXY should be restored (deleted)
+      expect(process.env.NO_PROXY).toBeUndefined();
+      expect(process.env.no_proxy).toBeUndefined();
+    } finally {
+      delete process.env.HTTP_PROXY;
+      if (origNoProxy !== undefined) {
+        process.env.NO_PROXY = origNoProxy;
+      } else {
+        delete process.env.NO_PROXY;
+      }
+      if (origNoProxyLower !== undefined) {
+        process.env.no_proxy = origNoProxyLower;
+      } else {
+        delete process.env.no_proxy;
+      }
+    }
+  });
+});
