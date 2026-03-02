@@ -202,8 +202,9 @@ export function createTelegramDraftStream(params: {
         // First sendMessageDraft threw — likely unsupported by this bot token.
         // Disable and allow the lifecycle to retry via the legacy path.
         draftApiFailed = true;
+        const errMsg = err instanceof Error ? err.message : String(err);
         params.warn?.(
-          `telegram sendMessageDraft failed; falling back to send-then-edit: ${err instanceof Error ? err.message : String(err)}`,
+          `telegram sendMessageDraft failed; falling back to send-then-edit: ${errMsg}`,
         );
         return false;
       }
@@ -244,7 +245,10 @@ export function createTelegramDraftStream(params: {
     loop.resetThrottleWindow();
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, draftApi=${useSendMessageDraft})`);
+  params.log?.(
+    `telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, ` +
+      `draftApi=${useSendMessageDraft})`,
+  );
 
   return {
     update,
