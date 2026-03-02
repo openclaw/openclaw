@@ -1,7 +1,7 @@
 {
   "id": "diffs",
   "name": "Diffs",
-  "description": "Read-only diff viewer and image renderer for agents.",
+  "description": "Read-only diff viewer and file renderer for agents.",
   "uiHints": {
     "defaults.fontFamily": {
       "label": "Default Font",
@@ -39,9 +39,25 @@
       "label": "Default Theme",
       "help": "Initial viewer theme."
     },
+    "defaults.fileFormat": {
+      "label": "Default File Format",
+      "help": "Rendered file format for file mode (PNG or PDF)."
+    },
+    "defaults.fileQuality": {
+      "label": "Default File Quality",
+      "help": "Quality preset for PNG/PDF rendering."
+    },
+    "defaults.fileScale": {
+      "label": "Default File Scale",
+      "help": "Device scale factor used while rendering file artifacts."
+    },
+    "defaults.fileMaxWidth": {
+      "label": "Default File Max Width",
+      "help": "Maximum file render width in CSS pixels."
+    },
     "defaults.mode": {
       "label": "Default Output Mode",
-      "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, image for PNG, or both."
+      "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, file for PNG/PDF, or both."
     },
     "security.allowRemoteViewer": {
       "label": "Allow Remote Viewer",
@@ -99,9 +115,53 @@
             "enum": ["light", "dark"],
             "default": "dark"
           },
+          "fileFormat": {
+            "type": "string",
+            "enum": ["png", "pdf"],
+            "default": "png"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["png", "pdf"]
+          },
+          "fileQuality": {
+            "type": "string",
+            "enum": ["standard", "hq", "print"],
+            "default": "standard"
+          },
+          "fileScale": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 2
+          },
+          "fileMaxWidth": {
+            "type": "number",
+            "minimum": 640,
+            "maximum": 2400,
+            "default": 960
+          },
+          "imageFormat": {
+            "type": "string",
+            "enum": ["png", "pdf"]
+          },
+          "imageQuality": {
+            "type": "string",
+            "enum": ["standard", "hq", "print"]
+          },
+          "imageScale": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "imageMaxWidth": {
+            "type": "number",
+            "minimum": 640,
+            "maximum": 2400
+          },
           "mode": {
             "type": "string",
-            "enum": ["view", "image", "both"],
+            "enum": ["view", "image", "file", "both"],
             "default": "both"
           }
         }

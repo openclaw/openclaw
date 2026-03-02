@@ -3,14 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { chromium } from "playwright-core";
-import type { DiffTheme } from "./types.js";
+import type { DiffRenderOptions, DiffTheme } from "./types.js";
 import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
 
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
+const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
+const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
+const MAX_PDF_PAGES = 50;
 
 export type DiffScreenshotter = {
-  screenshotHtml(params: { html: string; outputPath: string; theme: DiffTheme }): Promise<string>;
+  screenshotHtml(params: {
+    html: string;
+    outputPath: string;
+    theme: DiffTheme;
+    image: DiffRenderOptions["image"];
+  }): Promise<string>;
 };
 
 type BrowserInstance = Awaited<ReturnType<typeof chromium.launch>>;
@@ -49,6 +57,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     html: string;
     outputPath: string;
     theme: DiffTheme;
+    image: DiffRenderOptions["image"];
   }): Promise<string> {
     await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
     const lease = await acquireSharedBrowser({
@@ -56,121 +65,198 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
       idleMs: this.browserIdleMs,
     });
     let page: Awaited<ReturnType<BrowserInstance["newPage"]>> | undefined;
+    let currentScale = params.image.scale;
+    const maxRetries = 2;
 
     try {
-      page = await lease.browser.newPage({
-        viewport: { width: 1200, height: 900 },
-        deviceScaleFactor: 2,
-        colorScheme: params.theme,
-      });
-      await page.route("**/*", async (route) => {
-        const requestUrl = route.request().url();
-        if (requestUrl === "about:blank" || requestUrl.startsWith("data:")) {
-          await route.continue();
-          return;
-        }
-        let parsed: URL;
-        try {
-          parsed = new URL(requestUrl);
-        } catch {
-          await route.abort();
-          return;
-        }
-        if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
-          await route.abort();
-          return;
-        }
-        if (!parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
-          await route.abort();
-          return;
-        }
-        const asset = await getServedViewerAsset(parsed.pathname);
-        if (!asset) {
-          await route.abort();
-          return;
-        }
-        await route.fulfill({
-          status: 200,
-          contentType: asset.contentType,
-          body: asset.body,
+      for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        page = await lease.browser.newPage({
+          viewport: {
+            width: Math.max(Math.ceil(params.image.maxWidth + 240), 1200),
+            height: 900,
+          },
+          deviceScaleFactor: currentScale,
+          colorScheme: params.theme,
         });
-      });
-      await page.setContent(injectBaseHref(params.html), { waitUntil: "load" });
-      await page.waitForFunction(
-        () => {
-          if (document.documentElement.dataset.openclawDiffsReady === "true") {
-            return true;
+        await page.route("**/*", async (route) => {
+          const requestUrl = route.request().url();
+          if (requestUrl === "about:blank" || requestUrl.startsWith("data:")) {
+            await route.continue();
+            return;
           }
-          return [...document.querySelectorAll("[data-openclaw-diff-host]")].every((element) => {
-            return (
-              element instanceof HTMLElement && element.shadowRoot?.querySelector("[data-diffs]")
-            );
+          let parsed: URL;
+          try {
+            parsed = new URL(requestUrl);
+          } catch {
+            await route.abort();
+            return;
+          }
+          if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+            await route.abort();
+            return;
+          }
+          if (!parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
+            await route.abort();
+            return;
+          }
+          const pathname = parsed.pathname;
+          const asset = await getServedViewerAsset(pathname);
+          if (!asset) {
+            await route.abort();
+            return;
+          }
+          await route.fulfill({
+            status: 200,
+            contentType: asset.contentType,
+            body: asset.body,
           });
-        },
-        {
-          timeout: 10_000,
-        },
-      );
-      await page.evaluate(async () => {
-        await document.fonts.ready;
-      });
-      await page.evaluate(() => {
-        const frame = document.querySelector(".oc-frame");
-        if (frame instanceof HTMLElement) {
-          frame.dataset.renderMode = "image";
+        });
+        await page.setContent(injectBaseHref(params.html), { waitUntil: "load" });
+        await page.waitForFunction(
+          () => {
+            if (document.documentElement.dataset.openclawDiffsReady === "true") {
+              return true;
+            }
+            return [...document.querySelectorAll("[data-openclaw-diff-host]")].every((element) => {
+              return (
+                element instanceof HTMLElement && element.shadowRoot?.querySelector("[data-diffs]")
+              );
+            });
+          },
+          {
+            timeout: 10_000,
+          },
+        );
+        await page.evaluate(async () => {
+          await document.fonts.ready;
+        });
+        await page.evaluate(() => {
+          const frame = document.querySelector(".oc-frame");
+          if (frame instanceof HTMLElement) {
+            frame.dataset.renderMode = "image";
+          }
+        });
+
+        const frame = page.locator(".oc-frame");
+        await frame.waitFor();
+        const initialBox = await frame.boundingBox();
+        if (!initialBox) {
+          throw new Error("Diff frame did not render.");
         }
-      });
 
-      const frame = page.locator(".oc-frame");
-      await frame.waitFor();
-      const initialBox = await frame.boundingBox();
-      if (!initialBox) {
-        throw new Error("Diff frame did not render.");
+        const isPdf = params.image.format === "pdf";
+        const padding = isPdf ? 0 : 20;
+        const clipWidth = Math.ceil(initialBox.width + padding * 2);
+        const clipHeight = Math.ceil(Math.max(initialBox.height + padding * 2, 320));
+        await page.setViewportSize({
+          width: Math.max(clipWidth + padding, 900),
+          height: Math.max(clipHeight + padding, 700),
+        });
+
+        const box = await frame.boundingBox();
+        if (!box) {
+          throw new Error("Diff frame was lost after resizing.");
+        }
+
+        if (isPdf) {
+          await page.emulateMedia({ media: "screen" });
+          await page.evaluate(() => {
+            const html = document.documentElement;
+            const body = document.body;
+            const frame = document.querySelector(".oc-frame");
+
+            html.style.background = "transparent";
+            body.style.margin = "0";
+            body.style.padding = "0";
+            body.style.background = "transparent";
+            body.style.setProperty("-webkit-print-color-adjust", "exact");
+            if (frame instanceof HTMLElement) {
+              frame.style.margin = "0";
+            }
+          });
+
+          const pdfBox = await frame.boundingBox();
+          if (!pdfBox) {
+            throw new Error("Diff frame was lost before PDF render.");
+          }
+          const pdfWidth = Math.max(Math.ceil(pdfBox.width), 1);
+          const pdfHeight = Math.max(Math.ceil(pdfBox.height), 1);
+          const estimatedPixels = pdfWidth * pdfHeight;
+          const estimatedPages = Math.ceil(pdfHeight / PDF_REFERENCE_PAGE_HEIGHT_PX);
+          if (estimatedPixels > params.image.maxPixels || estimatedPages > MAX_PDF_PAGES) {
+            throw new Error(IMAGE_SIZE_LIMIT_ERROR);
+          }
+
+          await page.pdf({
+            path: params.outputPath,
+            width: `${pdfWidth}px`,
+            height: `${pdfHeight}px`,
+            printBackground: true,
+            margin: {
+              top: "0",
+              right: "0",
+              bottom: "0",
+              left: "0",
+            },
+          });
+          return params.outputPath;
+        }
+
+        const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
+
+        // Raw clip in CSS px
+        const rawX = Math.max(box.x - padding, 0);
+        const rawY = Math.max(box.y - padding, 0);
+        const rawRight = rawX + clipWidth;
+        const rawBottom = rawY + clipHeight;
+
+        // Snap to device-pixel grid to avoid soft text from sub-pixel crop
+        const x = Math.floor(rawX * dpr) / dpr;
+        const y = Math.floor(rawY * dpr) / dpr;
+        const right = Math.ceil(rawRight * dpr) / dpr;
+        const bottom = Math.ceil(rawBottom * dpr) / dpr;
+        const cssWidth = Math.max(right - x, 1);
+        const cssHeight = Math.max(bottom - y, 1);
+        const estimatedPixels = cssWidth * cssHeight * dpr * dpr;
+
+        if (estimatedPixels > params.image.maxPixels) {
+          if (currentScale > 1) {
+            const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
+            const reducedScale = Math.max(
+              1,
+              Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
+            );
+            if (reducedScale < currentScale - 0.01 && attempt < maxRetries) {
+              await page.close().catch(() => {});
+              page = undefined;
+              currentScale = reducedScale;
+              continue;
+            }
+          }
+          throw new Error(IMAGE_SIZE_LIMIT_ERROR);
+        }
+
+        await page.screenshot({
+          path: params.outputPath,
+          type: "png",
+          scale: "device",
+          clip: {
+            x,
+            y,
+            width: cssWidth,
+            height: cssHeight,
+          },
+        });
+        return params.outputPath;
       }
-
-      const padding = 20;
-      const clipWidth = Math.ceil(initialBox.width + padding * 2);
-      const clipHeight = Math.ceil(Math.max(initialBox.height + padding * 2, 320));
-      await page.setViewportSize({
-        width: Math.max(clipWidth + padding, 900),
-        height: Math.max(clipHeight + padding, 700),
-      });
-
-      const box = await frame.boundingBox();
-      if (!box) {
-        throw new Error("Diff frame was lost after resizing.");
-      }
-
-      const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
-
-      // Raw clip in CSS px
-      const rawX = Math.max(box.x - padding, 0);
-      const rawY = Math.max(box.y - padding, 0);
-      const rawRight = rawX + clipWidth;
-      const rawBottom = rawY + clipHeight;
-
-      // Snap to device-pixel grid to avoid soft text from sub-pixel crop
-      const x = Math.floor(rawX * dpr) / dpr;
-      const y = Math.floor(rawY * dpr) / dpr;
-      const right = Math.ceil(rawRight * dpr) / dpr;
-      const bottom = Math.ceil(rawBottom * dpr) / dpr;
-
-      await page.screenshot({
-        path: params.outputPath,
-        type: "png",
-        scale: "device",
-        clip: {
-          x,
-          y,
-          width: right - x,
-          height: bottom - y,
-        },
-      });
-      return params.outputPath;
+      throw new Error(IMAGE_SIZE_LIMIT_ERROR);
     } catch (error) {
+      if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
+        throw error;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Diff image rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+        `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
       );
     } finally {
       await page?.close().catch(() => {});

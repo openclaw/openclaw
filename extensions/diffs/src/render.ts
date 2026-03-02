@@ -197,6 +197,7 @@ function buildHtmlDocument(params: {
   title: string;
   bodyHtml: string;
   theme: DiffRenderOptions["presentation"]["theme"];
+  imageMaxWidth: number;
   runtimeMode: "viewer" | "image";
 }): string {
   return `<!doctype html>
@@ -211,12 +212,18 @@ function buildHtmlDocument(params: {
         box-sizing: border-box;
       }
 
+      html,
+      body {
+        min-height: 100%;
+      }
+
       html {
         background: #05070b;
       }
 
       body {
         margin: 0;
+        min-height: 100vh;
         padding: 22px;
         font-family:
           "Fira Code",
@@ -239,7 +246,7 @@ function buildHtmlDocument(params: {
       }
 
       .oc-frame[data-render-mode="image"] {
-        max-width: 960px;
+        max-width: ${Math.max(640, Math.round(params.imageMaxWidth))}px;
       }
 
       [data-openclaw-diff-root] {
@@ -407,12 +414,14 @@ export async function renderDiffDocument(
       title,
       bodyHtml: rendered.viewerBodyHtml,
       theme: options.presentation.theme,
+      imageMaxWidth: options.image.maxWidth,
       runtimeMode: "viewer",
     }),
     imageHtml: buildHtmlDocument({
       title,
       bodyHtml: rendered.imageBodyHtml,
       theme: options.presentation.theme,
+      imageMaxWidth: options.image.maxWidth,
       runtimeMode: "image",
     }),
     title,
