@@ -286,7 +286,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   if (normalized === "byteplus" || normalized === "byteplus-plan") {
     return pick("BYTEPLUS_API_KEY");
   }
-  if (normalized === "minimax-portal") {
+  if (normalized === "minimax-portal" || normalized === "minimax-portal-cn") {
     return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
   }
 

@@ -18,16 +18,26 @@ openclaw gateway restart
 
 ## Authenticate
 
+This plugin provides two separate providers for different regions:
+
+### Global (International users)
+
 ```bash
 openclaw models auth login --provider minimax-portal --set-default
 ```
 
-You will be prompted to select an endpoint:
+Uses endpoint: `api.minimax.io`
 
-- **Global** - International users, optimized for overseas access (`api.minimax.io`)
-- **China** - Optimized for users in China (`api.minimaxi.com`)
+### China (CN users)
+
+```bash
+openclaw models auth login --provider minimax-portal-cn --set-default
+```
+
+Uses endpoint: `api.minimaxi.com`
 
 ## Notes
 
 - MiniMax OAuth uses a user-code login flow.
 - Currently, OAuth login is supported only for the Coding plan
+- Global and CN are now separate providers to avoid configuration conflicts when switching between regions

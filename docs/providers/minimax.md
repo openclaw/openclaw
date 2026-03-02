@@ -46,13 +46,13 @@ Enable the bundled OAuth plugin and authenticate:
 ```bash
 openclaw plugins enable minimax-portal-auth  # skip if already loaded.
 openclaw gateway restart  # restart if gateway is already running
+
+# For international users (api.minimax.io)
 openclaw onboard --auth-choice minimax-portal
+
+# For users in China (api.minimaxi.com)
+openclaw onboard --auth-choice minimax-portal-cn
 ```
-
-You will be prompted to select an endpoint:
-
-- **Global** - International users (`api.minimax.io`)
-- **CN** - Users in China (`api.minimaxi.com`)
 
 See [MiniMax OAuth plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth) for details.
 

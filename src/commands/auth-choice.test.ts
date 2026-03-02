@@ -1223,7 +1223,7 @@ describe("applyAuthChoice", () => {
       },
       {
         authChoice: "minimax-portal",
-        label: "MiniMax",
+        label: "MiniMax (Global)",
         authId: "oauth",
         authLabel: "MiniMax OAuth (Global)",
         providerId: "minimax-portal",
@@ -1232,7 +1232,6 @@ describe("applyAuthChoice", () => {
         api: "anthropic-messages",
         defaultModel: "minimax-portal/MiniMax-M2.1",
         apiKey: "minimax-oauth",
-        selectValue: "oauth",
       },
     ];
     for (const scenario of scenarios) {

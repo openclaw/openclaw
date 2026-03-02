@@ -51,7 +51,13 @@ const AUTH_CHOICE_GROUP_DEFS: {
     value: "minimax",
     label: "MiniMax",
     hint: "M2.5 (recommended)",
-    choices: ["minimax-portal", "minimax-api", "minimax-api-key-cn", "minimax-api-lightning"],
+    choices: [
+      "minimax-portal",
+      "minimax-portal-cn",
+      "minimax-api",
+      "minimax-api-key-cn",
+      "minimax-api-lightning",
+    ],
   },
   {
     value: "moonshot",
@@ -271,8 +277,13 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   {
     value: "minimax-portal",
-    label: "MiniMax OAuth",
-    hint: "Oauth plugin for MiniMax",
+    label: "MiniMax OAuth (Global)",
+    hint: "OAuth plugin for MiniMax (api.minimax.io)",
+  },
+  {
+    value: "minimax-portal-cn",
+    label: "MiniMax OAuth (CN)",
+    hint: "OAuth plugin for MiniMax China (api.minimaxi.com)",
   },
   { value: "qwen-portal", label: "Qwen OAuth" },
   {

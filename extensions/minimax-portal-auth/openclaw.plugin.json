@@ -1,6 +1,6 @@
 {
   "id": "minimax-portal-auth",
-  "providers": ["minimax-portal"],
+  "providers": ["minimax-portal", "minimax-portal-cn"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
