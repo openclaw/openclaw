@@ -150,6 +150,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   const ids = new Set<string>([
     normalizeBackendKey("claude-cli"),
+    normalizeBackendKey("claude-sdk"),
     normalizeBackendKey("codex-cli"),
   ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
@@ -157,6 +158,11 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
     ids.add(normalizeBackendKey(key));
   }
   return ids;
+}
+
+/** Returns true if the provider uses the Claude Agent SDK instead of direct CLI spawning. */
+export function isSdkProvider(provider: string): boolean {
+  return normalizeBackendKey(provider) === "claude-sdk";
 }
 
 export function resolveCliBackendConfig(
