@@ -433,7 +433,6 @@ export function parseTtsDirectives(
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
 export const OPENAI_TTS_RESPONSE_FORMATS = ["mp3", "opus", "aac", "flac", "wav", "pcm"] as const;
 export const OPENAI_TTS_STREAM_FORMATS = ["audio", "sse"] as const;
-const OPENAI_TTS_MODELS_WITH_INSTRUCTIONS = new Set<string>(["gpt-4o-mini-tts"]);
 const OPENAI_TTS_MODELS_WITH_STREAMING = new Set<string>(["gpt-4o-mini-tts"]);
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
 
@@ -484,12 +483,23 @@ export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
-function supportsOpenAIMultiParamFeatures(model: string, baseUrl?: string): boolean {
-  return isCustomOpenAIEndpoint(baseUrl) || OPENAI_TTS_MODELS_WITH_INSTRUCTIONS.has(model);
-}
-
 function supportsOpenAIStreaming(model: string, baseUrl?: string): boolean {
   return isCustomOpenAIEndpoint(baseUrl) || OPENAI_TTS_MODELS_WITH_STREAMING.has(model);
+}
+
+function isUnsupportedInstructionsApiError(error: Error): boolean {
+  const normalized = error.message.toLowerCase();
+  const hasUnsupportedSignal =
+    normalized.includes("unsupported") ||
+    normalized.includes("not supported") ||
+    normalized.includes("unknown parameter") ||
+    normalized.includes("unrecognized request argument");
+
+  return (
+    (normalized.includes("instruction") && hasUnsupportedSignal) ||
+    normalized.includes("extra inputs are not permitted") ||
+    normalized.includes("additional properties are not allowed")
+  );
 }
 
 export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
@@ -588,7 +598,7 @@ function inferOpenAiFormatFromBytes(audio: Buffer): OpenAiTtsResponseFormat | un
 }
 
 function resolveOpenAiReturnedFormat(params: {
-  requested: OpenAiTtsResponseFormat;
+  requested?: OpenAiTtsResponseFormat;
   contentType: string | null;
   audioBuffer?: Buffer;
 }): OpenAiTtsResponseFormat {
@@ -596,13 +606,46 @@ function resolveOpenAiReturnedFormat(params: {
   const fromBytes = params.audioBuffer ? inferOpenAiFormatFromBytes(params.audioBuffer) : undefined;
   const detected = fromBytes ?? fromContentType;
 
-  if (detected && detected !== params.requested) {
+  if (params.requested && detected && detected !== params.requested) {
     throw new Error(
       `OpenAI TTS returned ${detected} but ${params.requested} was requested. ` +
         `Align messages.tts.openai.responseFormat with upstream output or fix the upstream endpoint.`,
     );
   }
-  return detected ?? params.requested;
+  return detected ?? params.requested ?? "mp3";
+}
+
+async function buildOpenAiTtsApiError(response: Response): Promise<Error> {
+  let details = "";
+  try {
+    if (typeof response.text === "function") {
+      const raw = await response.text();
+      const trimmed = raw.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed) as {
+            error?: { message?: string } | string;
+            message?: string;
+          };
+          if (typeof parsed.error === "string") {
+            details = parsed.error;
+          } else if (typeof parsed.error?.message === "string") {
+            details = parsed.error.message;
+          } else if (typeof parsed.message === "string") {
+            details = parsed.message;
+          } else {
+            details = trimmed;
+          }
+        } catch {
+          details = trimmed;
+        }
+      }
+    }
+  } catch {
+    // ignore body parse failures and fall back to status-only error
+  }
+  const suffix = details ? `: ${details}` : "";
+  return new Error(`OpenAI TTS API error (${response.status})${suffix}`);
 }
 
 type SummarizeResult = {
@@ -819,9 +862,10 @@ export async function openaiTTS(params: {
   apiKey: string;
   model: string;
   voice: string;
-  responseFormat: OpenAiTtsResponseFormat;
+  responseFormat?: OpenAiTtsResponseFormat;
   speed?: number;
   instructions?: string;
+  instructionsExplicit?: boolean;
   stream?: boolean;
   streamFormat?: OpenAiTtsStreamFormat;
   streamFallbackToBuffered?: boolean;
@@ -836,6 +880,7 @@ export async function openaiTTS(params: {
     responseFormat,
     speed,
     instructions,
+    instructionsExplicit = false,
     stream,
     streamFormat,
     streamFallbackToBuffered = true,
@@ -853,11 +898,6 @@ export async function openaiTTS(params: {
     throw new Error("OpenAI speed must be between 0.25 and 4.0");
   }
   const normalizedInstructions = instructions?.trim();
-  if (normalizedInstructions && !supportsOpenAIMultiParamFeatures(model, baseUrl)) {
-    throw new Error(
-      `OpenAI instructions are unsupported for model ${model}; use gpt-4o-mini-tts or unset instructions.`,
-    );
-  }
   if (stream === true && !supportsOpenAIStreaming(model, baseUrl)) {
     throw new Error(
       `OpenAI stream mode is unsupported for model ${model}; use gpt-4o-mini-tts or disable stream.`,
@@ -875,6 +915,7 @@ export async function openaiTTS(params: {
   try {
     const makeRequest = async (
       enableStream: boolean,
+      includeInstructions: boolean,
       signal: AbortSignal = controller.signal,
     ): Promise<Response> =>
       fetch(`${getOpenAITtsBaseUrl(baseUrl)}/audio/speech`, {
@@ -887,14 +928,43 @@ export async function openaiTTS(params: {
           model,
           input: text,
           voice,
-          response_format: responseFormat,
-          speed,
-          instructions: normalizedInstructions || undefined,
-          stream: enableStream ? true : undefined,
-          stream_format: enableStream ? streamFormat : undefined,
+          ...(responseFormat != null ? { response_format: responseFormat } : {}),
+          ...(speed != null ? { speed } : {}),
+          ...(includeInstructions && normalizedInstructions
+            ? { instructions: normalizedInstructions }
+            : {}),
+          ...(enableStream ? { stream: true } : {}),
+          ...(enableStream && streamFormat ? { stream_format: streamFormat } : {}),
         }),
         signal,
       });
+
+    const requestWithUnsupportedInstructionsRetry = async (
+      enableStream: boolean,
+      signal: AbortSignal = controller.signal,
+    ): Promise<Response> => {
+      let includeInstructions = Boolean(normalizedInstructions);
+      let retriedWithoutInstructions = false;
+
+      while (true) {
+        const response = await makeRequest(enableStream, includeInstructions, signal);
+        if (response.ok) {
+          return response;
+        }
+        const apiError = await buildOpenAiTtsApiError(response);
+        if (
+          includeInstructions &&
+          !instructionsExplicit &&
+          !retriedWithoutInstructions &&
+          isUnsupportedInstructionsApiError(apiError)
+        ) {
+          includeInstructions = false;
+          retriedWithoutInstructions = true;
+          continue;
+        }
+        throw apiError;
+      }
+    };
 
     const toResult = async (res: Response) => {
       const audioBuffer = Buffer.from(await res.arrayBuffer());
@@ -912,14 +982,19 @@ export async function openaiTTS(params: {
       const fallbackController = new AbortController();
       const fallbackTimeout = setTimeout(() => fallbackController.abort(), timeoutMs);
       try {
-        const fallback = await makeRequest(false, fallbackController.signal);
-        if (!fallback.ok) {
-          if (cause != null) {
-            throw new Error(`OpenAI TTS API error (${fallback.status})`, { cause });
-          }
-          throw new Error(`OpenAI TTS API error (${fallback.status})`);
-        }
+        const fallback = await requestWithUnsupportedInstructionsRetry(
+          false,
+          fallbackController.signal,
+        );
         return toResult(fallback);
+      } catch (fallbackError) {
+        if (cause != null) {
+          throw new Error(
+            fallbackError instanceof Error ? fallbackError.message : "OpenAI TTS fallback error",
+            { cause: fallbackError },
+          );
+        }
+        throw fallbackError;
       } finally {
         clearTimeout(fallbackTimeout);
       }
@@ -928,13 +1003,7 @@ export async function openaiTTS(params: {
     const shouldRequestStream = stream === true;
     if (shouldRequestStream) {
       try {
-        const streamResponse = await makeRequest(true);
-        if (!streamResponse.ok) {
-          if (streamFallbackToBuffered) {
-            return attemptBufferedFallback();
-          }
-          throw new Error(`OpenAI TTS API error (${streamResponse.status})`);
-        }
+        const streamResponse = await requestWithUnsupportedInstructionsRetry(true);
         return toResult(streamResponse);
       } catch (err) {
         if (streamFallbackToBuffered) {
@@ -944,10 +1013,7 @@ export async function openaiTTS(params: {
       }
     }
 
-    const response = await makeRequest(false);
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
-    }
+    const response = await requestWithUnsupportedInstructionsRetry(false);
     return toResult(response);
   } finally {
     clearTimeout(timeout);
@@ -959,9 +1025,10 @@ export async function openaiTTSReadable(params: {
   apiKey: string;
   model: string;
   voice: string;
-  responseFormat: OpenAiTtsResponseFormat;
+  responseFormat?: OpenAiTtsResponseFormat;
   speed?: number;
   instructions?: string;
+  instructionsExplicit?: boolean;
   streamFormat?: OpenAiTtsStreamFormat;
   timeoutMs: number;
   baseUrl?: string;
@@ -974,6 +1041,7 @@ export async function openaiTTSReadable(params: {
     responseFormat,
     speed,
     instructions,
+    instructionsExplicit = false,
     streamFormat,
     timeoutMs,
     baseUrl,
@@ -988,11 +1056,6 @@ export async function openaiTTSReadable(params: {
     throw new Error("OpenAI speed must be between 0.25 and 4.0");
   }
   const normalizedInstructions = instructions?.trim();
-  if (normalizedInstructions && !supportsOpenAIMultiParamFeatures(model, baseUrl)) {
-    throw new Error(
-      `OpenAI instructions are unsupported for model ${model}; use gpt-4o-mini-tts or unset instructions.`,
-    );
-  }
   if (!supportsOpenAIStreaming(model, baseUrl)) {
     throw new Error(
       `OpenAI stream mode is unsupported for model ${model}; use gpt-4o-mini-tts or disable stream.`,
@@ -1012,28 +1075,50 @@ export async function openaiTTSReadable(params: {
   };
 
   try {
-    const response = await fetch(`${getOpenAITtsBaseUrl(baseUrl)}/audio/speech`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        speed,
-        instructions: normalizedInstructions || undefined,
-        stream: true,
-        stream_format: streamFormat,
-      }),
-      signal: controller.signal,
-    });
+    let includeInstructions = Boolean(normalizedInstructions);
+    let retriedWithoutInstructions = false;
+    let response: Response;
+    while (true) {
+      response = await fetch(`${getOpenAITtsBaseUrl(baseUrl)}/audio/speech`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: text,
+          voice,
+          ...(responseFormat != null ? { response_format: responseFormat } : {}),
+          ...(speed != null ? { speed } : {}),
+          ...(includeInstructions && normalizedInstructions
+            ? { instructions: normalizedInstructions }
+            : {}),
+          stream: true,
+          ...(streamFormat ? { stream_format: streamFormat } : {}),
+        }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      throw new Error(`OpenAI TTS API error (${response.status})`);
+      if (response.ok) {
+        break;
+      }
+
+      const apiError = await buildOpenAiTtsApiError(response);
+      if (
+        includeInstructions &&
+        !instructionsExplicit &&
+        !retriedWithoutInstructions &&
+        isUnsupportedInstructionsApiError(apiError)
+      ) {
+        includeInstructions = false;
+        retriedWithoutInstructions = true;
+        continue;
+      }
+
+      throw apiError;
     }
+
     if (!response.body) {
       throw new Error("OpenAI TTS API returned no response body");
     }
