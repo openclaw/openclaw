@@ -146,7 +146,17 @@ function sortStringsCompat(values: Iterable<string>): string[] {
   if (typeof maybeToSorted === "function") {
     return maybeToSorted.call(entries, (a, b) => a.localeCompare(b));
   }
-  return entries.slice().toSorted((a, b) => a.localeCompare(b));
+  const sorted = [...entries];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const current = sorted[i];
+    let j = i - 1;
+    while (j >= 0 && sorted[j].localeCompare(current) > 0) {
+      sorted[j + 1] = sorted[j];
+      j -= 1;
+    }
+    sorted[j + 1] = current;
+  }
+  return sorted;
 }
 
 export function renderApp(state: AppViewState) {
