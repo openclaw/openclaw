@@ -168,6 +168,28 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("config");
   });
 
+  it("suppresses duplicate warning when paths use '..' segments (feishu false-positive regression)", () => {
+    // Regression test for: https://github.com/openclaw/openclaw/issues/29826
+    // The feishu bundled plugin could appear with an alternate path representation
+    // (e.g. containing "sub/..") where safeRealpathSync might return null on some
+    // systems. The fix ensures path.resolve() is used as a fallback so these are
+    // correctly identified as the same plugin.
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    // altDir is lexically different but resolves to the same directory
+    const altDir = path.join(dir, "sub", "..");
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({ idHint: "feishu", rootDir: dir, origin: "bundled" }),
+      createPluginCandidate({ idHint: "feishu", rootDir: altDir, origin: "global" }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
   it("rejects manifest paths that escape plugin root via symlink", () => {
     const rootDir = makeTempDir();
     const outsideDir = makeTempDir();
