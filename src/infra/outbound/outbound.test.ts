@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
-import { getLifecycleDb } from "../message-lifecycle/db.js";
+import { clearLifecycleDbCacheForTest, getLifecycleDb } from "../message-lifecycle/db.js";
 import {
   ackDelivery,
   computeBackoffMs,
@@ -55,6 +55,7 @@ describe("delivery-queue", () => {
   });
 
   afterAll(() => {
+    clearLifecycleDbCacheForTest();
     if (!fixtureRoot) {
       return;
     }
@@ -284,8 +285,8 @@ describe("delivery-queue", () => {
     const baseCfg = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
     // Age all queued entries to simulate having survived a gateway crash.
-    // Without aging, entries are not eligible because the outbox worker defers fresh
-    // entries for 5 s to avoid racing with the direct delivery path.
+    // Without aging, entries have next_attempt_at = now and might be picked up
+    // before the direct delivery path finishes (startup-cutoff prevents this in prod).
     const makeEntriesEligible = () => {
       const db = getLifecycleDb(tmpDir);
       const past = Date.now() - 10_000;
@@ -494,7 +495,9 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(3);
 
       // Should have logged a warning about deferred entries.
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next tick"));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("deferred to next recovery pass"),
+      );
     });
 
     it("defers entries until backoff becomes eligible", async () => {

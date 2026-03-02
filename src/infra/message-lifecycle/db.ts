@@ -43,6 +43,7 @@ export function getLifecycleDb(stateDir?: string): DatabaseSync {
   }
   db.exec("PRAGMA journal_mode=WAL;");
   db.exec("PRAGMA synchronous=NORMAL;");
+  db.exec("PRAGMA busy_timeout=5000;");
   ensureLifecycleSchema(db);
   registerCleanupHook();
   DB_CACHE.set(cacheKey, db);
@@ -73,7 +74,6 @@ export function ensureLifecycleSchema(db: DatabaseSync): void {
     );
   `);
 
-  db.exec("DROP INDEX IF EXISTS idx_message_outbox_idem");
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_message_outbox_idem
       ON message_outbox(idempotency_key)

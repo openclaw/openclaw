@@ -175,9 +175,9 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
     // this entry, the recovery worker should not resurrect it.
     const row = db
       .prepare(
-        `SELECT attempt_count FROM message_outbox WHERE id=? AND status IN ('queued','failed_retryable')`,
+        `SELECT attempt_count, dispatch_kind FROM message_outbox WHERE id=? AND status IN ('queued','failed_retryable')`,
       )
-      .get(id) as { attempt_count: number } | undefined;
+      .get(id) as { attempt_count: number; dispatch_kind: string | null } | undefined;
     if (!row) {
       return;
     }
@@ -187,11 +187,30 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
         `UPDATE message_outbox
            SET status='failed_terminal',
                error_class='permanent',
+               attempt_count=?,
                last_error=?,
+               last_attempt_at=?,
                completed_at=?,
                terminal_reason=?
          WHERE id=?`,
-      ).run(error, now, error, id);
+      ).run(row.attempt_count + 1, error, now, now, error, id);
+      return;
+    }
+    // Non-final rows (tool/block dispatches) have no recovery path — recovery
+    // skips them by dispatch_kind filter. Mark terminal immediately rather than
+    // leaving them in failed_retryable where they'd accumulate.
+    if (row.dispatch_kind && row.dispatch_kind !== "final") {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               attempt_count=?,
+               last_error=?,
+               last_attempt_at=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(row.attempt_count + 1, error, now, now, "non-final dispatch; no recovery path", id);
       return;
     }
     const nextCount = row.attempt_count + 1;
@@ -450,7 +469,9 @@ export async function recoverPendingDeliveries(opts: {
     const now = Date.now();
     if (now >= deadline) {
       const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next tick`);
+      opts.log.warn(
+        `Recovery time budget exceeded — ${deferred} entries deferred to next recovery pass`,
+      );
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
@@ -511,6 +532,10 @@ export function isPermanentDeliveryError(error: string): boolean {
 }
 
 export function pruneOutbox(ageMs: number, stateDir?: string): void {
+  if (!Number.isFinite(ageMs) || ageMs <= 0) {
+    logVerbose(`delivery-queue: pruneOutbox skipped — invalid ageMs: ${ageMs}`);
+    return;
+  }
   const db = getLifecycleDb(stateDir);
   const cutoff = Date.now() - ageMs;
   try {
