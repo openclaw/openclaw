@@ -5,18 +5,22 @@
  * Prevents accidental exposure through CLI output, log files,
  * and error stack traces.
  */
+
 // Matches "token": "any-string-value" in JSON
 const TOKEN_FIELD_PATTERN = /("token"\s*:\s*")([^"]{8,})(")/gi;
+
 // Matches "Bearer <token>" — case-insensitive per RFC 6750
-// Character class covers full token68 charset (RFC 7235):
-// ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" / "="
+// Full token68 charset per RFC 7235
 const BEARER_PATTERN = /(bearer\s+)([\w\-\.+/=~]{16,})/gi;
+
 // Matches standalone long hex strings (API keys, session IDs)
 const HEX_TOKEN_PATTERN = /\b([a-f0-9]{32,})\b/gi;
+
 function mask(token: string): string {
   if (token.length <= 8) return "****";
   return token.slice(0, 4) + "****" + token.slice(-4);
 }
+
 export function redactTokens(input: string): string {
   return input
     .replace(TOKEN_FIELD_PATTERN, (_m, pre, token, post) => {
@@ -29,20 +33,25 @@ export function redactTokens(input: string): string {
       return mask(token);
     });
 }
+
 /**
  * Convert any argument to a redacted copy for logging.
  * Never mutates the original argument.
  */
 function stringify(arg: any): any {
   if (typeof arg === "string") return redactTokens(arg);
+
   if (arg instanceof Error) {
-    const clone = new (arg.constructor as ErrorConstructor)(
-      redactTokens(arg.message)
-    );
-    clone.name = arg.name;
+    // Use Object.create to preserve prototype chain and all custom
+    // fields (code, statusCode, etc.) without calling the subclass
+    // constructor, which may require extra arguments.
+    const clone: Error = Object.create(Object.getPrototypeOf(arg));
+    Object.assign(clone, arg);
+    clone.message = redactTokens(arg.message);
     if (arg.stack) clone.stack = redactTokens(arg.stack);
     return clone;
   }
+
   if (typeof arg === "object" && arg !== null) {
     try {
       return JSON.parse(redactTokens(JSON.stringify(arg)));
@@ -50,8 +59,10 @@ function stringify(arg: any): any {
       return arg;
     }
   }
+
   return arg;
 }
+
 /**
  * Wraps all console output methods to automatically redact tokens.
  * Covers log, info, debug, warn, error, trace, dir, and table.
@@ -61,7 +72,9 @@ export function installLogRedaction(): void {
   const methods = [
     "log", "info", "debug", "warn", "error", "trace", "dir", "table",
   ] as const;
+
   const originals: Record<string, (...args: any[]) => void> = {};
+
   for (const level of methods) {
     if (typeof console[level] !== "function") continue;
     originals[level] = console[level];

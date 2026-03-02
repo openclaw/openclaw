@@ -13,13 +13,16 @@ import { resolve, dirname } from "path";
 
 function findGitRoot(startDir: string): string | null {
   let dir = resolve(startDir);
-  const root = resolve("/");
 
-  while (dir !== root) {
+  while (true) {
     if (existsSync(resolve(dir, ".git"))) {
       return dir;
     }
-    dir = dirname(dir);
+    const parent = dirname(dir);
+    // Stop when we can't go higher (handles all platforms including
+    // Windows drives where dirname("D:\") === "D:\")
+    if (parent === dir) break;
+    dir = parent;
   }
   return null;
 }
