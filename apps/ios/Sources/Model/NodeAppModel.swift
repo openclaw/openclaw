@@ -2591,8 +2591,8 @@ extension NodeAppModel {
                     "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
                 return
             }
-            if Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt) < 1.0 {
-                self.deepLinkLogger.debug("agent deep link prompt throttled")
+            if Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt) < 5.0 {
+                self.deepLinkLogger.debug("agent deep link prompt rate-limited (min 5 s interval)")
                 return
             }
             self.lastAgentDeepLinkPromptAt = Date()

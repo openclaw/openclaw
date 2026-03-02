@@ -59,7 +59,7 @@ extension URLSession: WebSocketSessioning {
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.webSocketTask(with: url)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
-        task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
+        task.maximumMessageSize = 4 * 1024 * 1024 // 4 MB
         return WebSocketTaskBox(task: task)
     }
 }
