@@ -12,6 +12,7 @@ vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
   sendLinkZalouser: vi.fn(),
+  sendReactionZalouser: vi.fn(),
 }));
 
 vi.mock("./zalo-js.js", () => ({

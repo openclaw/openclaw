@@ -19,9 +19,19 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
 import { getZalouserRuntime } from "./runtime.js";
-import { sendMessageZalouser, sendTypingZalouser } from "./send.js";
+import {
+  sendDeliveredZalouser,
+  sendMessageZalouser,
+  sendSeenZalouser,
+  sendTypingZalouser,
+} from "./send.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import { listZaloFriends, listZaloGroups, startZaloListener } from "./zalo-js.js";
+import {
+  listZaloFriends,
+  listZaloGroups,
+  resolveZaloGroupContext,
+  startZaloListener,
+} from "./zalo-js.js";
 
 export type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
@@ -142,6 +152,24 @@ function resolveGroupRequireMention(params: {
   return true;
 }
 
+async function sendZalouserDeliveryAcks(params: {
+  profile: string;
+  isGroup: boolean;
+  message: NonNullable<ZaloInboundMessage["eventMessage"]>;
+}): Promise<void> {
+  await sendDeliveredZalouser({
+    profile: params.profile,
+    isGroup: params.isGroup,
+    message: params.message,
+    isSeen: true,
+  });
+  await sendSeenZalouser({
+    profile: params.profile,
+    isGroup: params.isGroup,
+    message: params.message,
+  });
+}
+
 async function processMessage(
   message: ZaloInboundMessage,
   account: ResolvedZalouserAccount,
@@ -169,7 +197,32 @@ async function processMessage(
     return;
   }
   const senderName = message.senderName ?? "";
-  const groupName = message.groupName ?? "";
+  const configuredGroupName = message.groupName?.trim() || "";
+  const groupContext =
+    isGroup && !configuredGroupName
+      ? await resolveZaloGroupContext(account.profile, chatId).catch((err) => {
+          logVerbose(
+            core,
+            runtime,
+            `zalouser: group context lookup failed for ${chatId}: ${String(err)}`,
+          );
+          return null;
+        })
+      : null;
+  const groupName = configuredGroupName || groupContext?.name?.trim() || "";
+  const groupMembers = groupContext?.members?.slice(0, 20).join(", ") || undefined;
+
+  if (message.eventMessage) {
+    try {
+      await sendZalouserDeliveryAcks({
+        profile: account.profile,
+        isGroup,
+        message: message.eventMessage,
+      });
+    } catch (err) {
+      logVerbose(core, runtime, `zalouser: delivery/seen ack failed for ${chatId}: ${String(err)}`);
+    }
+  }
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
@@ -316,7 +369,10 @@ async function processMessage(
     wasMentioned,
     implicitMention: message.implicitMention === true,
     hasAnyMention: explicitMention.hasAnyMention,
-    allowTextCommands: core.channel.commands.shouldHandleTextCommands(config),
+    allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+      cfg: config,
+      surface: "zalouser",
+    }),
     hasControlCommand,
     commandAuthorized: commandAuthorized === true,
   });
@@ -354,6 +410,9 @@ async function processMessage(
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
+    GroupSubject: isGroup ? groupName || undefined : undefined,
+    GroupChannel: isGroup ? groupName || undefined : undefined,
+    GroupMembers: isGroup ? groupMembers : undefined,
     SenderName: senderName || undefined,
     SenderId: senderId,
     WasMentioned: isGroup ? mentionGate.effectiveWasMentioned : undefined,
@@ -361,6 +420,10 @@ async function processMessage(
     Provider: "zalouser",
     Surface: "zalouser",
     MessageSid: message.msgId ?? message.cliMsgId ?? `${message.timestampMs}`,
+    MessageSidFull:
+      message.msgId && message.cliMsgId
+        ? `${message.msgId}:${message.cliMsgId}`
+        : (message.msgId ?? message.cliMsgId ?? undefined),
     OriginatingChannel: "zalouser",
     OriginatingTo: `zalouser:${chatId}`,
   });

@@ -16,6 +16,18 @@ export type ZaloGroupMember = {
   avatar?: string;
 };
 
+export type ZaloEventMessage = {
+  msgId: string;
+  cliMsgId: string;
+  uidFrom: string;
+  idTo: string;
+  msgType: string;
+  st: number;
+  at: number;
+  cmd: number;
+  ts: string | number;
+};
+
 export type ZaloInboundMessage = {
   threadId: string;
   isGroup: boolean;
@@ -30,6 +42,7 @@ export type ZaloInboundMessage = {
   wasExplicitlyMentioned?: boolean;
   canResolveExplicitMention?: boolean;
   implicitMention?: boolean;
+  eventMessage?: ZaloEventMessage;
   raw: unknown;
 };
 
@@ -51,6 +64,12 @@ export type ZaloSendResult = {
   ok: boolean;
   messageId?: string;
   error?: string;
+};
+
+export type ZaloGroupContext = {
+  groupId: string;
+  name?: string;
+  members?: string[];
 };
 
 export type ZaloAuthStatus = {

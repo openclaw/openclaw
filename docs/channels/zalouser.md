@@ -107,6 +107,28 @@ Example:
 }
 ```
 
+### Group mention gating
+
+- `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
+- Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
+- This applies both to allowlisted groups and open group mode.
+
+Example:
+
+```json5
+{
+  channels: {
+    zalouser: {
+      groupPolicy: "allowlist",
+      groups: {
+        "*": { allow: true, requireMention: true },
+        "Work Chat": { allow: true, requireMention: false },
+      },
+    },
+  },
+}
+```
+
 ## Multi-account
 
 Accounts map to `zalouser` profiles in OpenClaw state. Example:
@@ -124,6 +146,14 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
   },
 }
 ```
+
+## Typing, reactions, and delivery acknowledgements
+
+- OpenClaw sends a typing event before dispatching a reply (best-effort).
+- Message reaction action `react` is supported for `zalouser` in channel actions.
+  - Use `remove: true` to remove a specific reaction emoji from a message.
+  - Reaction semantics: [Reactions](/tools/reactions)
+- For inbound messages that include event metadata, OpenClaw sends delivered + seen acknowledgements (best-effort).
 
 ## Troubleshooting
 
