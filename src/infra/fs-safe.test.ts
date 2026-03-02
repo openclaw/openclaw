@@ -35,6 +35,9 @@ describe("fs-safe", () => {
     await expect(readLocalFileSafely({ filePath: dir })).rejects.toMatchObject({
       code: "not-file",
     });
+    const err = await readLocalFileSafely({ filePath: dir }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SafeOpenError);
+    expect((err as SafeOpenError).message).not.toMatch(/EISDIR/i);
   });
 
   it("enforces maxBytes", async () => {
