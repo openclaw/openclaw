@@ -154,7 +154,7 @@ function binaryName(token: string | undefined): string | undefined {
     return undefined;
   }
   const cleaned = stripOuterQuotes(token) ?? token;
-  const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
+  const segment = cleaned.split(/[\\/]/).at(-1) ?? cleaned;
   return segment
     .trim()
     .toLowerCase()
@@ -568,6 +568,11 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      // Preflight: catch malformed exec control metadata before any approval or
+      // deferred gateway execution path can handle the command asynchronously.
+      assertNoInlineExecControlLeak(params.command);
+      await validateScriptFileForShellBleed({ command: params.command, workdir });
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -633,11 +638,6 @@ export function createExecTool(
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
-
-      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
-      // before we execute and burn tokens in cron loops.
-      assertNoInlineExecControlLeak(params.command);
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
 
       const run = await runExecProcess({
         command: params.command,

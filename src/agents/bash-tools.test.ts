@@ -586,4 +586,24 @@ describe("exec inline control metadata guard", () => {
       Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
     `);
   });
+
+  it("rejects leaked inline exec control metadata before gateway approval branching", async () => {
+    const approvalTool = createTestExecTool({ ask: "on" });
+    await expect(executeExecCommand(approvalTool, 'bash pty:true -lc "echo ok"')).rejects
+      .toThrowErrorMatchingInlineSnapshot(`
+      [Error: exec preflight: detected leaked exec control metadata in command text (pty:true) inside shell argv immediately after the executable.
+      Keep exec controls structured and separate from the shell command.
+      Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
+    `);
+  });
+
+  it("rejects leaked inline exec control metadata for windows path launcher names", async () => {
+    await expect(
+      executeExecCommand(execTool, 'C:\\\\Git\\\\bin\\\\bash.exe pty:true -lc "echo ok"'),
+    ).rejects.toThrowErrorMatchingInlineSnapshot(`
+      [Error: exec preflight: detected leaked exec control metadata in command text (pty:true) inside shell argv immediately after the executable.
+      Keep exec controls structured and separate from the shell command.
+      Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.]
+    `);
+  });
 });
