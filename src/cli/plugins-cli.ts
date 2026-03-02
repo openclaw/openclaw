@@ -638,11 +638,10 @@ export function registerPluginsCli(program: Command) {
         logger: createPluginInstallLogger(),
       });
       if (!result.ok) {
-        const shouldTryBundledFallback =
-          isPackageNotFoundInstallError(result.error) || isNotAnOpenClawPluginError(result.error);
-        const bundledFallback = shouldTryBundledFallback
-          ? findBundledPluginByNpmSpec({ spec: raw })
-          : undefined;
+        const isNpmNotFound = isPackageNotFoundInstallError(result.error);
+        const isNotPlugin = isNotAnOpenClawPluginError(result.error);
+        const bundledFallback =
+          isNpmNotFound || isNotPlugin ? findBundledPluginByNpmSpec({ spec: raw }) : undefined;
         if (!bundledFallback) {
           defaultRuntime.error(result.error);
           process.exit(1);
@@ -680,7 +679,9 @@ export function registerPluginsCli(program: Command) {
         logSlotWarnings(slotResult.warnings);
         defaultRuntime.log(
           theme.warn(
-            `npm package unavailable for ${raw}; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`,
+            isNpmNotFound
+              ? `npm package unavailable for ${raw}; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`
+              : `npm package "${raw}" is not a valid OpenClaw plugin; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`,
           ),
         );
         defaultRuntime.log(`Installed plugin: ${bundledFallback.pluginId}`);
