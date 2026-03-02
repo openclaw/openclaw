@@ -25,14 +25,25 @@ export function resolveAuthProfileOrder(params: {
   const storedOrder = findNormalizedProviderValue(store.order, providerKey);
   const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
   const explicitOrder = storedOrder ?? configuredOrder;
+  const providerApi = cfg?.models?.providers?.[providerKey]?.api;
+  const isOpenAiCompatible =
+    providerKey !== "openai" &&
+    (providerApi === "openai-completions" || providerApi === "openai-responses");
+  const allowedProviderKeys = isOpenAiCompatible ? [providerKey, "openai"] : [providerKey];
+
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) => normalizeProviderId(profile.provider) === providerKey)
+        .filter(([, profile]) =>
+          allowedProviderKeys.includes(normalizeProviderId(profile.provider)),
+        )
         .map(([profileId]) => profileId)
     : [];
-  const baseOrder =
+  let baseOrder =
     explicitOrder ??
     (explicitProfiles.length > 0 ? explicitProfiles : listProfilesForProvider(store, providerKey));
+  if (baseOrder.length === 0 && isOpenAiCompatible) {
+    baseOrder = listProfilesForProvider(store, "openai");
+  }
   if (baseOrder.length === 0) {
     return [];
   }
@@ -42,12 +53,12 @@ export function resolveAuthProfileOrder(params: {
     if (!cred) {
       return false;
     }
-    if (normalizeProviderId(cred.provider) !== providerKey) {
+    if (!allowedProviderKeys.includes(normalizeProviderId(cred.provider))) {
       return false;
     }
     const profileConfig = cfg?.auth?.profiles?.[profileId];
     if (profileConfig) {
-      if (normalizeProviderId(profileConfig.provider) !== providerKey) {
+      if (!allowedProviderKeys.includes(normalizeProviderId(profileConfig.provider))) {
         return false;
       }
       if (profileConfig.mode !== cred.type) {
