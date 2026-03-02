@@ -163,7 +163,7 @@ function getOrCreateDebouncer(target: WebhookTarget) {
       const balloonBundleId = msg.balloonBundleId?.trim();
       const associatedMessageGuid = msg.associatedMessageGuid?.trim();
       if (balloonBundleId && associatedMessageGuid) {
-        return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+        return `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`;
       }
 
       const messageId = msg.messageId?.trim();

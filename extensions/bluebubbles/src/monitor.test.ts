@@ -1877,6 +1877,135 @@ describe("BlueBubbles webhook monitor", () => {
         vi.useRealTimers();
       }
     });
+
+    it("coalesces text and balloon webhook events by associatedMessageGuid", async () => {
+      vi.useFakeTimers();
+      try {
+        const account = createMockAccount({ dmPolicy: "open" });
+        const config: OpenClawConfig = {};
+        const core = createMockRuntime();
+
+        // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
+        // oxlint-disable-next-line typescript/no-explicit-any
+        core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+          // oxlint-disable-next-line typescript/no-explicit-any
+          type Item = any;
+          const buckets = new Map<
+            string,
+            { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+          >();
+
+          const flush = async (key: string) => {
+            const bucket = buckets.get(key);
+            if (!bucket) {
+              return;
+            }
+            if (bucket.timer) {
+              clearTimeout(bucket.timer);
+              bucket.timer = null;
+            }
+            const items = bucket.items;
+            bucket.items = [];
+            if (items.length > 0) {
+              try {
+                await params.onFlush(items);
+              } catch (err) {
+                params.onError?.(err);
+                throw err;
+              }
+            }
+          };
+
+          return {
+            enqueue: async (item: Item) => {
+              if (params.shouldDebounce && !params.shouldDebounce(item)) {
+                await params.onFlush([item]);
+                return;
+              }
+
+              const key = params.buildKey(item);
+              const existing = buckets.get(key);
+              const bucket = existing ?? { items: [], timer: null };
+              bucket.items.push(item);
+              if (bucket.timer) {
+                clearTimeout(bucket.timer);
+              }
+              bucket.timer = setTimeout(async () => {
+                await flush(key);
+              }, params.debounceMs);
+              buckets.set(key, bucket);
+            },
+            flushKey: vi.fn(async (key: string) => {
+              await flush(key);
+            }),
+          };
+        }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+
+        setBlueBubblesRuntime(core);
+
+        unregister = registerBlueBubblesWebhookTarget({
+          account,
+          config,
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        });
+
+        const messageId = "msg-merge-1";
+        const chatGuid = "iMessage;-;+15551234567";
+
+        const textPayload = {
+          type: "new-message",
+          data: {
+            text: "https://openclaw.ai",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: messageId,
+            chatGuid,
+            date: Date.now(),
+          },
+        };
+
+        const balloonPayload = {
+          type: "new-message",
+          data: {
+            text: "OpenClaw",
+            handle: { address: "+15551234567" },
+            isGroup: false,
+            isFromMe: false,
+            guid: "balloon-msg-2",
+            chatGuid,
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+            associatedMessageGuid: messageId,
+            date: Date.now(),
+          },
+        };
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", textPayload),
+          createMockResponse(),
+        );
+
+        await vi.advanceTimersByTimeAsync(200);
+
+        await handleBlueBubblesWebhookRequest(
+          createMockRequest("POST", "/bluebubbles-webhook", balloonPayload),
+          createMockResponse(),
+        );
+
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(700);
+
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+        const callArgs = getFirstDispatchCall();
+        expect(callArgs.ctx.Body).toContain("https://openclaw.ai");
+        expect(callArgs.ctx.Body).toContain("OpenClaw");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("reply metadata", () => {
