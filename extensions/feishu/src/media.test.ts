@@ -108,7 +108,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
-  it("uses msg_type=media for mp4", async () => {
+  it("uses msg_type=file for mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -124,7 +124,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
   });
@@ -171,7 +171,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media when replying with mp4", async () => {
+  it("uses msg_type=file when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -183,7 +183,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
 
@@ -203,7 +203,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "media", reply_in_thread: true }),
+        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
       }),
     );
   });
@@ -333,5 +333,64 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).rejects.toThrow("invalid file_key");
 
     expect(messageResourceGetMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("downloadMessageResourceFeishu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    resolveFeishuAccountMock.mockReturnValue({
+      configured: true,
+      accountId: "main",
+      config: {},
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+    });
+
+    createFeishuClientMock.mockReturnValue({
+      im: {
+        messageResource: {
+          get: messageResourceGetMock,
+        },
+      },
+    });
+
+    messageResourceGetMock.mockResolvedValue(Buffer.from("fake-audio-data"));
+  });
+
+  // Regression: Feishu API only supports type=image|file for messageResource.get.
+  // Audio/video resources must use type=file, not type=audio (#8746).
+  it("forwards provided type=file for non-image resources", async () => {
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_audio_msg",
+      fileKey: "file_key_audio",
+      type: "file",
+    });
+
+    expect(messageResourceGetMock).toHaveBeenCalledWith({
+      path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
+      params: { type: "file" },
+    });
+    expect(result.buffer).toBeInstanceOf(Buffer);
+  });
+
+  it("image uses type=image", async () => {
+    messageResourceGetMock.mockResolvedValue(Buffer.from("fake-image-data"));
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: {} as any,
+      messageId: "om_img_msg",
+      fileKey: "img_key_1",
+      type: "image",
+    });
+
+    expect(messageResourceGetMock).toHaveBeenCalledWith({
+      path: { message_id: "om_img_msg", file_key: "img_key_1" },
+      params: { type: "image" },
+    });
+    expect(result.buffer).toBeInstanceOf(Buffer);
   });
 });

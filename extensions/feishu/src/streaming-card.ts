@@ -9,6 +9,13 @@ import type { FeishuDomain } from "./types.js";
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
 
+/** Optional header for streaming cards (title bar with color template) */
+export type StreamingCardHeader = {
+  title: string;
+  /** Color template: blue, green, red, orange, purple, indigo, wathet, turquoise, yellow, grey, carmine, violet, lime */
+  template?: string;
+};
+
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -99,14 +106,19 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; replyInThread?: boolean; rootId?: string },
+    options?: {
+      replyToMessageId?: string;
+      replyInThread?: boolean;
+      rootId?: string;
+      header?: StreamingCardHeader;
+    },
   ): Promise<void> {
     if (this.state) {
       return;
     }
 
     const apiBase = resolveApiBase(this.creds.domain);
-    const cardJson = {
+    const cardJson: Record<string, unknown> = {
       schema: "2.0",
       config: {
         streaming_mode: true,
@@ -117,6 +129,12 @@ export class FeishuStreamingSession {
         elements: [{ tag: "markdown", content: "⏳ Thinking...", element_id: "content" }],
       },
     };
+    if (options?.header) {
+      cardJson.header = {
+        title: { tag: "plain_text", content: options.header.title },
+        template: options.header.template ?? "blue",
+      };
+    }
 
     // Create card entity
     const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({

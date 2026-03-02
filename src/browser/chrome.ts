@@ -316,6 +316,16 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Collect stderr for diagnostics in case Chrome fails to start.
+  // The listener is removed on success to avoid unbounded memory growth
+  // from a long-lived Chrome process that emits periodic warnings.
+  const stderrChunks: Buffer[] = [];
+  const onStderr = (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+  };
+  proc.stderr?.on("data", onStderr);
+
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 30_000; // Increased from 15s to 30s for Windows compatibility
   while (Date.now() < readyDeadline) {
@@ -325,16 +335,26 @@ export async function launchOpenClawChrome(
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  if (!(await isChromeReachable(profile.cdpUrl, 2000))) { // Increased from 500ms to 2000ms
+  if (!(await isChromeReachable(profile.cdpUrl, 2000))) {
+    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+    const stderrHint = stderrOutput ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}` : "";
+    const sandboxHint =
+      process.platform === "linux" && !resolved.noSandbox
+        ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
+        : "";
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
     );
   }
+
+  // Chrome started successfully — detach the stderr listener and release the buffer.
+  proc.stderr?.off("data", onStderr);
+  stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
   log.info(

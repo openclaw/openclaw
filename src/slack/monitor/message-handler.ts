@@ -19,8 +19,10 @@ export type SlackMessageHandler = (
 export function createSlackMessageHandler(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
+  /** Called on each inbound event to update liveness tracking. */
+  trackEvent?: () => void;
 }): SlackMessageHandler {
-  const { ctx, account } = params;
+  const { ctx, account, trackEvent } = params;
   const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
 
@@ -113,6 +115,7 @@ export function createSlackMessageHandler(params: {
     if (ctx.markMessageSeen(message.channel, message.ts)) {
       return;
     }
+    trackEvent?.();
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
