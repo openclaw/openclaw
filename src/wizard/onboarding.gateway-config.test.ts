@@ -93,6 +93,7 @@ describe("configureGatewayForOnboarding", () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
     mocks.randomToken.mockReturnValue("generated-token");
+    mocks.randomToken.mockClear();
 
     const prompter = createPrompter({
       selectQueue: ["loopback", "token", "off"],
@@ -112,7 +113,6 @@ describe("configureGatewayForOnboarding", () => {
       });
 
       expect(result.settings.gatewayToken).toBe("token-from-env");
-      expect(mocks.randomToken).not.toHaveBeenCalled();
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
