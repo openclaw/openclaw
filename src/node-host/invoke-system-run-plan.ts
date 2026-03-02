@@ -159,7 +159,7 @@ export function buildSystemRunApprovalPlan(params: {
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand: command.cmdText.trim() || null,
+      rawCommand: command.rawCommand,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
     },
