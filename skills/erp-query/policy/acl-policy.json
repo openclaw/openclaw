@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-02T17:35:40.245Z",
+  "updatedAt": "2026-03-02T18:34:36.839Z",
   "source": {
     "dbServer": "192.168.3.250",
     "dbName": "htjx2021"
@@ -1243,7 +1243,7 @@
         "LX",
         "LY"
       ],
-      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "edt_res", "res"],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "edt_res", "res", "app_voucher_type"],
       "requireVoucherTypeFilter": true
     },
     "finance_manager": {
@@ -1376,35 +1376,35 @@
       "roles": ["hr_manager"],
       "status": "active",
       "note": "",
-      "updatedAt": "2026-03-02T17:35:40.245Z"
+      "updatedAt": "2026-03-02T18:34:36.838Z"
     },
     "21032565285572": {
       "displayName": "王五兰",
       "roles": ["production_manager"],
       "status": "active",
       "note": "",
-      "updatedAt": "2026-03-02T17:35:40.245Z"
+      "updatedAt": "2026-03-02T18:34:36.838Z"
     },
     "王鹏程": {
       "displayName": "",
       "roles": [],
       "status": "active",
       "note": "",
-      "updatedAt": "2026-03-02T17:35:40.245Z"
+      "updatedAt": "2026-03-02T18:34:36.838Z"
     },
     "wangchong": {
       "displayName": "王冲",
       "roles": ["admin_readonly"],
       "status": "active",
       "note": "",
-      "updatedAt": "2026-03-02T17:35:40.245Z"
+      "updatedAt": "2026-03-02T18:34:36.838Z"
     },
     "wangpengcheng": {
       "displayName": "王鹏程",
-      "roles": ["finance_manager"],
+      "roles": ["warehouse_manager"],
       "status": "active",
       "note": "",
-      "updatedAt": "2026-03-02T17:35:40.245Z"
+      "updatedAt": "2026-03-02T18:34:36.839Z"
     }
   },
   "aclAdmins": ["wangpengcheng"],

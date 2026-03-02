@@ -146,6 +146,18 @@ node ~/openclaw/skills/erp-query/scripts/acl-web-server.cjs --host 127.0.0.1 --p
 - **AA**: 采购订单, **AB**: 采购入库单, **AC**: 采购开票, **AF**: 采购退货
 - **CB**: 收款单, **CA**: 预收款, **DB**: 付款单, **DA**: 预付款
 - **CC**: 应收款单, **DC**: 应付款单, **EA**: 应收核销, **EB**: 应付核销
+- **GA**: 其他入库单, **GB**: 其他出库单, **GC**: 盘点单
+
+## 仓储查询约定（GA/GB）
+
+- 用户提到“其他入库单”时，默认按 `GA` 查询；提到“其他出库单”时，默认按 `GB` 查询。
+- 走 ACL 安全入口时，仓储查询必须使用 `sql`，并且显式带 `voucher_type` 过滤条件。
+- 推荐 SQL 模板（安全）：
+
+```bash
+node ~/openclaw/skills/erp-query/scripts/secure-query.cjs --wecom-user-id <id> sql "SELECT TOP 20 voucher_no, voucher_date, voucher_type, state FROM ebs_v WHERE voucher_type='GA' ORDER BY voucher_date DESC"
+node ~/openclaw/skills/erp-query/scripts/secure-query.cjs --wecom-user-id <id> sql "SELECT TOP 20 voucher_no, voucher_date, voucher_type, state FROM ebs_v WHERE voucher_type='GB' ORDER BY voucher_date DESC"
+```
 
 ## 错误处理
 
