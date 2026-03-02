@@ -33,7 +33,7 @@ run_n() {
   for i in $(seq 1 "$n"); do
     got="$(cat "/tmp/google_seat_out.${n}.${i}.txt" 2>/dev/null || true)"
     if [[ "$got" != "$shot" ]]; then
-      echo "FAIL seat=$n i=$i got="
+      echo "FAIL seat=$n i=$i got='$got'"
       bad=1
     fi
   done
