@@ -1,17 +1,20 @@
 import { en } from "../locales/en.ts";
+import {
+  DEFAULT_LOCALE,
+  SUPPORTED_LOCALES,
+  isSupportedLocale,
+  loadLazyLocaleTranslation,
+  resolveNavigatorLocale,
+} from "./registry.ts";
 import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "zh-CN", "zh-TW", "pt-BR", "de"];
-
-export function isSupportedLocale(value: string | null | undefined): value is Locale {
-  return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
-}
+export { SUPPORTED_LOCALES, isSupportedLocale };
 
 class I18nManager {
-  private locale: Locale = "en";
-  private translations: Record<Locale, TranslationMap> = { en } as Record<Locale, TranslationMap>;
+  private locale: Locale = DEFAULT_LOCALE;
+  private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
   private subscribers: Set<Subscriber> = new Set();
 
   constructor() {
@@ -23,23 +26,13 @@ class I18nManager {
     if (isSupportedLocale(saved)) {
       return saved;
     }
-    const navLang = navigator.language;
-    if (navLang.startsWith("zh")) {
-      return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
-    }
-    if (navLang.startsWith("pt")) {
-      return "pt-BR";
-    }
-    if (navLang.startsWith("de")) {
-      return "de";
-    }
-    return "en";
+    return resolveNavigatorLocale(navigator.language);
   }
 
   private loadLocale() {
     const initialLocale = this.resolveInitialLocale();
-    if (initialLocale === "en") {
-      this.locale = "en";
+    if (initialLocale === DEFAULT_LOCALE) {
+      this.locale = DEFAULT_LOCALE;
       return;
     }
     // Use the normal locale setter so startup locale loading follows the same
@@ -52,27 +45,18 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    const needsTranslationLoad = !this.translations[locale];
+    const needsTranslationLoad = locale !== DEFAULT_LOCALE && !this.translations[locale];
     if (this.locale === locale && !needsTranslationLoad) {
       return;
     }
 
-    // Lazy load translations if needed
     if (needsTranslationLoad) {
       try {
-        let module: Record<string, TranslationMap>;
-        if (locale === "zh-CN") {
-          module = await import("../locales/zh-CN.ts");
-        } else if (locale === "zh-TW") {
-          module = await import("../locales/zh-TW.ts");
-        } else if (locale === "pt-BR") {
-          module = await import("../locales/pt-BR.ts");
-        } else if (locale === "de") {
-          module = await import("../locales/de.ts");
-        } else {
+        const translation = await loadLazyLocaleTranslation(locale);
+        if (!translation) {
           return;
         }
-        this.translations[locale] = module[locale.replace("-", "_")];
+        this.translations[locale] = translation;
       } catch (e) {
         console.error(`Failed to load locale: ${locale}`, e);
         return;
@@ -99,7 +83,7 @@ class I18nManager {
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value: unknown = this.translations[this.locale] || this.translations["en"];
+    let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
 
     for (const k of keys) {
       if (value && typeof value === "object") {
@@ -110,9 +94,9 @@ class I18nManager {
       }
     }
 
-    // Fallback to English
-    if (value === undefined && this.locale !== "en") {
-      value = this.translations["en"];
+    // Fallback to English.
+    if (value === undefined && this.locale !== DEFAULT_LOCALE) {
+      value = this.translations[DEFAULT_LOCALE];
       for (const k of keys) {
         if (value && typeof value === "object") {
           value = (value as Record<string, unknown>)[k];
