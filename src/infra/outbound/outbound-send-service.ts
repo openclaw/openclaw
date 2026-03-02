@@ -219,7 +219,7 @@ export async function executeSendAction(params: {
   const result: MessageSendResult = await sendMessage({
     cfg: params.ctx.cfg,
     to: params.to,
-    content: params.message,
+    content: pluginSendAttempt.content,
     agentId: params.ctx.agentId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
