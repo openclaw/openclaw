@@ -59,9 +59,10 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
   }
 }
 
-function createInboundCall(params: {
+function createWebhookCall(params: {
   ctx: EventContext;
   providerCallId: string;
+  direction: "inbound" | "outbound";
   from: string;
   to: string;
 }): CallRecord {
@@ -71,7 +72,7 @@ function createInboundCall(params: {
     callId,
     providerCallId: params.providerCallId,
     provider: params.ctx.provider?.name || "twilio",
-    direction: "inbound",
+    direction: params.direction,
     state: "ringing",
     from: params.from,
     to: params.to,
@@ -79,7 +80,10 @@ function createInboundCall(params: {
     transcript: [],
     processedEventIds: [],
     metadata: {
-      initialMessage: params.ctx.config.inboundGreeting || "Hello! How can I help you today?",
+      initialMessage:
+        params.direction === "inbound"
+          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          : undefined,
     },
   };
 
@@ -87,7 +91,9 @@ function createInboundCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(`[voice-call] Created inbound call record: ${callId} from ${params.from}`);
+  console.log(
+    `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
+  );
   return callRecord;
 }
 
@@ -142,9 +148,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       return;
     }
 
-    call = createInboundCall({
+    call = createWebhookCall({
       ctx,
       providerCallId: event.providerCallId,
+      direction: event.direction === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
     });
