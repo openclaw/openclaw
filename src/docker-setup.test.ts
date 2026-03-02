@@ -151,6 +151,9 @@ describe("docker-setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+    expect(log).toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.mode local");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
@@ -166,6 +169,30 @@ describe("docker-setup.sh", () => {
     expect(result.status).toBe(0);
     const identityDirStat = await stat(join(configDir, "identity"));
     expect(identityDirStat.isDirectory()).toBe(true);
+  });
+
+  it("precreates agent data dirs to avoid EACCES in container", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-agent-dirs");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const agentDirStat = await stat(join(configDir, "agents", "main", "agent"));
+    expect(agentDirStat.isDirectory()).toBe(true);
+    const sessionsDirStat = await stat(join(configDir, "agents", "main", "sessions"));
+    expect(sessionsDirStat.isDirectory()).toBe(true);
+
+    // Verify that a root-user chown step runs before onboarding.
+    const log = await readFile(activeSandbox.logPath, "utf8");
+    const chownIdx = log.indexOf("--user root");
+    const onboardIdx = log.indexOf("onboard");
+    expect(chownIdx).toBeGreaterThanOrEqual(0);
+    expect(onboardIdx).toBeGreaterThan(chownIdx);
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
@@ -252,5 +279,11 @@ describe("docker-setup.sh", () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
     expect(compose).not.toContain("gateway-daemon");
     expect(compose).toContain('"gateway"');
+  });
+
+  it("keeps docker-compose CLI network namespace settings in sync", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(compose).toContain('network_mode: "service:openclaw-gateway"');
+    expect(compose).toContain("depends_on:\n      - openclaw-gateway");
   });
 });

@@ -365,9 +365,18 @@ export function createSlackMonitorContext(params: {
     if (!body || typeof body !== "object") {
       return false;
     }
-    const raw = body as { api_app_id?: unknown; team_id?: unknown };
+    const raw = body as {
+      api_app_id?: unknown;
+      team_id?: unknown;
+      team?: { id?: unknown };
+    };
     const incomingApiAppId = typeof raw.api_app_id === "string" ? raw.api_app_id : "";
-    const incomingTeamId = typeof raw.team_id === "string" ? raw.team_id : "";
+    const incomingTeamId =
+      typeof raw.team_id === "string"
+        ? raw.team_id
+        : typeof raw.team?.id === "string"
+          ? raw.team.id
+          : "";
 
     if (params.apiAppId && incomingApiAppId && incomingApiAppId !== params.apiAppId) {
       logVerbose(
