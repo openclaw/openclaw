@@ -128,7 +128,7 @@ describe("attachChildProcessBridge", () => {
       throw new Error("expected SIGTERM listener");
     }
 
-    addedSigterm();
+    addedSigterm("SIGTERM");
     expect(observedSignals).toEqual(["SIGTERM"]);
     expect(kill).toHaveBeenCalledWith("SIGTERM");
 
