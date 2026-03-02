@@ -61,6 +61,21 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
+  it("allocates from configured cdpPortRangeStart for new local profiles", async () => {
+    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const { ctx, state } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { cdpPortRangeStart: 19000, profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(19001);
+    expect(result.isRemote).toBe(false);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
+    expect(writeConfigFile).toHaveBeenCalled();
+  });
+
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
     const resolved = resolveBrowserConfig({});
     const { ctx } = createCtx(resolved);
