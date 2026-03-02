@@ -111,7 +111,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropThinkingBlocks } from "../thinking.js";
+import { clearThinkingSignatures, dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -1081,15 +1081,18 @@ export async function runEmbeddedAttempt(
       // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
       // on *any* follow-up provider call (including tool continuations). Wrap the stream function
       // so every outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks) {
+      if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.clearThinkingSignatures) {
         const inner = activeSession.agent.streamFn;
+        const sanitize = transcriptPolicy.clearThinkingSignatures
+          ? clearThinkingSignatures
+          : dropThinkingBlocks;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          const sanitized = sanitize(messages as unknown as AgentMessage[]) as unknown;
           if (sanitized === messages) {
             return inner(model, context, options);
           }

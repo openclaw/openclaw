@@ -16,6 +16,7 @@ export type TranscriptPolicy = {
   };
   sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
+  clearThinkingSignatures: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -96,10 +97,15 @@ export function resolveTranscriptPolicy(params: {
   const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
   const requiresOpenAiCompatibleToolIdSanitization = params.modelApi === "openai-completions";
 
-  // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
-  // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
-  // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  // GitHub Copilot's Claude endpoints use the `anthropic-messages` API path and
+  // return real base64 crypto signatures. However, signatures may not round-trip
+  // correctly through session persistence. Rather than dropping thinking blocks
+  // entirely (which breaks multi-turn tool use — Claude requires assistant
+  // messages to start with thinking/redacted_thinking when thinking is enabled),
+  // we clear the signatures so pi-ai's convertMessages treats them as unsigned
+  // thinking → plain text blocks, preserving reasoning content.
+  const clearThinkingSignatures = isCopilotClaude;
+  const dropThinkingBlocks = false;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
@@ -127,6 +133,7 @@ export function resolveTranscriptPolicy(params: {
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
+    clearThinkingSignatures,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
