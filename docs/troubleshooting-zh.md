@@ -73,7 +73,7 @@ openclaw memory index --force
 **解决**:
 ```bash
 # 重新配置channel
-openclaw onboard
+openclaw onboard --install-daemon
 
 # 检查日志
 openclaw logs --follow
