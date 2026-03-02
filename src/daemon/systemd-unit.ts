@@ -104,6 +104,16 @@ function envOptionConsumesNextValue(token: string): boolean {
   );
 }
 
+function extractEnvInlineSplitStringValue(token: string): string | null {
+  if (token.startsWith("--split-string=")) {
+    return token.slice("--split-string=".length);
+  }
+  if (token.startsWith("-S") && token.length > 2) {
+    return token.slice(2);
+  }
+  return null;
+}
+
 export function collectSystemdExecStartValues(contents: string): string[] {
   const logicalLines: string[] = [];
   let currentLine = "";
@@ -156,6 +166,14 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
       while (pending.length > 0) {
         const envToken = pending.shift() ?? "";
         if (!envToken) {
+          continue;
+        }
+        const inlineSplitValue = extractEnvInlineSplitStringValue(envToken);
+        if (inlineSplitValue) {
+          const expanded = parseSystemdExecStart(inlineSplitValue);
+          if (expanded.length > 0) {
+            pending.unshift(...expanded);
+          }
           continue;
         }
         if (envOptionConsumesNextValue(envToken)) {
