@@ -90,6 +90,25 @@ describe("downgradeUnsignedThinkingBlocks", () => {
     expect(result).toBe(messages);
   });
 
+
+  it("preserves thinking blocks with non-string (object) signatures", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: { id: "rs_test", type: "reasoning" },
+          },
+        ],
+      } as unknown as AgentMessage,
+    ];
+
+    const result = downgradeUnsignedThinkingBlocks(messages);
+    expect(result).toBe(messages);
+  });
+
   it("does not downgrade empty thinking blocks", () => {
     const messages: AgentMessage[] = [
       {

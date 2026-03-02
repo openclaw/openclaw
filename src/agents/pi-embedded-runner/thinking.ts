@@ -77,7 +77,9 @@ export function downgradeUnsignedThinkingBlocks(messages: AgentMessage[]): Agent
         const thinking = (block as { thinking?: unknown }).thinking;
         const thinkingSignature = (block as { thinkingSignature?: unknown }).thinkingSignature;
         const hasThinking = typeof thinking === "string" && thinking.length > 0;
-        const hasSignature = typeof thinkingSignature === "string" && thinkingSignature.length > 0;
+        const hasSignature =
+          thinkingSignature != null &&
+          (typeof thinkingSignature !== "string" || thinkingSignature.length > 0);
         if (hasThinking && !hasSignature) {
           touched = true;
           changed = true;
