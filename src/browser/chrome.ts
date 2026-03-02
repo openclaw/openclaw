@@ -67,7 +67,49 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
+/**
+ * Ensure loopback addresses bypass the proxy for CDP health checks.
+ * When HTTP_PROXY, HTTPS_PROXY, or ALL_PROXY is set, Node.js (via undici) routes
+ * HTTP requests through the proxy. This function adds loopback addresses to no_proxy
+ * if a proxy is configured.
+ */
+function ensureLoopbackExcludedFromProxy(): void {
+  const proxyVars = [
+    process.env.HTTP_PROXY,
+    process.env.HTTPS_PROXY,
+    process.env.ALL_PROXY,
+    process.env.http_proxy,
+    process.env.https_proxy,
+    process.env.all_proxy,
+  ];
+  const hasProxy = proxyVars.some((v) => v && v.length > 0);
+  if (!hasProxy) {
+    return;
+  }
+
+  const loopbackHosts = ["127.0.0.1", "localhost", "::1"];
+  const noProxy = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
+  const currentHosts = noProxy
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h.length > 0);
+
+  let updated = false;
+  for (const host of loopbackHosts) {
+    if (!currentHosts.includes(host)) {
+      currentHosts.push(host);
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    process.env.NO_PROXY = currentHosts.join(",");
+    process.env.no_proxy = process.env.NO_PROXY;
+  }
+}
+
 export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
+  ensureLoopbackExcludedFromProxy();
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   return Boolean(version);
 }

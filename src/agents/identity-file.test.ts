@@ -33,4 +33,16 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  it("parses Chinese label '头像' as avatar", () => {
+    const content = `
+- **名称：** TestAgent
+- **头像：** avatars/C-3PO-TROSTGG.webp
+`;
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      name: "testagent",
+      avatar: "avatars/C-3PO-TROSTGG.webp",
+    });
+  });
 });

@@ -40,7 +40,8 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const lines = content.split(/\r?\n/);
   for (const line of lines) {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
-    const colonIndex = cleaned.indexOf(":");
+    // Support both English ":" and Chinese "：" colon characters
+    const colonIndex = cleaned.indexOf(":") !== -1 ? cleaned.indexOf(":") : cleaned.indexOf("：");
     if (colonIndex === -1) {
       continue;
     }
@@ -55,22 +56,23 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (isIdentityPlaceholder(value)) {
       continue;
     }
-    if (label === "name") {
+    // Support both English and Chinese labels
+    if (label === "name" || label === "名称") {
       identity.name = value;
     }
-    if (label === "emoji") {
+    if (label === "emoji" || label === "表情符号") {
       identity.emoji = value;
     }
-    if (label === "creature") {
+    if (label === "creature" || label === "生物类型") {
       identity.creature = value;
     }
-    if (label === "vibe") {
+    if (label === "vibe" || label === "气质") {
       identity.vibe = value;
     }
-    if (label === "theme") {
+    if (label === "theme" || label === "主题") {
       identity.theme = value;
     }
-    if (label === "avatar") {
+    if (label === "avatar" || label === "头像") {
       identity.avatar = value;
     }
   }
