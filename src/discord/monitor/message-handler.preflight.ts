@@ -213,31 +213,30 @@ export async function preflightDiscordMessage(
             `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
           );
           if (
-              isOutboundSuppressed({
-                cfg: params.cfg,
-                channel: "discord",
-                accountId: resolvedAccountId,
-              })
-            ) {
-              logVerbose(`[suppressOutbound] Blocked Discord pairing reply for ${author.id}`);
-            } else {
-              try {
-                await sendMessageDiscord(
-                  `user:${author.id}`,
-                  buildPairingReply({
-                    channel: "discord",
-                    idLine: `Your Discord user id: ${author.id}`,
-                    code,
-                  }),
-                  {
-                    token: params.token,
-                    rest: params.client.rest,
-                    accountId: params.accountId,
-                  },
-                );
-              } catch (err) {
-                logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
-              }
+            isOutboundSuppressed({
+              cfg: params.cfg,
+              channel: "discord",
+              accountId: resolvedAccountId,
+            })
+          ) {
+            logVerbose(`[suppressOutbound] Blocked Discord pairing reply for ${author.id}`);
+          } else {
+            try {
+              await sendMessageDiscord(
+                `user:${author.id}`,
+                buildPairingReply({
+                  channel: "discord",
+                  idLine: `Your Discord user id: ${author.id}`,
+                  code,
+                }),
+                {
+                  token: params.token,
+                  rest: params.client.rest,
+                  accountId: params.accountId,
+                },
+              );
+            } catch (err) {
+              logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
             }
           }
         },
