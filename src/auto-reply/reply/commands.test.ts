@@ -253,6 +253,64 @@ describe("handleCommands gating", () => {
   });
 });
 
+describe("owner-only command enforcement", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      parsed: {},
+    });
+    validateConfigObjectWithPluginsMock.mockReturnValue({ ok: true, config: {} });
+    writeConfigFileMock.mockResolvedValue(undefined);
+  });
+
+  it("blocks /config for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        config: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/config show", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks /send for authorized non-owner senders", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        allowFrom: { whatsapp: ["+15550001111"] },
+        ownerAllowFrom: ["whatsapp:+15550002222"],
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/send off", cfg, {
+      From: "whatsapp:+15550001111",
+      SenderE164: "+15550001111",
+    });
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+  });
+});
+
 describe("/approve command", () => {
   beforeEach(() => {
     vi.clearAllMocks();

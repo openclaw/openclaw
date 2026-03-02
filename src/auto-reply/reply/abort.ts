@@ -294,6 +294,9 @@ export async function tryFastAbortFromMessage(params: {
   if (!auth.isAuthorizedSender) {
     return { handled: false, aborted: false };
   }
+  if (auth.ownerList.length > 0 && !auth.senderIsOwner) {
+    return { handled: false, aborted: false };
+  }
 
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;

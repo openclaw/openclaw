@@ -17,6 +17,7 @@ import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { rejectNonOwnerCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -90,6 +91,10 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
     );
     return { shouldContinue: false };
   }
+  const nonOwner = rejectNonOwnerCommand(params, "/activation");
+  if (nonOwner) {
+    return nonOwner;
+  }
   if (!activationCommand.mode) {
     return {
       shouldContinue: false,
@@ -122,6 +127,10 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
       `Ignoring /send from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/send");
+  if (nonOwner) {
+    return nonOwner;
   }
   if (!sendPolicyCommand.mode) {
     return {

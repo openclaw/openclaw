@@ -17,6 +17,19 @@ export function rejectUnauthorizedCommand(
   return { shouldContinue: false };
 }
 
+export function rejectNonOwnerCommand(
+  params: HandleCommandsParams,
+  commandLabel: string,
+): CommandHandlerResult | null {
+  if (params.command.ownerList.length === 0 || params.command.senderIsOwner) {
+    return null;
+  }
+  logVerbose(
+    `Ignoring ${commandLabel} from non-owner sender: ${params.command.senderId || "<unknown>"}`,
+  );
+  return { shouldContinue: false };
+}
+
 export function buildDisabledCommandReply(params: {
   label: string;
   configKey: CommandFlagKey;

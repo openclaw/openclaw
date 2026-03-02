@@ -319,6 +319,37 @@ describe("abort detection", () => {
     expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
   });
 
+  it("ignores fast abort from authorized non-owner when owner allowlist exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = {
+      session: { store: storePath },
+      commands: {
+        allowFrom: {
+          telegram: ["12345"],
+        },
+        ownerAllowFrom: ["telegram:99999"],
+      },
+    } as OpenClawConfig;
+
+    const result = await tryFastAbortFromMessage({
+      ctx: buildTestCtx({
+        CommandBody: "/stop",
+        RawBody: "/stop",
+        CommandAuthorized: true,
+        SessionKey: "agent:main:telegram:dm:12345",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        From: "telegram:12345",
+        To: "telegram:99999",
+      }),
+      cfg,
+    });
+
+    expect(result).toEqual({ handled: false, aborted: false });
+  });
+
   it("fast-aborts even when text commands are disabled", async () => {
     const { cfg } = await createAbortConfig({ commandsTextEnabled: false });
 
