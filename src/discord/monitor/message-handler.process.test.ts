@@ -103,6 +103,7 @@ vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
       },
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
     }),
   ),
 }));
