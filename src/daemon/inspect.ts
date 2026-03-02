@@ -106,6 +106,13 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
   return contents.toLowerCase().includes("gateway");
 }
 
+function collectSystemdExecStartLines(contents: string): string[] {
+  return contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.toLowerCase().startsWith("execstart="));
+}
+
 /**
  * Returns true when a systemd unit is a browser/CDP service (e.g. a snap-installed
  * Chromium running headless with --remote-debugging-port as a persistent workaround
@@ -118,13 +125,15 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
  *   2. ExecStart references a chromium or chrome binary
  */
 function isBrowserCdpService(contents: string): boolean {
-  const lower = contents.toLowerCase();
-  if (lower.includes("--remote-debugging-port")) {
-    return true;
-  }
-  // Match common browser binary names on the ExecStart line
-  if (/execstart\s*=.*\b(chromium|chromium-browser|google-chrome|chrome)\b/.test(lower)) {
-    return true;
+  const execStartLines = collectSystemdExecStartLines(contents);
+  for (const line of execStartLines) {
+    const lower = line.toLowerCase();
+    if (lower.includes("--remote-debugging-port")) {
+      return true;
+    }
+    if (/\b(chromium|chromium-browser|google-chrome|chrome)\b/.test(lower)) {
+      return true;
+    }
   }
   return false;
 }

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findExtraGatewayServices } from "./inspect.js";
 
@@ -83,5 +84,64 @@ describe("findExtraGatewayServices (win32)", () => {
         legacy: true,
       },
     ]);
+  });
+});
+
+describe("findExtraGatewayServices (linux)", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "linux",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("does not treat non-ExecStart remote debugging flags as browser/CDP services", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["rogue.service"] as unknown as string[]);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Unit]",
+        "Description=OpenClaw Helper --remote-debugging-port=18800",
+        "[Service]",
+        "Environment=CDP=--remote-debugging-port=18800",
+        "ExecStart=/usr/local/bin/helper --mode openclaw",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "rogue.service",
+        detail: "unit: /home/test/.config/systemd/user/rogue.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
+
+  it("skips browser/CDP services when ExecStart contains remote debugging port", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["chromium-browser.service"] as unknown as string[]);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart=/snap/bin/chromium --headless --remote-debugging-port=18800 --user-data-dir=/home/test/snap/chromium/common/openclaw/user-data",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
   });
 });
