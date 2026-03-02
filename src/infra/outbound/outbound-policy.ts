@@ -39,24 +39,11 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "sticker",
 ]);
 
-function resolveContextGuardTarget(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
-    return undefined;
-  }
-
-  if (action === "thread-reply" || action === "thread-create") {
-    if (typeof params.channelId === "string") {
-      return params.channelId;
-    }
-    if (typeof params.to === "string") {
-      return params.to;
-    }
-    return undefined;
-  }
-
+/**
+ * Extracts the destination target from action args regardless of action type.
+ * Used by the read-only source guard, which must block ANY action targeting the source.
+ */
+function resolveActionTarget(params: Record<string, unknown>): string | undefined {
   if (typeof params.to === "string") {
     return params.to;
   }
@@ -64,6 +51,20 @@ function resolveContextGuardTarget(
     return params.channelId;
   }
   return undefined;
+}
+
+/**
+ * Extracts the destination target for cross-context policy checks.
+ * Only resolves for send-family actions (CONTEXT_GUARDED_ACTIONS).
+ */
+function resolveContextGuardTarget(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+): string | undefined {
+  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
+    return undefined;
+  }
+  return resolveActionTarget(params);
 }
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
@@ -95,28 +96,37 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): void {
+  // Read-only source guard: runs for EVERY action, not just send-family.
+  // If we have a read-only source and the action targets it, block unconditionally.
+  const readOnlySource = params.toolContext?.readOnlySource;
+  if (readOnlySource) {
+    const readOnlySourceChannel =
+      typeof readOnlySource.channel === "string" ? readOnlySource.channel.trim().toLowerCase() : "";
+    const readOnlySourceTo = typeof readOnlySource.to === "string" ? readOnlySource.to.trim() : "";
+    if (readOnlySourceChannel && readOnlySourceTo && readOnlySourceChannel === params.channel) {
+      const actionTarget = resolveActionTarget(params.args);
+      const normalizedSource = normalizeTarget(params.channel, readOnlySourceTo);
+      const normalizedAction = actionTarget
+        ? normalizeTarget(params.channel, actionTarget)
+        : undefined;
+      if (normalizedSource && normalizedAction && normalizedSource === normalizedAction) {
+        const sourceAccountId = normalizeOptionalAccountId(readOnlySource.accountId);
+        const targetAccountId = normalizeOptionalAccountId(params.accountId);
+        const accountMatches =
+          !sourceAccountId || !targetAccountId || sourceAccountId === targetAccountId;
+        if (accountMatches) {
+          throw new Error("Source channel is read-only; send to relay destination only.");
+        }
+      }
+    }
+  }
+
+  // Cross-context policy: only applies to send-family actions.
   if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
     return;
   }
 
   const target = resolveContextGuardTarget(params.action, params.args);
-  const readOnlySource = params.toolContext?.readOnlySource;
-  const readOnlySourceChannel =
-    typeof readOnlySource?.channel === "string" ? readOnlySource.channel.trim().toLowerCase() : "";
-  const readOnlySourceTo = typeof readOnlySource?.to === "string" ? readOnlySource.to.trim() : "";
-  if (readOnlySourceChannel && readOnlySourceTo && readOnlySourceChannel === params.channel) {
-    const normalizedSource = normalizeTarget(params.channel, readOnlySourceTo);
-    const normalizedTarget = target ? normalizeTarget(params.channel, target) : undefined;
-    if (normalizedSource && normalizedTarget && normalizedSource === normalizedTarget) {
-      const sourceAccountId = normalizeOptionalAccountId(readOnlySource.accountId);
-      const targetAccountId = normalizeOptionalAccountId(params.accountId);
-      const accountMatches =
-        !sourceAccountId || !targetAccountId || sourceAccountId === targetAccountId;
-      if (accountMatches) {
-        throw new Error("Source channel is read-only; send to relay destination only.");
-      }
-    }
-  }
 
   const currentTarget = params.toolContext?.currentChannelId?.trim();
   if (!currentTarget) {
