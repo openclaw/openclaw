@@ -15,6 +15,7 @@ import type {
   CronStatus,
 } from "../types.ts";
 import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
 
 function renderAgentContextCard(context: AgentContext, subtitle: string) {
   return html`
@@ -99,55 +100,6 @@ function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null): Channel
 }
 
 const CHANNEL_EXTRA_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
-
-function resolveChannelConfigValue(
-  configForm: Record<string, unknown> | null,
-  channelId: string,
-): Record<string, unknown> | null {
-  if (!configForm) {
-    return null;
-  }
-  const channels = (configForm.channels ?? {}) as Record<string, unknown>;
-  const fromChannels = channels[channelId];
-  if (fromChannels && typeof fromChannels === "object") {
-    return fromChannels as Record<string, unknown>;
-  }
-  const fallback = configForm[channelId];
-  if (fallback && typeof fallback === "object") {
-    return fallback as Record<string, unknown>;
-  }
-  return null;
-}
-
-function formatChannelExtraValue(raw: unknown): string {
-  if (raw == null) {
-    return "n/a";
-  }
-  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
-    return String(raw);
-  }
-  try {
-    return JSON.stringify(raw);
-  } catch {
-    return "n/a";
-  }
-}
-
-function resolveChannelExtras(
-  configForm: Record<string, unknown> | null,
-  channelId: string,
-): Array<{ label: string; value: string }> {
-  const value = resolveChannelConfigValue(configForm, channelId);
-  if (!value) {
-    return [];
-  }
-  return CHANNEL_EXTRA_FIELDS.flatMap((field) => {
-    if (!(field in value)) {
-      return [];
-    }
-    return [{ label: field, value: formatChannelExtraValue(value[field]) }];
-  });
-}
 
 function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
   let connected = 0;
@@ -234,7 +186,11 @@ export function renderAgentChannels(params: {
                       ? `${summary.configured} configured`
                       : "not configured";
                     const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
-                    const extras = resolveChannelExtras(params.configForm, entry.id);
+                    const extras = resolveChannelExtrasFromConfig({
+                      configForm: params.configForm,
+                      channelId: entry.id,
+                      fields: CHANNEL_EXTRA_FIELDS,
+                    });
                     return html`
                       <div class="list-item">
                         <div class="list-main">
