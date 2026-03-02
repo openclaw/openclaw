@@ -112,7 +112,12 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
 }
 
 function isBrowserExecutableToken(token: string): boolean {
-  const base = token.toLowerCase().split("/").pop() ?? token.toLowerCase();
+  const normalized = normalizeExecStartToken(token);
+  if (!normalized) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
+  const base = lower.split("/").pop() ?? lower;
   return (
     base === "chromium" ||
     base === "chromium-browser" ||
@@ -121,11 +126,27 @@ function isBrowserExecutableToken(token: string): boolean {
   );
 }
 
+function normalizeExecStartToken(token: string): string {
+  let normalized = token.trim();
+  while (normalized.length >= 2) {
+    const quote = normalized[0];
+    if ((quote === "'" || quote === '"') && normalized.at(-1) === quote) {
+      normalized = normalized.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return normalized;
+}
+
 function hasRemoteDebuggingPortArg(execStartValue: string): boolean {
   const tokens = parseSystemdExecStart(execStartValue);
-  return tokens.some(
-    (token) => token === "--remote-debugging-port" || token.startsWith("--remote-debugging-port="),
-  );
+  return tokens.some((token) => {
+    const normalized = normalizeExecStartToken(token);
+    return (
+      normalized === "--remote-debugging-port" || normalized.startsWith("--remote-debugging-port=")
+    );
+  });
 }
 
 /**
