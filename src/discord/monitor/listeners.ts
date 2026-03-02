@@ -119,7 +119,7 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  private messageQueue: Promise<void> = Promise.resolve();
+  private messageQueues = new Map<string, Promise<void>>();
 
   constructor(
     private handler: DiscordMessageHandler,
@@ -131,9 +131,9 @@ export class DiscordMessageListener extends MessageCreateListener {
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    // Release Carbon's dispatch lane immediately, but keep our message handler
-    // serialized to avoid unbounded parallel model/IO work on traffic bursts.
-    this.messageQueue = this.messageQueue
+    const channelId = String(data.channel_id ?? "global");
+    const prev = this.messageQueues.get(channelId) ?? Promise.resolve();
+    const next = prev
       .catch(() => {})
       .then(() =>
         runDiscordListenerWithSlowLog({
@@ -146,8 +146,14 @@ export class DiscordMessageListener extends MessageCreateListener {
             logger.error(danger(`discord handler failed: ${String(err)}`));
           },
         }),
-      );
-    void this.messageQueue.catch((err) => {
+      )
+      .finally(() => {
+        if (this.messageQueues.get(channelId) === next) {
+          this.messageQueues.delete(channelId);
+        }
+      });
+    this.messageQueues.set(channelId, next);
+    void next.catch((err) => {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord handler failed: ${String(err)}`));
     });
