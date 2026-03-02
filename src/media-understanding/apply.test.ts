@@ -240,7 +240,12 @@ describe("applyMediaUnderstanding", () => {
   });
 
   beforeEach(() => {
-    mockedResolveApiKey.mockClear();
+    mockedResolveApiKey.mockReset();
+    mockedResolveApiKey.mockResolvedValue({
+      apiKey: "test-key",
+      source: "test",
+      mode: "api-key",
+    });
     mockedFetchRemoteMedia.mockClear();
     mockedRunExec.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
@@ -495,6 +500,10 @@ describe("applyMediaUnderstanding", () => {
       content: "audio",
     });
     const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
 
     await withMediaAutoDetectEnv(
       {
