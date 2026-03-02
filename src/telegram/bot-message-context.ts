@@ -888,9 +888,10 @@ const FORUM_SERVICE_FIELDS = [
  * `forum_topic_*` / `general_forum_topic_*` fields and should not count as
  * regular bot replies for implicit-mention purposes.
  */
-function isTelegramForumServiceMessage(msg: Record<string, unknown> | undefined | null): boolean {
-  if (!msg) {
+function isTelegramForumServiceMessage(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") {
     return false;
   }
-  return FORUM_SERVICE_FIELDS.some((f) => msg[f] != null);
+  const record = msg as Record<string, unknown>;
+  return FORUM_SERVICE_FIELDS.some((f) => record[f] != null);
 }
