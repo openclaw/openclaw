@@ -56,6 +56,8 @@ export function listKnownProfileNames(state: BrowserServerState): string[] {
   return [...names];
 }
 
+const MAX_MANAGED_BROWSER_PAGE_TABS = 8;
+
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
  */
@@ -136,6 +138,39 @@ function createProfileContext(
       .filter((t) => Boolean(t.targetId));
   };
 
+  const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
+    const profileState = getProfileState();
+    if (
+      profile.driver !== "openclaw" ||
+      !profile.cdpIsLoopback ||
+      state().resolved.attachOnly ||
+      !profileState.running
+    ) {
+      return;
+    }
+
+    const pageTabs = await listTabs()
+      .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page"))
+      .catch(() => [] as BrowserTab[]);
+    if (pageTabs.length <= MAX_MANAGED_BROWSER_PAGE_TABS) {
+      return;
+    }
+
+    const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
+    const excessCount = pageTabs.length - MAX_MANAGED_BROWSER_PAGE_TABS;
+    for (const tab of candidates.slice(0, excessCount)) {
+      void fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
+        // best-effort cleanup only
+      });
+    }
+  };
+
+  const triggerManagedTabLimit = (keepTargetId: string): void => {
+    void enforceManagedTabLimit(keepTargetId).catch(() => {
+      // best-effort cleanup only
+    });
+  };
+
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
@@ -152,6 +187,7 @@ function createProfileContext(
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
+        triggerManagedTabLimit(page.targetId);
         return {
           targetId: page.targetId,
           title: page.title,
@@ -178,10 +214,12 @@ function createProfileContext(
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+          triggerManagedTabLimit(found.targetId);
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
       }
+      triggerManagedTabLimit(createdViaCdp);
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
 
@@ -218,6 +256,7 @@ function createProfileContext(
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    triggerManagedTabLimit(created.id);
     return {
       targetId: created.id,
       title: created.title ?? "",
@@ -282,6 +321,27 @@ function createProfileContext(
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+    const waitForCdpReadyAfterLaunch = async () => {
+      // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
+      // If a follow-up call (snapshot/screenshot/etc.) races ahead, we can hit PortInUseError trying to
+      // launch again on the same port. Poll briefly so browser(action="start"/"open") is stable.
+      //
+      // Bound the wait by wall-clock time to avoid long stalls when /json/version is reachable
+      // but the CDP WebSocket never becomes ready.
+      const deadlineMs = Date.now() + 8000;
+      while (Date.now() < deadlineMs) {
+        const remainingMs = Math.max(0, deadlineMs - Date.now());
+        // Keep each attempt short; loopback profiles derive a WS timeout from this value.
+        const attemptTimeoutMs = Math.max(75, Math.min(250, remainingMs));
+        if (await isReachable(attemptTimeoutMs)) {
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(
+        `Chrome CDP websocket for profile "${profile.name}" is not reachable after start.`,
+      );
+    };
 
     if (isExtension && remoteCdp) {
       throw new Error(
@@ -319,6 +379,13 @@ function createProfileContext(
       }
       const launched = await launchOpenClawChrome(current.resolved, profile);
       attachRunning(launched);
+      try {
+        await waitForCdpReadyAfterLaunch();
+      } catch (err) {
+        await stopOpenClawChrome(launched).catch(() => {});
+        setProfileRunning(null);
+        throw err;
+      }
       return;
     }
 
