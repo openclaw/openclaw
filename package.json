@@ -156,7 +156,6 @@
     "@aws-sdk/client-bedrock": "^3.998.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",
-    "@discordjs/voice": "^0.19.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
@@ -186,8 +185,6 @@
     "gaxios": "7.1.2",
     "google-auth-library": "10.5.0",
     "grammy": "^1.40.1",
-    "https-proxy-agent": "^7.0.6",
-    "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
@@ -211,6 +208,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@discordjs/voice": "^0.19.0",
     "@grammyjs/types": "^3.24.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -221,6 +219,8 @@
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260225.1",
     "@vitest/coverage-v8": "^4.0.18",
+    "https-proxy-agent": "^7.0.6",
+    "ipaddr.js": "^2.3.0",
     "lit": "^3.3.2",
     "oxfmt": "0.35.0",
     "oxlint": "^1.50.0",

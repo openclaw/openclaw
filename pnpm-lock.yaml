@@ -33,9 +33,6 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.1
         version: 1.0.1
-      '@discordjs/voice':
-        specifier: ^0.19.0
-        version: 0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)
       '@grammyjs/runner':
         specifier: ^2.0.3
         version: 2.0.3(grammy@1.40.1)
@@ -126,12 +123,6 @@ importers:
       grammy:
         specifier: ^1.40.1
         version: 1.40.1
-      https-proxy-agent:
-        specifier: ^7.0.6
-        version: 7.0.6
-      ipaddr.js:
-        specifier: ^2.3.0
-        version: 2.3.0
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -199,6 +190,9 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@discordjs/voice':
+        specifier: ^0.19.0
+        version: 0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)
       '@grammyjs/types':
         specifier: ^3.24.0
         version: 3.24.0
@@ -229,6 +223,12 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^4.0.18
         version: 4.0.18(@vitest/browser@4.0.18(vite@7.3.1(@types/node@25.3.1)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.18))(vitest@4.0.18)
+      https-proxy-agent:
+        specifier: ^7.0.6
+        version: 7.0.6
+      ipaddr.js:
+        specifier: ^2.3.0
+        version: 2.3.0
       lit:
         specifier: ^3.3.2
         version: 3.3.2

@@ -4,6 +4,7 @@
 # dependencies = [
 #     "google-genai>=1.0.0",
 #     "pillow>=10.0.0",
+#     "socksio",
 # ]
 # ///
 """
@@ -20,6 +21,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
 
 
 def get_api_key(provided_key: str | None) -> str | None:
