@@ -1022,15 +1022,39 @@ export const chatHandlers: GatewayRequestHandlers = {
         context.logGateway.info(
           `chat.send: message steered into active run sessionId=${sessionId} message=${parsedMessage.slice(0, 50)}...`,
         );
-        respond(true, { runId: clientRunId, status: "steered" as const }, undefined, {
+        // Broadcast chat.steered event so webchat clients are notified
+        const steeredPayload = {
+          runId: clientRunId,
+          sessionKey: rawSessionKey,
+          sessionId,
+          status: "steered" as const,
+          timestamp: now,
+        };
+        context.broadcast("chat.steered", steeredPayload);
+        context.nodeSendToSession(rawSessionKey, "chat.steered", steeredPayload);
+        respond(true, { runId: clientRunId, status: "steered" as const, sessionId }, undefined, {
           runId: clientRunId,
         });
         return;
       }
-      // If steering failed (e.g., compacting), fall through to normal dispatch
-      context.logGateway.debug(
-        `chat.send: steering failed for sessionId=${sessionId}, falling back to normal dispatch`,
+      // If steering failed (e.g., compacting), queue as followup
+      // The active run exists but cannot accept messages right now
+      context.logGateway.info(
+        `chat.send: message queued as followup for sessionId=${sessionId} (run busy)`,
       );
+      const queuedPayload = {
+        runId: clientRunId,
+        sessionKey: rawSessionKey,
+        sessionId,
+        status: "queued" as const,
+        timestamp: now,
+      };
+      context.broadcast("chat.queued", queuedPayload);
+      context.nodeSendToSession(rawSessionKey, "chat.queued", queuedPayload);
+      respond(true, { runId: clientRunId, status: "queued" as const, sessionId }, undefined, {
+        runId: clientRunId,
+      });
+      return;
     }
 
     try {
@@ -1044,7 +1068,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       const ackPayload = {
         runId: clientRunId,
-        status: "started" as const,
+        status: "new" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
