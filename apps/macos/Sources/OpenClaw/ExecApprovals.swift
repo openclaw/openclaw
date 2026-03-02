@@ -535,7 +535,9 @@ enum ExecApprovalsStore {
                 [.posixPermissions: self.secureStateDirPermissions],
                 ofItemAtPath: url.path)
         } catch {
-            self.logger.warning("exec approvals state dir permission hardening failed: \(error.localizedDescription, privacy: .public)")
+            self.logger
+                .warning(
+                    "exec approvals state dir permission hardening failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
