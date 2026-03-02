@@ -32,6 +32,7 @@ import {
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
+  countPendingDescendantRunsFromRuns,
   findRunIdsByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForRequesterFromRuns,
@@ -709,7 +710,8 @@ async function finalizeSubagentCleanup(
   const deferredDecision = resolveDeferredCleanupDecision({
     entry,
     now,
-    activeDescendantRuns: Math.max(0, countActiveDescendantRuns(entry.childSessionKey)),
+    // Defer until descendants are fully settled, including post-end cleanup.
+    activeDescendantRuns: Math.max(0, countPendingDescendantRuns(entry.childSessionKey)),
     announceExpiryMs: ANNOUNCE_EXPIRY_MS,
     maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -1209,6 +1211,13 @@ export function countActiveRunsForSession(requesterSessionKey: string): number {
 
 export function countActiveDescendantRuns(rootSessionKey: string): number {
   return countActiveDescendantRunsFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRuns(rootSessionKey: string): number {
+  return countPendingDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
   );

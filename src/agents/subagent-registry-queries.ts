@@ -113,6 +113,42 @@ export function countActiveDescendantRunsFromRuns(
   return count;
 }
 
+export function countPendingDescendantRunsFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+): number {
+  const root = rootSessionKey.trim();
+  if (!root) {
+    return 0;
+  }
+  const pending = [root];
+  const visited = new Set<string>([root]);
+  let count = 0;
+  while (pending.length > 0) {
+    const requester = pending.shift();
+    if (!requester) {
+      continue;
+    }
+    for (const entry of runs.values()) {
+      if (entry.requesterSessionKey !== requester) {
+        continue;
+      }
+      const runEnded = typeof entry.endedAt === "number";
+      const cleanupCompleted = typeof entry.cleanupCompletedAt === "number";
+      if (!runEnded || !cleanupCompleted) {
+        count += 1;
+      }
+      const childKey = entry.childSessionKey.trim();
+      if (!childKey || visited.has(childKey)) {
+        continue;
+      }
+      visited.add(childKey);
+      pending.push(childKey);
+    }
+  }
+  return count;
+}
+
 export function listDescendantRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,

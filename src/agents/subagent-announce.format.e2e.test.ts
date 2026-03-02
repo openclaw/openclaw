@@ -34,6 +34,7 @@ const embeddedRunMock = {
 const subagentRegistryMock = {
   isSubagentSessionRunActive: vi.fn(() => true),
   countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+  countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
   resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
 };
 const subagentDeliveryTargetHookMock = vi.fn(
@@ -172,6 +173,11 @@ describe("subagent announce formatting", () => {
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.countActiveDescendantRuns.mockClear().mockReturnValue(0);
+    subagentRegistryMock.countPendingDescendantRuns
+      .mockClear()
+      .mockImplementation((sessionKey: string) =>
+        subagentRegistryMock.countActiveDescendantRuns(sessionKey),
+      );
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
     hookRunnerMock.hasHooks.mockClear();
