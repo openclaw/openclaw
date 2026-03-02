@@ -439,6 +439,34 @@ describe("chrome extension relay server", () => {
     cdp.close();
   });
 
+  it("accepts re-announce attach events with minimal targetInfo", async () => {
+    const { ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-minimal",
+            targetInfo: {
+              targetId: "t-minimal",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    const list = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (entries) => entries.some((entry) => entry.id === "t-minimal"),
+    );
+    expect(list.some((entry) => entry.id === "t-minimal")).toBe(true);
+  });
+
   it("waits briefly for extension reconnect before failing CDP commands", async () => {
     const { port, ext: ext1 } = await startRelayWithExtension();
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
