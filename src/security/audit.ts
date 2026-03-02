@@ -569,7 +569,7 @@ function collectGatewayConfigFindings(
       title: "Plugin HTTP routes bypass gateway auth",
       detail:
         "Plugins can register HTTP routes and handlers via the plugin registry. " +
-        "These routes are served by the gateway HTTP server but do not pass through the gateway authentication middleware. " +
+        "Plugin-registered routes outside protected prefixes (e.g. /api/channels/*) bypass gateway authentication middleware. " +
         "A malicious or misconfigured plugin could expose unauthenticated endpoints.",
       remediation:
         "Review installed plugins and their registered HTTP routes. " +
