@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -41,13 +41,28 @@ import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  beforeAll(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-suite-"));
+  });
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dq-test-"));
+    tmpDir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    if (!fixtureRoot) {
+      return;
+    }
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
   });
 
   describe("enqueue + ack lifecycle", () => {
