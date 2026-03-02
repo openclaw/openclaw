@@ -501,9 +501,11 @@ export async function runPreparedReply(
           }
         : undefined,
     // Originating channel for reply routing.
-    originatingChannel: ctx.OriginatingChannel,
-    originatingTo: ctx.OriginatingTo,
-    originatingAccountId: ctx.AccountId,
+    // Use the same fallback chains as resolveSessionRelayRoute (line 466-473)
+    // so the read-only source guard sees the same resolved values.
+    originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo ?? sessionCtx.OriginatingTo ?? sessionCtx.To,
+    originatingAccountId: ctx.AccountId ?? sessionCtx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
     run: {

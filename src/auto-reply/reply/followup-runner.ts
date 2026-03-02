@@ -207,8 +207,7 @@ export function createFollowupRunner(params: {
               messageTo: runMessageTo,
               messageThreadId: runMessageThreadId,
               currentChannelId: runMessageTo,
-              currentThreadTs:
-                runMessageThreadId != null ? String(runMessageThreadId) : undefined,
+              currentThreadTs: runMessageThreadId != null ? String(runMessageThreadId) : undefined,
               readOnlySource: runReadOnlySource,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
