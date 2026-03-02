@@ -437,7 +437,10 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
-            if (shouldSwallowRelaySkipToken && hasRelaySkipToken(deliveryPayload.text)) {
+            // Check SKIP_RELAY against the pre-stripping payload — resolveToolDeliveryPayload
+            // may clear text from media-bearing payloads in group/native mode, which would
+            // prevent token detection on the stripped deliveryPayload.
+            if (shouldSwallowRelaySkipToken && hasRelaySkipToken(ttsPayload.text)) {
               return;
             }
             if (hasRouteTarget) {

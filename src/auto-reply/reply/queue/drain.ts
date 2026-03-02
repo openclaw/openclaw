@@ -142,7 +142,30 @@ export function scheduleFollowupDrain(
           const groups = resolveCollectGroups(queue.items);
           const currentGroup = groups[0];
           if (!currentGroup) {
-            break;
+            // Items exhausted but overflow summary may be pending (droppedCount > 0).
+            // Emit summary to prevent infinite re-schedule — matches main's batch
+            // fallthrough that naturally handles empty items + pending summary.
+            const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            if (!summary) {
+              break;
+            }
+            const run = queue.lastRun;
+            if (!run) {
+              break;
+            }
+            const prompt = buildCollectPrompt({
+              title: "[Queued messages while agent was busy]",
+              items: [] as FollowupRun[],
+              summary,
+              renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+            });
+            await runFollowup({
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+            });
+            clearQueueSummaryState(queue);
+            continue;
           }
 
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
