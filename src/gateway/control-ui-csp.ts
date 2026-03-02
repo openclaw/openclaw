@@ -37,5 +37,6 @@ export function buildControlUiCspHeader(requestHost?: string): string {
     "img-src 'self' data: https:",
     "font-src 'self' https://fonts.gstatic.com",
     `connect-src ${connectSrc.join(" ")}`,
+    "media-src 'self' blob:",
   ].join("; ");
 }

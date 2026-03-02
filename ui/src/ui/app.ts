@@ -255,6 +255,9 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionHistoryLoading = false;
+  @state() sessionHistoryKey: string | null = null;
+  @state() sessionHistoryMessages: unknown[] = [];
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -635,6 +638,12 @@ export class OpenClawApp extends LitElement {
     }
     this.execApprovalBusy = true;
     this.execApprovalError = null;
+    // Safety valve: clear the busy flag after 15s in case the WebSocket request hangs
+    // (e.g. connection stalls without formally disconnecting). Without this, buttons
+    // stay disabled forever and all subsequent approvals are silently swallowed.
+    const safetyTimer = window.setTimeout(() => {
+      this.execApprovalBusy = false;
+    }, 15_000);
     try {
       await this.client.request("exec.approval.resolve", {
         id: active.id,
@@ -642,8 +651,18 @@ export class OpenClawApp extends LitElement {
       });
       this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
     } catch (err) {
-      this.execApprovalError = `Exec approval failed: ${String(err)}`;
+      const msg = String(err);
+      this.execApprovalError = `Exec approval failed: ${msg}`;
+      // If the gateway says the entry is already gone (expired or resolved by someone else),
+      // remove the stale entry so the pill doesn't stay stuck showing an unresolvable request.
+      if (
+        msg.toLowerCase().includes("unknown approval id") ||
+        msg.toLowerCase().includes("expired")
+      ) {
+        this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      }
     } finally {
+      window.clearTimeout(safetyTimer);
       this.execApprovalBusy = false;
     }
   }

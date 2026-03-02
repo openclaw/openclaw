@@ -168,6 +168,9 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionHistoryLoading: boolean;
+  sessionHistoryKey: string | null;
+  sessionHistoryMessages: unknown[];
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

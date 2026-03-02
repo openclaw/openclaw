@@ -392,7 +392,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (entry) {
       host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
       host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+      // Use a 2s buffer on top of stated expiry, with a 10s minimum floor, to tolerate
+      // minor clock skew between gateway and browser and keep the pill visible long enough
+      // for the user to respond even if the stated expiry is slightly in the past.
+      const delay = Math.max(10_000, entry.expiresAtMs - Date.now() + 2_000);
       window.setTimeout(() => {
         host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
       }, delay);

@@ -12,6 +12,9 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionHistoryLoading: boolean;
+  sessionHistoryKey: string | null;
+  sessionHistoryMessages: unknown[];
 };
 
 export async function loadSessions(
@@ -114,6 +117,26 @@ export async function deleteSession(state: SessionsState, key: string): Promise<
     return false;
   } finally {
     state.sessionsLoading = false;
+  }
+}
+
+export async function loadSessionHistory(state: SessionsState, key: string): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.sessionHistoryLoading = true;
+  state.sessionHistoryKey = key;
+  state.sessionHistoryMessages = [];
+  try {
+    const res = await state.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: key,
+      limit: 500,
+    });
+    state.sessionHistoryMessages = Array.isArray(res?.messages) ? res.messages : [];
+  } catch {
+    state.sessionHistoryMessages = [];
+  } finally {
+    state.sessionHistoryLoading = false;
   }
 }
 

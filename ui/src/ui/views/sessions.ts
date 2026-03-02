@@ -30,6 +30,11 @@ export type SessionsProps = {
     },
   ) => void;
   onDelete: (key: string) => void;
+  onViewSession: (key: string) => void;
+  sessionHistoryLoading: boolean;
+  sessionHistoryKey: string | null;
+  sessionHistoryMessages: unknown[];
+  onCloseSessionHistory: () => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -206,11 +211,29 @@ export function renderSessions(props: SessionsProps) {
                 <div class="muted">No sessions found.</div>
               `
             : rows.map((row) =>
-                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+                renderRow(
+                  row,
+                  props.basePath,
+                  props.onPatch,
+                  props.onDelete,
+                  props.onViewSession,
+                  props.loading,
+                ),
               )
         }
       </div>
     </section>
+
+    ${
+      props.sessionHistoryKey
+        ? renderSessionHistoryModal({
+            sessionKey: props.sessionHistoryKey,
+            messages: props.sessionHistoryMessages,
+            loading: props.sessionHistoryLoading,
+            onClose: props.onCloseSessionHistory,
+          })
+        : nothing
+    }
   `;
 }
 
@@ -219,6 +242,7 @@ function renderRow(
   basePath: string,
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
+  onViewSession: SessionsProps["onViewSession"],
   disabled: boolean,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
@@ -311,10 +335,122 @@ function renderRow(
           )}
         </select>
       </div>
-      <div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn" ?disabled=${disabled} @click=${() => onViewSession(row.key)}>
+          View
+        </button>
         <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
           Delete
         </button>
+      </div>
+    </div>
+  `;
+}
+
+type HistoryMessage = { role: string; text: string };
+
+function extractHistoryMessages(raw: unknown[]): HistoryMessage[] {
+  const out: HistoryMessage[] = [];
+  for (const msg of raw) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const m = msg as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role.trim() : "";
+    if (!role || role === "tool") {
+      continue;
+    }
+    let text = "";
+    if (typeof m.content === "string") {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = (m.content as unknown[])
+        .filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+        .filter((c) => c.type === "text")
+        .map((c) => (typeof c.text === "string" ? c.text : ""))
+        .join("\n");
+    }
+    if (text.trim()) {
+      out.push({ role, text: text.trim() });
+    }
+  }
+  return out;
+}
+
+function copyText(text: string): void {
+  navigator.clipboard.writeText(text).catch(() => undefined);
+}
+
+function renderSessionHistoryModal(props: {
+  sessionKey: string;
+  messages: unknown[];
+  loading: boolean;
+  onClose: () => void;
+}) {
+  const msgs = extractHistoryMessages(props.messages);
+  const allText = msgs
+    .map((m) => `${m.role === "user" ? "You" : "MaxBot"}: ${m.text}`)
+    .join("\n\n");
+
+  const closeOnBackdrop = (e: MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      props.onClose();
+    }
+  };
+
+  const closeOnEsc = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      props.onClose();
+    }
+  };
+
+  return html`
+    <div
+      class="sh-overlay"
+      @click=${closeOnBackdrop}
+      @keydown=${closeOnEsc}
+      tabindex="-1"
+    >
+      <div class="sh-panel card">
+        <div class="sh-header">
+          <span class="sh-title mono">${props.sessionKey}</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            ${
+              msgs.length > 0
+                ? html`<button class="btn" @click=${() => copyText(allText)}>Copy all</button>`
+                : nothing
+            }
+            <button class="btn" @click=${props.onClose}>✕</button>
+          </div>
+        </div>
+
+        <div class="sh-messages">
+          ${
+            props.loading
+              ? html`
+                  <div class="muted" style="padding: 20px">Loading…</div>
+                `
+              : msgs.length === 0
+                ? html`
+                    <div class="muted" style="padding: 20px">No messages found for this session.</div>
+                  `
+                : msgs.map(
+                    (m) => html`
+                    <div class="sh-msg sh-msg-${m.role}">
+                      <div class="sh-msg-header">
+                        <span class="sh-msg-role">${m.role === "user" ? "You" : "MaxBot"}</span>
+                        <button
+                          class="btn sh-msg-copy"
+                          title="Copy message"
+                          @click=${() => copyText(m.text)}
+                        >Copy</button>
+                      </div>
+                      <pre class="sh-msg-text">${m.text}</pre>
+                    </div>
+                  `,
+                  )
+          }
+        </div>
       </div>
     </div>
   `;

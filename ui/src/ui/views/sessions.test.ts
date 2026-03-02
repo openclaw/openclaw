@@ -27,6 +27,11 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onRefresh: () => undefined,
     onPatch: () => undefined,
     onDelete: () => undefined,
+    onViewSession: () => undefined,
+    sessionHistoryLoading: false,
+    sessionHistoryKey: null,
+    sessionHistoryMessages: [],
+    onCloseSessionHistory: () => undefined,
   };
 }
 

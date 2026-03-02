@@ -9,7 +9,7 @@ import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 const DEFAULT_AREA = "Warwickshire";
 const DEFAULT_RADIUS_KM = 20;
 const DEFAULT_MAX_RESULTS = 50;
-const DEFAULT_MAX_ENTRY_BARRIER_SCORE = 2; // Up to A-level/Level 3
+const DEFAULT_MAX_ENTRY_BARRIER_SCORE = 6; // Include all — rank by barrier, don't filter
 const SEARCH_BATCH_SIZE = 20;
 const MAX_QUERIES_PER_RUN = 24;
 const MAX_CANDIDATES_PER_RUN = 140;
@@ -27,6 +27,16 @@ const SECONDARY_VACANCY_HOSTS = new Set([
   "totaljobs.com",
   "www.totaljobs.com",
   "uk.indeed.com",
+  "getmyfirstjob.co.uk",
+  "www.getmyfirstjob.co.uk",
+  "ratemyapprenticeship.co.uk",
+  "www.ratemyapprenticeship.co.uk",
+  "prospects.ac.uk",
+  "www.prospects.ac.uk",
+  "notgoingtouni.co.uk",
+  "www.notgoingtouni.co.uk",
+  "jobstoday.co.uk",
+  "www.jobstoday.co.uk",
 ]);
 const WARWICKSHIRE_POSTCODE_PREFIXES = [
   "CV1",
@@ -261,7 +271,21 @@ function buildQueries(params: { area: string; radiusKm: number; sectors: string[
   const sectors = expandSectorQueries(params.sectors);
   const areaTokens = [normalizedArea, ...AREA_HINTS].slice(0, 4);
   const govSite = "site:findapprenticeship.service.gov.uk/apprenticeship";
+  const year = new Date().getFullYear();
 
+  // Sector-specific queries first — free-text (no site: operator) for much better coverage.
+  // site: operator queries return very few results from Brave for sector+location combos.
+  for (const sector of sectors) {
+    queries.add(`"${sector}" apprenticeship "${normalizedArea}" ${year}`);
+    queries.add(`"${sector}" apprentice "${normalizedArea}" apply`);
+    queries.add(`${sector} apprenticeship ${normalizedArea} vacancies apply ${year}`);
+    queries.add(`${sector} apprenticeship ${normalizedArea} getmyfirstjob ratemyapprenticeship`);
+    if (queries.size >= MAX_QUERIES_PER_RUN) {
+      break;
+    }
+  }
+
+  // Gov site: general area queries (reliable for any apprenticeship)
   queries.add(`${govSite} "${normalizedArea}" apprenticeship`);
   queries.add(`${govSite} "${normalizedArea}" entry level apprenticeship`);
   queries.add(`${govSite} "${normalizedArea}" "level 2" apprenticeship`);
@@ -269,29 +293,35 @@ function buildQueries(params: { area: string; radiusKm: number; sectors: string[
   queries.add(`${govSite} "${normalizedArea}" apply now apprenticeship`);
   queries.add(`${govSite}/VAC "${normalizedArea}" apprenticeship`);
   queries.add(`${govSite}/reference "${normalizedArea}" apprenticeship`);
-  queries.add(`${govSite} "${normalizedArea}" ${params.radiusKm} miles apprenticeship`);
 
+  // Gov site: sector-specific (belt-and-braces, in case Brave indexes them)
   for (const sector of sectors) {
-    queries.add(`${govSite} "${normalizedArea}" ${sector} apprenticeship`);
-    queries.add(`${govSite}/VAC "${normalizedArea}" ${sector}`);
-    queries.add(`site:reed.co.uk/jobs "${normalizedArea}" "${sector}" apprentice`);
-    queries.add(`site:totaljobs.com/jobs "${normalizedArea}" "${sector}" apprentice`);
-    queries.add(`site:uk.indeed.com "${normalizedArea}" "${sector}" apprentice job`);
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
     }
+    queries.add(`${govSite} "${normalizedArea}" ${sector} apprenticeship`);
+    queries.add(`${govSite}/VAC "${normalizedArea}" ${sector}`);
   }
+
+  // Job board site: queries for area tokens
   for (const token of areaTokens) {
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
     }
-    queries.add(`${govSite} "${token}" apprenticeship`);
     queries.add(`site:reed.co.uk/jobs "${token}" apprenticeship`);
     queries.add(`site:totaljobs.com/jobs "${token}" apprenticeship`);
     if (queries.size < MAX_QUERIES_PER_RUN) {
       queries.add(`site:uk.indeed.com "${token}" apprenticeship`);
     }
+    if (queries.size < MAX_QUERIES_PER_RUN) {
+      queries.add(`site:getmyfirstjob.co.uk "${token}" apprenticeship`);
+    }
+    if (queries.size < MAX_QUERIES_PER_RUN) {
+      queries.add(`site:ratemyapprenticeship.co.uk "${token}"`);
+    }
   }
+
+  // Postcode-based fallback for Warwickshire
   for (const prefix of WARWICKSHIRE_POSTCODE_PREFIXES.slice(0, 3)) {
     if (queries.size >= MAX_QUERIES_PER_RUN) {
       break;
@@ -300,16 +330,10 @@ function buildQueries(params: { area: string; radiusKm: number; sectors: string[
     if (queries.size < MAX_QUERIES_PER_RUN) {
       queries.add(`site:reed.co.uk/jobs "${prefix}" apprenticeship`);
     }
-    if (queries.size < MAX_QUERIES_PER_RUN) {
-      queries.add(`site:totaljobs.com/jobs "${prefix}" apprenticeship`);
-    }
   }
 
   if (queries.size < MAX_QUERIES_PER_RUN) {
-    queries.add(`site:reed.co.uk/jobs "${normalizedArea}" trainee retail`);
-  }
-  if (queries.size < MAX_QUERIES_PER_RUN) {
-    queries.add(`site:totaljobs.com/jobs "${normalizedArea}" trainee retail`);
+    queries.add(`site:reed.co.uk/jobs "${normalizedArea}" trainee`);
   }
   if (queries.size < MAX_QUERIES_PER_RUN) {
     queries.add(`site:uk.indeed.com "${normalizedArea}" trainee apprenticeship`);
@@ -567,7 +591,18 @@ async function verifyAndRankRows(
       a.score - b.score || b.sector_score - a.sector_score || a.title.localeCompare(b.title),
   );
   inAreaOther.sort((a, b) => a.score - b.score || a.title.localeCompare(b.title));
-  return [...inAreaPreferred, ...inAreaOther].slice(0, maxResults);
+
+  // When sectors were specified and we found sector-matched results, don't pad with
+  // unrelated roles — they confuse the output. Only fall back to inAreaOther if the
+  // sector search genuinely returned nothing at all.
+  const hasSectorResults = inAreaPreferred.length > 0;
+  const sectorsWereSpecified = sectors.length > 0;
+  const combined =
+    sectorsWereSpecified && hasSectorResults
+      ? inAreaPreferred
+      : [...inAreaPreferred, ...inAreaOther];
+
+  return combined.slice(0, maxResults);
 }
 
 function scoreSectorMatch(haystackRaw: string, sectors: string[]): number {
@@ -628,6 +663,21 @@ function isAllowedVacancyUrl(url: string): boolean {
   }
   if (host.includes("indeed.com")) {
     return parsed.pathname.includes("/viewjob") || parsed.searchParams.has("jk");
+  }
+  if (host.includes("getmyfirstjob.co.uk")) {
+    return /\/(vacancy|apprenticeship|job)\/.+/.test(parsed.pathname);
+  }
+  if (host.includes("ratemyapprenticeship.co.uk")) {
+    return /\/(vacancies?|apprenticeship)\/.+/.test(parsed.pathname);
+  }
+  if (host.includes("prospects.ac.uk")) {
+    return /\/job-profile\/.+/.test(parsed.pathname) || /\/(job|vacancy)\/.+/.test(parsed.pathname);
+  }
+  if (host.includes("notgoingtouni.co.uk")) {
+    return /\/(apprenticeship|vacancy)\/.+/.test(parsed.pathname);
+  }
+  if (host.includes("jobstoday.co.uk")) {
+    return /\/(job|vacancy)\/.+/.test(parsed.pathname);
   }
   return false;
 }
@@ -883,7 +933,11 @@ function getAreaHints(area: string): string[] {
 
 function entryBarrierScore(text: string): number {
   const value = text.toLowerCase();
-  if (/(no (formal )?qualifications|no experience|full training)/.test(value)) {
+  if (
+    /(no (formal )?qualifications|no experience|full training|no prior experience|we('ll| will) train|no previous experience|entry.?level|school leavers?|school leaver|all training provided|training provided|no requirements)/.test(
+      value,
+    )
+  ) {
     return 0;
   }
   if (/(gcse|level 2)/.test(value)) {
@@ -901,7 +955,8 @@ function entryBarrierScore(text: string): number {
   if (/(postgraduate|masters|phd)/.test(value)) {
     return 5;
   }
-  return 6;
+  // "Not stated" — assume accessible (apprenticeships are entry-level by definition)
+  return 2;
 }
 
 function barrierLabel(score: number): string {

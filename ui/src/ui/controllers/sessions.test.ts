@@ -14,6 +14,9 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionHistoryLoading: false,
+    sessionHistoryKey: null,
+    sessionHistoryMessages: [],
     ...overrides,
   };
 }

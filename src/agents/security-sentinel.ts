@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -30,10 +30,10 @@ const DEFAULT_PASSPHRASE_REQUIRED_TOOLS = ["message"];
 const MAX_APPROVAL_GRANT_KEYS = 2048;
 
 // Catches destructive shell commands in tool parameters.
-// Covers flag-order variants (rm -rf / rm -fr), long-form flags, disk tools,
-// and shell redirects to block/character devices.
+// Covers flag-order variants (rm -rf / rm -fr / rm -r), long-form flags, disk tools,
+// shell redirects to block/character devices, and pipe-to-shell execution.
 const DESTRUCTIVE_CMD_RX =
-  /\b(rm\s+-[^\s]*r[^\s]*f|rm\s+--recursive|rm\s+--force|mkfs|dd\s+if=|shutdown\b|reboot\b|halt\b|poweroff\b|diskutil\s+erase|format\s+[a-z]:|chmod\s+-R\s+777|chown\s+-R\s+root|killall\b|shred\b|wipe\b|fdisk\b|truncate\s+-s\s+0)\b|>\s*\/dev\/(sd[a-z]|nvme|disk|hd[a-z])/i;
+  /\b(rm\s+-[^\s]*r[^\s]*f|rm\s+--recursive|rm\s+--force|rm\s+-r\b|mkfs|dd\s+if=|dd\s+of=|shutdown\b|reboot\b|halt\b|poweroff\b|diskutil\s+erase|format\s+[a-z]:|chmod\s+-R\s+777|chown\s+-R\s+root|killall\b|shred\b|wipe\b|fdisk\b|truncate\s+-s\s+0)\b|>\s*\/dev\/(sd[a-z]|nvme|disk|hd[a-z])|\|\s*(bash|sh|zsh|python3?|node|ruby|perl)\b/i;
 // Catches common prompt-injection phrases that attempt to override agent behaviour.
 // Deliberately broad to catch natural-language variants; false-positive risk is low
 // because these phrases are rarely in legitimate tool payloads.
@@ -185,6 +185,19 @@ function resolveSignalPassphraseHash(env: NodeJS.ProcessEnv): string | undefined
 
 function hashSha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+// Constant-time string comparison to prevent timing-based passphrase oracle attacks.
+// Handles strings of different lengths without leaking length information.
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    // Compare a to itself to burn roughly the same time; always returns false.
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 function resolveApprovalFlag(params: unknown): boolean {
@@ -363,9 +376,11 @@ function resolveApprovalState(args: {
           "approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
       };
     }
-    const plainMatches = configuredPassphrase ? providedPassphrase === configuredPassphrase : false;
+    const plainMatches = configuredPassphrase
+      ? timingSafeStringEqual(providedPassphrase, configuredPassphrase)
+      : false;
     const hashMatches = configuredPassphraseHash
-      ? hashSha256(providedPassphrase) === configuredPassphraseHash
+      ? timingSafeStringEqual(hashSha256(providedPassphrase), configuredPassphraseHash)
       : false;
     if (!plainMatches && !hashMatches) {
       matched.push("invalid_signal_passphrase");
@@ -405,19 +420,36 @@ function resolveApprovalState(args: {
   };
 }
 
+// Field names that commonly carry shell commands across tool implementations.
+const COMMAND_FIELD_NAMES = [
+  "cmd",
+  "command",
+  "chars",
+  "script",
+  "shell",
+  "exec",
+  "run",
+  "input",
+  "query",
+  "payload",
+  "body",
+  "text",
+] as const;
+
 function extractPotentialCommand(params: unknown): string {
   if (!isPlainObject(params)) {
     return "";
   }
-  const direct = [params.cmd, params.command, params.chars];
-  for (const candidate of direct) {
+  for (const field of COMMAND_FIELD_NAMES) {
+    const candidate = params[field];
     if (typeof candidate === "string" && candidate.trim()) {
       return candidate.trim();
     }
   }
+  // One level of nesting (e.g. params.params.cmd for wrapped tool calls)
   if (isPlainObject(params.params)) {
-    const nested = [params.params.cmd, params.params.command, params.params.chars];
-    for (const candidate of nested) {
+    for (const field of COMMAND_FIELD_NAMES) {
+      const candidate = params.params[field];
       if (typeof candidate === "string" && candidate.trim()) {
         return candidate.trim();
       }
@@ -427,11 +459,29 @@ function extractPotentialCommand(params: unknown): string {
 }
 
 function resolveAuditPath(env: NodeJS.ProcessEnv): string {
+  const stateDir = resolveStateDir(env);
   const explicit = env.OPENCLAW_SECURITY_SENTINEL_AUDIT_PATH?.trim();
   if (explicit) {
+    // Guard against path traversal: audit path must stay within the state directory.
+    const resolved = path.resolve(explicit);
+    const base = path.resolve(stateDir);
+    if (!resolved.startsWith(base + path.sep) && resolved !== base) {
+      log.warn(
+        `security sentinel audit path "${explicit}" escapes state dir — falling back to default`,
+      );
+      return path.join(stateDir, "logs", "security-sentinel.jsonl");
+    }
     return explicit;
   }
-  return path.join(resolveStateDir(env), "logs", "security-sentinel.jsonl");
+  return path.join(stateDir, "logs", "security-sentinel.jsonl");
+}
+
+// Redacts known secret patterns from command previews before writing to audit log.
+const AUDIT_SECRET_RX =
+  /\b(sk-ant[-\w]*|sk-proj[-\w]*|Bearer\s+\S+|ghp_\w+|ghs_\w+|(?:api[_-]?key|password|token|secret)\s*[:=]\s*\S+)/gi;
+
+function redactSecretsForAudit(text: string): string {
+  return text.replace(AUDIT_SECRET_RX, "[REDACTED]");
 }
 
 function summarizeParams(params: unknown): Record<string, unknown> {
@@ -443,7 +493,7 @@ function summarizeParams(params: unknown): Record<string, unknown> {
   };
   const cmd = extractPotentialCommand(params);
   if (cmd) {
-    summary.commandPreview = cmd.slice(0, 160);
+    summary.commandPreview = redactSecretsForAudit(cmd.slice(0, 160));
   }
   return summary;
 }

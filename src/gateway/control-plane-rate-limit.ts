@@ -40,6 +40,20 @@ export function resolveControlPlaneRateLimitKey(client: GatewayClient | null): s
   return `${deviceId}|${clientIp}`;
 }
 
+// Evict stale buckets whose window has long expired to prevent unbounded map growth.
+// Called on each write so cleanup happens lazily without a separate interval.
+function pruneExpiredBuckets(nowMs: number): void {
+  if (controlPlaneBuckets.size < 256) {
+    return; // Skip until the map is large enough to warrant pruning
+  }
+  const cutoff = nowMs - CONTROL_PLANE_RATE_LIMIT_WINDOW_MS * 2;
+  for (const [k, b] of controlPlaneBuckets) {
+    if (b.windowStartMs < cutoff) {
+      controlPlaneBuckets.delete(k);
+    }
+  }
+}
+
 export function consumeControlPlaneWriteBudget(params: {
   client: GatewayClient | null;
   nowMs?: number;
@@ -50,6 +64,7 @@ export function consumeControlPlaneWriteBudget(params: {
   key: string;
 } {
   const nowMs = params.nowMs ?? Date.now();
+  pruneExpiredBuckets(nowMs);
   const key = resolveControlPlaneRateLimitKey(params.client);
   const bucket = controlPlaneBuckets.get(key);
 

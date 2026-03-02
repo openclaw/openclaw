@@ -26,7 +26,7 @@ def patch_models(models: Path) -> None:
         models,
         '    model_size: Optional[str] = Field(default="1.7B", pattern="^(1\\\\.7B|0\\\\.6B)$")\n'
         '    instruct: Optional[str] = Field(None, max_length=500)\n',
-        '    model_size: Optional[str] = Field(default="0.6B", pattern="^(1\\\\.7B|0\\\\.6B)$")\n'
+        '    model_size: Optional[str] = Field(default="1.7B", pattern="^(1\\\\.7B|0\\\\.6B)$")\n'
         '    max_new_tokens: Optional[int] = Field(default=384, ge=64, le=1024)\n'
         '    instruct: Optional[str] = Field(None, max_length=500)\n',
     )
@@ -46,7 +46,18 @@ def patch_main(main_py: Path) -> None:
 
             raw_audio = None
             if openai_key:
-                preferred_voice = os.getenv("OPENCLAW_VOICEBOX_OPENAI_VOICE", "alloy").strip() or "alloy"
+                _OPENAI_VOICES = {"alloy","ash","coral","echo","fable","nova","onyx","sage","shimmer"}
+                _env_voice = os.getenv("OPENCLAW_VOICEBOX_OPENAI_VOICE", "nova").strip() or "nova"
+                # Use profile name as voice if it matches a valid OpenAI voice name
+                try:
+                    from backend.database import VoiceProfile as _VoiceProfile
+                    _prof = db.query(_VoiceProfile).filter(
+                        _VoiceProfile.id == data.profile_id
+                    ).first()
+                    _prof_name = (_prof.name.strip().lower() if _prof and _prof.name else "")
+                    preferred_voice = _prof_name if _prof_name in _OPENAI_VOICES else _env_voice
+                except Exception:
+                    preferred_voice = _env_voice
                 model_name = os.getenv("OPENCLAW_VOICEBOX_OPENAI_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
                 payload = {
                     "model": model_name,
@@ -184,16 +195,13 @@ def patch_bundled_and_pytorch(bundled: Path, pytorch: Path) -> None:
         '                self.model = Qwen3TTSModel.from_pretrained(\n'
         '                    model_path,\n'
         '                    device_map=self.device,\n'
-        '                    torch_dtype=torch.float32 if self.device == "cpu" else torch.bfloat16,\n'
-        '                    low_cpu_mem_usage=True,\n'
+        '                    dtype=torch.float32 if self.device == "cpu" else torch.bfloat16,\n'
+        '                    low_cpu_mem_usage=self.device != "cpu",\n'
         '                )\n',
     )
 
-    replace_once(
-        pytorch,
-        '                x_vector_only_mode=False,\n',
-        '                x_vector_only_mode=True,\n',
-    )
+    # x_vector_only_mode stays False (upstream default) — full voice cloning path needed
+    # for voice profiles to sound distinct; True would collapse all voices to the same embedding
 
     replace_once(
         pytorch,
@@ -228,10 +236,10 @@ def patch_bundled_and_pytorch(bundled: Path, pytorch: Path) -> None:
         '                voice_clone_prompt=voice_prompt,\n'
         '                instruct=instruct,\n'
         '                max_new_tokens=max_new_tokens or 384,\n'
-        '                do_sample=False,\n'
-        '                top_k=20,\n'
-        '                top_p=0.9,\n'
-        '                temperature=0.7,\n'
+        '                do_sample=True,\n'
+        '                top_k=50,\n'
+        '                top_p=0.95,\n'
+        '                temperature=0.8,\n'
         '            )\n',
     )
 
