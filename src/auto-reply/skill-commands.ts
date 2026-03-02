@@ -50,10 +50,12 @@ export function listSkillCommandsForAgentIds(params: {
   agentIds: string[];
 }): SkillCommandSpec[] {
   const mergeSkillFilters = (existing?: string[], incoming?: string[]): string[] | undefined => {
+    // undefined = no allowlist (unrestricted); [] = explicit empty allowlist (no skills).
     // If any agent is unrestricted for this workspace, keep command discovery unrestricted.
     if (existing === undefined || incoming === undefined) {
       return undefined;
     }
+    // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
     if (existing.length === 0) {
       return Array.from(new Set(incoming));
     }
