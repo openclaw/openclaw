@@ -2234,16 +2234,6 @@ describe("security audit", () => {
     expectFinding(res, "plugin.http_routes_no_auth", "info");
   });
 
-  it("does not report plugin.http_routes_no_auth when plugins.allow is configured", async () => {
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: true, allow: ["trusted-plugin"] },
-    };
-
-    const res = await audit(cfg);
-
-    expectNoFinding(res, "plugin.http_routes_no_auth");
-  });
-
   it("reports HTTP API session-key override surfaces when enabled", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

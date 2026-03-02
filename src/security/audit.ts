@@ -562,7 +562,7 @@ function collectGatewayConfigFindings(
     });
   }
 
-  if (cfg.plugins?.enabled !== false && !cfg.plugins?.allow?.length) {
+  if (cfg.plugins?.enabled !== false) {
     findings.push({
       checkId: "plugin.http_routes_no_auth",
       severity: "info",
