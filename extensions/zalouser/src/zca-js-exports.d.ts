@@ -4,6 +4,18 @@ declare module "zca-js" {
     Group = 1,
   }
 
+  export enum Reactions {
+    HEART = "/-heart",
+    LIKE = "/-strong",
+    HAHA = ":>",
+    WOW = ":o",
+    CRY = ":-((",
+    ANGRY = ":-h",
+    KISS = ":-*",
+    TEARS_OF_JOY = ":')",
+    NONE = "",
+  }
+
   export enum LoginQRCallbackEventType {
     QRCodeGenerated = 0,
     QRCodeExpired = 1,
@@ -110,6 +122,27 @@ declare module "zca-js" {
     stop(): void;
   };
 
+  export type ZaloEventMessageParams = {
+    msgId: string;
+    cliMsgId: string;
+    uidFrom: string;
+    idTo: string;
+    msgType: string;
+    st: number;
+    at: number;
+    cmd: number;
+    ts: string | number;
+  };
+
+  export type AddReactionDestination = {
+    data: {
+      msgId: string;
+      cliMsgId: string;
+    };
+    threadId: string;
+    type: ThreadType;
+  };
+
   export class API {
     listener: Listener;
     getContext(): {
@@ -124,6 +157,7 @@ declare module "zca-js" {
     };
     fetchAccountInfo(): Promise<{ profile: User } | User>;
     getAllFriends(): Promise<User[]>;
+    getOwnId(): string;
     getAllGroups(): Promise<{
       gridVerMap: Record<string, string>;
     }>;
@@ -154,6 +188,24 @@ declare module "zca-js" {
       threadId: string,
       type?: ThreadType,
     ): Promise<{ msgId?: string | number }>;
+    sendTypingEvent(
+      threadId: string,
+      type?: ThreadType,
+      destType?: number,
+    ): Promise<{ status: number }>;
+    addReaction(
+      icon: Reactions | string | { rType: number; source: number; icon: string },
+      dest: AddReactionDestination,
+    ): Promise<unknown>;
+    sendDeliveredEvent(
+      isSeen: boolean,
+      messages: ZaloEventMessageParams | ZaloEventMessageParams[],
+      type?: ThreadType,
+    ): Promise<unknown>;
+    sendSeenEvent(
+      messages: ZaloEventMessageParams | ZaloEventMessageParams[],
+      type?: ThreadType,
+    ): Promise<unknown>;
   }
 
   export class Zalo {
