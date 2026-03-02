@@ -212,8 +212,13 @@ function collectGatewayAssignments(params: {
     const remote = gateway.remote;
     const remoteMode = gateway.mode === "remote";
     const remoteUrlConfigured = typeof remote.url === "string" && remote.url.trim().length > 0;
+    const tailscale =
+      isRecord(gateway.tailscale) && typeof gateway.tailscale.mode === "string"
+        ? gateway.tailscale
+        : undefined;
+    const tailscaleRemoteExposure = tailscale?.mode === "serve" || tailscale?.mode === "funnel";
     const remoteEnabled = remote.enabled !== false;
-    const remoteConfiguredSurface = remoteMode || remoteUrlConfigured;
+    const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
     const remoteTokenActive = remoteEnabled && remoteConfiguredSurface;
     const remotePasswordActive = remoteEnabled && remoteConfiguredSurface;
     collectSecretInputAssignment({
@@ -225,7 +230,7 @@ function collectGatewayAssignments(params: {
       active: remoteTokenActive,
       inactiveReason: !remoteEnabled
         ? "gateway.remote is disabled."
-        : "gateway.remote.token is inactive unless gateway.mode=remote or gateway.remote.url is configured.",
+        : "gateway.remote.token is inactive unless gateway.mode=remote, gateway.remote.url is configured, or gateway.tailscale.mode is serve/funnel.",
       apply: (value) => {
         remote.token = value;
       },
@@ -239,7 +244,7 @@ function collectGatewayAssignments(params: {
       active: remotePasswordActive,
       inactiveReason: !remoteEnabled
         ? "gateway.remote is disabled."
-        : "gateway.remote.password is inactive unless gateway.mode=remote or gateway.remote.url is configured.",
+        : "gateway.remote.password is inactive unless gateway.mode=remote, gateway.remote.url is configured, or gateway.tailscale.mode is serve/funnel.",
       apply: (value) => {
         remote.password = value;
       },

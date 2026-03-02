@@ -617,6 +617,35 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats gateway.remote refs as active when tailscale serve is enabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          mode: "local",
+          tailscale: { mode: "serve" },
+          remote: {
+            enabled: true,
+            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+          },
+        },
+      }),
+      env: {
+        REMOTE_GATEWAY_TOKEN: "tailscale-remote-token",
+        REMOTE_GATEWAY_PASSWORD: "tailscale-remote-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.remote?.token).toBe("tailscale-remote-token");
+    expect(snapshot.config.gateway?.remote?.password).toBe("tailscale-remote-password");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.remote.token");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "gateway.remote.password",
+    );
+  });
+
   it("treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
