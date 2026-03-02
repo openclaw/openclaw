@@ -377,6 +377,50 @@ describe("legacy config detection", () => {
       expect(validated.config.gateway?.bind).toBe("tailnet");
     }
   });
+  it("normalizes gateway.bind host aliases to supported bind modes", async () => {
+    const cases = [
+      { input: "0.0.0.0", expected: "lan" },
+      { input: "::", expected: "lan" },
+      { input: "127.0.0.1", expected: "loopback" },
+      { input: "localhost", expected: "loopback" },
+      { input: "::1", expected: "loopback" },
+    ] as const;
+
+    for (const testCase of cases) {
+      const res = migrateLegacyConfig({
+        gateway: { bind: testCase.input },
+      });
+      expect(res.changes).toContain(
+        `Normalized gateway.bind "${testCase.input}" → "${testCase.expected}".`,
+      );
+      expect(res.config?.gateway?.bind).toBe(testCase.expected);
+
+      const validated = validateConfigObject(res.config);
+      expect(validated.ok).toBe(true);
+      if (validated.ok) {
+        expect(validated.config.gateway?.bind).toBe(testCase.expected);
+      }
+    }
+  });
+  it("flags gateway.bind host aliases as legacy to trigger auto-migration paths", async () => {
+    const cases = ["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"] as const;
+    for (const bind of cases) {
+      const validated = validateConfigObject({ gateway: { bind } });
+      expect(validated.ok, bind).toBe(false);
+      if (!validated.ok) {
+        expect(
+          validated.issues.some((issue) => issue.path === "gateway.bind"),
+          bind,
+        ).toBe(true);
+      }
+    }
+  });
+  it("escapes control characters in gateway.bind migration change text", async () => {
+    const res = migrateLegacyConfig({
+      gateway: { bind: "\r\n0.0.0.0\r\n" },
+    });
+    expect(res.changes).toContain('Normalized gateway.bind "\\r\\n0.0.0.0\\r\\n" → "lan".');
+  });
   it('enforces dmPolicy="open" allowFrom wildcard for supported providers', async () => {
     const cases = [
       {

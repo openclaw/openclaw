@@ -116,6 +116,59 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
+  it("skips typing indicator for stale replayed messages", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 3 * 60_000,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).not.toHaveBeenCalled();
+  });
+
+  it("treats second-based timestamps as stale for typing suppression", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps typing indicator for fresh messages", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
+    expect(addTypingIndicatorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "om_parent",
+      }),
+    );
+  });
+
   it("keeps auto mode plain text on non-streaming send path", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,

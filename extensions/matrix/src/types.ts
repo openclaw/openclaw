@@ -49,6 +49,8 @@ export type MatrixConfig = {
   enabled?: boolean;
   /** Multi-account configuration keyed by account ID. */
   accounts?: Record<string, MatrixAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
   /** Matrix user id (@user:server). */
