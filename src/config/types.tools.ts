@@ -92,6 +92,16 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
   models?: MediaUnderstandingModelConfig[];
+  /**
+   * Echo the audio transcript back to the originating chat before agent processing.
+   * Lets users verify what was heard. Default: false.
+   */
+  echoTranscript?: boolean;
+  /**
+   * Format string for the echoed transcript. Use `{transcript}` as placeholder.
+   * Default: '📝 "{transcript}"'
+   */
+  echoFormat?: string;
 };
 
 export type LinkModelConfig = {
