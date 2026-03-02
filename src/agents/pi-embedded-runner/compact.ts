@@ -384,9 +384,12 @@ export async function compactEmbeddedPiSessionDirect(
       modelContextWindowTokens: model.contextWindow,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
-    const allowedToolNames = collectAllowedToolNames({ tools });
-    logToolSchemasForGoogle({ tools, provider });
+    const disableTools = provider.trim().toLowerCase() === "ollama";
+    const tools = disableTools ? [] : sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const allowedToolNames = disableTools ? [] : collectAllowedToolNames({ tools });
+    if (!disableTools) {
+      logToolSchemasForGoogle({ tools, provider });
+    }
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
