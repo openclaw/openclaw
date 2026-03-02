@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+.local-data/
 docker-compose.extra.yml
 dist
 *.bun-build
