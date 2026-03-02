@@ -161,7 +161,7 @@ function expectMemoryConversation(params: {
 }
 
 describe("session-memory hook", () => {
-  it("skips non-command events", async () => {
+  it("skips non-command and non-session events", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-");
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
@@ -170,12 +170,12 @@ describe("session-memory hook", () => {
 
     await handler(event);
 
-    // Memory directory should not be created for non-command events
+    // Memory directory should not be created for non-command/non-session events
     const memoryDir = path.join(tempDir, "memory");
     await expect(fs.access(memoryDir)).rejects.toThrow();
   });
 
-  it("skips commands other than new", async () => {
+  it("skips commands other than new/reset", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-");
 
     const event = createHookEvent("command", "help", "agent:main:main", {
@@ -185,6 +185,20 @@ describe("session-memory hook", () => {
     await handler(event);
 
     // Memory directory should not be created for other commands
+    const memoryDir = path.join(tempDir, "memory");
+    await expect(fs.access(memoryDir)).rejects.toThrow();
+  });
+
+  it("skips session events other than end", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+
+    const event = createHookEvent("session", "start", "agent:main:main", {
+      workspaceDir: tempDir,
+    });
+
+    await handler(event);
+
+    // Memory directory should not be created for session:start events
     const memoryDir = path.join(tempDir, "memory");
     await expect(fs.access(memoryDir)).rejects.toThrow();
   });
@@ -220,6 +234,44 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
+  });
+
+  it("creates memory file with session content on session:end event", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Session ending message" },
+      { role: "assistant", content: "Captured on session end" },
+    ]);
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: sessionContent,
+    });
+
+    // Use session:end event instead of command:new
+    const event = createHookEvent("session", "end", "agent:main:main", {
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      sessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+      },
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    expect(memoryContent).toContain("user: Session ending message");
+    expect(memoryContent).toContain("assistant: Captured on session end");
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {
