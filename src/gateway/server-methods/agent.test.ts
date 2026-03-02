@@ -521,7 +521,7 @@ describe("gateway agent handler", () => {
     expect(mocks.sessionsResetHandler).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     expect(call?.message).toBe(BARE_SESSION_RESET_PROMPT);
-    expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Execute your Session Startup sequence for any non-bootstrap files");
     expect(call?.sessionId).toBe("reset-session-id");
   });
 
