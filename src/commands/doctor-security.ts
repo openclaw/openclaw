@@ -184,8 +184,8 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // ===========================================
   // SYSTEM OWNER CHECK
   // ===========================================
-  // Check if Discord is enabled but System Owner is not configured
-  const hasDiscord = cfg.channels?.discord?.enabled !== false;
+  // Check if Discord is configured with a token but System Owner is not configured
+  const hasDiscordToken = Boolean(cfg.channels?.discord?.token?.trim());
   const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
   const ownerConfigured = Array.isArray(ownerAllowFrom) && ownerAllowFrom.length > 0;
   const hasNumericOwner = ownerConfigured && ownerAllowFrom.some(entry => {
@@ -196,14 +196,14 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     return false;
   });
 
-  if (hasDiscord && !ownerConfigured) {
+  if (hasDiscordToken && !ownerConfigured) {
     warnings.push(
       "- CRITICAL: Discord enabled but System Owner not configured (commands.ownerAllowFrom).",
       "  Anyone on Discord can run privileged commands (/restart, /config, owner-only tools).",
       `  Fix: Add your Discord User ID: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
       "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
     );
-  } else if (hasDiscord && ownerConfigured && !hasNumericOwner) {
+  } else if (hasDiscordToken && ownerConfigured && !hasNumericOwner) {
     warnings.push(
       "- WARNING: System Owner configured with names instead of numeric IDs.",
       "  Nicknames can be spoofed! Use Discord User IDs (numeric) instead of usernames.",

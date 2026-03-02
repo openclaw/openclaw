@@ -14,8 +14,9 @@ export async function maybePromptForSystemOwner(params: {
 }): Promise<{ cfg: OpenClawConfig; changed: boolean }> {
   const { cfg, prompter, nonInteractive } = params;
 
-  const hasDiscord = cfg.channels?.discord?.enabled !== false;
-  if (!hasDiscord) {
+  // Only prompt if Discord is actually configured with a token
+  const hasDiscordToken = Boolean(cfg.channels?.discord?.token?.trim());
+  if (!hasDiscordToken) {
     return { cfg, changed: false };
   }
 

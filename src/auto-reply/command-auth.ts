@@ -135,10 +135,23 @@ function resolveOwnerAllowFromList(params: {
         if (params.providerId && channel !== params.providerId) {
           continue;
         }
-        const remainder = trimmed.slice(separatorIndex + 1).trim();
+        let remainder = trimmed.slice(separatorIndex + 1).trim();
+        
+        // For Discord/Telegram, normalize IDs (strip mentions, prefixes) before validation
+        const isNumericOnlyChannel = channel === "discord" || channel === "telegram";
+        if (isNumericOnlyChannel && channel === "discord") {
+          // Normalize Discord mention formats: <@123>, <@!123>, user:123, discord:123, pk:123
+          remainder = remainder
+            .replace(/^<@!?/, "")
+            .replace(/>$/, "")
+            .replace(/^discord:/i, "")
+            .replace(/^user:/i, "")
+            .replace(/^pk:/i, "")
+            .trim();
+        }
+        
         // For Discord/Telegram, only accept numeric IDs to prevent nickname spoofing
         // For other channels (WhatsApp, Signal, Slack, etc), allow native ID formats
-        const isNumericOnlyChannel = channel === "discord" || channel === "telegram";
         if (remainder && (isNumericOnlyChannel ? /^\d+$/.test(remainder) : true)) {
           filtered.push(remainder);
         } else if (remainder && isNumericOnlyChannel) {
