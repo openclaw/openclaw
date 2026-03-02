@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
@@ -86,6 +86,7 @@ vi.mock("../commands/gateway-status.js", () => ({
 }));
 
 const { registerGatewayCli } = await import("./gateway-cli.js");
+let gatewayProgram: Command;
 
 function createGatewayProgram() {
   const program = new Command();
@@ -95,8 +96,7 @@ function createGatewayProgram() {
 }
 
 async function runGatewayCommand(args: string[]) {
-  const program = createGatewayProgram();
-  await program.parseAsync(args, { from: "user" });
+  await gatewayProgram.parseAsync(args, { from: "user" });
 }
 
 async function expectGatewayExit(args: string[]) {
@@ -104,6 +104,10 @@ async function expectGatewayExit(args: string[]) {
 }
 
 describe("gateway-cli coverage", () => {
+  beforeEach(() => {
+    gatewayProgram = createGatewayProgram();
+  });
+
   it("registers call/health commands and routes to callGateway", async () => {
     resetRuntimeCapture();
     callGateway.mockClear();

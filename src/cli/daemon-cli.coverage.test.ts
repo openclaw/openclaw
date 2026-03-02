@@ -74,6 +74,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 const { registerDaemonCli } = await import("./daemon-cli.js");
+let daemonProgram: Command;
 
 function createDaemonProgram() {
   const program = new Command();
@@ -83,8 +84,7 @@ function createDaemonProgram() {
 }
 
 async function runDaemonCommand(args: string[]) {
-  const program = createDaemonProgram();
-  await program.parseAsync(args, { from: "user" });
+  await daemonProgram.parseAsync(args, { from: "user" });
 }
 
 function parseFirstJsonRuntimeLine<T>() {
@@ -96,6 +96,7 @@ describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
+    daemonProgram = createDaemonProgram();
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
