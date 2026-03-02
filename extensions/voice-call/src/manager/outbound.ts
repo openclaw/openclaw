@@ -49,6 +49,7 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "onCallEnded"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
@@ -372,6 +373,15 @@ export async function endCall(
 
     ctx.activeCalls.delete(callId);
     ctx.providerCallIdMap.delete(providerCallId);
+
+    try {
+      ctx.onCallEnded?.(call);
+    } catch (cbErr) {
+      console.error(
+        "[voice-call] onCallEnded callback error:",
+        cbErr instanceof Error ? cbErr.message : String(cbErr),
+      );
+    }
 
     return { success: true };
   } catch (err) {
