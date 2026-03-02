@@ -456,6 +456,43 @@ describe("handleDiscordMessageAction", () => {
       expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
   });
+
+  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
+    await handleDiscordMessageAction({
+      action: "react",
+      params: {
+        channelId: "123",
+        emoji: "ok",
+      },
+      cfg: {} as OpenClawConfig,
+      toolContext: { currentMessageId: "9001" },
+    });
+
+    const call = handleDiscordAction.mock.calls.at(-1);
+    expect(call?.[0]).toEqual(
+      expect.objectContaining({
+        action: "react",
+        channelId: "123",
+        messageId: "9001",
+        emoji: "ok",
+      }),
+    );
+  });
+
+  it("rejects reactions when neither messageId nor toolContext.currentMessageId is provided", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          channelId: "123",
+          emoji: "ok",
+        },
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow(/messageId required/i);
+
+    expect(handleDiscordAction).not.toHaveBeenCalled();
+  });
 });
 
 describe("telegramMessageActions", () => {
