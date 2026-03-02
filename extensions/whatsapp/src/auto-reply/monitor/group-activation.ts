@@ -21,12 +21,18 @@ export function resolveGroupPolicyFor(
     Provider: "whatsapp",
   })?.id;
   const whatsappCfg = cfg.channels?.whatsapp as
-    | { groupAllowFrom?: string[]; allowFrom?: string[]; accounts?: Record<string, { groupAllowFrom?: string[]; allowFrom?: string[] }> }
+    | {
+        groupAllowFrom?: string[];
+        allowFrom?: string[];
+        accounts?: Record<string, { groupAllowFrom?: string[]; allowFrom?: string[] }>;
+      }
     | undefined;
   const accountCfg = accountId ? whatsappCfg?.accounts?.[accountId] : undefined;
   const hasGroupAllowFrom = Boolean(
-    accountCfg?.groupAllowFrom?.length || accountCfg?.allowFrom?.length ||
-    whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length,
+    accountCfg?.groupAllowFrom?.length ||
+    accountCfg?.allowFrom?.length ||
+    whatsappCfg?.groupAllowFrom?.length ||
+    whatsappCfg?.allowFrom?.length,
   );
   return resolveChannelGroupPolicy({
     cfg,
@@ -67,7 +73,11 @@ export function resolveGroupActivationFor(params: {
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const requireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId, params.accountId);
+  const requireMention = resolveGroupRequireMentionFor(
+    params.cfg,
+    params.conversationId,
+    params.accountId,
+  );
   const defaultActivation = !requireMention ? "always" : "mention";
   return normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation;
 }
