@@ -162,10 +162,17 @@ function parseInteractiveCardContent(parsed: unknown): string {
     );
   }
 
-  // Extract body elements
-  if (Array.isArray(card.elements)) {
-    texts.push(...extractCardTextElements(card.elements as unknown[]));
-  }
+  // Extract body elements — support both schema 1.0 (card.elements) and
+  // schema 2.0 (card.body.elements, used by buildMarkdownCard and most
+  // modern Feishu alert/notification cards).
+  const bodyElements = Array.isArray(card.elements)
+    ? (card.elements as unknown[])
+    : card.body &&
+        typeof card.body === "object" &&
+        Array.isArray((card.body as Record<string, unknown>).elements)
+      ? ((card.body as Record<string, unknown>).elements as unknown[])
+      : [];
+  texts.push(...extractCardTextElements(bodyElements));
 
   return texts.join("\n").trim() || "[Interactive Card]";
 }
