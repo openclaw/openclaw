@@ -44,6 +44,16 @@ param slackAppToken string
 @secure()
 param slackBotToken string
 
+var agentSystemPrompt = '''
+You are a helpful enterprise assistant.
+
+CITATION & FORMATTING RULES:
+When you use the `web_search` tool, you must cite your sources using clickable links. Before generating your response, check which platform the user is messaging from and apply the exact syntax required for that platform:
+* If the channel is Slack: You MUST use Slack's proprietary link syntax: <URL|[Number]>.
+* If the channel is WeChat Work (WeCom): You MUST use standard Markdown link syntax: [[Number]](URL).
+* For all other channels: Default to standard Markdown format.
+'''
+
 // 1. Log Analytics Workspace
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: '${environmentName}-logs'
@@ -198,6 +208,11 @@ exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bi
             {
               name: 'OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH'
               value: 'true' // Bypasses the device pairing waiting room
+            }
+            // Update system prompt to add citation & formatting rules
+            {
+              name: 'OPENCLAW_DEFAULT_SYSTEM_PROMPT'
+              value: agentSystemPrompt
             }
 
             // Slack Integration
