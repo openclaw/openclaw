@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import "./server-context.chrome-test-harness.js";
 import * as cdpModule from "./cdp.js";
+import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import type { BrowserServerState } from "./server-context.js";
-import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
 const originalFetch = globalThis.fetch;
@@ -16,6 +17,7 @@ afterEach(() => {
 
 function makeState(
   profile: "remote" | "openclaw",
+  opts?: { attachOnly?: boolean },
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -34,7 +36,7 @@ function makeState(
       color: "#FF4500",
       headless: true,
       noSandbox: false,
-      attachOnly: false,
+      attachOnly: opts?.attachOnly ?? false,
       ssrfPolicy: { allowPrivateNetwork: true },
       defaultProfile: profile,
       profiles: {
@@ -62,6 +64,13 @@ function createRemoteRouteHarness(fetchMock?: ReturnType<typeof vi.fn>) {
   const state = makeState("remote");
   const ctx = createBrowserRouteContext({ getState: () => state });
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
+}
+
+function createOpenclawRouteHarness(opts?: { attachOnly?: boolean }) {
+  global.fetch = withFetchPreconnect(makeUnexpectedFetchMock());
+  const state = makeState("openclaw", opts);
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  return { openclaw: ctx.forProfile("openclaw") };
 }
 
 describe("browser server-context remote profile tab operations", () => {
@@ -215,6 +224,30 @@ describe("browser server-context remote profile tab operations", () => {
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser server-context ensureBrowserAvailable attachOnly", () => {
+  it("does not report local port ownership errors when attachOnly is enabled", async () => {
+    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
+    vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValue(false);
+
+    const { openclaw } = createOpenclawRouteHarness({ attachOnly: true });
+
+    await expect(openclaw.ensureBrowserAvailable()).rejects.toThrow(
+      'Browser attachOnly is enabled and CDP websocket for profile "openclaw" is not reachable.',
+    );
+  });
+
+  it("keeps local port ownership errors when attachOnly is disabled", async () => {
+    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
+    vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValue(false);
+
+    const { openclaw } = createOpenclawRouteHarness({ attachOnly: false });
+
+    await expect(openclaw.ensureBrowserAvailable()).rejects.toThrow(
+      'Port 18800 is in use for profile "openclaw" but not by openclaw.',
+    );
   });
 });
 
