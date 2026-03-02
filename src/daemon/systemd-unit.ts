@@ -100,10 +100,7 @@ function envOptionConsumesNextValue(token: string): boolean {
     token === "--unset" ||
     token === "--chdir" ||
     token === "--split-string" ||
-    token === "--argv0" ||
-    token === "--default-signal" ||
-    token === "--ignore-signal" ||
-    token === "--block-signal"
+    token === "--argv0"
   );
 }
 

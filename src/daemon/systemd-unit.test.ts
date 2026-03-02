@@ -75,4 +75,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("does not consume executable after env optional signal options", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env --default-signal /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });
