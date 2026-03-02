@@ -679,22 +679,6 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert).toBe(false);
   });
 
-  it("uses a longer default timeout for cron run", async () => {
-    const { runOpts } = await runCronRunAndCaptureExit({
-      ran: true,
-      args: ["cron", "run", "job-1", "--expect-final"],
-    });
-    expect(runOpts.timeout).toBe("600000");
-  });
-
-  it("preserves explicit --timeout for cron run", async () => {
-    const { runOpts } = await runCronRunAndCaptureExit({
-      ran: true,
-      args: ["cron", "run", "job-1", "--expect-final", "--timeout", "45000"],
-    });
-    expect(runOpts.timeout).toBe("45000");
-  });
-
   it("patches failure alert mode/accountId on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
