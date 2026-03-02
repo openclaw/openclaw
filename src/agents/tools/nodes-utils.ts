@@ -163,3 +163,26 @@ export async function resolveNodeId(
   const nodes = await loadNodes(opts);
   return resolveNodeIdFromList(nodes, query, allowDefault);
 }
+
+/**
+ * Returns all connected canvas-capable node IDs for broadcast commands.
+ * If a specific node query is provided, resolves to just that single node.
+ * Throws if no canvas-capable nodes are connected.
+ */
+export async function resolveCanvasNodeIds(
+  opts: GatewayCallOptions,
+  query?: string,
+): Promise<string[]> {
+  const q = String(query ?? "").trim();
+  const nodes = await loadNodes(opts);
+  if (q) {
+    return [resolveNodeIdFromList(nodes, q)];
+  }
+  const canvasConnected = nodes.filter(
+    (n) => n.connected && Array.isArray(n.caps) && n.caps.includes("canvas"),
+  );
+  if (canvasConnected.length === 0) {
+    throw new Error("no connected canvas-capable nodes");
+  }
+  return canvasConnected.map((n) => n.nodeId);
+}
