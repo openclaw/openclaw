@@ -24,14 +24,33 @@ export async function loadDebug(state: DebugState) {
   }
   state.debugLoading = true;
   try {
-    const [status, health, models, heartbeat] = await Promise.all([
+    const [status, health, channels, models, heartbeat] = await Promise.all([
       state.client.request("status", {}),
       state.client.request("health", {}),
+      state.client.request("channels.status", { probe: false, timeoutMs: 8000 }),
       state.client.request("models.list", {}),
       state.client.request("last-heartbeat", {}),
     ]);
     state.debugStatus = status as StatusSummary;
-    state.debugHealth = health as HealthSnapshot;
+
+    const debugHealth = health as HealthSnapshot;
+    const channelsSnapshot = channels as
+      | { channels?: Record<string, { running?: boolean; lastStartAt?: number | null }> }
+      | null
+      | undefined;
+    const telegramRuntime = channelsSnapshot?.channels?.telegram;
+    const telegramHealth = (debugHealth?.channels as Record<string, unknown> | undefined)
+      ?.telegram as Record<string, unknown> | undefined;
+    if (telegramHealth && telegramRuntime) {
+      if (typeof telegramRuntime.running === "boolean") {
+        telegramHealth.running = telegramRuntime.running;
+      }
+      if (telegramRuntime.lastStartAt != null) {
+        telegramHealth.lastStartAt = telegramRuntime.lastStartAt;
+      }
+    }
+
+    state.debugHealth = debugHealth;
     const modelPayload = models as { models?: unknown[] } | undefined;
     state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
     state.debugHeartbeat = heartbeat;

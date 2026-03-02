@@ -350,6 +350,28 @@ describe("config form renderer", () => {
     expect(analysis.unsupportedPaths).not.toContain("channels");
   });
 
+  it("tracks unsupported additionalProperties paths precisely", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        channels: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              capabilities: {
+                anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toContain("channels.*.capabilities");
+    expect(analysis.unsupportedPaths).not.toContain("channels");
+  });
+
   it("flags additionalProperties true", () => {
     const schema = {
       type: "object",
