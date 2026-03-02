@@ -235,7 +235,7 @@ export async function dispatchReplyFromConfig(params: {
     cfg,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
     channel: ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
-    chatType: ctx.ChatType,
+    chatType: ctx.ChatType ?? sessionStoreEntry.entry?.chatType,
     source: {
       to: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
       accountId: ctx.AccountId,
