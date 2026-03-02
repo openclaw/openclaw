@@ -9,6 +9,8 @@ import {
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSingleWebhookTargetAsync,
+  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
 
@@ -210,5 +212,74 @@ describe("resolveSingleWebhookTarget", () => {
     });
     expect(result).toEqual({ kind: "ambiguous" });
     expect(calls).toEqual(["a", "b"]);
+  });
+});
+
+describe("resolveWebhookTargetWithAuthOrReject", () => {
+  it("returns matched target", async () => {
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }, { id: "b" }],
+        res,
+        isMatch: (target) => target.id === "b",
+      }),
+    ).resolves.toEqual({ id: "b" });
+  });
+
+  it("writes unauthorized response on no match", async () => {
+    const endMock = vi.fn();
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: endMock,
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }],
+        res,
+        isMatch: () => false,
+      }),
+    ).resolves.toBeNull();
+    expect(res.statusCode).toBe(401);
+    expect(endMock).toHaveBeenCalledWith("unauthorized");
+  });
+
+  it("writes ambiguous response on multi-match", async () => {
+    const endMock = vi.fn();
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: endMock,
+    } as unknown as ServerResponse;
+    await expect(
+      resolveWebhookTargetWithAuthOrReject({
+        targets: [{ id: "a" }, { id: "b" }],
+        res,
+        isMatch: () => true,
+      }),
+    ).resolves.toBeNull();
+    expect(res.statusCode).toBe(401);
+    expect(endMock).toHaveBeenCalledWith("ambiguous webhook target");
+  });
+});
+
+describe("resolveWebhookTargetWithAuthOrRejectSync", () => {
+  it("returns matched target synchronously", () => {
+    const res = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as unknown as ServerResponse;
+    const target = resolveWebhookTargetWithAuthOrRejectSync({
+      targets: [{ id: "a" }, { id: "b" }],
+      res,
+      isMatch: (entry) => entry.id === "a",
+    });
+    expect(target).toEqual({ id: "a" });
   });
 });

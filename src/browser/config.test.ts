@@ -12,15 +12,19 @@ describe("browser config", () => {
     expect(resolved.cdpHost).toBe("127.0.0.1");
     expect(resolved.cdpProtocol).toBe("http");
     const profile = resolveProfile(resolved, resolved.defaultProfile);
-    expect(profile?.name).toBe("chrome");
-    expect(profile?.driver).toBe("extension");
-    expect(profile?.cdpPort).toBe(18792);
-    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18792");
+    expect(profile?.name).toBe("openclaw");
+    expect(profile?.driver).toBe("openclaw");
+    expect(profile?.cdpPort).toBe(18800);
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
 
     const openclaw = resolveProfile(resolved, "openclaw");
     expect(openclaw?.driver).toBe("openclaw");
     expect(openclaw?.cdpPort).toBe(18800);
     expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.cdpPort).toBe(18792);
+    expect(chrome?.cdpUrl).toBe("http://127.0.0.1:18792");
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
@@ -239,31 +243,30 @@ describe("browser config", () => {
     expect(resolved.ssrfPolicy).toEqual({});
   });
 
-  // Tests for headless/noSandbox profile preference (issue #14895)
-  describe("headless/noSandbox profile preference", () => {
-    it("defaults to chrome profile when headless=false and noSandbox=false", () => {
+  describe("default profile preference", () => {
+    it("defaults to openclaw profile when defaultProfile is not configured", () => {
       const resolved = resolveBrowserConfig({
         headless: false,
         noSandbox: false,
       });
-      expect(resolved.defaultProfile).toBe("chrome");
+      expect(resolved.defaultProfile).toBe("openclaw");
     });
 
-    it("prefers openclaw profile when headless=true", () => {
+    it("keeps openclaw default when headless=true", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
       });
       expect(resolved.defaultProfile).toBe("openclaw");
     });
 
-    it("prefers openclaw profile when noSandbox=true", () => {
+    it("keeps openclaw default when noSandbox=true", () => {
       const resolved = resolveBrowserConfig({
         noSandbox: true,
       });
       expect(resolved.defaultProfile).toBe("openclaw");
     });
 
-    it("prefers openclaw profile when both headless and noSandbox are true", () => {
+    it("keeps openclaw default when both headless and noSandbox are true", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
         noSandbox: true,
@@ -271,7 +274,7 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("openclaw");
     });
 
-    it("explicit defaultProfile config overrides headless preference", () => {
+    it("explicit defaultProfile config overrides defaults in headless mode", () => {
       const resolved = resolveBrowserConfig({
         headless: true,
         defaultProfile: "chrome",
@@ -279,7 +282,7 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("chrome");
     });
 
-    it("explicit defaultProfile config overrides noSandbox preference", () => {
+    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
       const resolved = resolveBrowserConfig({
         noSandbox: true,
         defaultProfile: "chrome",

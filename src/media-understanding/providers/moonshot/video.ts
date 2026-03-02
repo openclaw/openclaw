@@ -1,5 +1,5 @@
 import type { VideoDescriptionRequest, VideoDescriptionResult } from "../../types.js";
-import { assertOkOrThrowHttpError, fetchWithTimeoutGuarded, normalizeBaseUrl } from "../shared.js";
+import { assertOkOrThrowHttpError, normalizeBaseUrl, postJsonRequest } from "../shared.js";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_MOONSHOT_VIDEO_MODEL = "kimi-k2.5";
@@ -84,16 +84,13 @@ export async function describeMoonshotVideo(
     ],
   };
 
-  const { response: res, release } = await fetchWithTimeoutGuarded(
+  const { response: res, release } = await postJsonRequest({
     url,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    },
-    params.timeoutMs,
+    headers,
+    body,
+    timeoutMs: params.timeoutMs,
     fetchFn,
-  );
+  });
 
   try {
     await assertOkOrThrowHttpError(res, "Moonshot video description failed");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 describe("legacy migrate audio transcription", () => {
   it("moves routing.transcribeAudio into tools.media.audio.models", () => {
@@ -13,17 +14,7 @@ describe("legacy migrate audio transcription", () => {
     });
 
     expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
-    expect(res.config?.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [
-        {
-          command: "whisper",
-          type: "cli",
-          args: ["--model", "base"],
-          timeoutSeconds: 2,
-        },
-      ],
-    });
+    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
     expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
   });
 

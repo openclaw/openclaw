@@ -9,8 +9,8 @@ import {
 } from "./extension-relay.js";
 import { getFreePort } from "./test-port.js";
 
-const RELAY_MESSAGE_TIMEOUT_MS = 2_000;
-const RELAY_LIST_MATCH_TIMEOUT_MS = 1_500;
+const RELAY_MESSAGE_TIMEOUT_MS = 1_200;
+const RELAY_LIST_MATCH_TIMEOUT_MS = 1_000;
 const RELAY_TEST_TIMEOUT_MS = 10_000;
 
 function waitForOpen(ws: WebSocket) {
@@ -124,7 +124,7 @@ async function waitForListMatch<T>(
   fetchList: () => Promise<T>,
   predicate: (value: T) => boolean,
   timeoutMs = RELAY_LIST_MATCH_TIMEOUT_MS,
-  intervalMs = 50,
+  intervalMs = 20,
 ): Promise<T> {
   let latest: T | undefined;
   await expect
@@ -378,14 +378,10 @@ describe("chrome extension relay server", () => {
     const ext1Closed = waitForClose(ext1, 2_000);
     ext1.close();
     await ext1Closed;
-
-    await new Promise((r) => setTimeout(r, 80));
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
       headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
     });
     await waitForOpen(ext2);
-
-    await new Promise((r) => setTimeout(r, 80));
     expect(cdpClosed).toBe(false);
 
     cdp.close();
@@ -480,7 +476,7 @@ describe("chrome extension relay server", () => {
     await ext1Closed;
 
     cdp.send(JSON.stringify({ id: 41, method: "Runtime.enable" }));
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => setTimeout(r, 30));
 
     const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
       headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
@@ -561,12 +557,17 @@ describe("chrome extension relay server", () => {
     );
 
     ext.close();
-    await new Promise((r) => setTimeout(r, 170));
-
-    const version = (await fetch(`${cdpUrl}/json/version`, {
-      headers: relayAuthHeaders(cdpUrl),
-    }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
-    expect(version.webSocketDebuggerUrl).toBeUndefined();
+    await expect
+      .poll(
+        async () => {
+          const version = (await fetch(`${cdpUrl}/json/version`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
+          return version.webSocketDebuggerUrl === undefined;
+        },
+        { timeout: 800, interval: 20 },
+      )
+      .toBe(true);
   });
 
   it("accepts extension websocket access with relay token query param", async () => {
@@ -1019,12 +1020,13 @@ describe("chrome extension relay server", () => {
       const ext1Closed = waitForClose(ext1, 2_000);
       ext1.close();
       await ext1Closed;
-      await new Promise((r) => setTimeout(r, 260));
-
-      const listEmpty = (await fetch(`${cdpUrl}/json/list`, {
-        headers: relayAuthHeaders(cdpUrl),
-      }).then((r) => r.json())) as Array<{ id?: string }>;
-      expect(listEmpty.length).toBe(0);
+      await waitForListMatch(
+        async () =>
+          (await fetch(`${cdpUrl}/json/list`, {
+            headers: relayAuthHeaders(cdpUrl),
+          }).then((r) => r.json())) as Array<{ id?: string }>,
+        (list) => list.length === 0,
+      );
 
       // Reconnect and re-announce the same tab (simulates reannounceAttachedTabs).
       const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
@@ -1103,7 +1105,6 @@ describe("chrome extension relay server", () => {
       const ext1Closed = waitForClose(ext1, 2_000);
       ext1.close();
       await ext1Closed;
-      await new Promise((r) => setTimeout(r, 25));
 
       // Tab should still be listed during grace period.
       const listDuringGrace = (await fetch(`${cdpUrl}/json/list`, {

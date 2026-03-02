@@ -1,3 +1,4 @@
+import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
   isAuthPermanentErrorMessage,
@@ -82,13 +83,6 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
-}
-
 function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -127,7 +121,7 @@ function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (getErrorName(err) === "TimeoutError") {
+  if (readErrorName(err) === "TimeoutError") {
     return true;
   }
   const message = getErrorMessage(err);
@@ -141,7 +135,7 @@ export function isTimeoutError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  if (getErrorName(err) !== "AbortError") {
+  if (readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);
@@ -177,6 +171,9 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   }
   if (status === 502 || status === 503 || status === 504) {
     return "timeout";
+  }
+  if (status === 529) {
+    return "rate_limit";
   }
   if (status === 400) {
     return "format";

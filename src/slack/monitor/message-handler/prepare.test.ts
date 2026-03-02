@@ -104,6 +104,25 @@ describe("slack prepareSlackMessage inbound contract", () => {
     userTokenSource: "none",
     config: {},
   };
+  const defaultMessageTemplate: SlackMessageEvent = {
+    channel: "D123",
+    channel_type: "im",
+    user: "U1",
+    text: "hi",
+    ts: "1.000",
+  } as SlackMessageEvent;
+  const threadAccount: ResolvedSlackAccount = {
+    accountId: "default",
+    enabled: true,
+    botTokenSource: "config",
+    appTokenSource: "config",
+    userTokenSource: "none",
+    config: {
+      replyToMode: "all",
+      thread: { initialHistoryLimit: 20 },
+    },
+    replyToMode: "all",
+  };
 
   async function prepareWithDefaultCtx(message: SlackMessageEvent) {
     return prepareSlackMessage({
@@ -129,14 +148,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   }
 
   function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
-    return {
-      channel: "D123",
-      channel_type: "im",
-      user: "U1",
-      text: "hi",
-      ts: "1.000",
-      ...overrides,
-    } as SlackMessageEvent;
+    return { ...defaultMessageTemplate, ...overrides } as SlackMessageEvent;
   }
 
   async function prepareMessageWith(
@@ -162,18 +174,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   }
 
   function createThreadAccount(): ResolvedSlackAccount {
-    return {
-      accountId: "default",
-      enabled: true,
-      botTokenSource: "config",
-      appTokenSource: "config",
-      userTokenSource: "none",
-      config: {
-        replyToMode: "all",
-        thread: { initialHistoryLimit: 20 },
-      },
-      replyToMode: "all",
-    };
+    return threadAccount;
   }
 
   function createThreadReplyMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {

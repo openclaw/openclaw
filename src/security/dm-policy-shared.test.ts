@@ -7,9 +7,16 @@ import {
   resolveDmGroupAccessDecision,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
+  resolvePinnedMainDmOwnerFromAllowlist,
 } from "./dm-policy-shared.js";
 
 describe("security/dm-policy-shared", () => {
+  const controlCommand = {
+    useAccessGroups: true,
+    allowTextCommands: true,
+    hasControlCommand: true,
+  } as const;
+
   it("normalizes config + store allow entries and counts distinct senders", async () => {
     const state = await resolveDmAllowState({
       provider: "telegram",
@@ -100,6 +107,43 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual([]);
   });
 
+  it("infers pinned main DM owner from a single configured allowlist entry", () => {
+    const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: "main",
+      allowFrom: [" line:user:U123 "],
+      normalizeEntry: (entry) =>
+        entry
+          .trim()
+          .toLowerCase()
+          .replace(/^line:(?:user:)?/, ""),
+    });
+    expect(pinnedOwner).toBe("u123");
+  });
+
+  it("does not infer pinned owner for wildcard/multi-owner/non-main scope", () => {
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "main",
+        allowFrom: ["*"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "main",
+        allowFrom: ["u123", "u456"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
+    expect(
+      resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: "per-channel-peer",
+        allowFrom: ["u123"],
+        normalizeEntry: (entry) => entry.trim(),
+      }),
+    ).toBeNull();
+  });
+
   it("excludes storeAllowFrom when dmPolicy is allowlist", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],
@@ -148,11 +192,7 @@ describe("security/dm-policy-shared", () => {
       groupAllowFrom: ["group-owner"],
       storeAllowFrom: ["paired-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
-      command: {
-        useAccessGroups: true,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
+      command: controlCommand,
     });
     expect(resolved.decision).toBe("block");
     expect(resolved.reason).toBe("groupPolicy=allowlist (not allowlisted)");
@@ -169,11 +209,7 @@ describe("security/dm-policy-shared", () => {
       groupAllowFrom: [],
       storeAllowFrom: ["paired-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("owner"),
-      command: {
-        useAccessGroups: true,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
+      command: controlCommand,
     });
     expect(resolved.commandAuthorized).toBe(true);
     expect(resolved.shouldBlockControlCommand).toBe(false);
@@ -188,11 +224,7 @@ describe("security/dm-policy-shared", () => {
       groupAllowFrom: ["group-owner"],
       storeAllowFrom: ["paired-user"],
       isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
-      command: {
-        useAccessGroups: true,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
+      command: controlCommand,
     });
     expect(resolved.decision).toBe("allow");
     expect(resolved.commandAuthorized).toBe(true);
@@ -208,11 +240,7 @@ describe("security/dm-policy-shared", () => {
       groupAllowFrom: [],
       storeAllowFrom: [],
       isSenderAllowed: () => false,
-      command: {
-        useAccessGroups: true,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      },
+      command: controlCommand,
     });
     expect(resolved.decision).toBe("allow");
     expect(resolved.commandAuthorized).toBe(false);

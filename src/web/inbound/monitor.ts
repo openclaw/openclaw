@@ -323,6 +323,7 @@ export async function monitorWebInbox(options: {
         mentionedJids: mentionedJids ?? undefined,
         selfJid,
         selfE164,
+        fromMe: Boolean(msg.key?.fromMe),
         location: location ?? undefined,
         sendComposing,
         reply,

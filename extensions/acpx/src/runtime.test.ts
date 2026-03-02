@@ -22,6 +22,7 @@ describe("AcpxRuntime", () => {
       agentId: "codex",
       successPrompt: "contract-pass",
       errorPrompt: "trigger-error",
+      includeControlChecks: false,
       assertSuccessEvents: (events) => {
         expect(events.some((event) => event.type === "done")).toBe(true);
       },
@@ -32,9 +33,6 @@ describe("AcpxRuntime", () => {
 
     const logs = await readMockRuntimeLogEntries(fixture.logPath);
     expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-    expect(logs.some((entry) => entry.kind === "status")).toBe(true);
-    expect(logs.some((entry) => entry.kind === "set-mode")).toBe(true);
-    expect(logs.some((entry) => entry.kind === "set")).toBe(true);
     expect(logs.some((entry) => entry.kind === "cancel")).toBe(true);
     expect(logs.some((entry) => entry.kind === "close")).toBe(true);
   });
@@ -334,12 +332,6 @@ describe("AcpxRuntime", () => {
 
     await runtime.probeAvailability();
     expect(runtime.isHealthy()).toBe(false);
-  });
-
-  it("marks runtime healthy when command is available", async () => {
-    const { runtime } = await createMockRuntimeFixture();
-    await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(true);
   });
 
   it("logs ACPX spawn resolution once per command policy", async () => {

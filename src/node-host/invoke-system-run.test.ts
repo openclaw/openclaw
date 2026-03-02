@@ -87,6 +87,48 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return [...Array(params.depth).fill("/usr/bin/env"), "/bin/sh", "-c", params.payload];
   }
 
+  function createMacExecHostSuccess(stdout = "app-ok"): ExecHostResponse {
+    return {
+      ok: true,
+      payload: {
+        success: true,
+        stdout,
+        stderr: "",
+        timedOut: false,
+        exitCode: 0,
+        error: null,
+      },
+    };
+  }
+
+  function createAllowlistOnMissApprovals(params?: {
+    autoAllowSkills?: boolean;
+    agents?: Parameters<typeof saveExecApprovals>[0]["agents"];
+  }): Parameters<typeof saveExecApprovals>[0] {
+    return {
+      version: 1,
+      defaults: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        ...(params?.autoAllowSkills ? { autoAllowSkills: true } : {}),
+      },
+      agents: params?.agents ?? {},
+    };
+  }
+
+  function createInvokeSpies(params?: { runCommand?: MockedRunCommand }): {
+    runCommand: MockedRunCommand;
+    sendInvokeResult: MockedSendInvokeResult;
+    sendNodeEvent: MockedSendNodeEvent;
+  } {
+    return {
+      runCommand: params?.runCommand ?? vi.fn(async () => createLocalRunResult()),
+      sendInvokeResult: vi.fn(async () => {}),
+      sendNodeEvent: vi.fn(async () => {}),
+    };
+  }
+
   async function withTempApprovalsHome<T>(params: {
     approvals: Parameters<typeof saveExecApprovals>[0];
     run: (ctx: { tempHome: string }) => Promise<T>;
@@ -246,17 +288,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   it("uses mac app exec host when explicitly preferred", async () => {
     const { runCommand, runViaMacAppExecHost, sendInvokeResult } = await runSystemInvoke({
       preferMacAppExecHost: true,
-      runViaResponse: {
-        ok: true,
-        payload: {
-          success: true,
-          stdout: "app-ok",
-          stderr: "",
-          timedOut: false,
-          exitCode: 0,
-          error: null,
-        },
-      },
+      runViaResponse: createMacExecHostSuccess(),
     });
 
     expect(runViaMacAppExecHost).toHaveBeenCalledWith({
@@ -278,17 +310,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const { runViaMacAppExecHost } = await runSystemInvoke({
       preferMacAppExecHost: true,
       command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
-      runViaResponse: {
-        ok: true,
-        payload: {
-          success: true,
-          stdout: "app-ok",
-          stderr: "",
-          timedOut: false,
-          exitCode: 0,
-          error: null,
-        },
-      },
+      runViaResponse: createMacExecHostSuccess(),
     });
 
     expect(runViaMacAppExecHost).toHaveBeenCalledWith({
@@ -584,21 +606,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("denies ./skill-bin even when autoAllowSkills trust entry exists", async () => {
-    const runCommand = vi.fn(async () => createLocalRunResult());
-    const sendInvokeResult = vi.fn(async () => {});
-    const sendNodeEvent = vi.fn(async () => {});
+    const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies();
 
     await withTempApprovalsHome({
-      approvals: {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: true,
-        },
-        agents: {},
-      },
+      approvals: createAllowlistOnMissApprovals({ autoAllowSkills: true }),
       run: async ({ tempHome }) => {
         const skillBinPath = path.join(tempHome, "skill-bin");
         fs.writeFileSync(skillBinPath, "#!/bin/sh\necho should-not-run\n", { mode: 0o755 });
@@ -656,26 +667,20 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     if (process.platform === "win32") {
       return;
     }
-    const runCommand = vi.fn(async () => {
-      throw new Error("runCommand should not be called for nested env depth overflow");
+    const { runCommand, sendInvokeResult, sendNodeEvent } = createInvokeSpies({
+      runCommand: vi.fn(async () => {
+        throw new Error("runCommand should not be called for nested env depth overflow");
+      }),
     });
-    const sendInvokeResult = vi.fn(async () => {});
-    const sendNodeEvent = vi.fn(async () => {});
 
     await withTempApprovalsHome({
-      approvals: {
-        version: 1,
-        defaults: {
-          security: "allowlist",
-          ask: "on-miss",
-          askFallback: "deny",
-        },
+      approvals: createAllowlistOnMissApprovals({
         agents: {
           main: {
             allowlist: [{ pattern: "/usr/bin/env" }],
           },
         },
-      },
+      }),
       run: async ({ tempHome }) => {
         const marker = path.join(tempHome, "pwned.txt");
         await runSystemInvoke({

@@ -44,6 +44,10 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/keyed-async-queue": {
+      "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
+      "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
@@ -209,6 +213,7 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
+    "strip-ansi": "^7.2.0",
     "tar": "7.5.9",
     "tslog": "^4.10.2",
     "undici": "^7.22.0",

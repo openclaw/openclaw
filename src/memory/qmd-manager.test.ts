@@ -133,10 +133,9 @@ describe("QmdMemoryManager", () => {
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
     workspaceDir = path.join(tmpRoot, "workspace");
     stateDir = path.join(tmpRoot, "state");
-    await Promise.all([
-      fs.mkdir(workspaceDir, { recursive: true }),
-      fs.mkdir(stateDir, { recursive: true }),
-    ]);
+    // Only workspace must exist for configured collection paths; state paths are
+    // created lazily by manager code when needed.
+    await fs.mkdir(workspaceDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = stateDir;
     cfg = {
       agents: {
@@ -886,7 +885,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses qmd.cmd on Windows when qmd command is bare", async () => {
+  it("resolves bare qmd command to a Windows-compatible spawn invocation", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const { manager } = await createManager({ mode: "status" });
@@ -894,13 +893,23 @@ describe("QmdMemoryManager", () => {
 
       const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[] | undefined;
-        return Array.isArray(args) && args.length > 0;
+        return (
+          Array.isArray(args) &&
+          args.some((token) => token === "update" || token === "search" || token === "query")
+        );
       });
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
-        expect(call[0]).toBe("qmd.cmd");
+        const command = String(call[0]);
         const options = call[2] as { shell?: boolean } | undefined;
-        expect(options?.shell).toBe(true);
+        if (/(^|[\\/])qmd(?:\.cmd)?$/i.test(command)) {
+          // Wrapper unresolved: keep `.cmd` and use shell for PATHEXT lookup.
+          expect(command.toLowerCase().endsWith("qmd.cmd")).toBe(true);
+          expect(options?.shell).toBe(true);
+        } else {
+          // Wrapper resolved to node/exe entrypoint: shell fallback should not be used.
+          expect(options?.shell).not.toBe(true);
+        }
       }
 
       await manager.close();

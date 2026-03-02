@@ -412,7 +412,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable when callback delays body read", async () => {
     handlerSpy.mockImplementationOnce(async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(50);
+      await sleep(10);
       await reply(JSON.stringify(update));
     });
 
@@ -439,7 +439,7 @@ describe("startTelegramWebhook", () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(50);
+      await sleep(10);
       seenPayloads.push(JSON.stringify(update));
       await reply("ok");
     };
@@ -483,7 +483,7 @@ describe("startTelegramWebhook", () => {
           ) => {
             seenUpdates.push(update);
             void (async () => {
-              await sleep(50);
+              await sleep(10);
               await reply("ok");
             })();
           },
@@ -597,9 +597,7 @@ describe("startTelegramWebhook", () => {
     });
 
     abort.abort();
-    await sleep(25);
-
-    expect(deleteWebhookSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(deleteWebhookSpy).toHaveBeenCalledTimes(1));
     expect(deleteWebhookSpy).toHaveBeenCalledWith({ drop_pending_updates: false });
   });
 });

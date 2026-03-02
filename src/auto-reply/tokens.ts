@@ -24,7 +24,7 @@ export function isSilentReplyText(
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
   const escaped = escapeRegExp(token);
-  return text.replace(new RegExp(`(?:^|\\s+)${escaped}\\s*$`), "").trim();
+  return text.replace(new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`), "").trim();
 }
 
 export function isSilentReplyPrefixText(
