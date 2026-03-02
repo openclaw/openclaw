@@ -69,4 +69,30 @@ describe("renderDiffDocument", () => {
     expect(rendered.fileCount).toBe(2);
     expect(rendered.html).toContain("Workspace patch");
   });
+
+  it("rejects patches that exceed file-count limits", async () => {
+    const patch = Array.from({ length: 129 }, (_, i) => {
+      return [
+        `diff --git a/f${i}.ts b/f${i}.ts`,
+        `--- a/f${i}.ts`,
+        `+++ b/f${i}.ts`,
+        "@@ -1 +1 @@",
+        "-const x = 1;",
+        "+const x = 2;",
+      ].join("\n");
+    }).join("\n");
+
+    await expect(
+      renderDiffDocument(
+        {
+          kind: "patch",
+          patch,
+        },
+        {
+          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          expandUnchanged: false,
+        },
+      ),
+    ).rejects.toThrow("too many files");
+  });
 });

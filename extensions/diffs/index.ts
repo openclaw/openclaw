@@ -1,7 +1,11 @@
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk";
-import { diffsPluginConfigSchema, resolveDiffsPluginDefaults } from "./src/config.js";
+import {
+  diffsPluginConfigSchema,
+  resolveDiffsPluginDefaults,
+  resolveDiffsPluginSecurity,
+} from "./src/config.js";
 import { createDiffsHttpHandler } from "./src/http.js";
 import { DIFFS_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
 import { DiffArtifactStore } from "./src/store.js";
@@ -14,13 +18,20 @@ const plugin = {
   configSchema: diffsPluginConfigSchema,
   register(api: OpenClawPluginApi) {
     const defaults = resolveDiffsPluginDefaults(api.pluginConfig);
+    const security = resolveDiffsPluginSecurity(api.pluginConfig);
     const store = new DiffArtifactStore({
       rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
       logger: api.logger,
     });
 
     api.registerTool(createDiffsTool({ api, store, defaults }));
-    api.registerHttpHandler(createDiffsHttpHandler({ store, logger: api.logger }));
+    api.registerHttpHandler(
+      createDiffsHttpHandler({
+        store,
+        logger: api.logger,
+        allowRemoteViewer: security.allowRemoteViewer,
+      }),
+    );
     api.on("before_prompt_build", async () => ({
       prependContext: DIFFS_AGENT_GUIDANCE,
     }));
