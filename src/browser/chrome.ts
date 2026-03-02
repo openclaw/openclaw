@@ -239,9 +239,7 @@ async function setupCdpProxyAuth(
   }
 
   const cdpBase = `http://127.0.0.1:${cdpPort}`;
-  const versionRes = await fetch(appendCdpPath(cdpBase, "/json/version"));
-  const version = (await versionRes.json()) as { webSocketDebuggerUrl?: string };
-  const browserWsUrl = version.webSocketDebuggerUrl?.trim();
+  const browserWsUrl = await getChromeWebSocketUrl(cdpBase);
   if (!browserWsUrl) {
     throw new Error("no browser WebSocket URL for proxy auth setup");
   }
