@@ -325,7 +325,7 @@ export const registerTelegramNativeCommands = ({
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
       : null;
   if (nativeEnabled && nativeSkillsEnabled && !boundRoute) {
-    runtime.warn?.(
+    runtime.log?.(
       "nativeSkillsEnabled is true but no agent route is bound for this Telegram account; skill commands will not appear in the native menu.",
     );
   }
