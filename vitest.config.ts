@@ -18,6 +18,10 @@ export default defineConfig({
         replacement: path.join(repoRoot, "src", "plugin-sdk", "account-id.ts"),
       },
       {
+        find: "openclaw/plugin-sdk/keyed-async-queue",
+        replacement: path.join(repoRoot, "src", "plugin-sdk", "keyed-async-queue.ts"),
+      },
+      {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
       },
