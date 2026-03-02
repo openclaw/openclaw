@@ -5,6 +5,7 @@ import {
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
+  isValidOpenAIVoice,
   resolveTtsAutoMode,
   resolveTtsApiKey,
   resolveTtsConfig,
@@ -79,13 +80,30 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const cfg = loadConfig();
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const voice = typeof params.voice === "string" ? params.voice.trim() : undefined;
+      
+      // Validate voice parameter if provided
+      if (voice && !isValidOpenAIVoice(voice)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Invalid voice "${voice}". Valid OpenAI voices: ${OPENAI_TTS_VOICES.join(", ")}`,
+          ),
+        );
+        return;
+      }
+      
+      const overrides = voice ? { openai: { voice } } : undefined;
+      const result = await textToSpeech({ text, cfg, channel, overrides });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,
           provider: result.provider,
           outputFormat: result.outputFormat,
           voiceCompatible: result.voiceCompatible,
+          voice: voice || undefined,
         });
         return;
       }
