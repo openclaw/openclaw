@@ -212,12 +212,13 @@ This composes entirely from existing primitives:
 
 ### Layer 2: `auth-memory-gate` (future PR)
 
-| #   | Phase                 | Description                                                                    | Status  | Depends |
-| --- | --------------------- | ------------------------------------------------------------------------------ | ------- | ------- |
-| 2a  | Memory Scoping Hook   | Read identity from Layer 1 DB, inject `group_id` for Graphiti/LanceDB/pgvector | pending | Layer 1 |
-| 2b  | Chat API Bearer Token | Extract JWT from `/chat` Bearer header, auto-verify on connect                 | pending | Layer 1 |
-| 2c  | Memory Write Tagging  | `agent_end` hook tags stored memories with canonical `user_id`                 | pending | 2a      |
-| 2d  | Integration Tests     | E2E: cross-channel recall, isolation, auth rejection                           | pending | 2a, 2b  |
+| #   | Phase                 | Description                                                                      | Status       | Depends | PRP Plan                                                        |
+| --- | --------------------- | -------------------------------------------------------------------------------- | ------------ | ------- | --------------------------------------------------------------- |
+| 2a  | Memory Scoping Hook   | Read identity from Layer 1 DB, inject `group_id` for Graphiti/LanceDB/pgvector   | **complete** | Layer 1 | `.claude/PRPs/plans/auth-memory-gate.plan.md`                   |
+| 2a+ | Hard Identity Gate    | message_sending hook + strengthened before_agent_start for hard gate enforcement | **complete** | 2a      | `.claude/PRPs/plans/completed/auth-gate-railway-rebase.plan.md` |
+| 2b  | Chat API Bearer Token | Extract JWT from `/chat` Bearer header, auto-verify on connect                   | pending      | Layer 1 | -                                                               |
+| 2c  | Memory Write Tagging  | `agent_end` hook tags stored memories with canonical `user_id`                   | pending      | 2a      | -                                                               |
+| 2d  | Integration Tests     | E2E: cross-channel recall, isolation, auth rejection                             | pending      | 2a, 2b  | -                                                               |
 
 ### Key Design Decisions (Revised)
 
