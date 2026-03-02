@@ -658,6 +658,11 @@ export const dispatchTelegramMessage = async ({
       }
     }
     for (const archivedPreview of archivedAnswerPreviews) {
+      // Preserve previews that contained meaningful text — they were already
+      // visible to the user and should not be retroactively removed.
+      if (archivedPreview.textSnapshot?.trim()) {
+        continue;
+      }
       try {
         await bot.api.deleteMessage(chatId, archivedPreview.messageId);
       } catch (err) {

@@ -263,12 +263,18 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         return "preview-finalized";
       }
     }
-    try {
-      await params.deletePreviewMessage(archivedPreview.messageId);
-    } catch (err) {
-      params.log(
-        `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
-      );
+    // When the edit path was attempted but failed, delete the old preview to
+    // avoid duplication with the fallback send below. Only preserve previews
+    // with meaningful text when editing was not possible (media payload) —
+    // those messages are already visible to the user and should not be removed.
+    if (canEditViaPreview || !archivedPreview.textSnapshot?.trim()) {
+      try {
+        await params.deletePreviewMessage(archivedPreview.messageId);
+      } catch (err) {
+        params.log(
+          `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
+        );
+      }
     }
     const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
     return delivered ? "sent" : "skipped";
