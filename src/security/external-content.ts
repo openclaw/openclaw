@@ -137,16 +137,21 @@ function foldMarkerChar(char: string): string {
   return char;
 }
 
-function foldMarkerText(input: string): string {
+function normalizeAndFoldMarkerText(input: string): string {
   // First, remove zero-width characters that could hide markers
   let normalized = input
     .replace(/\u200B/g, "") // Zero Width Space
     .replace(/\u200C/g, "") // Zero Width Non-Joiner
     .replace(/\u200D/g, "") // Zero Width Joiner
+    .replace(/\u2060/g, "") // Word Joiner
+    .replace(/\u180E/g, "") // Mongolian Vowel Separator (deprecated)
     .replace(/\uFEFF/g, ""); // Zero Width No-Break Space
 
   // Normalize combining characters to prevent interference
-  normalized = normalized.normalize("NFD").replace(/[\u0300-\u036F]/g, "");
+  // Expanded to cover more combining character ranges
+  normalized = normalized
+    .normalize("NFD")
+    .replace(/[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/g, "");
 
   // Then apply character folding
   return normalized.replace(
@@ -156,11 +161,13 @@ function foldMarkerText(input: string): string {
 }
 
 function replaceMarkers(content: string): string {
-  const folded = foldMarkerText(content);
-  if (!/external_untrusted_content/i.test(folded)) {
-    return content;
+  // Apply normalization and folding directly to content to avoid index misalignment
+  const normalized = normalizeAndFoldMarkerText(content);
+
+  if (!/external_untrusted_content/i.test(normalized)) {
+    return normalized;
   }
-  const replacements: Array<{ start: number; end: number; value: string }> = [];
+
   // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
     {
@@ -173,35 +180,12 @@ function replaceMarkers(content: string): string {
     },
   ];
 
+  let result = normalized;
   for (const pattern of patterns) {
-    pattern.regex.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.regex.exec(folded)) !== null) {
-      replacements.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        value: pattern.value,
-      });
-    }
+    result = result.replace(pattern.regex, pattern.value);
   }
 
-  if (replacements.length === 0) {
-    return content;
-  }
-  replacements.sort((a, b) => a.start - b.start);
-
-  let cursor = 0;
-  let output = "";
-  for (const replacement of replacements) {
-    if (replacement.start < cursor) {
-      continue;
-    }
-    output += content.slice(cursor, replacement.start);
-    output += replacement.value;
-    cursor = replacement.end;
-  }
-  output += content.slice(cursor);
-  return output;
+  return result;
 }
 
 export type WrapExternalContentOptions = {
