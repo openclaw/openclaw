@@ -119,6 +119,28 @@ describe("browser server-context remote profile tab operations", () => {
     expect(launchMock).not.toHaveBeenCalled();
   });
 
+  it("keeps attachOnly websocket failures off the loopback ownership error path", async () => {
+    const state = makeState("openclaw");
+    state.resolved.attachOnly = false;
+    state.resolved.profiles.openclaw = {
+      cdpPort: 18800,
+      attachOnly: true,
+      color: "#FF4500",
+    };
+
+    const httpReachableMock = vi.mocked(chromeModule.isChromeReachable).mockResolvedValueOnce(true);
+    const wsReachableMock = vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValueOnce(false);
+    const launchMock = vi.mocked(chromeModule.launchOpenClawChrome);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
+      /attachOnly is enabled and CDP websocket/i,
+    );
+    expect(httpReachableMock).toHaveBeenCalled();
+    expect(wsReachableMock).toHaveBeenCalled();
+    expect(launchMock).not.toHaveBeenCalled();
+  });
+
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
