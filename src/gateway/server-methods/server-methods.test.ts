@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -19,6 +20,10 @@ import { logsHandlers } from "./logs.js";
 
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+vi.mock("../../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: vi.fn(),
 }));
 
 describe("waitForAgentJob", () => {
@@ -257,6 +262,10 @@ describe("gateway chat transcript writes (guardrail)", () => {
 });
 
 describe("exec approval handlers", () => {
+  beforeEach(() => {
+    vi.mocked(requestHeartbeatNow).mockClear();
+  });
+
   const execApprovalNoop = () => false;
   type ExecApprovalHandlers = ReturnType<typeof createExecApprovalHandlers>;
   type ExecApprovalRequestArgs = Parameters<ExecApprovalHandlers["exec.approval.request"]>[0];
@@ -492,6 +501,29 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("triggers heartbeat wake with sessionKey on resolve", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true, sessionKey: "agent:main:main" },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
+    await requestPromise;
+
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "exec-approval:resolve", sessionKey: "agent:main:main" }),
+    );
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
