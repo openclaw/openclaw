@@ -63,6 +63,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelFromCallback,
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -1261,11 +1262,12 @@ export const registerTelegramHandlers = ({
 
         if (modelCallback.type === "select") {
           const { provider, model } = modelCallback;
-          // Process model selection as a synthetic message with /model command
+          const providerModels = [...(byProvider.get(provider) ?? [])];
+          const resolvedModel = resolveModelFromCallback(model, providerModels);
           const syntheticMessage = buildSyntheticTextMessage({
             base: callbackMessage,
             from: callback.from,
-            text: `/model ${provider}/${model}`,
+            text: `/model ${provider}/${resolvedModel}`,
           });
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,

@@ -296,12 +296,10 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
-    const models = [
-      "short-model",
-      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
-      "another-short",
-    ];
+  it("truncates models that would exceed callback_data limit", () => {
+    const longModel =
+      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit";
+    const models = ["short-model", longModel, "another-short"];
     const result = buildModelsKeyboard({
       provider: "openrouter",
       models,
@@ -309,10 +307,25 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
+
+    const truncatedButton = modelButtons[1]?.[0];
+    expect(truncatedButton).toBeDefined();
+    expect(Buffer.byteLength(truncatedButton!.callback_data, "utf8")).toBeLessThanOrEqual(64);
+    expect(truncatedButton!.callback_data.startsWith("mdl_sel_openrouter/")).toBe(true);
+    expect(longModel.startsWith(truncatedButton!.callback_data.replace("mdl_sel_openrouter/", ""))).toBe(true);
+  });
+
+  it("resolveModelFromCallback finds exact and prefix matches", async () => {
+    const { resolveModelFromCallback } = await import("./model-buttons.js");
+    const models = ["claude-3-5-sonnet-20241022-v2:0", "claude-3-opus", "gpt-4o"];
+    expect(resolveModelFromCallback("claude-3-opus", models)).toBe("claude-3-opus");
+    expect(resolveModelFromCallback("claude-3-5-sonnet-2024102", models)).toBe(
+      "claude-3-5-sonnet-20241022-v2:0",
+    );
+    expect(resolveModelFromCallback("unknown", models)).toBe("unknown");
   });
 });

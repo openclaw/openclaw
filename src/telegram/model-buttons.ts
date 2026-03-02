@@ -133,12 +133,19 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     : currentModel;
 
   for (const model of pageModels) {
-    const callbackData = `mdl_sel_${provider}/${model}`;
-    // Skip models that would exceed Telegram's callback_data limit
-    if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
-      continue;
+    const prefix = `mdl_sel_${provider}/`;
+    let modelForCallback = model;
+    const fullCallbackData = `${prefix}${model}`;
+
+    if (Buffer.byteLength(fullCallbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
+      const prefixBytes = Buffer.byteLength(prefix, "utf8");
+      const maxModelBytes = MAX_CALLBACK_DATA_BYTES - prefixBytes;
+      while (Buffer.byteLength(modelForCallback, "utf8") > maxModelBytes) {
+        modelForCallback = modelForCallback.slice(0, -1);
+      }
     }
 
+    const callbackData = `${prefix}${modelForCallback}`;
     const isCurrentModel = model === currentModelId;
     const displayText = truncateModelId(model, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
@@ -199,6 +206,19 @@ function truncateModelId(modelId: string, maxLen: number): string {
   }
   // Show last part with ellipsis prefix
   return `…${modelId.slice(-(maxLen - 1))}`;
+}
+
+/**
+ * Resolve a potentially truncated model ID back to its full name by
+ * prefix-matching against the provider's model list.
+ */
+export function resolveModelFromCallback(
+  callbackModel: string,
+  providerModels: readonly string[],
+): string {
+  const exact = providerModels.find((m) => m === callbackModel);
+  if (exact) return exact;
+  return providerModels.find((m) => m.startsWith(callbackModel)) ?? callbackModel;
 }
 
 /**
