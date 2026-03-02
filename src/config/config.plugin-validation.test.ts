@@ -34,6 +34,8 @@ async function writePluginFixture(params: {
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
+  let badPluginDir = "";
+  let bluebubblesPluginDir = "";
   const envSnapshot = {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
@@ -48,6 +50,26 @@ describe("config plugin validation", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
     suiteHome = path.join(fixtureRoot, "home");
     await fs.mkdir(suiteHome, { recursive: true });
+    badPluginDir = path.join(suiteHome, "bad-plugin");
+    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    await writePluginFixture({
+      dir: badPluginDir,
+      id: "bad-plugin",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          value: { type: "boolean" },
+        },
+        required: ["value"],
+      },
+    });
+    await writePluginFixture({
+      dir: bluebubblesPluginDir,
+      id: "bluebubbles-plugin",
+      channels: ["bluebubbles"],
+      schema: { type: "object" },
+    });
     process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
     clearPluginManifestRegistryCache();
   });
@@ -162,25 +184,11 @@ describe("config plugin validation", () => {
   });
 
   it("surfaces plugin config diagnostics", async () => {
-    const pluginDir = path.join(suiteHome, "bad-plugin");
-    await writePluginFixture({
-      dir: pluginDir,
-      id: "bad-plugin",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          value: { type: "boolean" },
-        },
-        required: ["value"],
-      },
-    });
-
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
         enabled: true,
-        load: { paths: [pluginDir] },
+        load: { paths: [badPluginDir] },
         entries: { "bad-plugin": { config: { value: "nope" } } },
       },
     });
@@ -218,17 +226,9 @@ describe("config plugin validation", () => {
   });
 
   it("accepts plugin heartbeat targets", async () => {
-    const pluginDir = path.join(suiteHome, "bluebubbles-plugin");
-    await writePluginFixture({
-      dir: pluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
-      schema: { type: "object" },
-    });
-
     const res = validateInSuite({
       agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [pluginDir] } },
+      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });
