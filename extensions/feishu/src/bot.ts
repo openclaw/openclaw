@@ -994,13 +994,12 @@ export async function handleFeishuMessage(params: {
     }));
 
     if (requireMention && !ctx.mentionedBot) {
-      log(
-        `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
-      );
-      // Record to pending history and return. For broadcast groups with requireMention,
-      // the mentioned bot's handler will dispatch to all agents; non-mentioned handlers
-      // skip dispatch entirely to avoid cross-account duplication in multi-account setups.
-      if (chatHistories && groupHistoryKey) {
+      log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
+      // Record to pending history for non-broadcast groups only. For broadcast groups,
+      // the mentioned handler's broadcast dispatch writes the turn directly into all
+      // agent sessions — buffering here would cause duplicate replay when this account
+      // later becomes active via buildPendingHistoryContextFromMap.
+      if (!broadcastAgents && chatHistories && groupHistoryKey) {
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: groupHistoryKey,
@@ -1395,7 +1394,14 @@ export async function handleFeishuMessage(params: {
           }
         }
       } else {
-        await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
+        const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].status === "rejected") {
+            log(
+              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+            );
+          }
+        }
       }
 
       if (isGroup && historyKey && chatHistories) {
