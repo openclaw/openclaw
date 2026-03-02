@@ -330,17 +330,48 @@ export async function initSessionState(params: {
     if (entry && resolveSessionEndFlushSettings(cfg)) {
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const agentDir = resolveAgentDir(cfg, agentId);
+
+      // Snapshot the transcript — archiveSessionTranscripts runs later in
+      // this flow and renames the original file, which would race with the
+      // async flush reading it.
+      const originalFile = entry.sessionFile;
+      let snapshotFile: string | undefined;
+      if (originalFile && fs.existsSync(originalFile)) {
+        snapshotFile = `${originalFile}.flush-snapshot`;
+        try {
+          fs.copyFileSync(originalFile, snapshotFile);
+        } catch {
+          snapshotFile = undefined;
+        }
+      }
+
+      // Use a flush-specific sessionKey so it gets its own lane and doesn't
+      // block the new session's first reply (runEmbeddedPiAgent serializes
+      // work by sessionKey via resolveSessionLane).
+      const flushSessionKey = `${sessionKey}:flush:${entry.sessionId}`;
+
       // Fire and forget - don't block session init on flush
       runSessionEndFlush({
         cfg,
-        sessionEntry: entry,
-        sessionKey,
+        sessionEntry: snapshotFile ? { ...entry, sessionFile: snapshotFile } : entry,
+        sessionKey: flushSessionKey,
         agentId,
         workspaceDir,
         agentDir,
-      }).catch(() => {
-        // Silently ignore flush errors - session reset should proceed
-      });
+      })
+        .catch(() => {
+          // Silently ignore flush errors - session reset should proceed
+        })
+        .finally(() => {
+          // Clean up transcript snapshot
+          if (snapshotFile) {
+            try {
+              fs.unlinkSync(snapshotFile);
+            } catch {
+              // best-effort cleanup
+            }
+          }
+        });
     }
 
     sessionId = crypto.randomUUID();
