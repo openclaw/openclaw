@@ -290,20 +290,24 @@ function matchesSearch(params: {
   }
   const criteria = parseConfigSearchQuery(params.query);
   const q = criteria.text;
+  const hasTagFilter = criteria.tags.length > 0;
   const meta = SECTION_META[params.key];
 
-  // Check key name
-  if (q && params.key.toLowerCase().includes(q)) {
-    return true;
-  }
-
-  // Check label and description
-  if (q && meta) {
-    if (meta.label.toLowerCase().includes(q)) {
+  // Fast-path matches only apply when no tag filters are present.
+  if (!hasTagFilter) {
+    // Check key name
+    if (q && params.key.toLowerCase().includes(q)) {
       return true;
     }
-    if (meta.description.toLowerCase().includes(q)) {
-      return true;
+
+    // Check label and description
+    if (q && meta) {
+      if (meta.label.toLowerCase().includes(q)) {
+        return true;
+      }
+      if (meta.description.toLowerCase().includes(q)) {
+        return true;
+      }
     }
   }
 
