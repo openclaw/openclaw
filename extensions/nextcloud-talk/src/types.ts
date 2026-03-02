@@ -79,6 +79,8 @@ export type NextcloudTalkAccountConfig = {
 export type NextcloudTalkConfig = {
   /** Optional per-account Nextcloud Talk configuration (multi-account). */
   accounts?: Record<string, NextcloudTalkAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & NextcloudTalkAccountConfig;
 
 export type CoreConfig = {
