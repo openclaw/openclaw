@@ -28,7 +28,7 @@ const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon
 );
 const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
 const inspectPortUsage = vi.fn(async (_port: number) => ({ status: "free" as const }));
-const formatPortDiagnostics = vi.fn(() => [] as string[]);
+const formatPortDiagnostics = vi.fn((_diagnostics: unknown) => [] as string[]);
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
