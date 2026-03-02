@@ -22,14 +22,26 @@ describe("classifyControlUiRequest", () => {
     expect(classified).toEqual({ kind: "not-found" });
   });
 
-  it("returns method-not-allowed for basePath non-read methods", () => {
+  it("falls through basePath non-read methods for plugin webhooks", () => {
     const classified = classifyControlUiRequest({
       basePath: "/openclaw",
       pathname: "/openclaw",
       search: "",
       method: "POST",
     });
-    expect(classified).toEqual({ kind: "method-not-allowed" });
+    expect(classified).toEqual({ kind: "not-control-ui" });
+  });
+
+  it("falls through PUT/DELETE/PATCH/OPTIONS under basePath for plugin handlers", () => {
+    for (const method of ["PUT", "DELETE", "PATCH", "OPTIONS"]) {
+      const classified = classifyControlUiRequest({
+        basePath: "/openclaw",
+        pathname: "/openclaw/webhook",
+        search: "",
+        method,
+      });
+      expect(classified, `${method} should fall through`).toEqual({ kind: "not-control-ui" });
+    }
   });
 
   it("returns redirect for basePath entrypoint GET", () => {
