@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
@@ -294,6 +295,23 @@ function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): str
   return result;
 }
 
+function shouldFallbackToStructuredRawRedaction(params: {
+  redactedRaw: string;
+  originalConfig: unknown;
+  hints?: ConfigUiHints;
+}): boolean {
+  try {
+    const parsed = JSON5.parse(params.redactedRaw);
+    const restored = restoreRedactedValues(parsed, params.originalConfig, params.hints);
+    if (!restored.ok) {
+      return true;
+    }
+    return JSON.stringify(restored.result) !== JSON.stringify(params.originalConfig);
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Returns a copy of the config snapshot with all sensitive fields
  * replaced by {@link REDACTED_SENTINEL}. The `hash` is preserved
@@ -338,8 +356,18 @@ export function redactConfigSnapshot(
   // readConfigFileSnapshot() does when it creates the snapshot.
 
   const redactedConfig = redactObject(snapshot.config, uiHints) as ConfigFileSnapshot["config"];
-  const redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
+  let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
+  if (
+    redactedRaw &&
+    shouldFallbackToStructuredRawRedaction({
+      redactedRaw,
+      originalConfig: snapshot.config,
+      hints: uiHints,
+    })
+  ) {
+    redactedRaw = JSON5.stringify(redactedParsed ?? redactedConfig, null, 2);
+  }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
 
