@@ -2,26 +2,27 @@ package ai.openclaw.android.node
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import android.webkit.WebView
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
+import ai.openclaw.android.BuildConfig
+import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.ByteArrayOutputStream
-import android.util.Base64
-import org.json.JSONObject
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import ai.openclaw.android.BuildConfig
-import kotlin.coroutines.resume
+import org.json.JSONObject
 
 class CanvasController {
   enum class SnapshotFormat(val rawValue: String) {
@@ -34,6 +35,7 @@ class CanvasController {
   @Volatile private var debugStatusEnabled: Boolean = false
   @Volatile private var debugStatusTitle: String? = null
   @Volatile private var debugStatusSubtitle: String? = null
+  @Volatile private var gatewayToken: String? = null
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
@@ -75,6 +77,17 @@ class CanvasController {
 
   fun isDefaultCanvas(): Boolean = url == null
 
+  fun setGatewayToken(token: String?) {
+    val newToken = token?.trim()?.takeIf { it.isNotEmpty() }
+    val hadToken = !gatewayToken.isNullOrBlank()
+    val hasToken = !newToken.isNullOrBlank()
+    gatewayToken = newToken
+    // If token changed from empty to non-empty and we have a URL, reload to apply auth headers
+    if (!hadToken && hasToken && url != null) {
+      reload()
+    }
+  }
+
   fun setDebugStatusEnabled(enabled: Boolean) {
     debugStatusEnabled = enabled
     applyDebugStatus()
@@ -101,6 +114,7 @@ class CanvasController {
 
   private fun reload() {
     val currentUrl = url
+    val token = gatewayToken
     withWebViewOnMain { wv ->
       if (currentUrl == null) {
         if (BuildConfig.DEBUG) {
@@ -111,7 +125,23 @@ class CanvasController {
         if (BuildConfig.DEBUG) {
           Log.d("OpenClawCanvas", "load url: $currentUrl")
         }
-        wv.loadUrl(currentUrl)
+        // Pass authentication headers only for trusted Gateway canvas host URLs.
+        // Gateway canvas host URLs contain /__openclaw__/ path segments in the path.
+        // This prevents leaking the gateway token to arbitrary external URLs.
+        val isHttpUrl = currentUrl.startsWith("http://") || currentUrl.startsWith("https://")
+        val path =
+          try {
+            Uri.parse(currentUrl).path
+          } catch (_: Throwable) {
+            null
+          }
+        val isGatewayCanvasUrl = isHttpUrl && path?.contains("/__openclaw__/") == true
+        if (isGatewayCanvasUrl && !token.isNullOrBlank()) {
+          val headers = mapOf("Authorization" to "Bearer $token")
+          wv.loadUrl(currentUrl, headers)
+        } else {
+          wv.loadUrl(currentUrl)
+        }
       }
     }
   }

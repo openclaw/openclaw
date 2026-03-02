@@ -549,6 +549,12 @@ class NodeRuntime(context: Context) {
     }
 
     scope.launch {
+      gatewayToken.collect { token ->
+        canvas.setGatewayToken(token)
+      }
+    }
+
+    scope.launch {
       prefs.talkEnabled.collect { enabled ->
         // MicCaptureManager handles STT + send to gateway.
         // TalkModeManager plays TTS on assistant responses.
