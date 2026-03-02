@@ -243,6 +243,136 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-probes-test-",
+      run: async () => {
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+        });
+
+        const probeCases = [
+          { path: "/health", status: "live" },
+          { path: "/healthz", status: "live" },
+          { path: "/ready", status: "ready" },
+          { path: "/readyz", status: "ready" },
+        ] as const;
+
+        for (const probeCase of probeCases) {
+          const response = createResponse();
+          await dispatchRequest(server, createRequest({ path: probeCase.path }), response.res);
+          expect(response.res.statusCode, probeCase.path).toBe(200);
+          expect(response.getBody(), probeCase.path).toBe(
+            JSON.stringify({ ok: true, status: probeCase.status }),
+          );
+        }
+      },
+    });
+  });
+
+  test("does not shadow plugin routes mounted on probe paths", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-probes-shadow-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/healthz") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
+            return true;
+          }
+          return false;
+        });
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const response = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/healthz" }), response.res);
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("rejects non-GET/HEAD methods on probe routes", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-probes-method-test-",
+      run: async () => {
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+        });
+
+        const postResponse = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/healthz", method: "POST" }),
+          postResponse.res,
+        );
+        expect(postResponse.res.statusCode).toBe(405);
+        expect(postResponse.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
+        expect(postResponse.getBody()).toBe("Method Not Allowed");
+
+        const headResponse = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/readyz", method: "HEAD" }),
+          headResponse.res,
+        );
+        expect(headResponse.res.statusCode).toBe(200);
+        expect(headResponse.getBody()).toBe("");
+      },
+    });
+  });
+
   test("requires gateway auth for protected plugin route space and allows authenticated pass-through", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
