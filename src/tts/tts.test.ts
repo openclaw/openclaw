@@ -969,7 +969,7 @@ describe("tts", () => {
       expect(body.stream).toBe(true);
     });
 
-    it("keeps buffered path when stream is disabled even if streamFormat is sse", async () => {
+    it("forces buffered request when stream.enabled=false and config stream=true", async () => {
       const cfg: OpenClawConfig = {
         ...openaiCfg,
         messages: {
@@ -977,7 +977,72 @@ describe("tts", () => {
             ...openaiCfg.messages?.tts,
             openai: {
               ...openaiCfg.messages?.tts?.openai,
-              stream: false,
+              stream: true,
+            },
+          },
+        },
+      };
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await textToSpeechWithFallback({
+        text: "hello",
+        cfg,
+        stream: { enabled: false },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.delivery).toBe("buffered");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const body = getFetchRequestBody(fetchMock as unknown as { mock: { calls: unknown[][] } }, 0);
+      expect(body.stream).toBeUndefined();
+    });
+
+    it("keeps buffered request when overrides request stream but stream.enabled=false", async () => {
+      const cfg: OpenClawConfig = {
+        ...openaiCfg,
+        messages: {
+          tts: {
+            ...openaiCfg.messages?.tts,
+            openai: {
+              ...openaiCfg.messages?.tts?.openai,
+              stream: true,
+            },
+          },
+        },
+      };
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await textToSpeechWithFallback({
+        text: "hello",
+        cfg,
+        overrides: { openai: { stream: true } },
+        stream: { enabled: false },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.delivery).toBe("buffered");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const body = getFetchRequestBody(fetchMock as unknown as { mock: { calls: unknown[][] } }, 0);
+      expect(body.stream).toBeUndefined();
+    });
+
+    it("keeps buffered path when stream.enabled=false even if streamFormat is sse", async () => {
+      const cfg: OpenClawConfig = {
+        ...openaiCfg,
+        messages: {
+          tts: {
+            ...openaiCfg.messages?.tts,
+            openai: {
+              ...openaiCfg.messages?.tts?.openai,
+              stream: true,
               streamFormat: "sse",
             },
           },
@@ -992,6 +1057,7 @@ describe("tts", () => {
       const result = await textToSpeechWithFallback({
         text: "hello",
         cfg,
+        stream: { enabled: false },
       });
 
       expect(result.success).toBe(true);

@@ -1201,7 +1201,16 @@ export async function textToSpeechWithFallback(params: {
     stream: params.stream,
   });
   if (!streamEnabled) {
-    const buffered = await textToSpeech(params);
+    const buffered = await textToSpeech({
+      ...params,
+      overrides: {
+        ...params.overrides,
+        openai: {
+          ...params.overrides?.openai,
+          stream: false,
+        },
+      },
+    });
     if (buffered.success) {
       return toBufferedSuccess(buffered);
     }
