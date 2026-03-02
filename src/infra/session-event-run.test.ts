@@ -6,8 +6,9 @@ const {
   dispatchInboundMessageWithDispatcherMock,
   createReplyPrefixOptionsMock,
   loadSessionEntryMock,
+  hasSystemEventsMock,
 } = vi.hoisted(() => ({
-  dispatchInboundMessageWithDispatcherMock: vi.fn(async () => ({
+  dispatchInboundMessageWithDispatcherMock: vi.fn(async (_params: unknown) => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
@@ -16,6 +17,7 @@ const {
     responsePrefixContextProvider: () => ({ identityName: "OpenClaw" }),
     onModelSelected: vi.fn(),
   })),
+  hasSystemEventsMock: vi.fn(() => true),
   loadSessionEntryMock: vi.fn(
     (sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({
       cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -23,6 +25,7 @@ const {
       store: {},
       entry: {
         sessionId: `sid-${sessionKey}`,
+        updatedAt: Date.now(),
         lastChannel: "telegram",
         lastTo: "123",
         lastAccountId: "acct-1",
@@ -43,6 +46,9 @@ vi.mock("../channels/reply-prefix.js", () => ({
 vi.mock("../gateway/session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
 }));
+vi.mock("./system-events.js", () => ({
+  hasSystemEvents: hasSystemEventsMock,
+}));
 vi.mock("../logger.js", () => ({
   logWarn: vi.fn(),
 }));
@@ -54,6 +60,8 @@ describe("triggerSessionEventRun", () => {
     dispatchInboundMessageWithDispatcherMock.mockClear();
     createReplyPrefixOptionsMock.mockClear();
     loadSessionEntryMock.mockClear();
+    hasSystemEventsMock.mockReset();
+    hasSystemEventsMock.mockReturnValue(true);
     loadSessionEntryMock.mockImplementation(
       (sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({
         cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -61,6 +69,7 @@ describe("triggerSessionEventRun", () => {
         store: {},
         entry: {
           sessionId: `sid-${sessionKey}`,
+          updatedAt: Date.now(),
           lastChannel: "telegram",
           lastTo: "123",
           lastAccountId: "acct-1",
@@ -108,6 +117,7 @@ describe("triggerSessionEventRun", () => {
         store: {},
         entry: {
           sessionId: "sid-main",
+          updatedAt: Date.now(),
           lastChannel: "discord",
           lastTo: "C123",
         },
@@ -137,6 +147,7 @@ describe("triggerSessionEventRun", () => {
         store: {},
         entry: {
           sessionId: "sid-global",
+          updatedAt: Date.now(),
         },
         canonicalKey: "global",
         legacyKey: undefined,
@@ -145,6 +156,18 @@ describe("triggerSessionEventRun", () => {
 
     const triggered = await triggerSessionEventRun({
       sessionKey: "global",
+      source: "exec-event",
+    });
+
+    expect(triggered).toBe(false);
+    expect(dispatchInboundMessageWithDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it("skips dispatch when there are no queued system events", async () => {
+    hasSystemEventsMock.mockReturnValue(false);
+
+    const triggered = await triggerSessionEventRun({
+      sessionKey: "agent:ops:main",
       source: "exec-event",
     });
 

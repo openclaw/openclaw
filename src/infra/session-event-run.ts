@@ -8,6 +8,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { shouldUseSessionScopedHeartbeatWake } from "./heartbeat-reason.js";
+import { hasSystemEvents } from "./system-events.js";
 
 export async function triggerSessionEventRun(params: {
   sessionKey: string;
@@ -21,6 +22,9 @@ export async function triggerSessionEventRun(params: {
 
   const { cfg, canonicalKey, entry } = loadSessionEntry(sessionKey);
   if (!shouldUseSessionScopedHeartbeatWake(canonicalKey)) {
+    return false;
+  }
+  if (!hasSystemEvents(canonicalKey)) {
     return false;
   }
 
