@@ -117,3 +117,53 @@ describe("FeishuConfigSchema replyInThread", () => {
     expect(result.accounts?.main?.replyInThread).toBe("enabled");
   });
 });
+
+describe("FeishuConfigSchema optimization flags", () => {
+  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.typingIndicator).toBe(true);
+    expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts account-level optimization flags", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          typingIndicator: false,
+          resolveSenderNames: false,
+        },
+      },
+    });
+    expect(result.accounts?.main?.typingIndicator).toBe(false);
+    expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema defaultAccount", () => {
+  it("accepts defaultAccount when it matches an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        "router-d": { appId: "cli_router", appSecret: "secret_router" },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects defaultAccount when it does not match an account key", () => {
+    const result = FeishuConfigSchema.safeParse({
+      defaultAccount: "router-d",
+      accounts: {
+        backup: { appId: "cli_backup", appSecret: "secret_backup" },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
+        true,
+      );
+    }
+  });
+});

@@ -22,16 +22,35 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/** Maximum age (ms) for a message to receive a typing indicator reaction.
+ * Messages older than this are likely replays after context compaction (#30418). */
+const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
+const MS_EPOCH_MIN = 1_000_000_000_000;
+
+function normalizeEpochMs(timestamp: number | undefined): number | undefined {
+  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
+    return undefined;
+  }
+  // Defensive normalization: some payloads use seconds, others milliseconds.
+  // Values below 1e12 are treated as epoch-seconds.
+  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
+}
+
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
   replyToMessageId?: string;
+  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
+  /** Epoch ms when the inbound message was created. Used to suppress typing
+   *  indicators on old/replayed messages after context compaction (#30418). */
+  messageCreateTimeMs?: number;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -41,27 +60,47 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     agentId,
     chatId,
     replyToMessageId,
+    skipReplyToInMessages,
     replyInThread,
     rootId,
     mentionTargets,
     accountId,
   } = params;
+  const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
+      // Check if typing indicator is enabled (default: true)
+      if (!(account.config.typingIndicator ?? true)) {
+        return;
+      }
       if (!replyToMessageId) {
         return;
       }
-      typingState = await addTypingIndicator({ cfg, messageId: replyToMessageId, accountId });
+      // Skip typing indicator for old messages — likely replays after context
+      // compaction that would flood users with stale notifications (#30418).
+      const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
+      if (
+        messageCreateTimeMs !== undefined &&
+        Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
+      ) {
+        return;
+      }
+      typingState = await addTypingIndicator({
+        cfg,
+        messageId: replyToMessageId,
+        accountId,
+        runtime: params.runtime,
+      });
     },
     stop: async () => {
       if (!typingState) {
         return;
       }
-      await removeTypingIndicator({ cfg, state: typingState, accountId });
+      await removeTypingIndicator({ cfg, state: typingState, accountId, runtime: params.runtime });
       typingState = null;
     },
     onStartError: (err) =>
@@ -189,7 +228,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   cfg,
                   to: chatId,
                   mediaUrl,
-                  replyToMessageId,
+                  replyToMessageId: sendReplyToMessageId,
                   replyInThread,
                   accountId,
                 });
@@ -209,7 +248,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId,
+                replyToMessageId: sendReplyToMessageId,
                 replyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
@@ -227,7 +266,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 cfg,
                 to: chatId,
                 text: chunk,
-                replyToMessageId,
+                replyToMessageId: sendReplyToMessageId,
                 replyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
@@ -243,7 +282,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               cfg,
               to: chatId,
               mediaUrl,
-              replyToMessageId,
+              replyToMessageId: sendReplyToMessageId,
               replyInThread,
               accountId,
             });
