@@ -283,9 +283,11 @@ function redactObjectGuessing(
 /**
  * Replace known sensitive values in a raw JSON5 string with the sentinel.
  * Values are replaced longest-first to avoid partial matches.
+ * Empty string is skipped: replacing "" would match every character boundary
+ * and corrupt the entire raw (e.g. in Settings → All Settings when a sensitive field is "").
  */
 function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): string {
-  const sensitiveValues = collectSensitiveValues(config, hints);
+  const sensitiveValues = collectSensitiveValues(config, hints).filter((v) => v !== "");
   sensitiveValues.sort((a, b) => b.length - a.length);
   let result = raw;
   for (const value of sensitiveValues) {
