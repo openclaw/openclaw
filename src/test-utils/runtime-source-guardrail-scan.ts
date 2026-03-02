@@ -7,8 +7,25 @@ export type RuntimeSourceGuardrailFile = {
   source: string;
 };
 
+const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
+  /\.test\.tsx?$/,
+  /\.test-helpers\.tsx?$/,
+  /\.test-utils\.tsx?$/,
+  /\.test-harness\.tsx?$/,
+  /\.e2e\.tsx?$/,
+  /\.d\.ts$/,
+  /[\\/](?:__tests__|tests|test-utils)[\\/]/,
+  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
+];
+
 const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();
 const FILE_READ_CONCURRENCY = 32;
+
+export function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
+  return DEFAULT_GUARDRAIL_SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
 
 async function readRuntimeSourceFiles(
   repoRoot: string,
@@ -56,7 +73,11 @@ export async function loadRuntimeSourceFilesForGuardrails(
         roots: ["src", "extensions"],
         extensions: [".ts", ".tsx"],
       });
-      return await readRuntimeSourceFiles(repoRoot, files);
+      const filtered = files.filter((absolutePath) => {
+        const relativePath = path.relative(repoRoot, absolutePath);
+        return !shouldSkipGuardrailRuntimeSource(relativePath);
+      });
+      return await readRuntimeSourceFiles(repoRoot, filtered);
     })();
     runtimeSourceGuardrailCache.set(repoRoot, pending);
   }

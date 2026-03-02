@@ -1,18 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { loadRuntimeSourceFilesForGuardrails } from "../test-utils/runtime-source-guardrail-scan.js";
-
-const SKIP_PATTERNS = [
-  /\.test\.tsx?$/,
-  /\.test-helpers\.tsx?$/,
-  /\.test-utils\.tsx?$/,
-  /\.test-harness\.tsx?$/,
-  /\.e2e\.tsx?$/,
-  /\.d\.ts$/,
-  /[\\/](?:__tests__|tests|test-utils)[\\/]/,
-  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
-  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
-  /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
-];
+import {
+  loadRuntimeSourceFilesForGuardrails,
+  shouldSkipGuardrailRuntimeSource,
+} from "../test-utils/runtime-source-guardrail-scan.js";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -22,7 +12,7 @@ type QuoteScanState = {
 };
 
 function shouldSkip(relativePath: string): boolean {
-  return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
+  return shouldSkipGuardrailRuntimeSource(relativePath);
 }
 
 function stripCommentsForScan(input: string): string {
