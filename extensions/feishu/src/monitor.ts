@@ -2,12 +2,15 @@ import * as crypto from "crypto";
 import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
+  applyBasicWebhookRequestGuards,
   type ClawdbotConfig,
-  createBoundedCounter,
   createFixedWindowRateLimiter,
+  createWebhookAnomalyTracker,
   type RuntimeEnv,
   type HistoryEntry,
   installRequestBodyLimitGuard,
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
@@ -30,12 +33,6 @@ const httpServers = new Map<string, http.Server>();
 const botOpenIds = new Map<string, string>();
 const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-const FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
-const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
-const FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
-const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
-const FEISHU_WEBHOOK_COUNTER_MAX_TRACKED_KEYS = 4_096;
-const FEISHU_WEBHOOK_COUNTER_TTL_MS = 6 * 60 * 60_000;
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
 export type FeishuReactionCreatedEvent = {
@@ -60,27 +57,19 @@ type ResolveReactionSyntheticEventParams = {
 };
 
 const feishuWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS,
-  maxRequests: FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
-  maxTrackedKeys: FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS,
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
 });
-const feishuWebhookStatusCounters = createBoundedCounter({
-  maxTrackedKeys: FEISHU_WEBHOOK_COUNTER_MAX_TRACKED_KEYS,
-  ttlMs: FEISHU_WEBHOOK_COUNTER_TTL_MS,
+const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
+  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
+  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
+  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
 });
-
-function isJsonContentType(value: string | string[] | undefined): boolean {
-  const first = Array.isArray(value) ? value[0] : value;
-  if (!first) {
-    return false;
-  }
-  const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
-  return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
-}
 
 export function clearFeishuWebhookRateLimitStateForTest(): void {
   feishuWebhookRateLimiter.clear();
-  feishuWebhookStatusCounters.clear();
+  feishuWebhookAnomalyTracker.clear();
 }
 
 export function getFeishuWebhookRateLimitStateSizeForTest(): number {
@@ -91,25 +80,19 @@ export function isWebhookRateLimitedForTest(key: string, nowMs: number): boolean
   return feishuWebhookRateLimiter.isRateLimited(key, nowMs);
 }
 
-function isWebhookRateLimited(key: string, nowMs: number): boolean {
-  return isWebhookRateLimitedForTest(key, nowMs);
-}
-
 function recordWebhookStatus(
   runtime: RuntimeEnv | undefined,
   accountId: string,
   path: string,
   statusCode: number,
 ): void {
-  if (![400, 401, 408, 413, 415, 429].includes(statusCode)) {
-    return;
-  }
-  const key = `${accountId}:${path}:${statusCode}`;
-  const next = feishuWebhookStatusCounters.increment(key);
-  if (next === 1 || next % FEISHU_WEBHOOK_COUNTER_LOG_EVERY === 0) {
-    const log = runtime?.log ?? console.log;
-    log(`feishu[${accountId}]: webhook anomaly path=${path} status=${statusCode} count=${next}`);
-  }
+  feishuWebhookAnomalyTracker.record({
+    key: `${accountId}:${path}:${statusCode}`,
+    statusCode,
+    log: runtime?.log ?? console.log,
+    message: (count) =>
+      `feishu[${accountId}]: webhook anomaly path=${path} status=${statusCode} count=${count}`,
+  });
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
@@ -462,15 +445,16 @@ async function monitorWebhook({
     });
 
     const rateLimitKey = `${accountId}:${path}:${req.socket.remoteAddress ?? "unknown"}`;
-    if (isWebhookRateLimited(rateLimitKey, Date.now())) {
-      res.statusCode = 429;
-      res.end("Too Many Requests");
-      return;
-    }
-
-    if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {
-      res.statusCode = 415;
-      res.end("Unsupported Media Type");
+    if (
+      !applyBasicWebhookRequestGuards({
+        req,
+        res,
+        rateLimiter: feishuWebhookRateLimiter,
+        rateLimitKey,
+        nowMs: Date.now(),
+        requireJsonContentType: true,
+      })
+    ) {
       return;
     }
 

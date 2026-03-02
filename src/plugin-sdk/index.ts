@@ -129,6 +129,11 @@ export {
   resolveWebhookTargets,
 } from "./webhook-targets.js";
 export type { WebhookTargetMatchResult } from "./webhook-targets.js";
+export {
+  applyBasicWebhookRequestGuards,
+  isJsonContentType,
+  readJsonWebhookBodyOrReject,
+} from "./webhook-request-guards.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -297,8 +302,19 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
-export { createBoundedCounter, createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
-export type { BoundedCounter, FixedWindowRateLimiter } from "./webhook-memory-guards.js";
+export {
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_ANOMALY_STATUS_CODES,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createBoundedCounter,
+  createFixedWindowRateLimiter,
+  createWebhookAnomalyTracker,
+} from "./webhook-memory-guards.js";
+export type {
+  BoundedCounter,
+  FixedWindowRateLimiter,
+  WebhookAnomalyTracker,
+} from "./webhook-memory-guards.js";
 
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {

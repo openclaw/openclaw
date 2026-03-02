@@ -2,27 +2,22 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
-  createBoundedCounter,
   createDedupeCache,
   createFixedWindowRateLimiter,
-  readJsonBodyWithLimit,
+  createWebhookAnomalyTracker,
+  readJsonWebhookBodyOrReject,
+  applyBasicWebhookRequestGuards,
   registerWebhookTarget,
-  rejectNonPostWebhookRequest,
-  requestBodyErrorToText,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
 
-const ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
-const ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
-const ZALO_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
-const ZALO_WEBHOOK_COUNTER_LOG_EVERY = 25;
-const ZALO_WEBHOOK_COUNTER_MAX_TRACKED_KEYS = 4_096;
-const ZALO_WEBHOOK_COUNTER_TTL_MS = 6 * 60 * 60_000;
 
 export type ZaloWebhookTarget = {
   token: string;
@@ -44,22 +39,23 @@ export type ZaloWebhookProcessUpdate = (params: {
 
 const webhookTargets = new Map<string, ZaloWebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS,
-  maxRequests: ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
-  maxTrackedKeys: ZALO_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS,
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
 });
 const recentWebhookEvents = createDedupeCache({
   ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
   maxSize: 5000,
 });
-const webhookStatusCounters = createBoundedCounter({
-  maxTrackedKeys: ZALO_WEBHOOK_COUNTER_MAX_TRACKED_KEYS,
-  ttlMs: ZALO_WEBHOOK_COUNTER_TTL_MS,
+const webhookAnomalyTracker = createWebhookAnomalyTracker({
+  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
+  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
+  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
 });
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
-  webhookStatusCounters.clear();
+  webhookAnomalyTracker.clear();
 }
 
 export function getZaloWebhookRateLimitStateSizeForTest(): number {
@@ -67,16 +63,7 @@ export function getZaloWebhookRateLimitStateSizeForTest(): number {
 }
 
 export function getZaloWebhookStatusCounterSizeForTest(): number {
-  return webhookStatusCounters.size();
-}
-
-function isJsonContentType(value: string | string[] | undefined): boolean {
-  const first = Array.isArray(value) ? value[0] : value;
-  if (!first) {
-    return false;
-  }
-  const mediaType = first.split(";", 1)[0]?.trim().toLowerCase();
-  return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
+  return webhookAnomalyTracker.size();
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
@@ -110,16 +97,13 @@ function recordWebhookStatus(
   path: string,
   statusCode: number,
 ): void {
-  if (![400, 401, 408, 413, 415, 429].includes(statusCode)) {
-    return;
-  }
-  const key = `${path}:${statusCode}`;
-  const next = webhookStatusCounters.increment(key);
-  if (next === 1 || next % ZALO_WEBHOOK_COUNTER_LOG_EVERY === 0) {
-    runtime?.log?.(
-      `[zalo] webhook anomaly path=${path} status=${statusCode} count=${String(next)}`,
-    );
-  }
+  webhookAnomalyTracker.record({
+    key: `${path}:${statusCode}`,
+    statusCode,
+    log: runtime?.log,
+    message: (count) =>
+      `[zalo] webhook anomaly path=${path} status=${statusCode} count=${String(count)}`,
+  });
 }
 
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
@@ -137,7 +121,13 @@ export async function handleZaloWebhookRequest(
   }
   const { targets, path } = resolved;
 
-  if (rejectNonPostWebhookRequest(req, res)) {
+  if (
+    !applyBasicWebhookRequestGuards({
+      req,
+      res,
+      allowMethods: ["POST"],
+    })
+  ) {
     return true;
   }
 
@@ -161,41 +151,34 @@ export async function handleZaloWebhookRequest(
   const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
   const nowMs = Date.now();
 
-  if (webhookRateLimiter.isRateLimited(rateLimitKey, nowMs)) {
-    res.statusCode = 429;
-    res.end("Too Many Requests");
+  if (
+    !applyBasicWebhookRequestGuards({
+      req,
+      res,
+      rateLimiter: webhookRateLimiter,
+      rateLimitKey,
+      nowMs,
+      requireJsonContentType: true,
+    })
+  ) {
     recordWebhookStatus(target.runtime, path, res.statusCode);
     return true;
   }
-
-  if (!isJsonContentType(req.headers["content-type"])) {
-    res.statusCode = 415;
-    res.end("Unsupported Media Type");
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-
-  const body = await readJsonBodyWithLimit(req, {
+  const body = await readJsonWebhookBodyOrReject({
+    req,
+    res,
     maxBytes: 1024 * 1024,
     timeoutMs: 30_000,
     emptyObjectOnEmpty: false,
+    invalidJsonMessage: "Bad Request",
   });
   if (!body.ok) {
-    res.statusCode =
-      body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
-    const message =
-      body.code === "PAYLOAD_TOO_LARGE"
-        ? requestBodyErrorToText("PAYLOAD_TOO_LARGE")
-        : body.code === "REQUEST_BODY_TIMEOUT"
-          ? requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
-          : "Bad Request";
-    res.end(message);
     recordWebhookStatus(target.runtime, path, res.statusCode);
     return true;
   }
+  const raw = body.value;
 
   // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }.
-  const raw = body.value;
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   const update: ZaloUpdate | undefined =
     record && record.ok === true && record.result
