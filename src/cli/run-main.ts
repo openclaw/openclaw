@@ -65,7 +65,11 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 export async function runCli(argv: string[] = process.argv) {
   let normalizedArgv = normalizeWindowsArgv(argv);
   const parsedProfile = parseCliProfileArgs(normalizedArgv);
-  if (parsedProfile.ok) {
+  if (!parsedProfile.ok) {
+    // `entry.ts` is the canonical path and exits early on invalid profile flags.
+    // Keep direct `runCli(...)` usage non-fatal, but surface the parse problem.
+    console.warn(`[openclaw] ${parsedProfile.error}`);
+  } else {
     if (parsedProfile.profile) {
       applyCliProfileEnv({ profile: parsedProfile.profile });
     }

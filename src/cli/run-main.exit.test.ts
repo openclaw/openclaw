@@ -89,4 +89,19 @@ describe("runCli exit behavior", () => {
       }
     }
   });
+
+  it("warns on invalid profile flags in direct runCli calls", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const argv = ["node", "openclaw", "--dev", "--profile", "rawdog", "status"];
+      await runCli(argv);
+
+      expect(warnSpy).toHaveBeenCalledWith("[openclaw] Cannot combine --dev with --profile");
+      expect(tryRouteCliMock).toHaveBeenCalledWith(argv);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
