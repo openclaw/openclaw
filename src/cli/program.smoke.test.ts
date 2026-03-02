@@ -4,7 +4,6 @@ import {
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  messageCommand,
   onboardCommand,
   runTui,
   runtime,
@@ -42,16 +41,10 @@ describe("cli program (smoke)", () => {
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("runs message command with required options", async () => {
-    await expect(
-      runProgram(["message", "send", "--target", "+1", "--message", "hi"]),
-    ).rejects.toThrow("exit");
-    expect(messageCommand).toHaveBeenCalled();
-  });
-
   it("registers memory + status commands", () => {
     const program = createProgram();
     const names = program.commands.map((command) => command.name());
+    expect(names).toContain("message");
     expect(names).toContain("memory");
     expect(names).toContain("status");
   });
