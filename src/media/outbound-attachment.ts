@@ -1,4 +1,5 @@
 import { loadWebMedia } from "../web/media.js";
+import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
 
 export async function resolveOutboundAttachmentFromUrl(
@@ -6,10 +7,13 @@ export async function resolveOutboundAttachmentFromUrl(
   maxBytes: number,
   options?: { localRoots?: readonly string[] },
 ): Promise<{ path: string; contentType?: string }> {
-  const media = await loadWebMedia(mediaUrl, {
-    maxBytes,
-    localRoots: options?.localRoots,
-  });
+  const media = await loadWebMedia(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes,
+      mediaLocalRoots: options?.localRoots,
+    }),
+  );
   const saved = await saveMediaBuffer(
     media.buffer,
     media.contentType ?? undefined,
