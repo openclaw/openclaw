@@ -471,7 +471,8 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
-      // Plugins run last so built-in gateway routes keep precedence on overlapping paths.
+      // Plugins run after built-in gateway routes so core surfaces keep
+      // precedence on overlapping paths.
       if (handlePluginRequest) {
         if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
           const pluginAuthOk = await enforcePluginRouteGatewayAuth({
