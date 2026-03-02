@@ -49,6 +49,7 @@ const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
 const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "getaddrinfo",
   "socket hang up",
+  "client network socket disconnected before secure tls connection was established",
   "network error",
   "network is unreachable",
   "temporary failure in name resolution",
