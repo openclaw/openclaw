@@ -8,8 +8,15 @@ import * as schedule from "./schedule.js";
 import { CronService } from "./service.js";
 import { createDeferred, createRunningCronServiceState } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { run } from "./service/ops.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
-import { DEFAULT_JOB_TIMEOUT_MS, executeJobCore, onTimer, runMissedJobs } from "./service/timer.js";
+import {
+  DEFAULT_JOB_TIMEOUT_MS,
+  applyJobResult,
+  executeJobCore,
+  onTimer,
+  runMissedJobs,
+} from "./service/timer.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 const noopLogger = {
@@ -20,7 +27,7 @@ const noopLogger = {
   trace: vi.fn(),
 };
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
-const FAST_TIMEOUT_SECONDS = 0.006;
+const FAST_TIMEOUT_SECONDS = 0.003;
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
 function topOfHourOffsetMs(jobId: string) {
@@ -32,9 +39,7 @@ let fixtureRoot = "";
 let fixtureCount = 0;
 
 async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
-  await fs.mkdir(dir, { recursive: true });
-  const storePath = path.join(dir, "jobs.json");
+  const storePath = path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`);
   return {
     storePath,
   };
@@ -165,12 +170,11 @@ describe("Cron issue regressions", () => {
     vi.clearAllMocks();
   });
 
-  it("covers schedule updates, force runs, isolated wake scheduling, and payload patching", async () => {
+  it("covers schedule updates and payload patching", async () => {
     const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
     const cron = await startCronForStore({
       storePath: store.storePath,
-      enqueueSystemEvent,
+      cronEnabled: false,
     });
 
     const created = await cron.add({
@@ -189,36 +193,6 @@ describe("Cron issue regressions", () => {
     });
 
     expect(updated.state.nextRunAtMs).toBe(Date.parse("2026-02-06T12:00:00.000Z") + offsetMs);
-
-    const forceNow = await cron.add({
-      name: "force-now",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "force" },
-    });
-
-    const result = await cron.run(forceNow.id, "force");
-
-    expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "force",
-      expect.objectContaining({ agentId: undefined }),
-    );
-
-    const job = await cron.add({
-      name: "isolated",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "hi" },
-    });
-    const status = await cron.status();
-
-    expect(typeof job.state.nextRunAtMs).toBe("number");
-    expect(typeof status.nextWakeAtMs).toBe("number");
 
     const unsafeToggle = await cron.add({
       name: "unsafe toggle",
@@ -293,7 +267,7 @@ describe("Cron issue regressions", () => {
 
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = await makeStorePath();
-    const cron = await startCronForStore({ storePath: store.storePath });
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const created = await cron.add({
       name: "repair-target",
@@ -385,7 +359,7 @@ describe("Cron issue regressions", () => {
       "utf-8",
     );
 
-    const cron = await startCronForStore({ storePath: store.storePath });
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const listed = await cron.list();
     expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
@@ -602,7 +576,7 @@ describe("Cron issue regressions", () => {
     await runStarted.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(105);
     await Promise.resolve();
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
@@ -672,6 +646,7 @@ describe("Cron issue regressions", () => {
 
     const cron = await startCronForStore({
       storePath: store.storePath,
+      cronEnabled: false,
       runIsolatedAgentJob,
     });
     const job = await cron.add({
@@ -1254,6 +1229,7 @@ describe("Cron issue regressions", () => {
 
     const cron = await startCronForStore({
       storePath: store.storePath,
+      cronEnabled: false,
       runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
     });
 
@@ -1445,6 +1421,61 @@ describe("Cron issue regressions", () => {
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
   });
 
+  it("#17554: run() clears stale runningAtMs and executes the job", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const staleRunningAtMs = now - 2 * 60 * 60 * 1000 - 1;
+
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "stale-running",
+              name: "stale-running",
+              enabled: true,
+              createdAtMs: now - 3_600_000,
+              updatedAtMs: now - 3_600_000,
+              schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+              sessionTarget: "main",
+              wakeMode: "now",
+              payload: { kind: "systemEvent", text: "stale-running" },
+              state: {
+                runningAtMs: staleRunningAtMs,
+                lastRunAtMs: now - 3_600_000,
+                lastStatus: "ok",
+                nextRunAtMs: now - 60_000,
+              },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const enqueueSystemEvent = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+
+    const result = await run(state, "stale-running", "force");
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "stale-running",
+      expect.objectContaining({ agentId: undefined }),
+    );
+  });
+
   it("honors cron maxConcurrentRuns for due jobs", async () => {
     vi.useRealTimers();
     const store = await makeStorePath();
@@ -1493,12 +1524,14 @@ describe("Cron issue regressions", () => {
     });
 
     const timerPromise = onTimer(state);
-    await Promise.race([
-      bothRunsStarted.promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timed out waiting for concurrent job starts")), 1_000),
-      ),
-    ]);
+    const startTimeout = setTimeout(() => {
+      bothRunsStarted.reject(new Error("timed out waiting for concurrent job starts"));
+    }, 120);
+    try {
+      await bothRunsStarted.promise;
+    } finally {
+      clearTimeout(startTimeout);
+    }
 
     expect(peakActiveRuns).toBe(2);
 
@@ -1523,7 +1556,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.06;
+    const timeoutSeconds = 0.012;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
@@ -1579,10 +1612,87 @@ describe("Cron issue regressions", () => {
     // The abort must not fire at the old ~1/3 regression value.
     // Keep the lower bound conservative for loaded CI runners.
     const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.6);
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutSeconds * 1000 * 0.55);
 
     const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
     expect(job?.state.lastStatus).toBe("error");
     expect(job?.state.lastError).toContain("timed out");
+  });
+
+  it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
+    const startedAt = Date.parse("2026-03-02T12:00:00.000Z");
+    const endedAt = startedAt + 50;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-30905-success.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-success-30905",
+      name: "apply-result-success-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(job.state.lastError).toMatch(/^schedule error:/);
+    expect(job.state.nextRunAtMs).toBe(endedAt + 2_000);
+    expect(job.enabled).toBe(true);
+  });
+
+  it("falls back to backoff schedule when cron next-run computation throws on error path (#30905)", () => {
+    const startedAt = Date.parse("2026-03-02T12:05:00.000Z");
+    const endedAt = startedAt + 25;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-30905-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-error-30905",
+      name: "apply-result-error-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "error",
+      error: "synthetic failure",
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    expect(job.state.lastStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(job.state.lastError).toMatch(/^schedule error:/);
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
   });
 });

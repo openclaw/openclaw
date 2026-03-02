@@ -131,11 +131,12 @@ describe("QmdMemoryManager", () => {
     logDebugMock.mockClear();
     logInfoMock.mockClear();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
-    await fs.mkdir(tmpRoot);
     workspaceDir = path.join(tmpRoot, "workspace");
-    await fs.mkdir(workspaceDir);
     stateDir = path.join(tmpRoot, "state");
-    await fs.mkdir(stateDir);
+    await Promise.all([
+      fs.mkdir(workspaceDir, { recursive: true }),
+      fs.mkdir(stateDir, { recursive: true }),
+    ]);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     cfg = {
       agents: {
@@ -152,7 +153,7 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
@@ -898,6 +899,8 @@ describe("QmdMemoryManager", () => {
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
         expect(call[0]).toBe("qmd.cmd");
+        const options = call[2] as { shell?: boolean } | undefined;
+        expect(options?.shell).toBe(true);
       }
 
       await manager.close();
@@ -1407,6 +1410,8 @@ describe("QmdMemoryManager", () => {
       );
       expect(mcporterCall).toBeDefined();
       expect(mcporterCall?.[0]).toBe("mcporter.cmd");
+      const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
+      expect(options?.shell).toBe(true);
 
       await manager.close();
     } finally {

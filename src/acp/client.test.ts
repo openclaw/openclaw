@@ -1,6 +1,13 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { describe, expect, it, vi } from "vitest";
-import { resolveAcpClientSpawnEnv, resolvePermissionRequest } from "./client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveAcpClientSpawnEnv,
+  resolveAcpClientSpawnInvocation,
+  resolvePermissionRequest,
+} from "./client.js";
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
 function makePermissionRequest(
@@ -28,6 +35,24 @@ function makePermissionRequest(
   };
 }
 
+const tempDirs: string[] = [];
+
+async function createTempDir(): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-acp-client-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) {
+      continue;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 describe("resolveAcpClientSpawnEnv", () => {
   it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
     const env = resolveAcpClientSpawnEnv({
@@ -45,6 +70,69 @@ describe("resolveAcpClientSpawnEnv", () => {
       OPENCLAW_SHELL: "wrong",
     });
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
+  });
+});
+
+describe("resolveAcpClientSpawnInvocation", () => {
+  it("keeps non-windows invocation unchanged", () => {
+    const resolved = resolveAcpClientSpawnInvocation(
+      { serverCommand: "openclaw", serverArgs: ["acp", "--verbose"] },
+      {
+        platform: "darwin",
+        env: {},
+        execPath: "/usr/bin/node",
+      },
+    );
+    expect(resolved).toEqual({
+      command: "openclaw",
+      args: ["acp", "--verbose"],
+      shell: undefined,
+      windowsHide: undefined,
+    });
+  });
+
+  it("unwraps .cmd shim entrypoint on windows", async () => {
+    const dir = await createTempDir();
+    const scriptPath = path.join(dir, "openclaw", "dist", "entry.js");
+    const shimPath = path.join(dir, "openclaw.cmd");
+    await mkdir(path.dirname(scriptPath), { recursive: true });
+    await writeFile(scriptPath, "console.log('ok')\n", "utf8");
+    await writeFile(shimPath, `@ECHO off\r\n"%~dp0\\openclaw\\dist\\entry.js" %*\r\n`, "utf8");
+
+    const resolved = resolveAcpClientSpawnInvocation(
+      { serverCommand: shimPath, serverArgs: ["acp", "--verbose"] },
+      {
+        platform: "win32",
+        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+        execPath: "C:\\node\\node.exe",
+      },
+    );
+    expect(resolved.command).toBe("C:\\node\\node.exe");
+    expect(resolved.args).toEqual([scriptPath, "acp", "--verbose"]);
+    expect(resolved.shell).toBeUndefined();
+    expect(resolved.windowsHide).toBe(true);
+  });
+
+  it("falls back to shell mode for unresolved wrappers on windows", async () => {
+    const dir = await createTempDir();
+    const shimPath = path.join(dir, "openclaw.cmd");
+    await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+
+    const resolved = resolveAcpClientSpawnInvocation(
+      { serverCommand: shimPath, serverArgs: ["acp"] },
+      {
+        platform: "win32",
+        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+        execPath: "C:\\node\\node.exe",
+      },
+    );
+
+    expect(resolved).toEqual({
+      command: shimPath,
+      args: ["acp"],
+      shell: true,
+      windowsHide: undefined,
+    });
   });
 });
 

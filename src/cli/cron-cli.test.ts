@@ -156,7 +156,7 @@ async function expectCronEditWithScheduleLookupExit(
   ).rejects.toThrow("__exit__:1");
 }
 
-async function runCronRunAndCaptureExit(params: { ran: boolean }) {
+async function runCronRunAndCaptureExit(params: { ran: boolean; args?: string[] }) {
   resetGatewayMock();
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, callParams?: unknown) => {
@@ -177,11 +177,15 @@ async function runCronRunAndCaptureExit(params: { ran: boolean }) {
   runtime.exit = exitSpy;
   try {
     const program = buildProgram();
-    await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+    await program.parseAsync(params.args ?? ["cron", "run", "job-1"], { from: "user" });
   } finally {
     runtime.exit = originalExit;
   }
-  return exitSpy;
+  const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+  return {
+    exitSpy,
+    runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
+  };
 }
 
 describe("cron cli", () => {
@@ -197,7 +201,7 @@ describe("cron cli", () => {
       expectedExitCode: 1,
     },
   ])("$name", async ({ ran, expectedExitCode }) => {
-    const exitSpy = await runCronRunAndCaptureExit({ ran });
+    const { exitSpy } = await runCronRunAndCaptureExit({ ran });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
   });
 
@@ -673,5 +677,21 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
     expect(patch?.patch?.failureAlert).toBe(false);
+  });
+
+  it("uses a longer default timeout for cron run", async () => {
+    const { runOpts } = await runCronRunAndCaptureExit({
+      ran: true,
+      args: ["cron", "run", "job-1", "--expect-final"],
+    });
+    expect(runOpts.timeout).toBe("600000");
+  });
+
+  it("preserves explicit --timeout for cron run", async () => {
+    const { runOpts } = await runCronRunAndCaptureExit({
+      ran: true,
+      args: ["cron", "run", "job-1", "--expect-final", "--timeout", "45000"],
+    });
+    expect(runOpts.timeout).toBe("45000");
   });
 });
