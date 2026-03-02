@@ -6,6 +6,7 @@ import {
   formatPairingApproveHint,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
+import { waitForAbortSignal } from "../../../src/infra/abort-signal.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
@@ -156,6 +157,14 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         messageId: `nostr-${Date.now()}`,
       };
     },
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const mergedText = [text, mediaUrl].filter(Boolean).join("\n");
+      return await nostrPlugin.outbound.sendText!({
+        to,
+        text: mergedText,
+        accountId,
+      });
+    },
   },
 
   status: {
@@ -274,15 +283,13 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
-      };
+      // Keep provider pending for the account lifecycle.
+      await waitForAbortSignal(ctx.abortSignal);
+
+      bus.close();
+      activeBuses.delete(account.accountId);
+      metricsSnapshots.delete(account.accountId);
+      ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
     },
   },
 };
