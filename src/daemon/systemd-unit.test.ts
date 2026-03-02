@@ -142,6 +142,22 @@ describe("extractSystemdExecStartCommandToken", () => {
     ).toBe("/snap/bin/chromium");
   });
 
+  it("extracts executable token from env -S inline double-quoted payload", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        '/usr/bin/env -S"/snap/bin/chromium --headless --remote-debugging-port=18800"',
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
+
+  it("extracts executable token from env -S inline single-quoted payload", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env -S'/snap/bin/chromium --headless --user-data-dir=/tmp/openclaw'",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
+
   it("extracts executable token when single-quoted env value contains spaces", () => {
     expect(
       extractSystemdExecStartCommandToken(

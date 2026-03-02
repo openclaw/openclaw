@@ -163,23 +163,6 @@ function extractEnvInlineSplitStringValue(token: string): string | null {
   return null;
 }
 
-function consumePossiblyQuotedValue(initialValue: string, pending: string[]): string {
-  let value = initialValue;
-  const quote = value[0];
-  if ((quote !== "'" && quote !== '"') || value.endsWith(quote)) {
-    return value;
-  }
-
-  while (pending.length > 0) {
-    value = `${value} ${pending.shift() ?? ""}`;
-    if (value.endsWith(quote)) {
-      break;
-    }
-  }
-
-  return value;
-}
-
 function hasUnescapedTrailingBackslash(line: string): boolean {
   let count = 0;
   for (let i = line.length - 1; i >= 0; i--) {
@@ -267,16 +250,14 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
   // Env wrapper path: walk past env options/assignments to find the real command.
   const pending = tokens.slice(1);
   while (pending.length > 0) {
-    const rawToken = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
-    const envToken = stripSurroundingQuotes(rawToken);
+    const envToken = stripSurroundingQuotes(pending.shift() ?? "");
     if (!envToken) {
       continue;
     }
 
     const inlineSplitValue = extractEnvInlineSplitStringValue(envToken);
     if (inlineSplitValue) {
-      const splitStringValue = consumePossiblyQuotedValue(inlineSplitValue, pending);
-      const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+      const expanded = parseSystemdExecStart(stripSurroundingQuotes(inlineSplitValue));
       if (expanded.length > 0) {
         pending.unshift(...expanded);
       }
@@ -284,7 +265,7 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
     }
 
     if (envOptionConsumesNextValue(envToken)) {
-      const optionValue = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
+      const optionValue = pending.shift() ?? "";
       if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
         const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
         if (expanded.length > 0) {
@@ -298,39 +279,23 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
     const cluster = parseEnvShortOptionCluster(envToken);
     if (cluster) {
       if (cluster.consumesNext) {
-        const optionValue = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
+        const optionValue = pending.shift() ?? "";
         if (cluster.isSplitString && optionValue) {
           const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
           if (expanded.length > 0) {
             pending.unshift(...expanded);
           }
         }
-      } else if (cluster.inlineValue) {
-        // Reassemble the inline value in case the tokenizer split a quoted
-        // value with spaces.  For split-string, expand the result; otherwise
-        // just drain the fragments so they don't leak as a command.
-        const reassembled = consumePossiblyQuotedValue(cluster.inlineValue, pending);
-        if (cluster.isSplitString) {
-          const expanded = parseSystemdExecStart(stripSurroundingQuotes(reassembled));
-          if (expanded.length > 0) {
-            pending.unshift(...expanded);
-          }
+      } else if (cluster.inlineValue && cluster.isSplitString) {
+        const expanded = parseSystemdExecStart(stripSurroundingQuotes(cluster.inlineValue));
+        if (expanded.length > 0) {
+          pending.unshift(...expanded);
         }
       }
       continue;
     }
 
     if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
-      // When the part after '=' is a single-quoted value with spaces, the
-      // tokenizer splits it.  Drain the trailing fragments from pending so
-      // they aren't mistaken for the command.
-      const eqIdx = envToken.indexOf("=");
-      if (eqIdx >= 0) {
-        const afterEq = envToken.slice(eqIdx + 1);
-        if (afterEq) {
-          consumePossiblyQuotedValue(afterEq, pending);
-        }
-      }
       continue;
     }
 

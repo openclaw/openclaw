@@ -6,7 +6,7 @@ export function splitArgsPreservingQuotes(
 ): string[] {
   const args: string[] = [];
   let current = "";
-  let inQuotes = false;
+  let quoteChar: string | null = null;
   const escapeMode = options?.escapeMode ?? "none";
 
   for (let i = 0; i < value.length; i++) {
@@ -28,11 +28,11 @@ export function splitArgsPreservingQuotes(
       i++;
       continue;
     }
-    if (char === '"') {
-      inQuotes = !inQuotes;
+    if ((char === '"' || char === "'") && (quoteChar === null || quoteChar === char)) {
+      quoteChar = quoteChar === null ? char : null;
       continue;
     }
-    if (!inQuotes && /\s/.test(char)) {
+    if (quoteChar === null && /\s/.test(char)) {
       if (current) {
         args.push(current);
         current = "";
