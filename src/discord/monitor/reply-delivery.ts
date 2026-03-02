@@ -148,7 +148,7 @@ export async function deliverDiscordReply(params: {
   chunkMode?: ChunkMode;
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
-}) {
+}): Promise<{ delivered: boolean; messageId?: string }> {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
   const replyToMode = params.replyToMode ?? "all";
@@ -275,4 +275,5 @@ export async function deliverDiscordReply(params: {
   if (binding && deliveredAny) {
     params.threadBindings?.touchThread?.({ threadId: binding.threadId });
   }
+  return { delivered: deliveredAny };
 }

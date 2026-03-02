@@ -18,7 +18,9 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
-}) {
+}): Promise<{ delivered: boolean; messageId?: string }> {
+  let delivered = false;
+  let lastMessageId: string | undefined;
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
@@ -35,28 +37,40 @@ export async function deliverReplies(params: {
       if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
+      const sent = await sendMessageSlack(params.target, trimmed, {
         token: params.token,
         threadTs,
         accountId: params.accountId,
         ...(params.identity ? { identity: params.identity } : {}),
       });
+      delivered = true;
+      if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "suppressed") {
+        lastMessageId = sent.messageId;
+      }
     } else {
       let first = true;
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
         first = false;
-        await sendMessageSlack(params.target, caption, {
+        const sent = await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        delivered = true;
+        if (sent.messageId && sent.messageId !== "unknown" && sent.messageId !== "suppressed") {
+          lastMessageId = sent.messageId;
+        }
       }
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }
+  return {
+    delivered,
+    messageId: lastMessageId,
+  };
 }
 
 export type SlackRespondFn = (payload: {

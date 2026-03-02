@@ -364,7 +364,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime.error?.(danger("imessage: missing delivery target"));
           return { delivered: false };
         }
-        await deliverReplies({
+        const delivery = await deliverReplies({
           replies: [payload],
           target,
           client,
@@ -374,7 +374,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           textLimit,
           sentMessageCache,
         });
-        return { delivered: true };
+        return delivery;
       },
       onDelivery: (payload, info) => {
         const target = ctxPayload.To;

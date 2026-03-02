@@ -23,7 +23,7 @@ function createMockDraftStream() {
 
 const deliveryMocks = vi.hoisted(() => ({
   editMessageDiscord: vi.fn(async () => ({})),
-  deliverDiscordReply: vi.fn(async () => {}),
+  deliverDiscordReply: vi.fn(async () => ({ delivered: true })),
   createDiscordDraftStream: vi.fn(() => createMockDraftStream()),
 }));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;

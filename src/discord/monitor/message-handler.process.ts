@@ -657,7 +657,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }
 
       const replyToId = replyReference.use();
-      await deliverDiscordReply({
+      const delivery = await deliverDiscordReply({
         replies: [payload],
         target: deliverTarget,
         token,
@@ -673,8 +673,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         sessionKey: ctxPayload.SessionKey,
         threadBindings,
       });
-      replyReference.markSent();
-      return { delivered: true };
+      if (delivery.delivered) {
+        replyReference.markSent();
+      }
+      return delivery;
     },
     onDelivery: (payload, deliveryInfo) => {
       if (deliveryInfo.success) {

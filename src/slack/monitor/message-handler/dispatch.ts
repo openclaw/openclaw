@@ -193,9 +193,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
 
-  const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
+  const deliverNormally = async (
+    payload: ReplyPayload,
+    forcedThreadTs?: string,
+  ): Promise<{ delivered: boolean; messageId?: string }> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
-    await deliverReplies({
+    const delivery = await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -206,17 +209,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
-    // Record the thread ts only after confirmed delivery success.
-    if (replyThreadTs) {
-      usedReplyThreadTs ??= replyThreadTs;
+    // Record thread routing only after actual delivery.
+    if (delivery.delivered) {
+      if (replyThreadTs) {
+        usedReplyThreadTs ??= replyThreadTs;
+      }
+      replyPlan.markSent();
     }
-    replyPlan.markSent();
+    return delivery;
   };
 
-  const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+  const deliverWithStreaming = async (
+    payload: ReplyPayload,
+  ): Promise<{ delivered: boolean; messageId?: string }> => {
     if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
-      await deliverNormally(payload, streamSession?.threadTs);
-      return;
+      return await deliverNormally(payload, streamSession?.threadTs);
     }
 
     const text = payload.text.trim();
@@ -230,8 +237,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload);
-          return;
+          return await deliverNormally(payload);
         }
 
         streamSession = await startSlackStream({
@@ -244,19 +250,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
-        return;
+        return { delivered: true };
       }
 
       await appendSlackStream({
         session: streamSession,
         text: "\n" + text,
       });
+      return { delivered: true };
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      return await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
 
@@ -266,8 +273,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     typingCallbacks,
     deliver: async (payload) => {
       if (useStreaming) {
-        await deliverWithStreaming(payload);
-        return { delivered: true };
+        return await deliverWithStreaming(payload);
       }
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
@@ -322,8 +328,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasStreamedMessage = false;
       }
 
-      await deliverNormally(payload);
-      return { delivered: true };
+      return await deliverNormally(payload);
     },
     onDelivery: (payload, info) => {
       const target = prepared.ctxPayload.To ?? message.channel;

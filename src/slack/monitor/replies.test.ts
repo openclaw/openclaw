@@ -22,9 +22,9 @@ function baseParams(overrides?: Record<string, unknown>) {
 describe("deliverReplies identity passthrough", () => {
   beforeEach(() => {
     sendMock.mockReset();
+    sendMock.mockResolvedValue({ messageId: "m-1", channelId: "C123" });
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconEmoji: ":robot:" };
     await deliverReplies(baseParams({ identity }));
 
@@ -33,7 +33,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
     await deliverReplies(
       baseParams({
@@ -47,10 +46,29 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("omits identity key when not provided", async () => {
-    sendMock.mockResolvedValue(undefined);
     await deliverReplies(baseParams());
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
+  });
+
+  it("reports delivered=false for channelData-only payloads", async () => {
+    const result = await deliverReplies(
+      baseParams({
+        replies: [{ channelData: { traceId: "noop" } }],
+      }),
+    );
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ delivered: false, messageId: undefined });
+  });
+
+  it("reports delivered metadata from successful sends", async () => {
+    sendMock.mockResolvedValueOnce({ messageId: "slack-msg-1", channelId: "C123" });
+
+    const result = await deliverReplies(baseParams({ replies: [{ text: "hello" }] }));
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ delivered: true, messageId: "slack-msg-1" });
   });
 });

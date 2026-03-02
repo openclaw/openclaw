@@ -281,4 +281,32 @@ describe("deliverDiscordReply", () => {
       expect.objectContaining({ token: "token", accountId: "default" }),
     );
   });
+
+  it("reports delivered=false when payload has no text or media", async () => {
+    const result = await deliverDiscordReply({
+      replies: [{ channelData: { traceId: "noop" } }],
+      target: "channel:noop",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendVoiceMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ delivered: false });
+  });
+
+  it("reports delivered=true when at least one outbound message is sent", async () => {
+    const result = await deliverDiscordReply({
+      replies: [{ text: "hello" }],
+      target: "channel:ok",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ delivered: true });
+  });
 });
