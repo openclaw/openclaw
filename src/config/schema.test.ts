@@ -119,4 +119,31 @@ describe("config schema", () => {
     expect(defaultsHint?.help).toContain("last");
     expect(listHint?.help).toContain("bluebubbles");
   });
+
+  it("resets channels additionalProperties after applying channel schemas", () => {
+    const res = buildConfigSchema({
+      channels: [
+        {
+          id: "matrix",
+          label: "Matrix",
+          configSchema: {
+            type: "object",
+            properties: {
+              accessToken: { type: "string" },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      properties?: Record<string, { additionalProperties?: unknown }>;
+    };
+    const channelsNode = schema.properties?.channels;
+    // stripChannelSchema sets additionalProperties = true so the base schema
+    // accepts any channel key.  applyChannelSchemas must reset it to false
+    // after merging concrete per-channel properties, otherwise the Control UI
+    // config-form analyzer flags the entire channels node as unsupported.
+    expect(channelsNode?.additionalProperties).toBe(false);
+  });
 });

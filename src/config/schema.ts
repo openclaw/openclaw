@@ -293,6 +293,13 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     }
   }
 
+  // Once concrete per-channel properties are merged, close the object so
+  // the Control UI config-form analyzer can enumerate the properties
+  // instead of flagging the node as "unsupported" (additionalProperties was
+  // set to true by stripChannelSchema to accept any channel key before
+  // individual channel schemas were known).
+  channelsNode.additionalProperties = false;
+
   return next;
 }
 
