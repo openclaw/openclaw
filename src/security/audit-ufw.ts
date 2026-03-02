@@ -37,7 +37,11 @@ function resolveUfwBinarySync(): string | null {
     }
   }
   // Fallback: check if ufw is on PATH (covers non-standard install locations)
+  // Only consider absolute paths to avoid executing cwd-relative binaries like ./ufw
   for (const dir of (process.env.PATH ?? "").split(":").filter(Boolean)) {
+    if (!dir.startsWith("/")) {
+      continue;
+    }
     const candidate = `${dir}/ufw`;
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
