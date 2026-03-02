@@ -316,7 +316,10 @@ async function processMessage(
     wasMentioned,
     implicitMention: message.implicitMention === true,
     hasAnyMention: explicitMention.hasAnyMention,
-    allowTextCommands: core.channel.commands.shouldHandleTextCommands(config),
+    allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+      cfg: config,
+      surface: "zalouser",
+    }),
     hasControlCommand,
     commandAuthorized: commandAuthorized === true,
   });
