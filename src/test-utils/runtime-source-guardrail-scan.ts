@@ -23,7 +23,7 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
 ];
 
 const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();
-const FILE_READ_CONCURRENCY = 16;
+const FILE_READ_CONCURRENCY = 24;
 
 export function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
   return DEFAULT_GUARDRAIL_SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
