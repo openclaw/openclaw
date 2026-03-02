@@ -5,7 +5,7 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
-  registerPluginHttpRoute,
+  registerPluginWebhookRoute,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
   isDangerousNameMatchingEnabled,
@@ -100,7 +100,7 @@ function warnDeprecatedUsersEmailEntries(
 }
 
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  const unregisterHttpRoute = registerPluginHttpRoute({
+  const registration = registerPluginWebhookRoute({
     path: target.path,
     handler: async (req, res) => {
       const handled = await handleGoogleChatWebhookRequest(req, res);
@@ -111,13 +111,15 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
       }
     },
     pluginId: "googlechat",
-    kind: "webhook",
     accountId: target.account.accountId,
     log: target.runtime.log,
   });
+  if (!registration.ok) {
+    return registration.unregister;
+  }
   const registered = registerWebhookTarget(webhookTargets, target);
   return () => {
-    unregisterHttpRoute();
+    registration.unregister();
     registered.unregister();
   };
 }

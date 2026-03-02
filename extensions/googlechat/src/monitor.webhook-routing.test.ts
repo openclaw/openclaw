@@ -165,4 +165,44 @@ describe("Google Chat webhook routing", () => {
       expect(registry.httpRoutes).toHaveLength(0);
     }
   });
+
+  it("does not activate a webhook target when the path conflicts with a core route", async () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    const unregister = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: {} as PluginRuntime,
+      path: "/chat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+
+    try {
+      expect(registry.httpRoutes).toHaveLength(0);
+      expect(registry.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          pluginId: "googlechat",
+          message: "http webhook route conflicts with core path: /chat",
+        }),
+      );
+
+      const res = createMockServerResponse();
+      const handled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          authorization: "Bearer test-token",
+          path: "/chat",
+          payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/AAA" } },
+        }),
+        res,
+      );
+
+      expect(handled).toBe(false);
+    } finally {
+      unregister();
+    }
+  });
 });

@@ -112,7 +112,7 @@ export type {
 } from "../gateway/server-methods/types.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
-export { registerPluginHttpRoute } from "../plugins/http-registry.js";
+export { registerPluginHttpRoute, registerPluginWebhookRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */

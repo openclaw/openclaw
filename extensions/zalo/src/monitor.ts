@@ -3,7 +3,7 @@ import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "op
 import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
-  registerPluginHttpRoute,
+  registerPluginWebhookRoute,
   resolveSenderCommandAuthorization,
   resolveOutboundMediaUrls,
   resolveDefaultGroupPolicy,
@@ -74,7 +74,7 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
 }
 
 export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  const unregisterHttpRoute = registerPluginHttpRoute({
+  const registration = registerPluginWebhookRoute({
     path: target.path,
     handler: async (req, res) => {
       const handled = await handleZaloWebhookRequest(req, res);
@@ -85,13 +85,15 @@ export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void
       }
     },
     pluginId: "zalo",
-    kind: "webhook",
     accountId: target.account.accountId,
     log: target.runtime.log,
   });
+  if (!registration.ok) {
+    return registration.unregister;
+  }
   const unregisterWebhookTarget = registerZaloWebhookTargetInternal(target);
   return () => {
-    unregisterHttpRoute();
+    registration.unregister();
     unregisterWebhookTarget();
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { registerPluginHttpRoute } from "./http-registry.js";
+import { registerPluginHttpRoute, registerPluginWebhookRoute } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 describe("registerPluginHttpRoute", () => {
@@ -98,16 +98,16 @@ describe("registerPluginHttpRoute", () => {
   it("rejects webhook routes on core-owned paths", () => {
     const registry = createEmptyPluginRegistry();
     const logs: string[] = [];
-    const unregister = registerPluginHttpRoute({
+    const registration = registerPluginWebhookRoute({
       path: "/chat",
       handler: vi.fn(),
       registry,
       pluginId: "bluebubbles",
-      kind: "webhook",
       log: (msg) => logs.push(msg),
     });
 
     expect(registry.httpRoutes).toHaveLength(0);
+    expect(registration.ok).toBe(false);
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -118,7 +118,30 @@ describe("registerPluginHttpRoute", () => {
     expect(logs).toContain(
       "plugin: refusing webhook path /chat because it conflicts with a core route",
     );
-    expect(() => unregister()).not.toThrow();
+    expect(() => registration.unregister()).not.toThrow();
+  });
+
+  it("returns success for accepted webhook routes", () => {
+    const registry = createEmptyPluginRegistry();
+
+    const registration = registerPluginWebhookRoute({
+      path: "/accepted-hook",
+      handler: vi.fn(),
+      registry,
+      pluginId: "bluebubbles",
+    });
+
+    expect(registration.ok).toBe(true);
+    expect(registry.httpRoutes).toContainEqual(
+      expect.objectContaining({
+        path: "/accepted-hook",
+        pluginId: "bluebubbles",
+        kind: "webhook",
+      }),
+    );
+
+    registration.unregister();
+    expect(registry.httpRoutes).toHaveLength(0);
   });
 
   it("refuses to replace a route registered by a different plugin", () => {

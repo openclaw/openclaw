@@ -10,6 +10,11 @@ export type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<void> | void;
 
+export type RegisterPluginWebhookRouteResult = {
+  ok: boolean;
+  unregister: () => void;
+};
+
 const sharedWebhookRouteRefCounts = new WeakMap<
   PluginRegistry,
   Map<PluginHttpRouteRegistration, number>
@@ -26,7 +31,7 @@ function getSharedWebhookRouteRefCounts(
   return counts;
 }
 
-export function registerPluginHttpRoute(params: {
+type RegisterPluginHttpRouteParams = {
   path?: string | null;
   fallbackPath?: string | null;
   handler: PluginHttpRouteHandler;
@@ -36,7 +41,11 @@ export function registerPluginHttpRoute(params: {
   accountId?: string;
   log?: (message: string) => void;
   registry?: PluginRegistry;
-}): () => void {
+};
+
+function registerPluginHttpRouteInternal(
+  params: RegisterPluginHttpRouteParams,
+): RegisterPluginWebhookRouteResult {
   const registry = params.registry ?? requireActivePluginRegistry();
   const routes = registry.httpRoutes ?? [];
   registry.httpRoutes = routes;
@@ -46,7 +55,7 @@ export function registerPluginHttpRoute(params: {
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   if (!normalizedPath) {
     params.log?.(`plugin: webhook path missing${suffix}`);
-    return () => {};
+    return { ok: false, unregister: () => {} };
   }
 
   if (kind === "webhook" && isCoreOwnedHttpPath(normalizedPath)) {
@@ -59,7 +68,7 @@ export function registerPluginHttpRoute(params: {
     params.log?.(
       `plugin: refusing webhook path ${normalizedPath}${suffix} because it conflicts with a core route`,
     );
-    return () => {};
+    return { ok: false, unregister: () => {} };
   }
 
   const existingIndex = routes.findIndex((entry) => entry.path === normalizedPath);
@@ -74,17 +83,20 @@ export function registerPluginHttpRoute(params: {
       const counts = getSharedWebhookRouteRefCounts(registry);
       counts.set(existing, (counts.get(existing) ?? 1) + 1);
       params.log?.(`plugin: reusing shared webhook path ${normalizedPath}${suffix}${pluginHint}`);
-      return () => {
-        const current = counts.get(existing) ?? 1;
-        if (current > 1) {
-          counts.set(existing, current - 1);
-          return;
-        }
-        counts.delete(existing);
-        const index = routes.indexOf(existing);
-        if (index >= 0) {
-          routes.splice(index, 1);
-        }
+      return {
+        ok: true,
+        unregister: () => {
+          const current = counts.get(existing) ?? 1;
+          if (current > 1) {
+            counts.set(existing, current - 1);
+            return;
+          }
+          counts.delete(existing);
+          const index = routes.indexOf(existing);
+          if (index >= 0) {
+            routes.splice(index, 1);
+          }
+        },
       };
     } else {
       registry.diagnostics.push({
@@ -94,7 +106,7 @@ export function registerPluginHttpRoute(params: {
         message: `http route already registered: ${normalizedPath}`,
       });
       params.log?.(`plugin: refusing duplicate route ${normalizedPath}${suffix}`);
-      return () => {};
+      return { ok: false, unregister: () => {} };
     }
   }
 
@@ -110,19 +122,32 @@ export function registerPluginHttpRoute(params: {
     getSharedWebhookRouteRefCounts(registry).set(entry, 1);
   }
 
-  return () => {
-    if (kind === "webhook") {
-      const counts = getSharedWebhookRouteRefCounts(registry);
-      const current = counts.get(entry) ?? 1;
-      if (current > 1) {
-        counts.set(entry, current - 1);
-        return;
+  return {
+    ok: true,
+    unregister: () => {
+      if (kind === "webhook") {
+        const counts = getSharedWebhookRouteRefCounts(registry);
+        const current = counts.get(entry) ?? 1;
+        if (current > 1) {
+          counts.set(entry, current - 1);
+          return;
+        }
+        counts.delete(entry);
       }
-      counts.delete(entry);
-    }
-    const index = routes.indexOf(entry);
-    if (index >= 0) {
-      routes.splice(index, 1);
-    }
+      const index = routes.indexOf(entry);
+      if (index >= 0) {
+        routes.splice(index, 1);
+      }
+    },
   };
+}
+
+export function registerPluginHttpRoute(params: RegisterPluginHttpRouteParams): () => void {
+  return registerPluginHttpRouteInternal(params).unregister;
+}
+
+export function registerPluginWebhookRoute(
+  params: Omit<RegisterPluginHttpRouteParams, "kind">,
+): RegisterPluginWebhookRouteResult {
+  return registerPluginHttpRouteInternal({ ...params, kind: "webhook" });
 }
