@@ -2,9 +2,11 @@ import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { isGifMedia, kindFromMime } from "../../media/mime.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -440,7 +442,16 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
+  cfg?: OpenClawConfig;
+  accountId?: string;
 }): Promise<{ delivered: boolean }> {
+  if (
+    params.cfg &&
+    isOutboundSuppressed({ cfg: params.cfg, channel: "telegram", accountId: params.accountId })
+  ) {
+    logVerbose(`[suppressOutbound] Blocked Telegram reply to chat ${params.chatId}`);
+    return { delivered: false };
+  }
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
