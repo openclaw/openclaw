@@ -1,7 +1,7 @@
 import path from "node:path";
 
 export const CONFIG_BACKUP_COUNT = 5;
-const CONFIG_BACKUP_MODE = 0o600;
+export const CONFIG_BACKUP_MODE = 0o600;
 
 export interface BackupRotationFs {
   unlink: (path: string) => Promise<void>;
