@@ -14,7 +14,7 @@ import { createDiffsTool } from "./src/tool.js";
 const plugin = {
   id: "diffs",
   name: "Diffs",
-  description: "Read-only diff viewer and PNG renderer for agents.",
+  description: "Read-only diff viewer and PNG/PDF renderer for agents.",
   configSchema: diffsPluginConfigSchema,
   register(api: OpenClawPluginApi) {
     const defaults = resolveDiffsPluginDefaults(api.pluginConfig);

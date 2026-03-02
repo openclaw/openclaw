@@ -1,18 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { loadRuntimeSourceFilesForGuardrails } from "../test-utils/runtime-source-guardrail-scan.js";
-
-const SKIP_PATTERNS = [
-  /\.test\.tsx?$/,
-  /\.test-helpers\.tsx?$/,
-  /\.test-utils\.tsx?$/,
-  /\.test-harness\.tsx?$/,
-  /\.e2e\.tsx?$/,
-  /\.d\.ts$/,
-  /[\\/](?:__tests__|tests|test-utils)[\\/]/,
-  /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
-  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
-  /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
-];
+import {
+  loadRuntimeSourceFilesForGuardrails,
+  shouldSkipGuardrailRuntimeSource,
+} from "../test-utils/runtime-source-guardrail-scan.js";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -20,9 +10,11 @@ type QuoteScanState = {
   quote: QuoteChar | null;
   escaped: boolean;
 };
+const WEAK_RANDOM_SAME_LINE_PATTERN =
+  /(?:Date\.now[^\r\n]*Math\.random|Math\.random[^\r\n]*Date\.now)/u;
 
 function shouldSkip(relativePath: string): boolean {
-  return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
+  return shouldSkipGuardrailRuntimeSource(relativePath);
 }
 
 function stripCommentsForScan(input: string): string {
@@ -233,15 +225,8 @@ describe("temp path guard", () => {
       if (hasDynamicTmpdirJoin(file.source)) {
         offenders.push(relativePath);
       }
-      if (file.source.includes("Date.now") && file.source.includes("Math.random")) {
-        const lines = file.source.split(/\r?\n/);
-        for (let idx = 0; idx < lines.length; idx += 1) {
-          const line = lines[idx] ?? "";
-          if (!line.includes("Date.now") || !line.includes("Math.random")) {
-            continue;
-          }
-          weakRandomMatches.push(`${relativePath}:${idx + 1}`);
-        }
+      if (WEAK_RANDOM_SAME_LINE_PATTERN.test(file.source)) {
+        weakRandomMatches.push(relativePath);
       }
     }
 
