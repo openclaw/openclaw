@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Pairing/AllowFrom account fallback: handle omitted `accountId` values in `readChannelAllowFromStore` and `readChannelAllowFromStoreSync` as `default`, while preserving legacy unscoped allowFrom merges for default-account flows. Thanks @Sid-Qin and @vincentkoc.
 - Agents/Subagent announce cleanup: keep completion-message runs pending while descendants settle, add a 30 minute hard-expiry backstop to avoid indefinite pending state, and keep retry bookkeeping resumable across deferred wakes. (#23970) Thanks @tyler6204.
 - BlueBubbles/Message metadata: harden send response ID extraction, include sender identity in DM context, and normalize inbound `message_id` selection to avoid duplicate ID metadata. (#23970) Thanks @tyler6204.
 - Gateway/Control UI method guard: allow POST requests to non-UI routes to fall through when no base path is configured, and add POST regression coverage for fallthrough and base-path 405 behavior. (#23970) Thanks @tyler6204.
@@ -51,6 +52,10 @@ Docs: https://docs.openclaw.ai
 - Browser/Extension navigation reattach: preserve debugger re-attachment when relay is temporarily disconnected by deferring relay attach events until reconnect/re-announce, reducing post-navigation tab loss. (#28725) Thanks @stone-jin.
 - Browser/Profile defaults: prefer `openclaw` profile over `chrome` in headless/no-sandbox environments unless an explicit `defaultProfile` is configured. (#14944) Thanks @BenediktSchackenberg.
 - Browser/Remote CDP ownership checks: skip local-process ownership errors for non-loopback remote CDP profiles when HTTP is reachable but the websocket handshake fails, and surface the remote websocket attach/retry path instead. (#15582) Landed from contributor (#28780) Thanks @stubbi, @bsormagec, @unblockedgamesstudio and @vincentkoc.
+- Browser/Profile attach-only override: support `browser.profiles.<name>.attachOnly` (fallback to global `browser.attachOnly`) so loopback proxy profiles can skip local launch/port-ownership checks without forcing attach-only mode for every profile. (#20595) Thanks @unblockedgamesstudio and @vincentkoc.
+- Browser/Act request compatibility: accept legacy flattened `action="act"` params (`kind/ref/text/...`) in addition to `request={...}` so browser act calls no longer fail with `request required`. (#15120) Thanks @vincentkoc.
+- Browser/Extension relay stale tabs: evict stale cached targets from `/json/list` when extension targets are destroyed/crashed or commands fail with missing target/session errors. (#6175) Thanks @vincentkoc.
+- CLI/Browser start timeout: honor `openclaw browser --timeout <ms> start` and stop by removing the fixed 15000ms override so slower Chrome startups can use caller-provided timeouts. (#22412, #23427) Thanks @vincentkoc.
 - Browser/CDP startup diagnostics: include Chrome stderr output and a Linux no-sandbox hint in startup timeout errors so failed launches are easier to diagnose. (#29312) Thanks @veast.
 - Docker/Image health checks: add Dockerfile `HEALTHCHECK` that probes gateway `GET /healthz` so container runtimes can mark unhealthy instances without requiring auth credentials in the probe command. (#11478) Thanks @U-C4N and @vincentkoc.
 - Docker/Sandbox bootstrap hardening: make `OPENCLAW_SANDBOX` opt-in parsing explicit (`1|true|yes|on`), support custom Docker socket paths via `OPENCLAW_DOCKER_SOCKET`, defer docker.sock exposure until sandbox prerequisites pass, and reset/roll back persisted sandbox mode to `off` when setup is skipped or partially fails to avoid stale broken sandbox state. (#29974) Thanks @jamtujest and @vincentkoc.

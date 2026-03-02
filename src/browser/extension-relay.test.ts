@@ -730,6 +730,148 @@ describe("chrome extension relay server", () => {
     RELAY_TEST_TIMEOUT_MS,
   );
 
+  it("removes cached targets from /json/list when targetDestroyed arrives", async () => {
+    const { ext } = await startRelayWithExtension();
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-1",
+            targetInfo: {
+              targetId: "t1",
+              type: "page",
+              title: "Example",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((target) => target.id === "t1"),
+    );
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.targetDestroyed",
+          params: { targetId: "t1" },
+        },
+      }),
+    );
+
+    const updatedList = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.every((target) => target.id !== "t1"),
+    );
+
+    expect(updatedList.some((target) => target.id === "t1")).toBe(false);
+    ext.close();
+  });
+
+  it("prunes stale cached targets after target-not-found command errors", async () => {
+    const { port, ext } = await startRelayWithExtension();
+    const extQueue = createMessageQueue(ext);
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-1",
+            targetInfo: {
+              targetId: "t1",
+              type: "page",
+              title: "Example",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((target) => target.id === "t1"),
+    );
+
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    const cdpQueue = createMessageQueue(cdp);
+
+    cdp.send(
+      JSON.stringify({
+        id: 77,
+        method: "Runtime.evaluate",
+        sessionId: "cb-tab-1",
+        params: { expression: "1+1" },
+      }),
+    );
+
+    let forwardedId: number | null = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const msg = JSON.parse(await extQueue.next()) as { method?: string; id?: number };
+      if (msg.method === "forwardCDPCommand" && typeof msg.id === "number") {
+        forwardedId = msg.id;
+        break;
+      }
+    }
+    expect(forwardedId).not.toBeNull();
+
+    ext.send(
+      JSON.stringify({
+        id: forwardedId,
+        error: "No target with given id",
+      }),
+    );
+
+    let response: { id?: number; error?: { message?: string } } | null = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const msg = JSON.parse(await cdpQueue.next()) as {
+        id?: number;
+        error?: { message?: string };
+      };
+      if (msg.id === 77) {
+        response = msg;
+        break;
+      }
+    }
+    expect(response?.id).toBe(77);
+    expect(response?.error?.message ?? "").toContain("No target with given id");
+
+    const updatedList = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.every((target) => target.id !== "t1"),
+    );
+    expect(updatedList.some((target) => target.id === "t1")).toBe(false);
+
+    cdp.close();
+    ext.close();
+  });
+
   it("rebroadcasts attach when a session id is reused for a new target", async () => {
     const { port, ext } = await startRelayWithExtension();
 
