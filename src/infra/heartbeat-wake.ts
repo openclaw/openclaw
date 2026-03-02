@@ -161,6 +161,16 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             sessionKey: pendingWake.sessionKey,
           });
           schedule(DEFAULT_RETRY_MS, "retry");
+          continue;
+        }
+        if (res.status === "failed") {
+          // Session-event runs should not be dropped on transient failures.
+          queuePendingWakeReason({
+            reason: pendingWake.reason ?? "retry",
+            agentId: pendingWake.agentId,
+            sessionKey: pendingWake.sessionKey,
+          });
+          schedule(DEFAULT_RETRY_MS, "retry");
         }
       }
     } catch {

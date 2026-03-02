@@ -107,6 +107,19 @@ describe("heartbeat-wake", () => {
     });
   });
 
+  it("retries failed runs after the default retry delay", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", reason: "temporary error" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "exec-event",
+      expectedRetryReason: "exec-event",
+    });
+  });
+
   it("stale disposer does not clear a newer handler", async () => {
     vi.useFakeTimers();
     const handlerA = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
