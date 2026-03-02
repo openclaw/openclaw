@@ -32,7 +32,10 @@ export type SignalDataMessage = {
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
+    type?: string | null;
   } | null;
+  expiresInSeconds?: number | null;
+  isExpirationUpdate?: boolean | null;
   quote?: { text?: string | null } | null;
   reaction?: SignalReactionMessage | null;
 };

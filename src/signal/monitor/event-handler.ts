@@ -490,6 +490,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
+    // Filter out group update / permission-change events and expiration timer changes.
+    // These are system-level messages (e.g. "Admin settings changed: only admins can edit
+    // group info") that should not be forwarded to the agent.
+    if (dataMessage.groupInfo?.type === "UPDATE") {
+      logVerbose("signal: ignoring group update message (groupInfo.type=UPDATE)");
+      return;
+    }
+    if (dataMessage.isExpirationUpdate) {
+      logVerbose("signal: ignoring expiration timer update message");
+      return;
+    }
+
     const senderRecipient = resolveSignalRecipient(sender);
     const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
