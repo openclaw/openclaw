@@ -223,14 +223,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     const configMatchesProfileDefault = profileDefaultPaths
       ? resolvedConfigPath === canonicalizePathForCompare(profileDefaultPaths.configPath)
       : false;
-    const targetMatchesProfileDefaults = stateMatchesProfileDefault && configMatchesProfileDefault;
+    const stateTargetsProfileDefault = stateIsDefault || stateMatchesProfileDefault;
+    const configTargetsProfileDefault = configIsDefault || configMatchesProfileDefault;
     const hasStateOverride = Boolean(process.env.OPENCLAW_STATE_DIR?.trim());
     const hasConfigOverride = Boolean(process.env.OPENCLAW_CONFIG_PATH?.trim());
     const hasExplicitCustomTarget =
-      (hasStateOverride || hasConfigOverride) &&
-      !stateIsDefault &&
-      !configIsDefault &&
-      !targetMatchesProfileDefaults;
+      hasStateOverride &&
+      !stateTargetsProfileDefault &&
+      (!hasConfigOverride || !configTargetsProfileDefault);
 
     if (!hasExplicitCustomTarget && (!stateMatchesDev || !configMatchesDev)) {
       defaultRuntime.error(

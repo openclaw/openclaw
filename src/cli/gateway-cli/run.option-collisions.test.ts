@@ -268,6 +268,22 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("hard-stops --dev --reset when state is profile-default but config is custom", async () => {
+    vi.stubEnv("HOME", "/Users/test");
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/test/.openclaw-work");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/custom-dev/openclaw.json");
+    resolveStateDir.mockReturnValue("/Users/test/.openclaw-work");
+    resolveConfigPath.mockReturnValue("/tmp/custom-dev/openclaw.json");
+
+    await expectGatewayExit(["gateway", "run", "--dev", "--reset"]);
+
+    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain(
+      "Refusing to run `gateway --dev --reset` because the reset target is not dev-isolated.",
+    );
+  });
+
   it("treats symlinked default paths as default reset targets", async () => {
     const home = "/Users/test";
     const defaultStateDir = path.join(home, ".openclaw");
