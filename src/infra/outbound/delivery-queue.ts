@@ -161,10 +161,12 @@ export async function enqueueDelivery(
  * This ensures the row passes startup-cutoff filtering even if the
  * subsequent ack/fail bookkeeping write is swallowed.
  *
- * Also pushes next_attempt_at forward by the first-retry backoff interval
+ * Also pushes next_attempt_at forward by the second-retry backoff (25s)
  * to prevent the recovery worker from picking up the row while the direct
- * send is still in progress. If the direct send completes normally,
- * ackDelivery or failDelivery finalizes the row before recovery touches it.
+ * send is still in progress. We use the second tier rather than the first
+ * (5s) because some channels have longer timeouts (e.g. Signal 10s RPC).
+ * If the direct send completes normally, ackDelivery or failDelivery
+ * finalizes the row before recovery touches it.
  */
 export async function markAttemptStarted(id: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
@@ -174,7 +176,7 @@ export async function markAttemptStarted(id: string, stateDir?: string): Promise
       `UPDATE message_outbox
          SET last_attempt_at = ?, next_attempt_at = ?
        WHERE id = ? AND last_attempt_at IS NULL`,
-    ).run(now, now + computeBackoffMs(1), id);
+    ).run(now, now + computeBackoffMs(2), id);
   } catch (err) {
     logVerbose(`delivery-queue: markAttemptStarted failed: ${String(err)}`);
   }
