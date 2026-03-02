@@ -17,6 +17,7 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
 }));
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type AppMentionHandler = MessageHandler;
 
 type MessageCase = {
   overrides?: SlackSystemEventTestOverrides;
@@ -33,6 +34,19 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
+    handleSlackMessage,
+  };
+}
+
+function createAppMentionHandlers(overrides?: SlackSystemEventTestOverrides) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  const handleSlackMessage = vi.fn(async () => {});
+  registerSlackMessageEvents({
+    ctx: harness.ctx,
+    handleSlackMessage,
+  });
+  return {
+    handler: harness.getHandler("app_mention") as AppMentionHandler | null,
     handleSlackMessage,
   };
 }
@@ -213,5 +227,43 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
+    const { handler, handleSlackMessage } = createAppMentionHandlers({ dmPolicy: "open" });
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: {
+        type: "app_mention",
+        channel: "D123",
+        channel_type: "channel",
+        user: "U1",
+        text: "<@U_BOT> hello",
+        ts: "123.456",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("routes app_mention events from channels to the message handler", async () => {
+    const { handler, handleSlackMessage } = createAppMentionHandlers({ dmPolicy: "open" });
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: {
+        type: "app_mention",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "<@U_BOT> hello",
+        ts: "123.789",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
   });
 });

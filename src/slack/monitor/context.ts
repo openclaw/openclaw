@@ -12,47 +12,10 @@ import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
+import { normalizeSlackChannelType } from "./channel-type.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
-export function inferSlackChannelType(
-  channelId?: string | null,
-): SlackMessageEvent["channel_type"] | undefined {
-  const trimmed = channelId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("D")) {
-    return "im";
-  }
-  if (trimmed.startsWith("C")) {
-    return "channel";
-  }
-  if (trimmed.startsWith("G")) {
-    return "group";
-  }
-  return undefined;
-}
-
-export function normalizeSlackChannelType(
-  channelType?: string | null,
-  channelId?: string | null,
-): SlackMessageEvent["channel_type"] {
-  const normalized = channelType?.trim().toLowerCase();
-  const inferred = inferSlackChannelType(channelId);
-  if (
-    normalized === "im" ||
-    normalized === "mpim" ||
-    normalized === "channel" ||
-    normalized === "group"
-  ) {
-    // D-prefix channel IDs are always DMs — override a contradicting channel_type.
-    if (inferred === "im" && normalized !== "im") {
-      return "im";
-    }
-    return normalized;
-  }
-  return inferred ?? "channel";
-}
+export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type.js";
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
