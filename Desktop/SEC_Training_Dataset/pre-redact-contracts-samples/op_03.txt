@@ -1,0 +1,2566 @@
+EX-10.1
+2
+kl04075_ex10-1.htm
+EXHIBIT 10.1 OPERATING AGREEMENT
+
+                                                                                                       Exhibit
+ 10.1
+
+OPERATING
+ AGREEMENT 
+
+OF
+
+INSTRIDE
+ VENTURES, LLC 
+
+THIS
+ OPERATING AGREEMENT (this
+ “Agreement”) of InStride Ventures, LLC, a limited liability company organized
+ pursuant to the Delaware Limited Liability Company Act (the “Company”), is
+ entered into by and among George Foreman Ventures LLC, a Delaware limited
+ liability company (“George Foreman Ventures”), In Stride, L.L.C., a Delaware
+ limited liability company doing business in New Jersey as In Stride Shoes,
+ L.L.C. (“In Stride”), Olen Rice, an individual (“Rice”), and Paul Koester, an
+ individual (“Koester”) (individually a “Member” or collectively the
+“Members”).
+
+SECTION
+ 1.   FORMATION;
+ DEFINITIONS.
+
+1.1. Formation.
+ The
+ Members have caused this limited liability company to be formed under the
+ Delaware Limited Liability Company Act, 6 Delaware Code § 18-101 et
+ seq., as
+ amended from time to time (the “Act”). The Members have caused a certificate of
+ formation to be filed in accordance with the Act (the “Certificate of
+ Formation”).
+
+1.2. Name.
+ The
+ name of the Company is “InStride Ventures, LLC” and all of the Company business
+ shall be conducted under that name or such other names that comply with
+ applicable law as the Manager may select from time to time.
+
+1.3. Registered
+ Office; Registered Agent.
+ The
+ registered agent of the Company shall be The Corporation Trust Company and
+ the
+ registered office of the Company shall be located at Corporation Trust Center,
+ 1209 Orange Street, Wilmington, Delaware 19801, or at such other location (which
+ need not be a place of business of the Company) as the Manager may designate
+ from time to time.
+
+1.4. Principal
+ Office; Other Offices.
+ The
+ initial principal office of the Company shall be located at c/o George Foreman
+ Ventures LLC, 100 North Wilkes-Barre Boulevard, 4th
+ Floor,
+ Wilkes-Barre, Pennsylvania 18702. The Company may change its principal office
+ or
+ have such other offices as the Manager may designate from time to
+ time.
+
+1.5. Purposes.
+ The
+ purposes of the Company are (a) to enter into a binding agreement (the “ShopKo
+ Agreement”) with ShopKo Stores, Inc. (“ShopKo”) which would give the Company the
+ rights to supply Shopko with Medicare reimburseable therapeutic footwear that
+ includes athletic, casual and post-operative shoes and accessories, including
+ shoe inserts, that meet the medical needs of individuals with specific footwear
+ problems such as those related to diabetes (the “Footwear”), (b) to initially
+ enter into a short-term joint venture to supply, and use celebrity marketing
+ to
+ market, the Footwear at fifteen (15) ShopKo stores for a period beginning
+ shortly after the execution of this Agreement and ending on August 1, 2007
+ (the
+“Test Period”) as a test (the “ShopKo Test”) to determine whether the Footwear
+ sells well enough during the
+
+1
+
+Test
+ Period to provide business justification for George Foreman Ventures to elect
+ to
+ continue the joint venture with respect to the Footwear following the expiration
+ of the Test Period, (c) to continue to supply and market the Footwear to ShopKo
+ and/or other retail outlets or through other channels of distribution beyond
+ the
+ expiration of the Test Period if George Foreman Ventures decides, in its sole
+ discretion, that the Company should do so, and (d) to engage in any and all
+ activities related or incident to the purposes described in (a) through (c)
+ of
+ this Section 1.5. 
+
+1.6. Term.
+ The
+ Company commenced its existence upon the filing of the Certificate of Formation
+ with the Secretary of State of the State of Delaware. The Company shall continue
+ in perpetual existence unless and until the Company is dissolved in accordance
+ with Section 8 hereof.
+
+1.7. No
+ State Law Partnership.
+ The
+ Members intend that the Company shall not be a partnership (including, without
+ limitation, a limited partnership) or joint venture, and that no Member shall
+ be
+ a partner or joint venturer of any other Member, for any purposes other than
+ federal, state and local tax purposes, and the provisions of this Agreement
+ shall not be construed otherwise.
+
+1.8. Definitions.
+ As used
+ in this Agreement, the following terms have the following meanings, unless
+ the
+ context otherwise requires:
+
+(a) “Accounting
+ Period”
+ means
+ the following fiscal periods: the initial Accounting Period commenced on the
+ date on which the Certificate of Formation was filed with the Delaware Secretary
+ of State. Each subsequent Accounting Period shall commence immediately after
+ the
+ close of the preceding Accounting Period. Each Accounting Period shall close
+ at
+ the earlier of the close of business on the last day of a Fiscal Year of the
+ Company or on the date of the Company’s dissolution. In addition, the Manager
+ may, in its sole discretion, close the applicable Accounting Period of the
+ Company upon: (1) the acceptance of a Capital Contribution from a new or
+ existing Member, other than a Capital Contribution which is pro rata among
+ all
+ existing Members; or (2) the effective date of the withdrawal of a
+ Member.
+
+(b) “Act”
+ has the
+ meaning set forth in Section 1.1 hereof.
+
+(c) “Adjusted
+ Capital Account”
+ means,
+ with respect to any Member, the balance, if any, in such Member’s Capital
+ Account as of the end of the relevant Accounting Period, after giving effect
+ to
+ the following adjustments:
+
+(1) Credit
+ to
+ such Capital Account any amounts which such Member is obligated to restore
+ or is
+ deemed to be obligated to restore pursuant to the next to the last sentences
+ of
+ Section 1.704-2(g)(1) and Section 1.704-2(i)(5) of the Regulations.
+
+(2) Debit
+ to
+ such Capital Account the items described in Section 1.704-1(b)(2)(ii)(d)(4),
+ Section 1.704-1(b)(2)(ii)(d)(5) and Section 1.704-1(b)(2)(ii)(d)(6) of the
+ Regulations.
+
+2
+
+(d) “Adjusted
+ Capital Account Deficit”
+ means,
+ with respect to any Member, the deficit balance, if any, in such Member’s
+ Capital Account as of the end of the relevant Accounting Period, after giving
+ effect to the following adjustments:
+
+(1) Credit
+ to
+ such Capital Account any amounts which such Member is obligated to restore
+ or is
+ deemed to be obligated to restore pursuant to the next to the last sentences
+ of
+ Section 1.704-2(g)(1) and Section 1.704-2(i)(5) of the Regulations.
+
+(2) Debit
+ to
+ such Capital Account the items described in Section 1.704-1(b)(2)(ii)(d)(4),
+ Section 1.704-1(b)(2)(ii)(d)(5) and Section 1.704-1(b)(2)(ii)(d)(6) of the
+ Regulations.
+
+The
+ foregoing definition of Adjusted Capital Account Deficit is intended to comply
+ with the provisions of Section 1.704-1(b)(2)(ii)(d) of the Regulations and
+ shall
+ be interpreted consistently therewith.
+
+(e) “Affiliate”
+ shall
+ mean with respect to any Person, any other Person controlling, controlled by
+ or
+ under common control with such specified persons. The term “control”, with
+ respect to any Person, means possession, direct or indirect, of the power to
+ direct or cause the direction of the management and policies of such Person,
+ whether through the ownership of voting securities or a general partnership
+ interest or limited liability company interest, by contract or
+ otherwise.
+
+(f) “Agreement”
+ means
+ this operating agreement, as it may be amended and/or restated from time to
+ time.
+
+(g) “Capital
+ Account”
+ means,
+ with respect to any Member, the Member’s Capital Contribution, increased or
+ decreased as provided in this Agreement.
+
+(h) “Capital
+ Account Balance”
+ of any
+ Member shall mean the balance in that Member’s Capital Account at the time of
+ determination, whether positive or negative, as determined in accordance with
+ the terms of this Agreement.
+
+(i) “Capital
+ Contribution”
+ means,
+ with respect to any Member, the amount of money and the initial Gross Asset
+ Value of any property other than money contributed to the Company by that
+ Member.
+
+(j) “Capital
+ Transaction”
+ means
+ any sale or other disposition of all or a portion of the Property in a single
+ transaction or in a series of related transactions, other than a sale or
+ disposition in the ordinary course of the Company’s business.
+
+(k) “Code”
+ means
+ the Internal Revenue Code of 1986, as amended from time to time. A reference
+ to
+ a specific section of the Code refers not only to that specific section but
+ any
+ corresponding provisions of any federal tax statute enacted after the date
+ of
+ this Agreement, as such specific section or corresponding provisions are in
+ effect on the date of application of this Agreement containing such
+ reference.
+
+3
+
+(l) “Company”
+ means
+ InStride Ventures, LLC, a Delaware limited liability company.
+
+(m) “Company
+ Minimum Gain”
+ shall
+ have the meaning set forth in Sections 1.704-2(b)(2) and 1.704-2(d) of the
+ Regulations.
+
+(n) “Depreciation”
+ means,
+ for each Accounting Period, an amount equal to the depreciation, amortization,
+ or other cost recovery deduction allowable with respect to an asset for such
+ year or other period, except that if the Gross Asset Value of an asset differs
+ from its adjusted basis for federal income tax purposes at the beginning of
+ such
+ year or other period, Depreciation shall be an amount which bears the same
+ ratio
+ to such beginning Gross Asset Value as the federal income tax depreciation,
+ amortization, or other cost recovery deduction for such year or other period
+ bears to such beginning adjusted tax basis.
+
+(o) “Distributable
+ Cash”
+ means,
+ with respect to any fiscal period, the excess of all cash receipts of the
+ Company from any source whatsoever, including normal operations, sales of
+ assets, proceeds of borrowings, Capital Contributions of the Members, proceeds
+ from a Capital Transaction, and any and all other sources over the sum of the
+ following amounts:
+
+(1) cash
+ disbursements for accounting and bookkeeping services, costs of sales of Company
+ assets, management fees and expenses, insurance, legal and accounting expenses,
+ and any and all other items customarily considered to be “ operating
+ expenses”;
+
+(2) payments
+ of interest, principal and premium, and points and other costs of borrowing
+ under any indebtedness of the Company (other
+ than payments made with respect to Member Loans);
+
+(3) payments
+ made to purchase Company assets; and
+
+(4) amounts
+ set aside as Reserves.
+
+(p) “Fiscal
+ Year”
+ means
+ the calendar year; but, upon the organization of the Company, Fiscal Year means
+ the period from the first day of the term of the Company to the next following
+ December 31, and upon dissolution of the Company, shall mean the period from
+ the
+ end of the last preceding Fiscal Year to the date of such
+ dissolution.
+
+(q) “Footwear”
+ has the
+ meaning set forth in Section 1.5 hereof.
+
+(r) “Gross
+ Asset Value”
+ means,
+ with respect to any asset, the asset’s adjusted basis for federal income tax
+ purposes, except as follows:
+
+(1) The
+ initial Gross Asset Value of any asset contributed by a Member to the Company
+ shall be the gross fair market value of such asset, as determined by the
+ contributing Member and the Company;
+
+(2) The
+ Gross
+ Asset Values of all Company assets shall be adjusted to equal their respective
+ gross fair market values in connection with (and to be effective immediately
+ prior to) the following events: (i) the acquisition of any additional Membership
+ Interest in the Company by any new or existing Member in exchange for more
+ than
+ a de minimis
+
+4
+
+Capital
+ Contribution; (ii) the acquisition of any additional Membership Interest in
+ the
+ Company (other than a de minimis Membership Interest) as consideration for
+ the
+ provision of services to or for the benefit of the Company by an existing Member
+ acting in a Member capacity, or by a new Member acting in a Member capacity
+ or
+ in anticipation of becoming a Member; (iii) the distribution by the Company
+ to a
+ Member of more than a de minimis amount of Company property other than money,
+ unless all Members receive simultaneous distributions of undivided interests
+ in
+ the distributed property in proportion to their interests in the Company; and
+ (iv) the liquidation of the Company within the meaning of Regulations Section
+ 1.704-1(b)(2)(ii)(g); provided, however, that an adjustment pursuant to clauses
+ (i), (ii) and (iii) above shall be made only if such adjustment is necessary
+ or
+ appropriate to reflect the relative economic interests of the Members in the
+ Company;
+
+(3) If
+ the
+ Gross Asset Value of an asset has been determined or adjusted pursuant to
+ Section l.8(r)(1) or 1.8(r)(2) hereof, such Gross Asset Value shall thereafter
+ be adjusted by the Depreciation taken into account with respect to such asset
+ for purposes of computing Profits and Losses; and
+
+(4) The
+ Gross
+ Asset Values of Company assets shall be increased (or decreased) to reflect
+ any
+ adjustments to the adjusted basis of such assets pursuant to Code Section 734(b)
+ or Code Section 743(b), but only to the extent that such adjustments are taken
+ into account in determining Capital Accounts pursuant to Regulations Section
+ 1.704-1(b)(2)(iv)(m); provided, however, that Gross Asset Values shall not
+ be
+ adjusted pursuant to this subsection to the extent that an adjustment pursuant
+ to subsection 1.8(r)(2) above is made in connection with a transaction that
+ would otherwise result in an adjustment pursuant to this
+ subsection.
+
+(s) “Initial
+ George Foreman Ventures Loan”
+ has
+ the
+ meaning set forth in Section 3.1(b)(2) hereof.
+
+(t) “Initial
+ In Stride Loan”
+ has
+ the
+ meaning set forth in Section 3.1(b)(1) hereof.
+
+(u) “Manager”
+ means
+ George Foreman Ventures and any other Person or Persons hereafter designated
+ as
+ a Manager pursuant to the Act or the terms of this Agreement.
+
+(v) “Member
+ Loan”
+ has the
+ meaning set forth in Section 3.2(a) hereof.
+
+(w) “Members”
+ means
+ George Foreman Ventures, In Stride, Rice, Koester and any other Person or
+ Persons hereafter admitted to the Company as a Member as provided in this
+ Agreement, but does not include any Person who has ceased to be a Member of
+ the
+ Company. The Members of the Company are listed on Schedule
+ A
+ attached
+ hereto, and the Company shall keep a current list of all Members and their
+ Capital Contributions. 
+
+(x) “Member
+ Nonrecourse Debt”
+ has the
+ meaning set forth in Section 1.704-2(b)(4) of the Regulations.
+
+(y) “Member
+ Nonrecourse Debt Minimum Gain”
+ means
+ an
+ amount, with respect to each Member Nonrecourse Debt, equal to the Company
+ Minimum Gain that would
+
+5
+
+result
+ if
+ such Member Nonrecourse Debt were treated as a Nonrecourse Liability, determined
+ in accordance with Section 1.704-2(i)(3) of the Regulations.
+
+(z) “Member
+ Nonrecourse Deductions”
+ has
+ the
+ meaning set forth in Sections 1.704-2(i)(1) and 1.704-2(i)(2) of the
+ Regulations. The amount of Member Nonrecourse Deductions with respect to a
+ Member Nonrecourse Debt for any Accounting Period shall be determined in
+ accordance with Section 1.704-2(i)(2) of the Regulations.
+
+(aa) “Membership
+ Interest”
+ shall
+ mean the interest of a Member in the Company, including without limitation,
+ rights to distributions (liquidating or otherwise), allocations, information
+ and
+ voting rights. The initial percentage Membership Interests of the Members in
+ the
+ Company are set forth on Schedule
+ A
+ attached
+ hereto. 
+
+(bb) “Nonrecourse
+ Deductions”
+ has the
+ meaning set forth in Section 1.704-2(b)(1) of the Regulations. The amount of
+ Nonrecourse Deductions for an Accounting Period shall be determined in
+ accordance with Section 1.704-2(c) of the Regulations.
+
+(cc) “Nonrecourse
+ Liability”
+ has the
+ meaning set forth in Sections 1.704-2(b)(3) and 1.752-1(a)(2) of the
+ Regulations.
+
+(dd) “Person”
+ means an
+ individual, corporation, association, partnership, joint venture, limited
+ liability company, estate, trust, or any other legal entity.
+
+(ee) “Profits”
+ and “Losses”
+ means
+ the Company’s taxable income or taxable loss, as the case may be, for each
+ Accounting Period, as determined under Section 703(a) of the Code and
+ Regulations Section 1.703-1, but with the following adjustments: (1) any
+ tax-exempt income, as described in Section 705(a)(1)(B) of the Code, realized
+ by
+ the Company during such Accounting Period shall be taken into account as if
+ it
+ were taxable income in computing such taxable income or taxable loss; (2) any
+ expenditures of the Company described in Section 705(a)(2)(B) of the Code for
+ such Accounting Period, including any items treated under Regulations Section
+ 1.704-1(b)(2)(iv)(i) as items described in Section 705(a)(2)(B) of the Code,
+ shall be taken into account as if they were deductible items in computing such
+ taxable income or taxable loss; (3) any items of income recognized by the
+ Company during such Accounting Period that are required to be allocated to
+ the
+ Members under Section 9.2(a) hereof shall be excluded from such taxable income
+ or taxable loss; (4) gain or loss resulting from any disposition of Company
+ property with respect to which gain or loss is recognized for federal income
+ tax
+ purposes shall be computed by reference to the Gross Asset Value of the property
+ disposed of, notwithstanding that the adjusted tax basis of such property
+ differs from its Gross Asset Value; and (5) in lieu of the depreciation,
+ amortization, and other cost recovery deductions taken into account in computing
+ such taxable income or loss, there shall be taken into account Depreciation
+ for
+ such Accounting Period, computed in accordance with Section 1.8(n) hereof.
+ If
+ the Company’s taxable income or taxable loss for such Accounting Period, as
+ adjusted in the manner provided in Clauses (1) through (5) above, is a positive
+ amount, such amount shall be the Company’s Profits for such Accounting Period;
+ and if negative, such amount shall be the Company’s Losses for such Accounting
+ Period.
+
+6
+
+(ff) “Property”
+ shall
+ mean, at any time, all property, whether real or personal, interests, assets
+ or
+ rights owned or held by or on behalf of the Company at such time.
+
+(gg) “Regulations”
+ means
+ the income tax regulations, including temporary regulations, promulgated under
+ the Code, as such regulations may be amended from time to time (including
+ corresponding provisions of succeeding regulations).
+
+(hh) “Reserve”
+ or
+“Reserves”
+ means
+ amounts set aside and deemed sufficient by the Manager, as of the date of
+ determination, for working capital and to pay taxes, insurance, debt service,
+ or
+ other costs and expenses, incident to the operation of the Company, and for
+ advancing the purposes of the Company set forth in Section 1.5
+ hereof.
+
+(ii) “ShopKo
+ Test”
+ has the
+ meaning set forth in Section 1.5 hereof.
+
+(jj) “Test
+ Period”
+ has
+ the
+ meaning set forth in Section 1.5 hereof.
+
+(kk) “Transfer”
+ shall
+ mean, any disposition (including, without limitation, gifts, sales, assignments,
+ pledges, encumbrances, bequests, and all other inter vivos or testamentary
+ dispositions) whether voluntary, involuntary or whether pursuant to court order
+ or by operation of law.
+
+SECTION
+ 2.  MEMBERS;
+ MANAGER.
+
+2.1. Members.
+ The
+ Members of the Company (and their Membership Interest in the Company) are listed
+ on Schedule
+ A
+ hereto,
+ each of whom has executed this Agreement as of the date hereof and is hereby
+ admitted to the Company as a Member.
+
+2.2. Additional
+ Members.
+ No
+ Person
+ shall be admitted to the Company as an additional or substitute Member without
+ the prior written consent of the Manager or as otherwise provided
+ herein.
+
+2.3. Liability
+ to Third Parties.
+ No
+ Member shall be liable for the debts, obligations or liabilities of the Company,
+ including under a judgment, decree or order of a court, except to the extent
+ required under the Act with respect to amounts distributed to the Member at
+ a
+ time when the Company was insolvent or was rendered insolvent by virtue of
+ such
+ distribution.
+
+2.4. Manager.
+ The
+ number of Managers of the Company shall be one (1). George Foreman Ventures
+ is
+ hereby designated to serve as the Manager of the Company. The Manager may resign
+ at any time upon prior written notice to the Company. In the event of a vacancy
+ in the position of Manager by reason of resignation, liquidation, dissolution
+ or
+ bankruptcy, a successor shall be appointed by a majority-in-interest of the
+ Members. 
+
+7
+
+SECTION
+ 3. CAPITAL
+ CONTRIBUTIONS; LOANS; ACQUISITION OF FOOTWEAR; CAPITAL
+ ACCOUNTS.
+
+3.1. Initial
+ Capital Contributions; Initial Loans and Acquisition of Footwear During the
+ Test
+ Period.
+
+(a) The
+ Members shall, promptly after the execution of this Agreement, make the initial
+ Capital Contributions set forth on Schedule
+ A attached hereto
+ to
+ the Company in exchange for their Membership Interests. In addition, In Stride
+ shall execute the license agreement attached hereto as Exhibit
+ A,
+ but
+ shall not receive any Capital Account credit for its execution of such license
+ agreement.
+
+(b) During
+ the Test Period:
+
+(1) In
+ Stride
+ shall supply to the Company all of the Footwear required, as determined by
+ the
+ Manager, to undertake the ShopKo Test. In addition, In Stride shall pay all
+ costs of training and Company operational overhead required (as determined
+ by
+ the Manager) during the Test Period to undertake the ShopKo Test. The sum of
+ (a)
+ In Stride’s documented direct cost of the Footwear supplied to the Company
+ pursuant to this Section 3.1(b)(1), and (b) the aggregate amount of documented
+ costs of training and Company operational overhead paid by In Stride pursuant
+ to
+ this Section 3.1(b)(1), shall constitute a loan by In Stride to the Company
+ (the
+“Initial In Stride Loan”) which shall not bear interest and the principal of
+ which shall be repaid out of Distributable Cash pursuant to Sections 4.2(a)
+ and
+ 4.3(a) hereof; provided, however, that (i) the documentation corresponding
+ to
+ any such costs shall be provided to the Manager within thirty (30) days after
+ such costs are incurred, and (ii) any individual expenditure (or commitment
+ to
+ make an individual expenditure) in excess of ten thousand dollars ($10,000)
+ shall require the approval of the Manager and the vote of those Members owning,
+ in the aggregate, at least sixty percent (60%) of the Membership Interests,
+ before such expenditure or commitment is incurred. Notwithstanding clause (ii)
+ of this Section 3.1(b)(1), (I) the Manager shall have the ability to propose
+ a
+ budget to the Members, and if the proposed budget is approved by at least sixty
+ percent (60%) of the Membership Interests, then the Member vote referred to
+ in
+ clause (ii) shall not be required unless the expenditure or commitment at issue
+ would result in the approved budgeted expenses being exceeded by more than
+ ten
+ thousand dollars ($10,000), and (II) regardless of whether or not a budget
+ has
+ been approved, if the Company’s gross revenue for any Fiscal Year exceeds two
+ million dollars ($2,000,000), then the Member vote referred to in clause (ii)
+ shall not be required for the remainder of that Fiscal Year and for all future
+ Fiscal Years. 
+
+(2) George
+ Foreman Ventures shall either advance to the Company, in cash, or pay directly,
+ all costs of marketing the Footwear during the Test Period, as such costs are
+ determined by the Manager. The aggregate amount of cash advanced to the Company
+ by George Foreman Ventures pursuant to this Section 3.1(b)(2), and documented
+ costs paid directly by George Foreman Ventures pursuant to this Section
+ 3.1(b)(2), shall constitute a loan by George Foreman Ventures to the Company
+ (the “Initial George Foreman Ventures Loan”) which shall
+
+8
+
+not
+ bear
+ interest and the principal of which shall be repaid out of Distributable Cash
+ pursuant to Sections 4.2(a) and 4.3(a) hereof; provided, however, that (i)
+ the
+ documentation corresponding to any such costs shall be provided to the Manager
+ within thirty (30) days after such costs are incurred, and (ii) any individual
+ expenditure (or commitment to make an individual expenditure) in excess of
+ ten
+ thousand dollars ($10,000) shall require the approval of the Manager and the
+ vote of those Members owning, in the aggregate, at least sixty percent (60%)
+ of
+ the Membership Interests, before such expenditure or commitment is incurred.
+ Notwithstanding clause (ii) of this Section 3.1(b)(2), (I) the Manager shall
+ have the ability to propose a budget to the Members, and if the proposed budget
+ is approved by at least sixty percent (60%) of the Membership Interests, then
+ the Member vote referred to in clause (ii) shall not be required unless the
+ expenditure or commitment at issue would result in the approved budgeted
+ expenses being exceeded by more than ten thousand dollars ($10,000), and (II)
+ regardless of whether or not a budget has been approved, if the Company’s gross
+ revenue for any Fiscal Year exceeds two million dollars ($2,000,000), then
+ the
+ Member vote referred to in clause (ii) shall not be required for the remainder
+ of that Fiscal Year and for all future Fiscal Years. 
+
+3.2. Additional
+ Capital Needs and Acquisition of Footwear After the Test Period.
+
+(a) If,
+ after
+ the expiration of the Test Period, the Manager determines, in its sole
+ discretion, that additional capital is needed for Company business, then the
+ Manager may raise such additional capital through borrowing or issuing
+ additional equity in the Company, as the Manager in its sole discretion deems
+ advisable. The Manager may secure third party financing from an institutional
+ lender (without offering warrants or other equity participation). Additionally,
+ the Manager may secure loans from its Members (“Member Loans”) with each Member
+ being offered the right to participate in such loans based on its percentage
+ Membership Interest, and with contributing Members having the right (but not
+ the
+ obligation) to contribute non-participating Members’ share of these Member
+ Loans. Any such Member Loan made by a Member to the Company shall bear interest
+ at the Prime Rate as published in The Wall Street Journal on the date the Member
+ Loan is made plus 500 basis points, and the interest and principal of such
+ Member Loan shall be repaid out of Distributable Cash as provided in Sections
+ 4.2 and 4.3 hereof. With respect to a proposed issuance of equity to raise
+ capital for Company purposes, the Manager shall value the new equity based
+ on a
+ good faith determination of the fair market value of the Company at the time
+ of
+ the issuance of such equity, and the issuance of such equity shall be subject
+ to
+ the preemptive rights of the Members set forth in Section 6.2 hereof.
+Notwithstanding
+ the foregoing and the provisions of Section 6.2 hereof, with respect to the
+ first two hundred fifty thousand dollars ($250,000) of capital raised from
+ the
+ Members pursuant to this Section 3.2(a), each such contributing Member shall
+ acquire an additional one percent (1%) equity interest in the Company for each
+ twenty-five thousand dollars ($25,000) of capital contributed by such Member
+ (and with respect to any increment of capital contributed by such Member which
+ is less than twenty-five thousand dollars ($25,000), such Member shall acquire
+ a
+ corresponding fraction of the one percent (1%) additional equity interest)
+ and
+ the Membership Interests of the non-contributing Members shall be diluted
+ proportionately. 
+
+(b) After
+ the
+ expiration of the Test Period, In Stride shall sell to the Company, at In
+ Stride’s direct cost and without allocable overhead, all of the Footwear
+ required, as
+
+9
+
+10
+
+determined
+ by the Manager, to conduct the business of the Company. Payment for such
+ Footwear shall be due from the Company to In Stride no later than the date
+ of
+ the shipment of such Footwear from the Orient. 
+
+(c) After
+ the
+ expiration of the Test Period, George Foreman Ventures shall sell to the
+ Company, at George Foreman Ventures’ direct cost and without allocable overhead,
+ all of the marketing materials required, as determined by the Manager, to
+ conduct the business of the Company. Payment for such marketing materials shall
+ be due from the Company to George Foreman Ventures immediately upon the
+ Company’s receipt of such materials. The parties agree that marketing materials
+ shall not include personal appearances by George Foreman, and that the terms
+ and
+ conditions of any such appearances shall be as negotiated and agreed upon
+ between George Foreman and the Company. 
+
+3.3. Time
+ When Capital Contribution to be Returned.
+ No time
+ is agreed upon as to when the Capital Contributions of the Members are to be
+ returned. The Members shall not have the right to demand return of their Capital
+ Contributions nor shall the Members have the right to demand and receive
+ property other than cash in return for their Capital Contributions.
+
+3.4. Capital
+ Accounts.
+ An
+ Adjusted Capital Account shall be maintained for each Member.
+
+(a) To
+ each
+ such account there shall be credited:
+
+(1) the
+ amount of money contributed to the capital of the Company by such
+ Member;
+
+(2) the
+ fair
+ market value of any property other than money contributed to the Company by
+ such
+ Member net of the liabilities securing such contributed property that the
+ Company is considered to assume or take subject to pursuant to Section 752
+ of
+ the Code; and
+
+(3) Profits
+ and items of income and gain allocated to the Member; and
+
+(b) From
+ each
+ such account there shall be debited:
+
+(1) the
+ amount of money distributed to the Member by the Company;
+
+(2) the
+ fair
+ market value of all property distributed to such Member by the Company net
+ of
+ the liabilities securing such distributed property that such Member is
+ considered to assume or take subject to pursuant to Section 752 of the Code;
+ and
+
+(3) Losses
+ and items of loss and deduction allocated to the Member.
+
+(c) In
+ addition to the foregoing adjustments, each Member’s Adjusted Capital Account
+ shall be maintained consistently with and reflect all adjustments described
+ in
+ Regulations Section 1.704-1(b)(2)(iv).
+
+(d) If
+ ownership of any Membership Interest in the Company is assigned in accordance
+ with the terms of this Agreement, the assignee shall succeed to the Capital
+ Account of the assignor to the extent it relates to the assigned Membership
+ Interest.
+
+11
+
+(e) In
+ determining the amount of any liability for purposes of subsections 3.4(a)
+ and
+ (b) above, there shall be taken into account Code Section 752(c) and any other
+ applicable provisions of the Code and Regulations.
+
+(f) To
+ each
+ Member’s Capital Account, there shall be debited or credited, as the case may
+ be, adjustments which are necessary to reflect a revaluation of Company assets
+ to reflect the Gross Asset Value of all Company assets, as required by
+ Regulations Section 1.704-1(b)(2)(iv)(f) and Section 1.8(r).
+
+The
+ foregoing provisions and the other provisions of this Agreement relating to
+ the
+ maintenance of Capital Accounts are intended to comply with Section 704 of
+ the
+ Code and Regulation Section 1.704-1(b) and shall be interpreted and applied
+ in a
+ manner consistent with such provisions. The Company shall make any adjustments
+ that are necessary or appropriate to maintain equality between the Capital
+ Accounts of the Members and the amount of Company capital reflected on the
+ Company’s balance sheet as computed for book purposes in accordance with Section
+ 1.704-1(b)(2)(iv)(q) of the Regulations. 
+
+SECTION
+ 4. DISTRIBUTIONS;
+ ALLOCATION OF PROFITS AND LOSSES.
+
+4.1. Distributions.
+ Subject
+ to maintaining the Company in a sound financial and cash position (which,
+ without limiting the generality of the foregoing, shall include the provision
+ for losses affecting the cash position of the Company and the payment or
+ provision for payment, when due, of obligations of the Company) and establishing
+ such Reserves as are determined by the Manager, in its sole discretion, to
+ be
+ reasonably required, the Manager shall distribute funds of the Company as
+ provided herein.   
+
+4.2. Distributions
+ of Distributable Cash from Operations.
+ If the
+ Manager decides in its discretion to distribute cash flow, then distributions
+ of
+ Distributable Cash arising from operations, other than Capital Transactions,
+ to
+ the extent available, shall be made to the Members in the following order of
+ priority:
+
+(a) first,
+ to
+ In Stride and George Foreman Ventures, the amount required to provide them
+ with
+ the outstanding principal balance of the Initial In Stride Loan and the Initial
+ George Foreman Ventures Loan, respectively, pro rata in accordance with the
+ respective amounts of the outstanding principal balances of the Initial In
+ Stride Loan and the Initial George Foreman Ventures Loan; 
+
+(b) second,
+ to each Member who has made a Member Loan, the amount, if any, required to
+ provide such Member with any current and accumulated interest on his or its
+ Member Loan, pro rata in accordance with the respective amounts of current
+ and
+ accumulated interest of all Member Loans;
+
+(c) third,
+ to
+ each
+ Member who has made a Member Loan, the amount, if any, required to provide
+ such
+ Member with the outstanding principal balance of his or its Member
+
+12
+
+Loan,
+ pro
+ rata in accordance with the respective amounts of the outstanding principal
+ balances of all Member Loans; and 
+
+(d) thereafter,
+ to the Members pro rata in accordance with their Membership
+ Interests.
+
+Notwithstanding
+ the foregoing provisions of this Section 4.2, after making the distributions
+ provided for in subsections (a) and (b) of this Section 4.2, and prior to making
+ the distributions provided for in subsections (c) and (d) of this Section 4.2,
+ the Company shall, to the extent available, distribute the Tax Distribution
+ Amount (as defined in Section 4.5 hereof) to the Members.
+
+4.3. Distributions
+ of Distributable Cash Arising from Capital Transactions and Upon
+ Liquidation.
+ If the
+ Manager decides in its discretion to distribute cash flow, then Distributable
+ Cash arising out of a Capital Transaction and net proceeds upon liquidation
+ of
+ the Company, to the extent available, shall be made to the Members in the
+ following order of priority:
+
+(a) first,
+ to
+ In Stride and George Foreman Ventures, the amount required to provide them
+ with
+ the outstanding principal balance of the Initial In Stride Loan and the Initial
+ George Foreman Ventures Loan, respectively, pro rata in accordance with the
+ respective amounts of the outstanding principal balances of the Initial In
+ Stride Loan and the Initial George Foreman Ventures Loan; 
+
+(b) second,
+ to each Member who has made a Member Loan, the amount, if any, required to
+ provide such Member with any current and accumulated interest on his or its
+ Member Loan, pro rata in accordance with the respective amounts of current
+ and
+ accumulated interest of all Member Loans;
+
+(c) third,
+ to
+ each
+ Member who has made a Member Loan, the amount, if any, required to provide
+ such
+ Member with the outstanding principal balance of his or its Member Loan, pro
+ rata in accordance with the respective amounts of the outstanding principal
+ balances of all Member Loans; 
+
+(d) fourth,
+ to all Members with positive Adjusted Capital Account Balances in proportion
+ to,
+ and to the extent of, such positive balances; and
+
+(e) thereafter,
+ to the Members pro rata in accordance with their Membership
+ Interests.
+
+Notwithstanding
+ the foregoing provisions of this Section 4.3, after making the distributions
+ provided for in subsections (a) and (b) of this Section 4.3, and prior to making
+ the distributions provided for in subsections (c), (d) and (e) of this Section
+ 4.3, the Company shall, to the extent available, distribute the Tax Distribution
+ Amount (as defined in Section 4.5 hereof) to the Members.
+
+13
+
+4.4. Tax
+ Withholding.
+ The
+ Members acknowledge and agree that the Company shall withhold for the payment
+ of
+ any foreign, state, federal and/or local taxes which may arise as a result
+ of
+ being a Member of the Company to the extent required by law.
+
+4.5. Time
+ of Distributions.
+ Except
+ as otherwise provided herein, distributions may be made from the Company to
+ the
+ Members at such times as the Manager in its discretion may determine;
+PROVIDED,
+ HOWEVER,
+ that
+ the Company shall endeavor to distribute to each Member in cash, if available,
+ no less than the “Tax Distribution Amount” within ten (10) days following the
+ end of each quarter. For purposes of this Agreement, the “Tax Distribution
+ Amount” for each Member for each quarter shall be an amount equal to (a) the
+ aggregate taxable income taxed to such Member for federal income tax purposes
+ for such quarter as a result of allocations of Profits and Losses under Section
+ 4.6 multiplied by (b) the sum, expressed as a percentage, of (1) the highest
+ marginal federal individual income tax rate in effect for that quarter plus
+ (2)
+ the highest marginal New Jersey individual income tax rate in effect for that
+ quarter. 
+
+4.6. Profits
+ and Losses.
+
+(a) Subject
+ to the special allocations set forth in Section 9 hereof, the Profits of the
+ Company shall be determined each year in accordance with the accounting methods
+ followed for federal income tax purposes and allocated as follows:
+
+(1) first,
+ to
+ each Member with an Adjusted Capital Account Deficit pro rata to such Adjusted
+ Capital Account Deficits to the extent of the amounts necessary to eliminate
+ such Adjusted Capital Account Deficits;
+
+(2) second,
+ to each Member to the extent such Member was previously allocated Losses, in
+ proportion to the amount of such Losses;
+ and
+
+(3) thereafter,
+ any remaining Profits shall be allocated to the Members pro rata in accordance
+ with their percentage Membership Interests.
+
+(b) Subject
+ to the special allocations set forth in Section 9 hereof, the Losses of the
+ Company shall be determined each year in accordance with the accounting methods
+ followed for federal income tax purposes and allocated as follows:
+
+(1) first,
+ to
+ the extent the Adjusted Capital Account Balance of any Member exceeds zero
+ (0),
+ to each such Member in proportion to and to the extent of the amounts necessary
+ to cause their respective Adjusted Capital Account Balances to equal zero (0);
+
+(2) second,
+ to In Stride, George Foreman Ventures and each Member who has made a Member
+ Loan, in proportion to and to the extent of the respective amounts of the
+ outstanding principal balances of the Initial In Stride Loan, the Initial George
+ Foreman Ventures Loan and Member Loans; and 
+
+(3) thereafter,
+ any remaining Losses shall be allocated to the Members pro rata in accordance
+ with their percentage Membership Interests. 
+
+14
+
+SECTION
+ 5. MANAGEMENT;
+ LIABILITY OF PARTIES; INDEMNIFICATION; PURCHASE OPTION; LICENSE
+ AGREEMENT
+
+5.1. Management
+ by Manager.
+ Subject
+ to Section 5.2 hereof, the Manager shall be responsible for the operation of
+ the
+ Company’s business in the ordinary course, and shall have the authority to do
+ all things without the approval or consent of the Members that it determines
+ in
+ its sole discretion to be in furtherance of the purposes of the Company. Without
+ limiting the generality of the foregoing, the Manager shall have the authority
+ to:
+
+(a) arrange
+ for the collection and deposit of all cash receipts of the Company;
+
+(b) establish,
+ maintain, and draw upon checking and other accounts in the name of the Company,
+ in such bank or banks as the Manager may, from time to time,
+ select;
+
+(c) execute
+ notifications, statements, reports, returns and other filings that are necessary
+ or desirable to be filed with any state or federal securities
+ commission;
+
+(d) except
+ as
+ provided in Section 7.3 hereof, make any tax elections available to the Company
+ under the Code or the Regulations thereunder, to designate a tax matters partner
+ of the Company, and to execute, acknowledge and deliver any and all instruments
+ desirable to effectuate the foregoing;
+
+(e) employ
+ accountants, attorneys, consultants and other persons, firms, corporations
+ or
+ entities on such terms and for such compensation as it shall
+ determine;
+
+(f) arrange
+ for the payment of all liabilities of the Company; 
+
+(g) arrange
+ for the timely filing of all federal and state tax returns of the
+ Company;
+
+(h) borrow
+ money on behalf of the Company on such terms as the Manager may determine,
+ provided, however, that, during the Test Period, any such borrowing in excess
+ of
+ ten thousand dollars ($10,000) shall be a Major Decision pursuant to Section
+ 5.2(a)(4) hereof and shall accordingly be subject to the Member voting
+ requirement described in Section 5.2(a); 
+
+(i) hypothecate,
+ encumber, and/or grant security interests in assets of the Company, provided,
+ however, that, during the Test Period, any such hypothecation, encumbrance,
+ and/or grant of security interests in assets of the Company having a fair market
+ value in excess of ten thousand dollars ($10,000) shall be a Major Decision
+ pursuant to Section 5.2(a)(5) hereof and shall accordingly be subject to the
+ Member voting requirement described in Section 5.2(a); and
+
+(j) make,
+ enter into, deliver and perform all contracts, agreements or undertakings,
+ pay
+ all costs and expenses and perform all acts deemed appropriate by the Manager
+ to
+ carry out the Company’s purposes. 
+
+15
+
+5.2. Major
+ Decisions; Manager Election to Outsource Day-to-Day Activities to In
+ Stride.
+
+(a) Notwithstanding
+ anything in this Agreement to the contrary, the Manager shall not take any
+ of
+ the following actions or enter into any agreement which would result in any
+ of
+ the following actions (any such action a “Major Decision”), without the vote of
+ those Members owning, in the aggregate, at least sixty percent (60%) of the
+ Membership Interests:
+
+(1) change
+ the nature of the Company’s business or enter into a new line of
+ business;
+
+(2) engage
+ in
+ any transactions with a Member, any Affiliate of a Member, or any family member
+ of a Member or family member of an owner of a Member or its Affiliates;
+
+(3) sell
+ or
+ dispose of all or substantially all of the Company’s assets other than on an
+ arms-length basis; 
+
+(4) during
+ the Test Period, borrow money on behalf of the Company in excess of ten thousand
+ dollars ($10,000); 
+
+(5) during
+ the Test Period, hypothecate, encumber, and/or grant security interests in
+ assets of the Company having a fair market value in excess of ten thousand
+ dollars ($10,000); and
+
+(6) enter
+ into any agreement for a personal appearance fee for George Foreman in excess
+ of
+ ten thousand dollars ($10,000).
+
+(b) In
+ Stride
+ agrees that, at the election of the Manager which may be made by the Manager
+ at
+ any time upon notice to In Stride, In Stride shall handle, on an independent
+ contractor basis, the day-to-day administration of the Company’s business,
+including,
+ but not limited to, billing, receivables, inventory control, warehousing,
+ shipping, sales management, training of ShopKo’s (or other customer of the
+ Company) pharmacists and technicians, maintenance of a customer service staff
+ dedicated to answering all of ShopKo’s (or other customer of the Company)
+ pharmacy requests and questions about the Footwear and Medicare program with
+ respect to the Footwear, and interfacing with ShopKo (or other customer of
+ the
+ Company) corporate in connection with issues relating to the ShopKo Agreement
+ (or agreement with such other customer) and delivery of goods and services
+ thereunder. In consideration for the foregoing services, the Company shall
+ pay
+ In Stride a service fee in accordance with the following schedule (for purposes
+ of this Section 5.2(b), a “unit” is defined as “a pair of shoes with inserts”):
+(i)
+ with
+ respect to any calendar month in which total sales of units for such calendar
+ month are not greater than three hundred (300) units, the service fee shall
+ be
+ thirty dollars ($30.00) per unit sold during such calendar month, and (ii)
+ with
+ respect to any calendar month in which total sales of units for such calendar
+ month are greater than three hundred (300) units, the service fee shall be
+ thirty dollars ($30.00) per unit for the first three hundred (300) units sold
+ during such calendar month plus twenty-two dollars and fifty cents ($22.50)
+ per
+ unit for each unit sold during such calendar month in excess of three hundred
+ (300) units. The
+
+16
+
+amount
+ of
+ the service fee set forth herein shall be in addition to (and not included
+ in)
+ the actual cost of the shoe and shoe inserts. 
+
+5.3. Authority
+ to Bind the Company.
+ The
+ Manager or its designee shall have the right to bind the Company and to execute
+ documents on the Company’s behalf. In addition to the specific rights and powers
+ herein granted to the Manager, the Manager shall, subject to the limitations
+ set
+ forth in this Agreement, possess and enjoy and exercise all of the other rights
+ and powers of Managers under the Act or granted by the law of any other
+ jurisdiction in which the Company may do business. In addition, no Member other
+ than the Manager may bind the Company and execute documents on the Company’s
+ behalf without the prior written approval of the Manager.
+
+5.4. Appointment
+ of Officers. The
+ Manager may, from time to time in its sole discretion, by resolution, appoint
+ such officers of the Company as it shall deem advisable.
+
+5.5. Liability
+ of Parties. 
+
+(a) No
+ Member, Manager or Affiliate of such Persons (a “Covered Person”) shall be
+ liable to the Company or any other Covered Person for any loss, damage or claim
+ incurred by reason of any act or omission performed or omitted by such Covered
+ Person in good faith on behalf of the Company and in a manner reasonably
+ believed to be within the scope of authority conferred on such Covered Person
+ by
+ this Agreement, except that a Covered Person shall be liable for any such loss,
+ damage or claim incurred by reason of such Covered Person’s gross negligence or
+ willful misconduct.
+
+(b) A
+ Covered
+ Person shall be fully protected in relying in good faith upon the records of
+ the
+ Company and upon such information, opinions, reports, or statements presented
+ to
+ the Company by any Person as to matters the Covered Person reasonably believes
+ are within such Person’s professional or expert competence and who has been
+ selected with reasonable care by or on behalf of the Company, including
+ information, opinions, reports or statements as to the value and amount of
+ the
+ assets, liabilities, Profits, Losses or Distributable Cash or any other facts
+ pertinent to the existence and amount of assets from which distributions to
+ Members might properly be paid.
+
+(c) To
+ the
+ extent that, at law or in equity, a Covered Person has duties (including
+ fiduciary duties) and liabilities relating thereto to the Company or to any
+ Member, a Covered Person acting under this Agreement shall not be liable to
+ the
+ Company or to any Member for its good faith reliance on the provisions of this
+ Agreement. The provisions of this Agreement, to the extent that they restrict
+ the duties and liabilities of a Covered Person otherwise existing at law or
+ in
+ equity, are agreed by the parties hereto to replace such other duties and
+ liabilities of such Covered Person.
+
+(d) Unless
+ otherwise expressly provided herein, (1) whenever a conflict of interest exists
+ or arises between Covered Persons, or (2) whenever this Agreement or any other
+ agreement contemplated herein or therein provides that a Covered Person shall
+ act in a manner that is, or provides terms that are, fair and reasonable to
+ the
+ Company or act in any manner that is, or provides terms that are, fair and
+ reasonable to the Company or any Member, the Covered
+
+17
+
+Person
+ shall resolve such conflicts of interest, take such action or provide such
+ terms, considering in each case the relative interest of each party (including
+ his, her or its own interest) to such conflict, agreement, transaction or
+ situation and the benefits and burdens relating to such interests, any customary
+ or accepted industry practices, and any applicable generally accepted accounting
+ principles. In the absence of bad faith by the Covered Person, the resolution,
+ action or term so made, taken or provided by the Covered Person shall not
+ constitute a breach of this Agreement or any other agreement contemplated herein
+ or of any duty or obligation of the Covered Person at law or in equity or
+ otherwise.
+
+(e) Whenever
+ in this Agreement a Covered Person is permitted or required to make a decision
+ (1) in his, her or its “discretion” or under a grant of similar authority or
+ latitude, the Covered Person shall be entitled to consider such interests and
+ factors as he or it desires, including his or its own interests, and shall
+ have
+ no duty or obligation to give any consideration to any interest of or factors
+ affecting the Company or any other Persons, or (2) in his or its “good faith” or
+ under another express standard, the Covered Person shall act under such express
+ standard and shall not be subject to any other or different standard imposed
+ by
+ this Agreement or other applicable law.
+
+5.6. Indemnification
+ of Covered Persons.
+
+(a) To
+ the
+ fullest extent permitted by applicable law, a Covered Person shall be entitled
+ to indemnification from the Company for any loss, damage or claim incurred
+ by
+ such Covered Person by reason of any act or omission performed or omitted by
+ such Covered Person in good faith on behalf of the Company and in a manner
+ reasonably believed to be within the scope of authority conferred on such
+ Covered Person by this Agreement, except that no Covered Person shall be
+ entitled to be indemnified in respect of any loss, damage or claim incurred
+ by
+ such Covered Person by reason of gross negligence or willful misconduct with
+ respect to such acts or omissions, PROVIDED,
+ HOWEVER,
+ that
+ any indemnity under this Section 5.6(a) shall be provided out of and to the
+ extent of Company assets only, and no Member shall have any personal liability
+ on account thereof. 
+
+(b) To
+ the
+ fullest extent permitted by applicable law, reasonable expenses (including
+ legal
+ fees) incurred by a Covered Person in defending any claim, demand, action,
+ suit
+ or proceeding shall, from time to time, be advanced by the Company prior to
+ the
+ final disposition of such claim, demand, action, suit or proceeding upon receipt
+ by the Company of an undertaking by or on behalf of the Covered Person to repay
+ such amount if it shall be determined that the Covered Person is not entitled
+ to
+ be indemnified as authorized in Section 5.6(a) hereof.
+
+(c) The
+ Company may, but is not required to, purchase and maintain insurance, to the
+ extent and in such amounts as the Manager shall deem reasonable, on behalf
+ of
+ Covered Persons and such other Persons as the Manager shall determine, against
+ any liability that may be asserted against or expenses that may be incurred
+ by
+ any such Person in connection with the activities of the Company or such
+ indemnities, regardless of whether the Company would have the power or
+ obligation to indemnify such Person against such liability under the provisions
+ of this Agreement. The Company may enter into indemnity contracts with Covered
+ Persons and such other Persons as the Manager shall determine and adopt written
+ procedures
+
+18
+
+pursuant
+ to which arrangements are made for the advancement of expenses and the funding
+ of obligations under Section 5.6(b) hereof and containing such other procedures
+ regarding indemnification as are appropriate.
+
+5.7. Competition.
+
+(a) While
+ a
+ Member owns a Membership Interest in the Company and for a period of two (2)
+ years after such Member ceases to own a Membership Interest in the Company
+ for
+ any reason, including without limitation dissolution of the Company, such Member
+ and such Member’s Affiliates shall not directly or indirectly engage in any
+ activities, perform any services or conduct any businesses which are competitive
+ with the Company’s business or any part of the Company’s business or engage in
+ activities or services performed by, or sell products sold by, the Company.
+ Except for businesses competitive with the Company as aforesaid,
+ any
+ Member
+ or Manager may engage in or possess an interest in other business ventures
+ of
+ every type and description, independently or with others, and neither the
+ Company nor any of the Members shall have any right by virtue of this Agreement
+ in or to any such independent ventures or to the income or profits derived
+ therefrom. The fact that a Member or Manager or an organization or other entity
+ which is related, directly or indirectly, is employed by or is directly or
+ indirectly interested in or is connected with any person, firm, organization
+ or
+ entity engaged in or employed by the Company, to render or perform a service,
+ or
+ from whom or which the Company may buy property of any sort, kind and
+ description, shall not prohibit the Company from executing any agreement with
+ or
+ employing such person, organization, firm, corporation, or entity, or from
+ otherwise dealing with him or it, in any manner whatsoever, so long as such
+ dealing is on an arm’s length basis, and neither the Company nor any of the
+ Members, as such, shall have any rights in or to any income or profits derived
+ by it or the related party.
+
+(b) Notwithstanding
+ Section 5.7(a) hereof or any other provision of this Agreement, In Stride shall
+ retain a limited right to sell and distribute Footwear solely as provided in
+ the
+ Exclusive Trademark License Agreement attached hereto as Exhibit
+ A;
+ provided, however, that such license agreement shall terminate upon a
+ dissolution of the Company or upon George Foreman Ventures’ material breach of
+ this Agreement if such material breach is not cured within thirty (30) days
+ after George Foreman Ventures receives written notice from In Stride of such
+ material breach. 
+
+5.8. Company’s
+ Option to Purchase Assets of In Stride.
+
+(a) For
+ a
+ period of two (2) years after the date of this Agreement, the Company shall
+ have
+ the option to purchase the assets of In Stride (other than its Membership
+ Interest in the Company). In the event such option is exercised, (i) the Company
+ shall purchase all of In Stride’s undamaged inventory that is salable in the
+ ordinary course of business at a purchase price equal to In Stride’s cost,
+ including but not limited to acquisition cost, freight, warehousing and
+ allocable overhead, and (ii) the Company shall purchase the assets of In Stride
+ other than the inventory at a purchase price equal to five (5) times the EBITDA
+ of In Stride for the twelve-month period ending on the date the option is
+ exercised (such EBITDA being determined without regard to any extraordinary
+ income or expenses of In Stride during said twelve-month period, including,
+ but
+ not limited to, income derived and expenses incurred in
+
+19
+
+connection
+ with In Stride’s fulfillment of its obligations to supply goods to the Company
+ hereunder) (the “EBITDA Calculation”). Notwithstanding the foregoing, if the
+ amount determined pursuant to the EBITDA Calculation is less than one million
+ dollars ($1,000,000), then the amount determined pursuant to the EBITDA
+ Calculation shall be increased by one-half (1/2) of the difference between
+ one
+ million dollars ($1,000,000) and the amount determined pursuant to the EBITDA
+ Calculation. The foregoing option shall be exercisable by written notice from
+ the Manager to In Stride within two (2) years after the date of this Agreement,
+ and in the event of exercise, the Company and In Stride shall enter into a
+ purchase and sale agreement to be negotiated in good faith and which shall
+ provide for cash payment in full at closing and contain standard
+ representations, warranties, and indemnities. 
+
+(b) If
+ the
+ Company exercises the option provided for in Section 5.8(a) hereof, then the
+ Company and Dan Werremeyer Jr. (“Werremeyer”) shall enter into an employment
+ agreement to be negotiated in good faith with respect to Werremeyer’s employment
+ with the Company and which shall provide for the term, title and compensation
+ set forth in this Section 5.8(b). The term of such employment agreement shall
+ be
+ three (3) years, and shall provide for the Company’s employment of Werremeyer as
+ its President. Such employment agreement shall require Werremeyer to dedicate
+ a
+ substantial amount of his time to his services as President of the Company
+ and
+ shall provide for Werremeyer to receive, during such three-year term, (i) an
+ annual base compensation of one hundred fifty thousand dollars ($150,000),
+ (ii)
+ with respect to each year that the gross revenue of the Company is greater
+ than
+ five million dollars ($5,000,000) and less than twenty million dollars
+ ($20,000,000), a bonus (in addition to the base compensation set forth in clause
+ (i) of this Section 5.8(b)) in the amount of fifty thousand dollars ($50,000),
+ and (iii) with respect to each year that the gross revenue of the Company is
+ equal to or greater than twenty million dollars ($20,000,000), a bonus (in
+ addition to the base compensation set forth in clause (i) of this Section
+ 5.8(b)) in the amount of one hundred thousand dollars ($100,000). 
+
+(c) If
+ the
+ Company exercises the option provided for in Section 5.8(a) hereof, then the
+ Company and Robert Schwartz (“Schwartz”) shall enter into an employment
+ agreement to be negotiated in good faith with respect to Schwartz’s employment
+ with the Company and which shall provide for the term, title and compensation
+ set forth in this Section 5.8(c). The term of such employment agreement shall
+ be
+ three (3) years, and shall provide for the Company’s employment of Schwartz as
+ its Vice President of Pharmacies. Such employment agreement shall require
+ Schwartz to dedicate a substantial amount of his time to his services as Vice
+ President of Pharmacies of the Company and shall provide for Schwartz to
+ receive, during such three-year term, (i) an annual base compensation of
+ seventy-five thousand dollars ($75,000), (ii) with respect to each year that
+ the
+ gross revenue of the Company is greater than five million dollars ($5,000,000)
+ and less than twenty million dollars ($20,000,000), a bonus (in addition to
+ the
+ base compensation set forth in clause (i) of this Section 5.8(c)) in the amount
+ of twenty-five thousand dollars ($25,000), and (iii) with respect to each year
+ that the gross revenue of the Company is equal to or greater than twenty million
+ dollars ($20,000,000), a bonus (in addition to the base compensation set forth
+ in clause (i) of this Section 5.8(c)) in the amount of fifty thousand dollars
+ ($50,000).
+
+20
+
+(d) In
+ Stride
+ agrees that it shall not engage in any sale or other disposition of its assets
+ outside the ordinary course of business prior to the expiration of the period
+ during which the Company may exercise its option pursuant to Section 5.8(a)
+ hereof or engage in any other transaction or activity that would adversely
+ affect or interfere with the Company’s option. 
+
+5.9. License
+ Agreement with George Foreman Ventures.
+ George
+ Foreman Ventures and the Company shall enter into the license agreement attached
+ hereto as Exhibit
+ B. 
+
+SECTION
+ 6. TRANSFERABILITY
+ OF MEMBERSHIP INTERESTS.
+
+6.1. Restrictions
+ on Transfer.
+
+(a) Except
+ as
+ specifically provided in this Agreement, no Member shall Transfer, directly
+ or
+ indirectly (including, without limitation, through a Transfer of a membership
+ interest, beneficial interest in a trust, partnership interest or shares in
+ an
+ entity that is a Member), all or any portion of his or its Membership Interest
+ in the Company. 
+
+(b) Subject
+ to Section 6.3 hereof, and notwithstanding the limitations of Section
+ 6.1(c)(5)(c)(i) and (ii) hereof, a Member may Transfer all or any portion of
+ his
+ or its Membership Interest in the Company to any transferee (“Approved
+ Transferee”) with the prior written consent of the Manager, which may be granted
+ or withheld in its sole and absolute discretion.
+
+(c) Permitted
+ Transferees. 
+
+(1) Subject
+ to Section 6.3 hereof, upon his death, each individual Member, if any (or
+ individual owner of a Member) shall have, and at all times retain the right
+ to
+ Transfer all or any portion of his Membership Interest (or interest in a Member)
+ outright or in trust to or for the benefit of his spouse or descendants, or
+ to
+ any entity which is wholly owned by such Member, such Member’s spouse or
+ descendants, the foregoing trusts, or any combination of the foregoing. Subject
+ to Section 6.3 hereof, each corporate Member, each limited partnership Member
+ and each limited liability company Member, if any, shall have the right to
+ Transfer all or any part of its Membership Interest to any owner of such Member,
+ to such owner’s spouse, descendants and/or a trust or trusts for the benefit of
+ the foregoing, or to any entity which is wholly owned by such owner, such
+ owner’s spouse or descendants, the foregoing trusts, or any combination of the
+ foregoing.
+
+(2) Subject
+ to Section 6.3 hereof, if a Membership Interest is held in trust, the holders
+ of
+ such Membership Interest shall have the right to Transfer such Membership
+ Interest to successor trustees and/or to the beneficiaries of such trust in
+ accordance with the terms thereof.
+
+(3) The
+ Person or Persons receiving a Membership Interest pursuant to the terms of
+ this
+ subsection (c) shall be referred to hereinafter individually as such Member’s
+“Permitted Transferee” and collectively as his, her or its “Permitted
+ Transferees.”
+
+21
+
+(4) Any
+ Permitted Transferee shall receive and hold the Membership Interest so
+ Transferred subject to the terms and conditions of this Agreement as though
+ a
+ party hereto, and no Transfer of any Membership Interest shall be made to such
+ Approved Transferee or Permitted Transferee unless he shall so acknowledge
+ in
+ writing to be bound by all of the terms and conditions of this Agreement. Upon
+ the satisfaction of the above and complying with Section 6.3 hereof, the
+ Approved Transferee or Permitted Transferee shall be admitted to the Company
+ as
+ a Member.
+
+(5) A
+ Permitted Transferee shall not Transfer all or any portion of his or its
+ Membership Interest in the Company unless such a Transfer is made (a) subject
+ to
+ the provisions of this Section 6.1, (b) subject to the provisions of Section
+ 6.3
+ hereof, and (c):
+
+(i) to
+ the
+ Member from whom he, she or it obtained the Membership Interest; or
+
+(ii) to
+ another Permitted Transferee of the Member from whom he, she or it obtained
+ the
+ Membership Interest.
+
+(d) Following
+ any Transfer of a Member’s entire Membership Interest, the Member shall have no
+ further rights as a Member of the Company. 
+
+6.2. Preemptive
+ Rights.
+
+(a) If,
+ following the expiration of the Test Period, the Company authorizes the issuance
+ or sale of any equity in the Company to any Person (including any Member) (the
+ "Offeree"), the Company shall first offer to sell to each Member a pro-rata
+ portion (based on the Membership Interest held by such Member at such time)
+ of
+ such equity. The Members shall be entitled to purchase such equity at the same
+ price as such equity is to be offered to the Offeree. The Members will take
+ all
+ necessary or desirable actions in connection with the consummation of the
+ purchase transactions contemplated by this Section 6.2(a) as requested by the
+ Company, including the execution of all agreements, documents and instruments
+ in
+ connection therewith in the form presented by the Company, and so long as such
+ agreements, documents and instruments do not require such Members to make more
+ burdensome representations, warranties, covenants or indemnities than those
+ required of the Offeree in the agreements, documents or instruments in
+ connection with such transaction. If any Member elects not to purchase any
+ such
+ equity, or not to purchase all of such Member’s pro-rata portion, each other
+ Member who has elected to purchase all of such Member’s pro-rata portion (a
+ "Fully Participating Member") shall be entitled to purchase an additional
+ portion of such equity. If more than one Fully Participating Member desires
+ to
+ purchase such equity in excess of the portion allocated to such Member pursuant
+ to the first sentence of this Section 6.2(a), then each such Fully Participating
+ Member shall be entitled to purchase up to all of such available equity. If
+ there is an oversubscription in respect of such remaining equity, the
+ oversubscribed amount shall be fully allocated among the Fully Participating
+ Members pro rata based on such Fully Participating Members’ percentage
+ Membership Interest. Notwithstanding the foregoing or anything contained to
+ the
+ contrary herein, no Member shall be entitled to purchase equity pursuant to
+ this
+ Section 6.2(a) in the event such Member is in breach of, or has not complied
+ with all of such Member’s obligations under this Agreement or other agreements
+ to which such Member and the Company are a party.
+
+22
+
+(b) In
+ order
+ to exercise its purchase rights hereunder, a Member must, within forty-five
+ (45)
+ days after receipt of written notice from the Company describing the equity
+ being offered, the purchase price thereof, the payment terms and such Member’s
+ percentage allotment, deliver a written notice to the Company describing its
+ election hereunder (which election shall be absolute and unconditional). The
+ forty-five (45) day time frame described herein shall apply both in the case
+ of
+ an initial written notice from the Company to the Members with respect to an
+ offering of equity and in the case of any subsequent written notice from the
+ Company to the Fully Participating Members with respect to an additional portion
+ of such equity available for purchase as a result of another Member electing
+ not
+ to purchase all of its pro-rata portion. 
+
+(c) Upon
+ the
+ expiration of the offering period described above, the Company shall be entitled
+ to sell such equity to the Offeree which the Members have not elected to
+ purchase during the 180 days following such expiration at no less than the
+ purchase price stated in the notice provided under Section 6.2(b)
+ hereunder. Any equity proposed to be offered or sold by the Company to the
+ Offeree after such 180-day period, or at a price not complying with the
+ immediate preceding sentence, must be reoffered to the Members pursuant to
+ the
+ terms of this Section 6.2 prior to any sale to the Offeree.
+
+6.3. Conditions
+ to Transfer.
+ A
+ Transfer of a Membership Interest in the Company shall be effective only upon
+ satisfaction of the following conditions:
+
+(a) The
+ Membership Interest with respect to which the transferee is admitted was
+ acquired either in exchange for a Capital Contribution pursuant to Section
+ 3.1
+ or 3.2(a) or by means of a Transfer permitted under subsection 6.1
+ hereof;
+
+(b) The
+ transferee executes such documents and instruments as the Company may reasonably
+ request as necessary or appropriate to confirm such transferee as a Member
+ in
+ the Company and such transferee’s agreement to be bound by the terms and
+ conditions hereof;
+
+(c) The
+ transferee furnishes copies of all instruments effecting the Transfer and such
+ other certificates, instruments and documents as the Company may
+ require;
+
+(d) At
+ the
+ request of the Manager, the transferee provides the Company with an opinion
+ of
+ counsel stating:
+
+(1) that
+ such
+ Transfer may be effected without registration of the Membership Interest under
+ the Securities Act of 1933, as amended;
+
+(2) that
+ such
+ Transfer does not cause the violation of any state or federal securities law
+ (including any investment suitability standards);
+
+(3) that
+ such
+ Transfer will not result in a termination of the Company pursuant to Section
+ 708(b)(1)(B) of the Code;
+
+(4) that
+ such
+ Transfer will not cause the Company or any entity in which the Company invests
+ to be subject to any state or federal registration requirements;
+ and
+
+(5) such
+ other matters as the Manager may reasonably request.
+
+23
+
+(e) The
+ transferee provides the Manager with a fully-executed and acknowledged written
+ instrument of Transfer setting forth the intention of the transferor that the
+ transferee become a Member in his or its place and stead;
+
+(f) The
+ transferee and the transferor execute and acknowledge such other instruments
+ as
+ the Manager may deem necessary or desirable to effect such admission, including
+ the written acceptance and adoption by the transferee of the provisions of
+ this
+ Agreement (including the power of attorney contained in Section 10.9 hereof)
+ and
+ the assumption by the transferee of all obligations of the transferor under
+ this
+ Agreement; and
+
+(g) The
+ transferee has paid all reasonable expenses incurred by the Company (including
+ any legal and accounting fees) in connection with such Transfer, including,
+ but
+ not limited to, the cost of the preparation, filing and publishing of any
+ amendment to the Company’s certificate of formation or any other amendments or
+ filings.
+
+6.4. Prohibited
+ Transfers.
+ Any
+ purported Transfer that is not permitted under this Section shall be null and
+ void and of no effect whatsoever. 
+
+SECTION
+ 7. BOOKS
+ AND RECORDS; ACCOUNTING AND TAX ELECTIONS
+
+7.1. Maintenance
+ of Records.
+ The
+ Company shall maintain true and correct books and records, in which shall be
+ entered all transactions of the Company, and shall maintain all other records
+ necessary, convenient or incidental to recording the Company’s business and
+ affairs, which shall be sufficient to record the allocation of Profits and
+ Losses and distributions as provided for herein. All decisions as to accounting
+ principles, accounting methods and other accounting matters shall be made by
+ the
+ Manager. Each Member or his or its authorized representative may, as often
+ as
+ quarterly and to the extent required by § 18-305 of the Act, examine the books
+ and records of the Company during normal business hours upon reasonable notice
+ for a proper purpose reasonably related to the Member’s Membership Interest in
+ the Company.
+
+7.2. Reports
+ to Members.
+ As soon
+ as practicable after the end of each fiscal quarter, the Company (a) shall
+ cause
+ to be prepared and sent to each Member a balance sheet and a statement of income
+ for the Company which may, but need not, be audited by a certified public
+ accountant, and (b) shall cause to be prepared and sent to each Member a report
+ setting forth in sufficient detail all such information and data with respect
+ to
+ the Company for such fiscal quarter as shall enable each Member to prepare
+ his
+ or its income tax returns in accordance with the laws, rules and regulations
+ then prevailing. The Company shall also cause to be prepared and filed all
+ tax
+ returns required of the Company. All balance sheets, statements, reports and
+ tax
+ returns required to be prepared by the Company pursuant to this Section 7.2
+ shall be prepared at the expense of the Company.
+
+24
+
+7.3. Tax
+ Election; Determinations Not Provided for in Agreement.
+ The
+ Manager shall be empowered to make or revoke any elections now or hereafter
+ required or permitted to be made by the Code or any state or local tax law,
+ and
+ to decide in a fair and equitable manner any accounting procedures and other
+ matters arising with respect to the Company or under this Agreement which are
+ not expressly provided for in this Agreement. Notwithstanding the foregoing,
+ neither the Company nor any Manager or Member shall make an election for the
+ Company to be excluded from taxation as a partnership under the Code or any
+ state or local law, and no provision of this Agreement (including Section 1.7)
+ shall be construed to sanction or approve any such election.
+
+7.4. Tax
+ Matters Partner.
+ George
+ Foreman Ventures is hereby designated to be the “tax matters partner” of the
+ Company pursuant to the requirements of the Code and shall have the authority
+ to
+ exercise all functions provided for in the Code, or in the Regulations,
+ including, to the extent permitted by such Regulations, the authority to
+ delegate the function of “tax matters partner” to any other person. George
+ Foreman Ventures shall be reimbursed for all reasonable expenses incurred as
+ a
+ result of its duties as “tax matters partner”. 
+
+SECTION
+ 8. DISSOLUTION
+ AND LIQUIDATION; TERMINATION AND WITHDRAWAL.
+
+8.1. Dissolution.
+ The
+ Company shall dissolve and its affairs shall be wound up at any time upon the
+ decision of the Manager. 
+
+8.2. Liquidation.
+
+(a) Upon
+ a
+ dissolution of the Company requiring the winding-up of its affairs, the Manager
+ shall wind up its affairs. The assets of the Company shall be sold within a
+ reasonable period of time to the extent necessary to pay or provide for the
+ payment of all debts and liabilities of the Company, and may be sold to the
+ extent deemed practicable and prudent by the Manager.
+
+(b) The
+ net
+ assets of the Company remaining after satisfaction of all such debts and
+ liabilities and the creation of any reserves under subsection 8.2(d), shall
+ be
+ distributed to the Members in accordance with their positive Capital Account
+ Balances as of the date of such distribution, after giving effect to all
+ contributions, distributions and allocations for all periods, including the
+ period during which such liquidation occurs. Any property distributed in kind
+ in
+ the liquidation shall be valued at fair market value.
+
+(c) Distributions
+ to Members pursuant to this Section 8 shall be made by the later of (i) the
+ end
+ of the taxable year of the liquidation, or (ii) ninety (90) days after the
+ date
+ of such liquidation in accordance with Regulations Section
+ 1.704-1(b)(2)(ii)(b).
+
+(d) The
+ Manager may withhold from distribution under this Section 8.2 such reserves
+ which are required by applicable law and such other reserves for subsequent
+ computation adjustments and for contingencies, including contingent liabilities
+ relating to pending or anticipated litigation or to Internal Revenue Service
+ examinations. Any amount held
+
+25
+
+as
+ a
+ reserve shall reduce the amount payable under this Section 8.2 and shall be
+ held
+ in a segregated interest-bearing account (which may be commingled with similar
+ accounts). The unused portion of any reserve shall be distributed with interest
+ thereon pursuant to this Section 8.2 after the Manager shall have determined
+ that the need therefore shall have ceased.
+
+8.3. Deficit
+ Capital Accounts.
+ If a
+ Member has a deficit balance in his or its Capital Account after giving effect
+ to all contributions, distributions and allocations for all taxable years,
+ including the year in which the liquidation occurs, such deficit shall not
+ be
+ considered a debt owed by such Member to the Company and such Member shall
+ not
+ be obligated to contribute such amount to the Company to bring the Capital
+ Account Balance of such Member’s Capital Account to zero (0).
+
+8.4. Restrictions
+ on Withdrawal.
+ Except
+ as otherwise expressly permitted in this Agreement, without the consent of
+ the
+ Manager, which may be withheld in its absolute discretion, a Member does not
+ have the right to withdraw from the Company as a Member or terminate his or
+ its
+ Membership Interest.   
+
+SECTION
+ 9.  ALLOCATION
+ RULES.
+
+9.1. Special
+ Allocations.
+
+(a) Minimum
+ Gain Chargeback.
+ Notwithstanding any other provision of Section 4 or this Section 9, except
+ to
+ the extent that Section 1.704-2(f) of the Regulations (or any other applicable
+ authority) provides an exception to the operation of the minimum gain chargeback
+ requirement of the Regulations, if there is a net decrease in Minimum Gain
+ during any Accounting Period, each Member shall be specially allocated items
+ of
+ income and gain for such Accounting Period in an amount equal to such Member’s
+ share of the net decrease in the Company’s Minimum Gain (within the meaning of
+ Regulations Section 1.704-2(g)(2)), determined in accordance with Regulations
+ Section 1.704-2(g). In the event that the minimum gain chargeback requirement
+ imposed by this subsection and Regulations Section 1.704-2(f) exceeds the
+ Company’s income and gains for the Accounting Period, the excess shall be
+ treated as a minimum gain chargeback requirement, and shall be specially
+ allocated under this subsection, in the immediately succeeding Accounting
+ Periods until fully charged back. Allocations pursuant to this subsection shall
+ be made in proportion to the respective amounts required to be allocated to
+ each
+ Member pursuant hereto. The items to be allocated shall be determined in
+ accordance with Sections 1.704-2(f)(6) and 1.704-2(j) of the Regulations. This
+ subsection 9.1(a) is intended to comply with the minimum gain chargeback
+ requirement in the Regulations and shall be interpreted consistently
+ therewith.
+
+(b) Member
+ Nonrecourse Debt Minimum Gain Chargeback.
+ Notwithstanding any other provision of Section 4 or this Section 9, except
+ to
+ the extent that Section 1.704-2(i)(4) of the Regulations (or any other
+ applicable authority) provides an exception to the operation of the partner
+ nonrecourse debt minimum gain chargeback requirement of the Regulations, if
+ there is a net decrease in Member Nonrecourse Debt Minimum Gain attributable
+ to
+ a Member
+
+26
+
+Nonrecourse
+ Debt during any Accounting Period, each Member who has a share of the Member
+ Nonrecourse Debt Minimum Gain attributable to such Member Nonrecourse Debt,
+ determined in accordance with Regulations Section 1.704-2(i)(5), as of the
+ beginning of that Accounting Period, shall be specially allocated items of
+ income and gain for such Accounting Period (and, if necessary, succeeding
+ Accounting Periods) in an amount equal to such Member’s share of the net
+ decrease in Member Nonrecourse Debt Minimum Gain. A Member’s share of the net
+ decrease in Member Nonrecourse Debt Minimum Gain shall be determined in a manner
+ consistent with the provisions of Regulations Sections 1.704-2(j)(2) and
+ 1.704-2(i)(4). Allocations pursuant to this subsection shall be made in
+ proportion to the respective amounts required to be allocated to each Member
+ pursuant to this subsection and Section 1.704-2(i)(4) of the Regulations. The
+ items to be so allocated shall be determined in accordance with Sections
+ 1.704-2(i)(4) and (j)(2) of the Regulations.
+
+This
+ subsection 9.1(b) is intended to comply with the partner nonrecourse debt
+ minimum gain chargeback requirement in the Regulations and shall be interpreted
+ consistently therewith.
+
+(c) Qualified
+ Income Offset.
+ If any
+ Member unexpectedly receives any adjustments, allocations or distributions
+ described in Regulations Sections 1.704-1(b)(2)(ii)(d)(4), (5), and (6), items
+ of income and gain (consisting of a pro rata portion of each item of income,
+ including gross income and gain) shall be specially allocated to that Member
+ in
+ an amount and manner sufficient to eliminate any Adjusted Capital Account
+ Deficit created by such adjustments, allocations or distributions as quickly
+ as
+ possible; PROVIDED,
+ HOWEVER,
+ that an
+ allocation pursuant to this subsection shall be made only if and to the extent
+ that such Member would have an Adjusted Capital Account Deficit after all other
+ allocations provided for in this Article have been tentatively made as if this
+ subsection were not a part of this Agreement.
+
+(d) Gross
+ Income Allocation.
+ If any
+ Member has a deficit Capital Account at the end of any Accounting Period that
+ is
+ in excess of the sum of the amount such Member is obligated to restore, or
+ the
+ amount such Member is deemed obligated to restore pursuant to the next to last
+ sentences of Section 1.704-2(g)(1) and Section 1.704-2(i)(5) of the Regulations,
+ the Member shall be specially allocated items of income and gain in the amount
+ of such excess as quickly as possible; PROVIDED,
+ HOWEVER,
+ that an
+ alloca-tion pursuant to this subsection shall be made only if and to the extent
+ that such Member would have a deficit Capital Account in excess of such sum
+ after all other allocations provided for in this Article have been tentatively
+ made as if this subsection and the qualified income offset provision set forth
+ in the preceding subsection were not a part of this Agreement.
+
+(e) Code
+ Section 754 Adjustments.
+ To the
+ extent an adjustment to the adjusted tax basis of any asset of the Company
+ pursuant to Code Section 734(b) or Code Section 743(b) is required, pursuant
+ to
+ Regulations Section 1.704-1(b)(2)(iv)(m)(2) or (4), to be taken into account
+ in
+ determining Capital Accounts as a result of a distribution to a Member in
+ complete liquidation of its interest in the Company, the amount of such
+ adjustment to the Capital Accounts of the Members shall be treated as an item
+ of
+ gain (if the adjustment increases the basis of the asset) or loss (if the
+ adjustment decreases such basis) and such gain or loss shall be
+
+27
+
+specially
+ allocated to the Members in accordance with their interests in the Company
+ in
+ the event Regulations Section 1.704-1(b)(2)(iv)(m)(2) applies, or to the Member
+ to whom such distribu-tion was made in the event Regulations Section
+ 1.704-1(b)(2)(iv)(m)(4) applies.
+
+(f) Nonrecourse
+ Deductions.
+ Nonrecourse Deductions for any Accounting Period shall be specially allocated
+ to
+ the Members, in accordance with the Members’ Membership Interests in the Company
+ for the applicable Accounting Period.
+
+(g) Member
+ Nonrecourse Deductions.
+ Any
+ Member Nonrecourse Deductions for any Accounting Period shall be specially
+ allocated to the Member who bears the economic risk of loss with respect to
+ the
+ Member Nonrecourse Debt to which such Member Nonrecourse Deductions are
+ attributable in accordance with Regulations Section 1.704-2(i).
+
+(h) Corrective
+ Allocations.
+ The
+ allocations set forth in the preceding subsections of this Section 9.1 (the
+ “Regulatory Allocations”) are intended to comply with certain requirements of
+ the Regulations. It is the intent of the Members that, to the extent possible,
+ all Regulatory Allocations shall be offset either with other Regulatory
+ Allocations or with special allocations of other items of income, gain, loss
+ or
+ deduction pursuant this subsection 9.1(h). Therefore, notwithstanding any other
+ provision of Section 4 or this Section 9 (other than the Regulatory
+ Allocations), the Manager shall make such offsetting special allocations of
+ income, gain, loss or deduction in whatever manner they determine appropriate
+ so
+ that, after such offsetting allocations are made, each Member’s Capital Account
+ Balance is, to the extent possible, equal to the Capital Account balance such
+ Member would have had if the Regulatory Allocations were not part of this
+ Agreement and all items were allocated pursuant to Section 4. In making any
+ allocation under this subsection, the Manager shall take into account future
+ Regulatory Allocations under subsection 9.1(a) and (b) that, although not yet
+ made, are likely to offset other Regulatory Allocations previously made under
+ subsections 9.1(f) and 9.1(g).
+
+9.2. Code
+ Section 704(c).
+
+(a) In
+ accordance with Code Section 704(c) and the Regulations thereunder, income,
+ gain, loss and deduction with respect to any property contributed to the capital
+ of the Company, solely for tax purposes, shall be allocated among the Members
+ so
+ as to take account of any variation between the adjusted basis of such property
+ to the Company for Federal income tax purposes and its initial Gross Asset
+ Value.
+
+(b) If
+ the
+ Gross Asset Value of any asset of the Company is revalued pursuant to Section
+ 1.8(r)(2), subsequent allocations of income, gain, loss and deduction with
+ respect to such asset shall take account of any variation between the adjusted
+ basis of such asset for federal income tax purposes and its Gross Asset Value
+ in
+ the same manner as under Code Section 704(c) and the Regulations
+ thereunder.
+
+(c) Any
+ elections or other decisions relating to allocations made under this Section
+ 9
+ shall be made in any manner that reasonably reflects the purpose and intention
+ of this Agreement. Allocations pursuant to this Section 9.2 are solely for
+ income tax purposes and shall not affect, or in any way be taken into account
+ in
+ computing, any Person’s Capital Account or share of Profits, Losses, other items
+ or distributions pursuant to any provision of this Agreement.
+
+28
+
+(d) The
+ provisions of this Section 9.2 are intended to comply with Code Section 704(c)
+ and the Regulations promulgated thereunder. The Members shall make any
+ modifications to this Agreement as may be required to comply with Section 704(c)
+ and the Regulations thereunder.
+
+9.3. Other
+ Allocation Rules.
+
+(a) Except
+ as
+ otherwise provided in this Agreement, items of income, gain, loss, deduction
+ and
+ credit shall be allocated among the Members for income tax purposes in a manner
+ consistent with the allocations made for “book purposes” under Section 4 and
+ this Section 9. Specifically, items of taxable income or loss corresponding
+ to
+ items which have been specially allocated pursuant to Section 9.1 shall be
+ allocated for tax purposes in the same manner as those items are allocated
+ for
+ book purposes. Taxable income or loss for any Accounting Period which is not
+ allocated pursuant to the preceding sentence and which is not otherwise
+ allocated pursuant to Section 4 or this Section 9 shall be allocated among
+ the
+ Members for tax purposes in the same proportion that Profit or Loss has been
+ allocated for that Accounting Period under Section 4.
+
+(b) For
+ purposes of determining the Profits, Losses or any other items allocable to
+ any
+ Accounting Period, Profits, Losses and any such other items shall be determined
+ on a daily, monthly or other basis, as determined by the Manager using any
+ permissible method under Code Section 706 and the Regulations
+ thereunder.
+
+(c) Except
+ as
+ otherwise provided in this Agreement, all items of income, gain, loss, deduction
+ and any other allocations not otherwise provided for shall be divided among
+ the
+ Members in the same proportions as they share Profits or Losses, as the case
+ may
+ be, for the applicable Accounting Period.
+
+(d) Notwithstanding
+ the other provisions of Section 4 or this Section 9, the Manager is authorized
+ to make any adjustment in the allocation of Profits or Losses provided for
+ in
+ such Sections if the Manager considers in good faith that the adjustment is
+ necessary and equitable to correct errors in allocations caused by errors in
+ unaudited financial information or to correct inequities which may arise under
+ this Agreement, including those which may result from there being multiple
+ Accounting Periods during a single Fiscal Year or during the term of this
+ Agreement rather than a single Accounting Period.
+
+(e) Solely
+ for purposes of determining each Member’s share of “excess nonrecourse
+ liabilities” of the Company, as such term is defined in Regulations Section
+ 1.752-3(a)(3), each Member’s Membership Interest in Profits for any Accounting
+ Period shall be that Member’s Membership Interest in the Company for that
+ Accounting Period.
+
+(f) To
+ the
+ extent permitted by Section 1.704-2(h)(3) of the Regulations, the Company shall
+ endeavor to treat distributions as having been made from the proceeds of a
+ Nonrecourse Liability or a Member Nonrecourse Debt only to the extent that
+ such
+ distributions would not cause or increase an Adjusted Capital Account Deficit
+ for any Member.
+
+(g) To
+ the
+ extent an adjustment to the adjusted tax basis of any asset of the Company
+ pursuant to Code Section 734(b) or Code Section 743(b) is required, pursuant
+ to
+
+29
+
+Regulations
+ Section 1.704-1(b)(2)(iv)(m)(2) or (4), to be taken into account in determining
+ Capital Accounts as a result of a distribution to a Member in complete
+ liquidation of its interest in the Company, the amount of such adjustment to
+ the
+ Capital Accounts of the Members shall be treated as an item of gain (if the
+ adjustment increases the basis of the asset) or loss (if the adjustment
+ decreases the basis of the asset) and such gain or loss shall be specially
+ allocated to the members in accordance with their interests in the Company
+ in
+ the event Regulations Section 1.704-1(b)(2)(iv)(m)(2) applies, or to the Member
+ to whom such distribution was made in the event Regulations Section
+ 1.704-1(b)(2)(iv)(m)(4) applies. 
+
+SECTION
+ 10. GENERAL
+ PROVISIONS.
+
+10.1. Notices.
+ Except
+ as expressly provided in this Agreement, all notices, consents, waivers,
+ requests or other instruments or communications given pursuant to this Agreement
+ shall be in writing, signed by the party giving the same, and shall be delivered
+ by hand or sent by registered or certified United States mail, return receipt
+ requested, postage prepaid, or by a recognized overnight delivery service,
+ addressed, in the case of the Company, to the Company at its principal place
+ of
+ business, and to any of the Members at the address set forth in the Company’s
+ books and records. Any Member may, by notice to the Company and each other
+ Member, specify any other address for the receipt of such notices, instruments
+ or communications. Except as expressly provided in this Agreement, any notice,
+ instrument or other communication shall be deemed properly given only when
+ received, or upon refusal of receipt, by the Person to whom it is sent. The
+ addresses of the Members are currently as follows:
+
+    George
+ Foreman ventures LLC                                
+
+In
+ Stride
+ L.L.C.
+
+    100
+ North
+ Wilkes-Barre Boulevard                                   
+29
+ Polhemus Drive
+
+    4th
+ Floor                                                Hillsborough,
+ NJ
+ 08844
+
+    Wilkes-Barre,
+ PA 18702                                      
+Attn:
+ Dan
+ Werremeyer
+
+    Attn:
+ Seymour
+ Holtzman
+
+    Olen
+ Rice                                                Paul
+ Koester
+
+    c/o
+ Northern
+ Group                                          1301
+ Armitage Avenue, Suite
+ K
+
+    926
+ Willard
+ Drive, Suite 144                                       
+Melrose
+ Park, IL
+ 60160
+
+    Green
+ Bay, WI
+ 54304
+
+10.2. Interpretation.
+
+(a) Section
+ and subsection headings are not to be considered part of this Agreement, are
+ included solely for convenience of reference and are not intended to be full
+ or
+ accurate descriptions of the contents thereof.
+
+30
+
+(b) Use
+ of
+ the terms “herein”, “hereunder”, “hereof” and like terms shall be deemed to
+ refer to this entire Agreement and not merely to the particular provision in
+ which the term is contained, unless the context clearly indicates
+ otherwise.
+
+(c) Use
+ of
+ the word “including” or a like term shall be construed to mean “including but
+ not limited to”.
+
+(d) Exhibits
+ and schedules to this Agreement are an integral part of this
+ Agreement.
+
+(e) Words
+ importing a particular gender shall include every other gender and words
+ importing the singular shall include the plural and vice-versa, unless the
+ context clearly indicates otherwise.
+
+(f) Any
+ reference to a provision of the Code, Regulations or the Act shall be construed
+ to be a reference to any successor provision thereof.
+
+10.3. Independent
+ Counsel.
+ The
+ Members recognize that the law firm of Riker, Danzig, Scherer, Hyland &
+Perretti LLP has represented George Foreman Ventures with respect to the
+ preparation and execution of this Agreement and that THE OTHER MEMBERS HAVE
+ BEEN
+ ADVISED TO RETAIN INDEPENDENT COUNSEL for advice regarding their rights and
+ obligations under this Agreement. Each Member other than George Foreman Ventures
+ represents that it has sought and obtained independent legal counsel or hereby
+ waives the right to obtain such legal counsel. 
+
+10.4. Governing
+ Law.
+ This
+ Agreement shall be governed by and construed in accordance with the laws of
+ the
+ State of Delaware, excluding any conflict-of-laws rule or principle that might
+ refer the governance, construction or interpretation of this Agreement to the
+ laws of another State.
+
+10.5. Binding
+ Agreement.
+ This
+ Agreement shall be binding upon and inure to the benefit of the Members and
+ their respective heirs, executors, administrators, personal representatives
+ and
+ successors.
+
+10.6. Severability.
+ Each
+ term and provision of this Agreement is intended to be severable. If any term
+ or
+ provision of this Agreement is determined by a court of competent jurisdiction
+ to be unenforceable for any reason whatsoever that term or provision shall
+ be
+ ineffectual and void and the validity of the remainder of this Agreement shall
+ not be adversely affected thereby.
+
+10.7. Entire
+ Agreement.
+ This
+ Agreement (including the exhibits and schedules hereto) supersedes any and
+ all
+ other understandings and agreements, either oral or in writing, between the
+ Members with respect to the Membership Interests and constitute the sole and
+ only agreement between the Members with respect to the Membership
+ Interests.
+
+10.8. Further
+ Action.
+ Each
+ Member and the Manager shall execute and deliver all papers, documents and
+ instruments and perform all acts that are necessary or appropriate to implement
+ the terms of this Agreement and the intent of the Members.
+
+31
+
+10.9. Power
+ of Attorney.
+ Each
+ Member hereby irrevocably constitutes and appoints (a) the Manager, (b) each
+ person who shall after the date of this Agreement become a Manager, and (c)
+ any
+ substitute that the Manager may appoint to act in its place (who need not be
+ a
+ Member) as his true and lawful representative and attorney-in-fact, with full
+ power and authority in his name, place and stead, to make, execute, acknowledge,
+ deliver, swear to, record, file and publish with respect to the Company (i)
+ any
+ and all instruments, documents and certificates (including the Certificate
+ of
+ Formation, any amendments thereto and a certificate of cancellation) which,
+ from
+ time to time, may be required by the laws of the United States of America,
+ the
+ State of Delaware or any other state in which the Company shall determine to
+ do
+ business or any political subdivision or agency thereof, and to take any other
+ action which the Manager may deem necessary or appropriate, in his sole
+ discretion, to execute, implement and continue or terminate the valid and
+ subsisting existence and business operations of the Company and (ii) any
+ amendments to and restatements of the Certificate of Formation as such
+ amendments and restatements are contemplated hereunder, or any other instrument
+ relating to any such amendments. The foregoing grant of authority is a special
+ power of attorney coupled with an interest, shall be irrevocable and shall
+ continue in full force and effect notwithstanding the subsequent death,
+ disability, insanity or incapacity (or, in the case of a Member that is a
+ corporation, limited liability company, association, partnership, joint venture
+ or trust, the subsequent merger, dissolution or other termination of the
+ existence) of such Member. The special power of attorney may be exercised on
+ behalf of a Member by a facsimile signature of the Manager (or substitute for
+ the Manager). The special power of attorney shall survive the Transfer by the
+ Member of the whole or any portion of his Membership Interest, except that
+ in a
+ case in which the transferee of the whole Membership Interest of a Member shall
+ have furnished a power of attorney and shall have been approved by the Manager
+ for admission to the Company as a substituted Member, this power of attorney
+ shall survive the Transfer for the sole purpose of enabling the Manager (or
+ substitute for a Manager) to execute, acknowledge and file any instrument
+ necessary to effect the substitution and shall thereafter
+ terminate.
+
+10.10. Amendment
+ or Modification.
+ This
+ Agreement (including the exhibits and schedules hereto) may be amended or
+ modified from time to time only by the unanimous written consent of the Members;
+ provided, however, that the Manager may amend or modify this Agreement
+ (including the exhibits and schedules hereto) without the consent of any of
+ the
+ Members to reflect the issuance of any additional equity in the Company pursuant
+ to the provisions of this Agreement. 
+
+10.11. Counterparts.
+ This
+ Agreement may be signed in counterparts, each of which shall be considered
+ an
+ original and together they shall constitute one instrument.
+
+(Signature
+ page follows)
+
+32
+
+IN
+ WITNESS WHEREOF,
+ the
+ Members have executed and adopted this Agreement effective as of April
+ 20,
+ 2007.
+
+WITNESS:                                                
+GEORGE
+ FOREMAN VENTURES LLC
+
+______________________________                      
+By:_______________________________________     
+
+                        Name:
+
+                        Title:
+
+                       IN
+ STRIDE
+ L.L.C.
+
+_______________________________                               By:_____________________________________     
+
+ Name:
+
+ Title 
+
+ ___________________________________           
+
+_______________________________                                 
+OLEN
+ RICE
+
+_______________________________                               
+ ________________________________________                       
+
+                                                       PAUL
+ KOESTER
+
+33
+
+SCHEDULE
+ A
+
+MEMBERS;
+ MEMBERSHIP INTERSTS; INITIAL CAPITAL CONTRIBUTIONS     
+
+ Member 
+
+MembershipInterest 
+
+Initial
+ Capital Contributions 
+
+George
+ Foreman Ventures LLC
+
+50.1
+ %
+
+ $
+
+ 501 
+
+In
+ Stride L.L.C.
+
+47.9
+ %
+
+$
+
+479
+
+Olen
+ Rice
+
+1.0
+ %
+
+ $
+
+ 10
+
+Paul
+ Koester
+
+1.0
+ %
+
+ $
+
+ 10
+
+34
+
+EXHIBIT
+ A
+
+LICENSE
+ AGREEMENT BETWEEN THE COMPANY AND IN STRIDE
+
+35
+
+EXHIBIT
+ B
+
+LICENSE
+ AGREEMENT BETWEEN THE COMPANY 
+
+AND
+ GEORGE FOREMAN VENTURES
+
+36

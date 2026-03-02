@@ -1,0 +1,1205 @@
+EX-99.1
+2
+ea191887ex99-1_foxotech.htm
+MASTER SOFTWARE AND SERVICES AGREEMENT WITH KR8 AI INC. EFFECTIVE JANUARY 12, 2024
+
+Exhibit 99.1
+
+MASTER SOFTWARE AND SERVICES AGREEMENT
+
+This Master Software and Services Agreement (this
+“Agreement”), effective as of January 12, 2024 (the “Effective Date”), is by and between KR8 AI Inc., a Nevada corporation
+with an address at 112 North Curry Street, Carson City, Nevada 89703 (“Licensor”) and FOXO Technologies Inc., a Delaware corporation
+with offices located at 729 N. Washington Ave., Suite 600, Minneapolis, MN 55401 (“Licensee”). Licensor and Licensee may be
+referred to herein collectively as the “Parties” or individually as a “Party.”
+
+R E C I T A L S:
+
+Licensee desire to develop and launch application
+services (“Licensee Applications”) pursuant to which, Licensee will be able to distribute to end users (“End Users”)
+an AI machine learning epigenetic APP to enhance health, wellness and longevity;
+
+To facilitate the development of the Licensee
+Applications Licensee desires that, subject to the terms and conditions hereof, Licensor provide it with a license to use Licensor Products
+underlying the KR8 AI eco system and iOS/Android APP software previously viewed by Licensee and provide ongoing support, upgrades, maintenance,
+and administration services related thereto.
+
+In consideration of the mutual covenants, terms,
+and conditions set forth herein, and for other good and valuable consideration, the receipt and sufficiency of which are hereby acknowledged,
+the Parties agree as follows:
+
+1.
+Definitions. Terms used in this Master
+Software and Services Agreement (the “Agreement”) with initial capital
+letters shall have the respective meanings set forth herein or, if not set forth herein, in Exhibit A hereto, or, if not set forth in
+either of the foregoing, in the Exhibits or Schedules attached hereto.
+
+2.
+Interpretation of Documents. In the event of a conflict between: (i) This Agreement and an Exhibit
+or other attachment to this Agreement, the terms of this Agreement shall prevail; (ii) This Agreement and an Order Form or attachment
+thereto (the “Order Form”), this Agreement shall prevail unless and except to the extent the Order Form explicitly notes the
+deviation from this Agreement, in which case the terms of such Order Form will prevail with respect to that Order Form only; (iii) This
+Agreement and a Service Level and Support Services Agreement Schedule and any schedule thereto (a “Service Agreement”), the
+terms of this Agreement shall prevail unless and except to the extent the Service Agreement explicitly notes the deviation from this Agreement,
+in which case the terms of such Service Agreement will prevail with respect to that Agreement only; (iv) A Service Order Form and any
+schedule thereto (a “Service Order”), the terms of the Service Order shall prevail; and (v) Any other documents and this Agreement,
+even when such other documents are expressed to apply to the provision of the Licensor Products, this Agreement shall prevail.
+
+1
+
+3.
+Schedules and Licensor Products
+
+3.1.
+This Agreement establishes a contractual framework for Licensor’s provision of Licensor Products
+to Licensee and/or any Licensee Affiliate who enters into this Agreement or one or more Order Forms, Service Agreement or Service Order
+(collectively, “Schedules”) hereunder for use solely within the United States of America, Canada and Mexico (the “Territory”)
+by consumer end users (“End Users”). The transactions contemplated by this Agreement shall be implemented in accordance with,
+and subject to the requirements of, the following provisions:
+
+3.1.1.
+Where Licensee or a Licensee Affiliate and Licensor agree to contract for the provision of Licensor Products,
+Licensee or such Licensee Affiliate and Licensor shall enter into and execute a Schedule that incorporates the terms of this Agreement.
+Licensor shall not commence delivery of any Licensor Product until Licensor and Licensee shall have executed a Schedule applicable to
+such Licensor Product. Licensee and Licensor have entered into and shall be deemed to have executed Exhibit B, Exhibit C and the Order
+Form annexed as Schedule 1.
+
+3.1.2.
+Where a Licensee Affiliate and Licensor have entered into a Schedule the terms of this Agreement shall
+be deemed incorporated therein, and such Schedule together inclusive of this Agreement, shall constitute a separate contract for the applicable
+Licensor Products, and the obligations of “Licensee” in this Agreement shall apply to the applicable Licensee Affiliate, mutatis
+mutandis.
+
+4.
+License.
+
+4.1.
+License Grant. Subject to terms and conditions of this Agreement and the applicable Schedules and
+exhibits, Licensor hereby grants Licensee a limited, non-sublicensable, non-transferable perpetual license to use the Licensor Products
+to develop, launch and maintain License Applications based upon Licensee’s epigenetic biomarker technology and software to develop
+an AI machine learning epigenetic APP to enhance health, wellness and longevity. Licensee’s Applications utilizing Licensor Products
+shall be made available only directly to individual consumer End Users within the Territory and shall process information and provide
+data and recommendations solely intended to enable End Users to monitor and improve their health, wellness and longevity. Licensee shall
+use Licensor Products solely for Licensee’s business purposes and shall not provide any Licensor Products to any party other than individual
+consumer End Users. Licensee may make a reasonable number of copies of the Documentation solely for Licensee’s internal business purposes
+in connection with Licensee’s use of the Software.
+
+4.2.
+Scope. Subject to the terms of this Agreement and the applicable Schedules, the license granted
+to Licensee hereunder shall be irrevocable during the period of this Agreement so long as Licensee complies with the material terms hereof,
+and Licensee shall have the right to do any or all of the following: (i) to maintain and operate the Licensee Applications within the
+Territory and to grant subscriptions to End Users to access and use the Licensee Applications within the Territory; and (ii) to generate,
+market, promote, and license the Licensee Applications in accordance with market demands. Nothing in this Agreement shall obligate Licensor
+to continue providing access to any Service beyond the date when Licensor ceases providing such Service to Licensees generally.
+
+2
+
+4.3.
+Open
+Source Components. Software may include Open Source Components. Any use of Open Source Components by Licensee is subject to
+and governed solely by the terms and conditions of the applicable open source license agreement(s).
+
+4.4.
+Use Restrictions. Licensee shall not use the Software or Documentation for any purposes beyond
+the scope of the license granted in this Agreement. Without limiting the foregoing and except as otherwise expressly set forth in this
+Agreement, Licensee shall not at any time, directly or indirectly: (i) copy, modify, or create derivative works of the Software or the
+Documentation, in whole or in part; (ii) rent, lease, lend, sell, sublicense, assign, distribute, publish, transfer, or otherwise make
+available the Software or the Documentation; (iii) reverse engineer, disassemble, decompile, decode, adapt, or otherwise attempt to derive
+or gain access to the source code of the Software, in whole or in part; (iv) remove any proprietary notices from the Software or the Documentation;
+(v) use the Software or Documentation for the purposes of competing with Licensor, including without limitation competitive intelligence;
+or (vi) use the Software in any manner or for any purpose that infringes, misappropriates, or otherwise violates any intellectual property
+right or other right of any person, or that violates any applicable law.
+
+4.5.
+Reservation of Rights. Licensor reserves all rights not expressly granted to Licensee in this Agreement.
+Except for the limited rights and licenses expressly granted under this Agreement, nothing in this Agreement grants, by implication, waiver,
+estoppel, or otherwise, to Licensee or any third party any intellectual property rights or other right, title, or interest in or to the
+Software.
+
+4.6.
+Deliverables. Deliverables shall be considered Licensor IP Rights and shall be licensed to Licensee
+pursuant to the terms of the Software License Grant as described in this Section 4.
+
+4.7.
+Subscriptions to Applications; Subscription Services. In the case of an Application as to which
+the rights are owned by Licensor, during the term of this Agreement and applicable Schedule, Licensor hereby (a) grants or agrees to procure
+a right for Licensee to access and use the Application and (b) agrees to provide the Subscription Services in accordance with the terms
+and conditions of this Agreement, including the applicable Schedule. Licensor shall provide Licensee with the use and access to the Application
+and the Subscription Services via an application server web environment as specified in the applicable Schedule. Unless otherwise set
+forth in the applicable Schedule, (i) Licensor shall provide Licensee with use and access of the Application and the Subscription Services
+twenty-four (24) hours per day, seven (7) days per week, and (ii) the fees charged by Licensor for an Application shall include Updates
+to such Application as well as Support Services relating to such Application. With respect to Apps as to which the rights are owned by
+third parties which are to be incorporated in Licensee Applications (for example, APPS controlled by Google, Microsoft, Open AI or Apple)
+Licensee shall be responsible for contracting with the application provider for the purpose of incorporating the APP in Licensee Applications.
+
+3
+
+4.8.
+Professional Services and Deliverables. In addition to the grant of the license provided herein,
+Licensor’s personnel will provide Services to develop agreed upon proprietary algorithms and assist with the development of APIs,
+user interfaces and cross platform capabilities described in a Schedule C. The cost of such development Services for the eighteen months
+commencing as of the date hereof is included within Initial Licensee Fee. Thereafter, if Licensor is to continue to providing development
+as opposed to maintenance services, the parties will enter into a mutually acceptable Order Form. Licensor shall provide to Licensee the
+Professional Services and/or Deliverables described in a Schedule. During the term of this Agreement, Licensee may request Licensor to
+perform computer professional services in the nature of deployment, customization add-in, documentation and/or integration services (hereinafter,
+“Professional Services”) in addition to the Professional Services associated with the software described in Schedule C. Upon
+receipt of a request, Licensor may provide Licensee with a written proposal, and when the parties agree to all requirements of the proposed
+Professional Services, a Service Order for the Professional Services, in the form of Schedules, shall be executed by the parties. All
+Service Orders shall be subject to the terms and conditions of this Agreement. Services performed by Licensor are not exclusive to Licensee,
+and Licensor may perform services of any type or nature for any other person or entity at any time.
+
+4.9.
+Licensee hereby acknowledges and agrees that (i) the Software and the Services do not produce final work
+product ready for release outside of the Licensee’s organization or submission for regulatory authorities’ review and approval without
+prior review by the Licensee; and (ii) Licensee assumes full responsibility for all final work product released outside of its organization,
+including, but not limited to, any submissions made to regulatory authorities.
+
+5.
+Delivery and Acceptance.
+
+5.1.
+Delivery. Licensor shall deliver the Licensor Products electronically, on tangible media, or by
+other means, in Licensor’s sole discretion or as detailed in the applicable Schedule or Order Form. If the Service is delivered to Licensee
+via a vendor, Licensee acknowledges that a vendor delivery fee may be charged to Licensee by such vendor or by Licensor on behalf of the
+vendor.
+
+5.2.
+Acceptance. Licensor will make the Service available to Licensee as indicated on the service order
+Schedule. The Service will be deemed accepted upon the Service Start Date. Any updates, bug fixes, or upgrades (“Corrections”)
+to the Service will be deemed accepted by Licensee on the day such Corrections are delivered.
+
+6.
+Licensee Responsibilities. Licensee is responsible and liable for all uses of the Licensor Products,
+directly or indirectly, whether such access or use is permitted by or in violation of this Agreement. Without limiting the generality
+of the foregoing, Licensee is responsible for all acts and omissions of Authorized Users, and any act or omission by an Authorized User
+that would constitute a breach of this Agreement if taken by Licensee will be deemed a breach of this Agreement by Licensee. Licensee
+shall take reasonable efforts to make all Authorized Users aware of this Agreement’s provisions as applicable to such Authorized User’s
+use of the Licensor Products, and shall cause Authorized Users to comply with such provisions.
+
+4
+
+7.
+Service Levels and Support.
+
+7.1.
+Service Levels. Subject to the terms and conditions of this Agreement, Licensor shall perform the
+Services and provide the other Licensor Products in a manner that meets or exceeds the Service Levels described in Exhibit B. In case
+of Service Level failure, the Licensor shall implement remedial measures as described in Exhibit B or as otherwise provided in the applicable
+Schedule or Order Form.
+
+7.2.
+Support Services. Licensor shall provide Licensee with support for the Licensor Products as described
+in the applicable Schedule or Order Form.
+
+7.3.
+Technical Assistance. During the term of this Agreement, Licensor shall offer the technical assistance
+services provided in the applicable Schedule or Order Form.
+
+7.4.
+Training. Licensor shall provide Licensee training and instructions on the operation of the Licensor
+Products at then current rates as provided in the applicable Schedule or Order Form.
+
+8.
+Charges and Payment.
+
+8.1.
+Licensee shall pay Licensor an Initial License and Development Fee of $2,500,000 (the “Initial
+ License Fee”), a monthly maintenance fee of $50,000 (Maintenance Fee”), and an ongoing royalty equal to 15% of
+ Subscriber Revenues (the “Running Royalty”), in accordance with the terms and subject to the minimums set forth in the
+ Schedules attached hereto. In addition, Licensee shall pay such additional amounts as are set forth in any Schedule agreed upon
+ after the date hereof (Such additional amounts, together with the Initial License and Development Fee, the Maintenance Fee and the
+ Royalty are referred to herein as the “Fees”).
+
+8.2.
+During the Term, Licensee shall pay the Fees to Licensor in accordance with the terms hereof, without
+any right of offset or withholding for any reason whatsoever.
+
+8.3.
+Expenses. Licensee agrees to reimburse Licensor for all reasonable travel and out-of-pocket expenses
+incurred in connection with the performance of the Services. in addition to payment of any applicable hourly rates.
+
+8.4.
+Audit of Use. Licensee agrees to maintain complete and accurate records in accordance with generally
+accepted accounting principles during the term of the Agreement and for a period of two years after the termination or expiration of this
+Agreement with respect to matters necessary for accurately determining amounts due hereunder. Licensor may, at its expense, on reasonable
+prior notice, audit Licensee’s use of the Licensor Product. Audits shall be conducted during regular business hours at Licensee’s place
+or places of business and shall not unreasonably interfere with Licensee’s business activities. Licensor shall be entitled to request
+upon seven (7) days prior written notice: (i) the office where the Services are accessed from; and (ii) the total number of End Users;
+and (iii) all of Licensee’s business records concerning or relating in any way to Licensor’s rights to receive the Royalty,
+or the calculation thereof. Audits shall be conducted no more than once annually. If, as a result of any such audit, Licensor identifies
+unauthorized use of the Licensor Products, Licensee shall promptly pay to Licensor the amount of the unauthorized use or undercharge and
+the reasonable expenses of Licensor in conducting the audit.
+
+5
+
+8.5.
+Late Payments. All fees and amounts due to Licensor and not paid within thirty (30) days after
+the date such amounts are due and payable (i) shall bear interest at the lesser of one and one half percent (1.5%) per month or the maximum
+rate of interest allowable by law and (ii) Licensee shall reimburse Licensor for all reasonable costs incurred by Licensor in collecting
+any late payments or interest, including attorneys’ fees, court costs, and collection agency fees; and (iii) if such failure continues
+for 30 days following written notice thereof, Licensor may prohibit access to the Software until all past due amounts have been paid,
+without incurring any obligation or liability to Licensee or any other person by reason of such prohibition of access to the Software.
+
+8.6.
+Taxes. All Fees and other amounts payable by Licensee under this Agreement are exclusive of taxes
+and similar assessments. Licensee is responsible for all sales, use, and excise taxes, and any other similar taxes, duties, and charges
+of any kind imposed by any federal, state, or local governmental or regulatory authority on any amounts payable by Licensee hereunder,
+other than any taxes imposed on Licensor’s income.
+
+9.
+Confidential Information. From
+time to time during the term of this Agreement, either Party may disclose or make available to the other Party information about its business
+affairs, products, confidential intellectual property, trade secrets, third-party confidential information, and other sensitive or proprietary
+information, whether orally or in written, electronic, or other form or
+media/in written or electronic form or media, and whether or not marked, designated or otherwise identified as “confidential”
+(collectively, “Confidential Information”). Confidential Information does not include information that, at the time of
+disclosure is: (a) in the public domain; (b) known to the receiving Party at the time of disclosure; (c) rightfully obtained by the receiving
+Party on a non-confidential basis from a third party; or (d) independently developed by the receiving Party. The receiving Party shall
+not disclose the disclosing Party’s Confidential Information to any person or entity, except to the receiving Party’s employees who have
+a need to know the Confidential Information for the receiving Party to exercise its rights or perform its obligations hereunder. Notwithstanding
+the foregoing, each Party may disclose Confidential Information to the limited extent required (i) in order to comply with the order of
+a court or other governmental body, or as otherwise necessary to comply with applicable law, provided that the Party making the disclosure
+pursuant to the order shall first have given written notice to the other Party and made a reasonable effort to obtain a protective order;
+or (ii) to establish a Party’s rights under this Agreement, including to make required court filings. On the expiration or termination
+of the Agreement, the receiving Party shall promptly return to the disclosing Party all copies, whether in written, electronic, or other
+form or media, of the disclosing Party’s Confidential Information, or destroy all such copies and certify in writing to the disclosing
+Party that such Confidential Information has been destroyed. Each Party’s obligations of non-disclosure with regard to Confidential Information
+are effective as of the Effective Date and will expire five years from the date first disclosed to the receiving Party; provided, however,
+with respect to any Confidential Information that constitutes a trade secret (as determined under applicable law), such obligations of
+non-disclosure will survive the termination or expiration of this Agreement for as long as such Confidential Information remains subject
+to trade secret protection under applicable law.
+
+6
+
+10.
+Intellectual Property Ownership.
+
+10.1.
+Licensee acknowledges that, as between Licensee and Licensor, Licensor owns all right, title, and interest,
+including all intellectual property rights, in and to the Licensor Products and Licensor IP Rights, with respect to Third-Party Products,
+the applicable third-party licensors own all right, title and interest, including all intellectual property rights, in and to the Third-Party
+Products.
+
+10.2.
+Licensee acknowledges that, as between Licensee and Licensor, Licensor owns all right, title, and interest,
+including all intellectual property rights, in and to any improvements to Licensor Products which were conceived and reduced to practice
+by Licensor during the performance of the Services and Licensor IP Rights, are the product of Licensor’s technical expertise, are directly
+related to Licensor’s line of business or the manner in which Licensor customarily performs services for third parties, and were not developed
+with the use of any Licensee Confidential Information, intellectual property or any other property of Licensee, shall be and remain the
+property of Licensor (“Licensor Improvements”). The works and databases included in the content of the Service are protected
+by applicable copyright laws. Licensor hereby grants Licensee a non-exclusive, non-sublicensable, non-transferable, worldwide license
+to use any Licensor Improvements to the extent necessary to enable Licensee to make reasonable use of the Licensor Products, except that
+Licensee shall not reverse engineer, decompile, or disassemble any Licensor Products or Licensor Improvements or otherwise attempt to
+determine the source code for computer programs or other trade secrets that constitute Licensor IP rights or Licensor Improvements.
+
+10.3.
+Licensor acknowledges that, as between Licensor and Licensee, Licensee owns all right, title, and interest,
+including all intellectual property rights, in and to the Licensee Data. Licensee hereby grants to Licensor a non-exclusive, royalty-free,
+worldwide license to reproduce, distribute, and otherwise use and display the Licensee Data and perform all acts with respect to the Licensee
+Data as may be necessary for Licensor to provide the Services to Licensee.
+
+10.4.
+Feedbacks. Feedbacks are suggestions, proposals, ideas, recommendations, or other feedback provided
+by Licensee to Licensor regarding improvements to the Services and Software (“Feedbacks”). As between Licensee and Licensor,
+Licensor is and will remain the sole and exclusive owner of all right, title, and interest in and to all Feedbacks, including all Intellectual
+Property Rights relating thereto, provided, Licensor will under no circumstances identify Licensee as the source of such feedback or as
+a customer of Licensor to any third party without obtaining prior approval.
+
+10.5.
+Resultant Data. As between Licensor and Licensee, Licensee owns all right, title, and interest,
+including all intellectual property rights, in and to the Resultant Data. Licensee hereby irrevocably grants to Licensor a non-exclusive,
+royalty-free, worldwide license to reproduce, distribute, and otherwise use and display the Resultant Data and perform all acts with respect
+to the Resultant Data as may be necessary for Licensor to improve the Software and the Services; provided that for so long as this License
+is an exclusive license, Licensor shall not grant any party the right to use the Resultant Data in connection with an application to be
+used by End Users in North America that is directly competitive with Licensee Applications.
+
+7
+
+11.
+Limited Warranty 
+
+11.1.
+Licensor warrants that it shall: (i) perform the Services in accordance with the terms and subject to
+the conditions set out in the respective Exhibit, Schedule and this Agreement; (ii) using personnel of commercially reasonable skill,
+experience, and qualifications; and (iii) in a timely, workmanlike, and professional manner in accordance with generally recognized industry
+standards for similar services.
+
+11.2.
+LICENSOR WARRANTS THAT THE LICENSOR PRODUCTS, INCLUDING ANY SOFTWARE AND DOCUMENTATION, IN UNMODIFIED
+FORM AND WHEN USED AS AUTHORIZED BY THIS AGREEMENT, WILL CONFORM IN ALL MATERIAL RESPECTS TO THE AGREED UPON SPECIFICATIONS AND SERVICE
+LEVELS. LICENSOR MAKES NO OTHER WARRANTIES OR REPRESENTATIONS RELATING TO THE LICENSOR PRODUCTS OR THEIR PERFORMANCE OR WITH RESPECT TO
+THE LICENSED DOCUMENTATION. ALL OTHER WARRANTIES, EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR
+A PARTICULAR PURPOSE OR NON-INFRINGEMENT, ARE EXPRESSLY DISCLAIMED AND EXCLUDED TO THE FULLEST EXTENT AUTHORIZED BY LAW. TECHNICAL DIFFICULTIES
+COULD BE ENCOUNTERED IN CONNECTION WITH THE SYSTEM. THESE DIFFICULTIES COULD INVOLVE, AMONG OTHERS, FAILURES, DELAYS, MALFUNCTION, SOFTWARE
+EROSION OR HARDWARE DAMAGE, WHICH DIFFICULTIES COULD BE THE RESULT OF HARDWARE, SOFTWARE OR COMMUNICATION LINK INADEQUACIES OR OTHER CAUSES.
+SUCH DIFFICULTIES COULD LEAD TO POSSIBLE ECONOMIC AND/OR DATA LOSS.
+
+11.3.
+The Limited Warranty provided in Section 11.2 of the Agreement does not apply to problems resulting from:
+(i) improper installation of the Licensor Software by Licensee, or any other party other than the Licensor, or the installation of the
+Licensor Products on improper hardware; (ii) modification of the Licensor Software not undertaken or performed by Licensor; (iii) malfunctions
+in any computer hardware or software or systems files not provided by Licensor; (iv) accident of Licensee or at the Licensee’s premises;
+(v) neglect of Licensee; (vi) misuse of the Licensor Software by Licensee; or (vii) use of the Licensor Software with data of any entity
+other than Licensee.
+
+11.4.
+Licensor’s sole and exclusive liability and Licensee’s sole and exclusive remedy for breach of this warranty
+shall be as follows: (i) Licensee shall remain liable for payments to Licensor for completed Services or prorated portions thereof received
+by Licensee, Licensor Software licensing fee and other pre-approved, non-cancelable expenses or obligations incurred by Licensee prior
+to the termination; and (ii) The Licensor shall not be liable for a breach of the warranty set forth in this Section unless Licensee gives
+written notice of the defective Licensor Products, reasonably described, to Licensor within ten (10) days of the time when Licensee discovers
+or ought to have discovered that the Licensor Products were defective. Subject to foregoing, Licensee shall remain liable for payments
+to Licensor for completed Services or prorated portions thereof received by Licensee, Licensor Software licensing fee and other pre-approved,
+non-cancelable expenses or obligations incurred by Licensee prior to the termination. The Licensor shall not be liable for a breach of
+the warranty set forth in this Section unless Licensee gives written notice of the defective Licensor Products, reasonably described,
+to Licensor within ten (10) days of the time when Licensee discovers or ought to have discovered that the Licensor Products were defective.
+
+8
+
+11.5.
+Subject to Section 11.4, Licensor shall, in its sole discretion, either: (i) promptly cure any such breach;
+or (ii) credit or refund the price of such Licensor Products at the pro rata contract rate.
+
+11.6.
+THE REMEDIES SET FORTH IN THIS SECTION 11 SHALL BE THE LICENSEE’S SOLE AND EXCLUSIVE REMEDY AND LICENSOR’S
+ENTIRE LIABILITY FOR ANY BREACH OF THE LIMITED WARRANTY SET FORTH IN THIS SECTION 11. LICENSOR MAKES NO WARRANTIES EXCEPT FOR THAT PROVIDED
+IN 11.1 and 11.2, ABOVE. ALL OTHER WARRANTIES, EXPRESS AND IMPLIED, ARE EXPRESSLY DISCLAIMED.
+
+11.7.
+Allocation of Risk. This Section 11 of this Agreement allocates the risks under this Agreement
+between Licensor and Licensee. Licensor’s Fees reflect this allocation of risk and the warranties, limitation of warranties, and limitation
+of liability in this Section 11.
+
+12.
+Indemnification.
+
+12.1.
+Licensor Indemnification.
+
+12.1.1.
+Licensor shall indemnify, defend, and hold harmless Licensee from and against any and all losses, damages,
+liabilities, and costs (including reasonable attorneys’ fees) (“Losses”) finally awarded by a court of competent jurisdiction,
+after all rights of appeal are exhausted, incurred by Licensee resulting from any third-party claim, suit, action, or proceeding (“Third-Party
+Claim”) that the Software or Documentation, or any use of the Software or Documentation in accordance with this Agreement, infringes
+or misappropriates such third party’s US intellectual property rights, copyrights, or trade secrets, provided that Licensee promptly notifies
+Licensor in writing of the claim within thirty (30) days of the date Licensee first knows or should know of the claim; and provide Licensor
+with reasonable cooperation and all information in Licensee’s possession related to said claim; and allows Licensor sole authority to
+control the defense, settlement negotiations and settlement execution, in whole or in part, of such claim. Reasonable out of pocket expenses
+incurred by Licensee in providing assistance to Licensor in defense of such a claim shall be reimbursed by Licensor.
+
+12.1.2.
+If such a claim is made or appears possible, Licensee agrees to permit Licensor, at Licensor’s sole discretion,
+to (i) modify or replace the Software or Documentation, or component or part thereof, to make it non-infringing, or (ii) obtain the right
+for Licensee to continue use. If Licensor determines that none of these alternatives is reasonably available, Licensor may terminate this
+Agreement, in its entirety or with respect to the affected component or part, effective immediately on written notice to Licensee.
+
+12.1.3.
+This Section 12.1.3. will not apply to the extent that the alleged infringement arises from: (i) modifications
+to the Software not made by or authorized by Licensor; or (ii) use of any version other than the most current version of the Software
+or Documentation delivered to Licensee.
+
+9
+
+12.2.
+Licensee Indemnification. Licensee shall indemnify, hold harmless, and, at Licensor’s option, defend
+Licensor from and against any Losses resulting from any Third-Party Claim based on Licensee’s violation of this Agreement, provided that
+Licensee may not settle any Third-Party Claim against Licensor unless such settlement completely and forever releases Licensor from all
+liability with respect to such Third-Party Claim or unless Licensor consents to such settlement, and further provided that Licensor will
+have the right, at its option, to defend itself against any such Third-Party Claim or to participate in the defense thereof by counsel
+of its own choice.
+
+12.3.
+Sole Remedy. THIS SECTION 12 SETS FORTH LICENSEE’S SOLE REMEDIES AND LICENSOR’S SOLE LIABILITY
+AND OBLIGATION FOR ANY ACTUAL, THREATENED, OR ALLEGED CLAIMS THAT THE LICENSOR PRODUCTS INFRINGES, MISAPPROPRIATES, OR OTHERWISE VIOLATES
+ANY INTELLECTUAL PROPERTY RIGHTS OF ANY THIRD PARTY.
+
+12.4.
+Covenant Not to Sue. Notwithstanding anything to the contrary in this Agreement or any other agreement
+or instrument delivered by Licensor or Licensee pursuant to this Agreement, Licensee and Licensor, on behalf of themselves, their Affiliates
+and designees, agree not to sue or initiate legal action on any legal theory against any of Licensor’s or Licensee’s past,
+current or future shareholders, officers, or directors.
+
+13.
+Limitations of Liability.
+
+LICENSEE AND LICENSOR
+WILL NOT BE LIABLE, WHETHER IN CONTRACT OR IN TORT (INCLUDING BREACH OF WARRANTY, NEGLIGENCE AND STRICT LIABILITY IN TORT), FOR INDIRECT
+OR CONSEQUENTIAL, EXEMPLARY, PUNITIVE OR SPECIAL DAMAGES ARISING OUT OF OR RELATING TO ITS PERFORMANCE OR FAILURE TO PERFORM UNDER THIS
+AGREEMENT, EVEN IF THE PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES IN ADVANCE.
+
+IN NO EVENT WILL THE COLLECTIVE AGGREGATE
+LIABILITY OF LICENSOR, ITS SUBSIDIARIES, AFFILIATES, SHAREHOLDERS, DIRECTORS, OFFICERS, EMPLOYEES AND ITS LICENSORS, SERVICE PROVIDERS,
+AND SUPPLIERS (“THE PARTIES”), UNDER OR IN CONNECTION WITH THIS AGREEMENT OR ITS SUBJECT MATTER, UNDER ANY LEGAL OR EQUITABLE
+THEORY, INCLUDING BREACH OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, AND OTHERWISE, EXCEED THE AMOUNT OF FEES PAID OR
+PAYABLE BY LICENSEE UNDER THIS AGREEMENT FOR THE TWELVE (12) MONTHS IMMEDIATELY PRECEDING THE LAST ACT OR OMISSION GIVING RISE TO SUCH
+LIABILITY. THE FOREGOING LIMITATION APPLIES NOTWITHSTANDING THE FAILURE OF ANY AGREED OR OTHER REMEDY OF ITS ESSENTIAL PURPOSE. IF ANY
+APPLICABLE AUTHORITY HOLDS ANY PORTION OF THIS SECTION TO BE UNENFORCEABLE, THEN THE PARTIES’ LIABILITY WILL BE LIMITED TO THE FULLEST
+POSSIBLE EXTENT PERMITTED BY APPLICABLE LAW. LICENSEE WILL INDEMNIFY, DEFEND AND HOLD HARMLESS LICENSOR FOR ANY LOSS, DAMAGE OR COST IN
+CONNECTION WITH ANY CLAIM OR ACTION WHICH MAY BE BROUGHT BY ANY THIRD PARTY AGAINST LICENSOR RELATING TO ANY BREACH OF THIS AGREEMENT
+BY LICENSEE.
+
+10
+
+14.
+Term, Termination and Conversion to a Non-exclusive
+License.
+
+14.1.
+Initial Term. The initial term of this Agreement shall commence on the Effective Date of this Agreement.
+Unless terminated earlier in accordance with the terms hereof, this Agreement shall be perpetual.
+
+14.2.
+Conversion. If Licensee shall fail to timely pay the Minimum Royalty due with respect to any calendar
+year, the License granted herein shall become non-exclusive as more fully set forth in the Order Form annexed hereto as Schedule 1.
+
+14.3.
+This Agreement, a Schedule, an Order Form or any portion of any of them may be terminated as follows:
+
+14.3.1.
+Either Party may terminate this Agreement, effective on written notice to the other Party, if the other
+Party materially breaches this Agreement, and such breach remains uncured 30 days after the non-breaching Party provides the breaching
+Party with written notice of such breach, in which event, the non-breaching party shall then deliver a second written notice to the breaching
+party terminating this Agreement, in which event this Agreement, and the licenses granted hereunder, will terminate on the date specified
+in such second notice;
+
+14.3.2.
+Notwithstanding the foregoing, either Party may terminate this Agreement, effective immediately upon written
+notice to the other Party, if the other Party: (i) is unable to pay, or fails to pay, its debts as they become due; (ii) becomes insolvent,
+files or has filed against it, a petition for voluntary or involuntary bankruptcy or otherwise becomes subject, voluntarily or involuntarily,
+to any proceeding under any domestic or foreign bankruptcy or insolvency law; (iii) makes or seeks to make a general assignment for the
+benefit of its creditors; or (iv) applies for or has appointed a receiver, trustee, custodian, or similar agent appointed by order of
+any court of competent jurisdiction to take charge of or sell any material portion of its property or business;
+
+14.3.3.
+Licensee may terminate this Agreement at any time upon ninety days notice to Licensor provided that as
+a condition to such termination Licensee immediately ceases using any Licensor Products. Termination of this Agreement by Licensee pursuant
+to this Section shall not relive Licensee of its obligation to pay the Initial Licensee Fee in accordance with Schedule 1.
+
+14.3.4.
+Licensor may terminate this Agreement at any time upon thirty (30) days’ notice to Licensee if Licensee
+shall fail to pay any portion of the Initial License Fee, Maintenance Fee or Royalty within ten days of the due date thereof and shall
+fail to cure such breach within ten days of the delivery by Licensor of notice of such default. Time is of the essence as to this Section
+14.3.4.
+
+11
+
+14.4.
+Effect of Expiration or Termination. Upon expiration or earlier termination of this Agreement,
+the license granted hereunder will terminate and Licensee shall cease using and delete, destroy, or return all Licensor Products, including
+without limitation, all copies of the Software and Documentation and certify in writing to the Licensor that the Software and Documentation
+has been deleted or destroyed. Licensee will pay to Licensor all previously-accrued but not yet paid Fees and reimbursable expenses, on
+receipt of Licensor’s invoice therefor, and within thirty (30) days of termination, any portion of the Initial License Fee then
+remaining unpaid, regardless of the due date of such remainder. Licensee shall not be entitled to any refund if this License is terminated.
+
+14.5.
+Surviving Terms. The provisions set forth in the following sections, and any other right, obligation
+or provision under this Agreement that, by its nature, should survive termination or expiration of this Agreement, will survive any expiration
+or termination of this Agreement: Section 1, Section 8, Section 9, Section 10, Section 13, Section 14, and Section 15. The indemnification
+provisions of Sections 12 shall survive termination or expiration of this Agreement, but only with respect to claims which arose from
+acts or circumstances which occurred prior to termination.
+
+15.
+Miscellaneous.
+
+15.1.
+Entire Agreement. This Agreement, together with any other documents incorporated herein by reference
+and all related Exhibits, constitutes the sole and entire agreement of the Parties with respect to the subject matter of this Agreement
+and supersedes all prior and contemporaneous understandings, agreements, and representations and warranties, both written and oral, with
+respect to such subject matter.
+
+15.2.
+Notices. All notices, requests, consents, claims, demands, waivers, and other communications hereunder
+(each, a “Notice”) must be in writing and addressed to the Parties at the addresses set forth on the first page of this Agreement
+(or to such other address that may be designated by the Party giving Notice from time to time in accordance with this Section). All Notices
+must be delivered by personal delivery, nationally recognized overnight courier (with all fees pre-paid), facsimile, or email (with confirmation
+of transmission) or certified or registered mail (in each case, return receipt requested, postage pre-paid). Except as otherwise provided
+in this Agreement, a Notice is effective only: (i) upon receipt by the receiving Party, and (ii) if the Party giving the Notice has complied
+with the requirements of this Section.
+
+12
+
+15.3.
+Marketing. Licensee grants Licensor permission to use the Licensee name and logo and/or
+trademark in any marketing materials of the Licensor or its Affiliates marketing materials. The Licensor or its Affiliates, as applicable,
+shall include a trademark attribution notice giving notice of the Licensee’s ownership of its trademarks in the marketing materials
+in which the Licensee’s name and logo appear. Licensor grants the Licensee permission to use the Licensee name and logo and/or
+trademark of the Licensor solely to market and promote the Services under this Agreement in accordance with Licensor guidelines as updated
+by Licensor from time to time.
+
+15.4.
+Force Majeure. In no event shall either Party be liable to the other Party, or be deemed to have
+breached this Agreement, for any failure or delay in performing its obligations under this Agreement, (except for any obligations to make
+payments), if and to the extent such failure or delay is caused by any circumstances beyond such Party’s reasonable control (a “Force
+Majeure Event”), including but not limited to acts of God, flood, fire, earthquake, explosion, war, terrorism, invasion, riot or
+other civil unrest, strikes, labor stoppages or slowdowns or other industrial disturbances, or passage of law or any action taken by a
+governmental or public authority, including imposing an embargo.
+
+15.5.
+Amendment and Modification; Waiver. No amendment to or modification of this Agreement is effective
+unless it is in writing and signed by an authorized representative of each Party. No waiver by any Party of any of the provisions hereof
+will be effective unless explicitly set forth in writing and signed by the Party so waiving. Except as otherwise set forth in this Agreement,
+(i) no failure to exercise, or delay in exercising, any rights, remedy, power, or privilege arising from this Agreement will operate or
+be construed as a waiver thereof and (ii) no single or partial exercise of any right, remedy, power, or privilege hereunder will preclude
+any other or further exercise thereof or the exercise of any other right, remedy, power, or privilege.
+
+15.6.
+Severability. If any provision of this Agreement is invalid, illegal, or unenforceable in any jurisdiction,
+such invalidity, illegality, or unenforceability will not affect any other term
+or provision of this Agreement or invalidate or render unenforceable such term or provision in any other jurisdiction. Upon such determination
+that any term or other provision is invalid, illegal, or unenforceable, the Parties hereto shall negotiate in good faith to modify this
+Agreement so as to effect the original intent of the Parties as closely as possible in a mutually acceptable manner in order that the
+transactions contemplated hereby be consummated as originally contemplated to the greatest extent possible.
+
+15.7.
+Governing Law; Submission to Jurisdiction. This Agreement is governed by and construed in accordance
+with the internal laws of the State of New York without giving effect to any choice or conflict of law provision or rule that would require
+or permit the application of the laws of any jurisdiction other than those of the State of New York. Any legal suit, action, or proceeding
+arising out of or related to this Agreement or the licenses granted hereunder will be instituted exclusively in the federal courts of
+the United States or the courts of the State of New York in each case located in the city of New York and County of New York, and each
+Party irrevocably submits to the exclusive jurisdiction of such courts in any such suit, action, or proceeding.
+
+13
+
+15.8.
+Waiver of Jury Trial. Each party irrevocably and unconditionally waives any right it may have to
+a trial by jury in respect of any legal action arising out of or relating to this Agreement or the transactions contemplated hereby.
+
+15.9.
+Assignment. Licensee may not assign or transfer any of its rights or delegate any of its obligations
+hereunder, in each case whether voluntarily, involuntarily, by operation of law or otherwise, without the prior written consent of Licensor,
+which consent shall not be unreasonably withheld, conditioned, or delayed. Any purported assignment, transfer, or delegation in violation
+of this Section is null and void. No assignment, transfer, or delegation will relieve the assigning or delegating Party of any of its
+obligations hereunder. This Agreement is binding upon and inures to the benefit of the Parties hereto and their respective permitted successors
+and assigns.
+
+15.10.
+Mergers and Acquisitions. For the purpose of calculating the Fees, it is not the parties’
+intention that the Fees charged under this Agreement will include accesses to Services added through a merger or acquisition. Accordingly,
+in the event of any merger or acquisition that would result in Licensee’s ownership or control of accesses to Services formerly
+owned or controlled by another entity, such additional accesses to Services will not be covered by the Fees charged under this Agreement.
+Licensee agrees that such additional accesses to Services shall be subject to additional fees, based upon the then current listed price
+for the additional accesses to Services resulting from the acquisition or merger. For the avoidance of doubt a merger and/or acquisition
+shall not entitle Licensee to terminate this Agreement other than in accordance with its terms.
+
+15.11.
+Creation, Storage of Back-ups and Security. Licensor will create a back-up of data daily for certain
+applications hosted by Licensor, as scheduled by Licensor. Licensor reserves the right to retain only the most current fifteen (15) days
+of back-ups, and to erase or otherwise dispose of all other back-ups at any time. In the event of a disaster, such back-ups will be retrieved
+and used in accordance with Licensor’s disaster recovery plan, which shall be updated from time to time without notice to Licensee.
+Licensor will employ commercially reasonable security measures (including, but not limited to, password protection and encryption) that
+are intended to prevent access to the Service and other Licensee data and/or information by unauthorized persons. Licensor will establish
+and maintain such other commercially reasonable safeguards (including, but not limited to, virus protection safeguards) against the destruction,
+loss or alteration of the Service and other Licensee data and/or information.
+
+15.12.
+Export Regulation. The Software
+may be subject to US export control laws, including the Export Control Reform Act and its associated regulations. Licensee shall not,
+directly or indirectly, export, re-export, or release the Software to, or make the Software accessible from, any jurisdiction or country
+to which export, re-export, or release is prohibited by law, rule, or regulation. Licensee shall comply with all applicable federal laws,
+regulations, and rules, and complete all required undertakings (including obtaining any necessary export license or other governmental
+approval), prior to exporting, re-exporting, releasing, or otherwise making the Software available outside the US.
+
+14
+
+15.13.
+Equitable Relief. Each Party acknowledges and agrees that a breach or threatened breach by such
+Party of any of its obligations under this Agreement, including Section 10 or 11, in the case of Licensee, Section 4.3, may cause the
+other Party irreparable harm for which monetary damages would not be an adequate remedy and agrees that, in the event of such breach or
+threatened breach, the other Party will be entitled to seek equitable relief, including a restraining order, an injunction, specific performance,
+and any other relief that may be available from any court, without any requirement to post a bond or other security, or to prove actual
+damages or that monetary damages are not an adequate remedy. Such remedies are not exclusive and are in addition to all other remedies
+that may be available at law, in equity, or otherwise.
+
+15.14.
+Exhibits and Schedules. The following Exhibits and Schedules are attached hereto and incorporated
+herein by this reference:
+
+Exhibit “A”: Definitions
+
+Exhibit “B”: Service Level
+and Support Services Agreement
+
+Exhibit “C”: Services and
+Features
+
+Schedule “1”: Order Form
+
+Schedule “2”: Form of Service
+Order
+
+15.15.
+Counterparts. This Agreement may be executed in counterparts, each of which is deemed an original,
+but all of which together are deemed to be one and the same agreement. A signed copy of this Agreement delivered by facsimile, email,
+or other means of electronic transmission is deemed to have the same legal effect as delivery of an original signed copy of this Agreement.
+
+IN WITNESS WHEREOF, the Parties hereto have executed
+this Agreement as of the Effective Date.
+
+ KR8 AI INC.
+
+ FOXO Technologies Inc.
+
+ By:
+
+ /s/ Mark White
+
+ By:
+
+ /s/ Brett Barnes
+
+ Name: 
+
+ Mark White
+
+ Name: 
+
+ Brett Barnes
+
+ Title:
+
+ CEO
+
+ Title:
+
+ Chairman
+
+15
+
+EXHIBIT A
+
+DEFINITIONS
+
+“Acceptance Criteria” means, with
+respect to a Licensor Product, (i) the Specifications applicable to such Licensor Product and (ii) any other requirement set forth in
+this Agreement that applies at the time of performance, provision or delivery of such Licensor Product.
+
+“Affiliate” means any individual,
+corporation, partnership, limited liability company, association or similar business organization that directly or indirectly, through
+one or more intermediaries, Controls, or is Controlled by, or is under common Control with a party or its successors. Affiliates shall
+include such entities whether now existing or later established by investment, merger or otherwise, including the successors and assigns
+of such entities.
+
+“APP” means a software-as-a-service
+application other than those to be provided by Licensor to Licensee.
+
+“Application” means the software-as-a-service
+application provided hereunder by Licensor to Licensee, including the rules, routines, machine readable object code and source code associated
+therewith, and including any modifications, Updates, Upgrades, enhancements, improvements or customizations by way of Services or otherwise
+by either party that are developed or released during the term of the applicable Schedule or Order Form. In addition, the term “Application”
+shall include the Documentation relating thereto and any third party software embedded in the Application.“Authorized User”
+means an employee or contractor of Licensee who Licensee permits to access and use the Software and/or Documentation pursuant to Licensee’s
+license hereunder.
+
+“Billing Start Date” shall mean the
+date identified on the order form as the date from which billing shall be calculated (which under no circumstances shall be later than
+the Service Start Date, as defined below).
+
+“Control”, including the terms “controlling”,
+“controlled by”, and “under common control with” means the possession, directly or indirectly, of the power to
+direct or cause the direction of the management and policies of an entity, whether through the ownership of voting securities (or other
+ownership interest), by contract, right to elect a majority of the governing board, or otherwise.
+
+“Deliverables” means the deliverables
+to be produced and delivered to Licensee or any Licensee Affiliate under this Agreement, as more particularly described in a Schedule
+or Order Form. Deliverables may include Software, documents, reports, Specifications, operating instructions, working papers, work in
+progress, video, film, multimedia, pictures, graphs and audio material, whether preliminary or final, in or on any media whether now existing
+or developed in the future.
+
+“Documentation” means Licensor’s user
+manuals, handbooks, and installation guides relating to the Software provided by Licensor to Licensee either electronically or in hard
+copy form.
+
+“Fees” shall mean the fees payable
+pursuant to Section 8.
+
+16
+
+“Initial License Fee” see Section
+8.
+
+“Intellectual Property Rights” means
+any and all registered and unregistered rights granted, applied for, or otherwise now or hereafter in existence under or related to any
+patent, copyright, trademark, trade secret, database protection, or other intellectual property rights laws, and all similar or equivalent
+rights or forms of protection, in any part of the world.
+
+“Licensee Data” means information, data,
+and other content, in any form or medium, that is submitted, posted, or otherwise transmitted by or on behalf of Licensee or an Authorized
+User.
+
+“Licensor IP Rights” means Intellectual
+Property Rights owned or licensed by Licensor or any Licensor Affiliate including, without limitation, patents, copyrights, trademarks,
+service marks, trade secrets and know-how owned or otherwise licensable by Licensor or any Licensor Affiliate or which are acquired by,
+developed by or on behalf of Licensor in the course of performances of Services under this Agreement, and without reference to or use
+of any Intellectual Property Rights owned or licensed by Licensee or any Licensee Affiliate.
+
+“Licensor Product(s)” means any Application,
+Software, Services, Deliverables, Equipment or other related materials that are licensed, purchased or otherwise acquired by Licensee
+pursuant to this Agreement.
+
+“Order Form” means an Order Form or
+similar agreement appurtenant to this Agreement for the provision of Professional Services or Deliverables, which sets out the commercial
+terms and is executed by the parties and substantially in the form of Schedules attached hereto.
+
+“Professional Services” means those
+services performed by Licensor for Licensee under this Agreement, which are not included within the meanings of the terms “Subscription
+Services” or “Support Services”, including preparation, configuration, delivery and installation of Licensor Products.
+
+“Purchase Order” shall mean a purchase
+order issued by Licensee in connection with Licensor Products described in a Schedule or Order Form.
+
+“Resultant Data” means (i) data and
+information generated from Licensee’s use of the Services that is used by Licensor in an aggregate and anonymized manner, including
+to compile statistical and performance information related to the provision and operation of the Services; and (ii) output generated from
+Licensee Data but shall not mean or include: (a) Licensee Data, whether in aggregated or anonymized form or otherwise manipulated or altered,
+or (b) personal information, unique identifiers, mobile network information including carrier names and phone numbers, location data or
+IP addresses of Authorized Users.
+
+“Schedules” shall mean the Schedules
+expressly referenced in and attached to this Agreement.
+
+“Services” means the Professional
+Services, Subscription Services and Support Services performed (or to be performed) by Licensor for Licensee or any Licensee Affiliate
+under this Agreement, as more particularly described in a Schedule or Order Form. Services shall be deemed to include all incidental services,
+functions, responsibilities or tasks not specifically described in this Agreement or a Schedule or Order Form hereunder, but which are
+an inherent, necessary or customary part of the services performed (or to be performed) by Licensor hereunder or that are required or
+reasonably necessary for the proper performance and provision of the Licensor Products provided (or to be provided) by Licensor hereunder.
+
+17
+
+“Service Start Date” shall mean the
+date from which Licensee receives the applicable Service.
+
+“Software” means the software consisting
+of proprietary technology including capabilities in KR8 AI eco system and iOS/Android APP artificial intelligence and inference engine
+and related Documentation, including any Updates provided to Licensee
+pursuant to this Agreement.
+
+“Specifications” means any and all
+technical, design or functional specifications for, and descriptions of, the capabilities of any Licensor Product, including those set
+forth in the applicable Schedule or Order Form, and (to the extent not inconsistent therewith) those contained in Licensor’s Documentation,
+descriptive documents and/or marketing materials, or applicable request for proposal and any Licensor response thereto, the terms of which
+are incorporated by reference in the applicable Schedule or Order Form.
+
+“Subscriber Revenues” – means
+all revenues received by Licensee or its affiliates from End User for use of the Licensee Applications, inclusive of up-front or downloading
+fees, periodic fees and per-use charges, net of any allowances or discounts allowed and taxes or other governmental charges levied on
+or measured by the amount charged by Licensee. Subscriber Revenues shall not include revenues received from affiliates but shall include
+the revenues received by such affiliates from End Users.
+
+“Subscription Services” means Licensee’
+access and use of Licensor’s provision of the Software and/or Application in accordance with the terms of this Agreement.
+
+“Support Services” means those maintenance
+and support services performed by the Licensor for Licensee under this Agreement, as more particularly described in a Schedule or Order
+Form and for which Licensee has contracted for support, which shall commence upon acceptance by Licensee of the applicable Licensor Product.
+
+“Term” shall mean the longer period
+of 1) the term of this Agreement, and 2) the period identified in the order form, or any renewal term, as applicable.
+
+“Third-Party Products” means any third-party
+products described in Exhibit C provided with or incorporated into the Software, including any open-source software available under the
+GNU Affero General Public License (AGPL), GNU General Public License (GPL), GNU Lesser General Public License (LGPL), Mozilla Public License
+(MPL), Apache License, BSD licenses, or any other license that is approved by the Open
+Source Initiative.
+
+“Update” means updates, revisions
+or additions to a Licensor Product that are intended to correct errors, improve efficiency or to incorporate additional or alternative
+functionality, but that do not constitute substantial additional or alternative functionality, as customarily indicated by a change to
+the number to the right of the decimal in the version number, for example, Version 2.1 updated to Version 2.2.
+
+“Upgrade” means a new release of a
+Licensor Product in question that incorporates substantial additional or alternative functionality, as customarily indicated by a change
+to the number to the left of the decimal in the version number, for example, Version 2.1 upgraded to Version 3.0.
+
+18
+
+EXHIBIT B
+
+SERVICE LEVEL AND SUPPORT SERVICES AGREEMENT
+SCHEDULE
+
+During the Term, Licensor will make available
+a technical point of contact for Licensee technical support inquiries. The purpose of Support Services is to resolve defects that cause
+any Licensed Product included within the Licensee Applications to fail to conform to its purpose. A resolution to a defect may consist
+of a fix or patch, a reasonable workaround, or other resolution as Licensor deems reasonable. Support Services do not include any Professional
+Services, such as implementation, configuration, integration, customization, or training services, or assistance with administrative
+functions.
+
+  SUPPORT SERVICE DETAILS
+
+ Feature
+
+ Details
+
+ Support Services Fees
+
+  Monthly fee of $50,000.00
+
+ Support Hours – United States
+
+ 8:00 a.m. to 10:00 p.m., Eastern Time, Monday-Friday
+
+ Number of tickets
+
+ Unlimited
+
+ Service Location
+
+ Remote
+
+ Support E-mail Address
+
+ support@kr8.ai
+
+Support Portal
+
+(including access to other resources such as documentation, knowledge
+ base and discussions)
+
+ Authorized users will have access to KR8 portal, which give access to Documentation, FAQ, Training)
+
+ Available languages
+
+ English 
+
+(i)
+Response Objectives.
+
+Licensor will use reasonable efforts to meet the
+response time objectives during U.S. support hours.
+
+ INCIDENT
+ SEVERITY LEVELS
+
+ Severity
+ Level
+
+ Definition
+
+ Response
+ time objective
+
+ Severity1 (Critical)
+
+● Essential functionality is nonfunctional.
+
+● Data is compromised or irretrievable.
+
+● Substantial response time delays.
+
+● No available procedural workaround.
+
+ 2 hours
+
+ Severity 2 (Urgent)
+
+● Essential functionality is limited in its
+ usability, without any viable workaround.
+
+● Significant delays in material response
+ time.
+
+ 1 business hours
+
+ Severity 3 (High)
+
+● Functional issue affects some users
+
+● Some response time latency
+
+ 1 business day
+
+ Severity 4 (Medium/Low)
+
+● Standard end-user assistance inquiry
+
+●
+ Inquiry for technical guidance related to configuration, capabilities, etc.
+
+● Common troubleshooting request
+
+● Bug affecting a select group of users
+
+● Non-disruptive error messages with no impact
+ on performance
+
+● Minor inconveniences with no impact on core
+ functionality
+
+ Varies
+
+19
+
+EXHIBIT C
+
+INITIAL LICENSOR PRODUCTS
+
+The initial services and features in the Licensor
+Products to be provided by Licensor are:
+
+1-Core AI Engine:
+
+●
+Adaptive
+ Algorithms: The AI evolves based on user interactions, offering more tailored wellness advice
+ over time.
+
+●
+Data Processing: Ability to process and interpret vast genetic and health datasets for personalized insights.
+
+●
+Continuous Learning: The AI updates its knowledge based on new epigenetic research and user feedback.
+
+2-Data Integration:
+
+●
+HealthKit API Integration: Seamlessly pulls in user data from the Apple HealthKit for more accurate health
+profiling.
+
+●
+Epigenetic Data Incorporation: Specifically designed modules to handle, analyze, and derive insights from
+epigenetic data.
+
+●
+Multi-database Support: Can interface with various genetic and wellness databases to provide comprehensive
+insights.
+
+3-User Experience:
+
+●
+Interactive Dashboards: Visual representations of user’s epigenetic health data and AI-driven wellness metrics.
+
+●
+Personalized User Profiles: Health and wellness profiles crafted based on user’s genetic makeup, preferences,
+and goals.
+
+●
+Feedback System: Users can provide feedback on recommendations, refining AI suggestions for a more personalized
+experience.
+
+4-Algorithm Customization:
+
+●
+KR8 Algorithm Build: KR8 will directly craft proprietary epigenetics-based wellness algorithms, leveraging
+Google Cloud Machine Learning capabilities.
+
+●
+Algorithmic Adjustments: The platform allows for on-the-fly adjustments to its algorithms based on new findings
+or user feedback.
+
+5-Scalability and Deployment:
+
+●
+Cloud Support: Can be deployed on various cloud platforms, ensuring scalability and seamless performance.
+
+●
+On-premise Deployment: For companies wanting more control, there’s an option for on-premise deployment
+of the platform.
+
+●
+Cross-platform Compatibility: Can be adapted for both web and mobile applications, offering users flexibility
+in access.
+
+20
+
+SCHEDULE 1
+
+ORDER FORM
+
+Billing Start Date: ____________________
+
+Service Start Date: ____________________
+
+Reference is made to that certain Master Software
+and Service Agreement by and between KR8 AI INC. (the “Licensor”) and FOXO Technologies Inc., dated as of January 12,
+2024, (as amended, supplemented or otherwise modified from time to time, the “Agreement”), the terms of which are hereby
+incorporated herein. This “Order Form” is an Order Form referred to in said Agreement. All capitalized terms used herein
+shall have the same meaning as ascribed to them in the Agreement unless otherwise defined herein. Each Order Schedule listed below is
+an independent obligation of the Parties, and each Order Schedule if not entered into as of the Effective Date shall commence as of the
+commencement date set forth in the relevant Order Schedule.
+
+In consideration of the Licensor Products set
+forth in Exhibit C to the Agreement and the Development Services to be provided during the period commencing as of the date hereof and
+ending on the eighteenth month anniversary of November 15, 2023, Licensee shall pay to Licensor, on the terms and conditions set forth
+herein:
+
+1. Software
+License Fee Schedule.
+
+A non-refundable, non-recoupable Initial License
+and Development Fee of $2,500,000 (the “Initial License Fee”), to be paid as follows:
+
+(i) $2,000,000 will be payable in cash in monthly
+increments of $100,000; provided, however, (a) with the written consent of Licensor in its sole discretion, and pursuant to the rules
+of any exchange on which the Common Stock is listed portions of the cash fee may be paid in shares of class A common stock of Licensee
+(“Common Stock”) and (b) for so long as the Common Stock is listed on a major exchange, commencing on July 1, 2024, if the
+average trading volume exceeds $50,000 per day for the ten (10) trading days preceding any scheduled date of payment, up to 1/3rd of the
+monthly fee payable on such date may be paid in shares of Common Stock of Licensee.
+
+(ii) the remaining $500,000, or such lesser amount
+as will not require approval of stockholders of Licensee pursuant to the rules of any exchange on which the Common Stock is listed, shall
+be paid in Common Stock of Licensee valued at 102% of the market value of the Common Stock as of the date hereof which shall be issued
+to Licensee within twenty (20) days of the date hereof. If any portion of the $500,000 of Common Stock may not be issued to Licensor without
+the consent of the stockholders of Licensee, such portion shall be added to the portion of the Initial License Fee to be paid in cash
+and such portion shall be paid in twelve equal monthly increments commencing January 1, 2024, through December 1, 2024.
+
+21
+
+2. Professional
+Service Fee and Deliverables.
+
+The fee for Professional Services to be rendered
+by Licensor’s personnel during the period commencing as of the date hereof and ending on the eighteenth month anniversary of November
+15, 2023, in connection with the development of the items set forth on Schedule C, shall be deemed satisfied by payment of the Initial
+License Fee. The Parties acknowledge and agree that the Initial License Fee is non-refundable.
+
+3.
+Support and Maintenance Services
+
+For so long as this Agreement
+remains in effect. a fee of $50,000 per month (the “Maintenance Fee”) shall be paid in advance on the first day of each month
+commencing December 1, 2024, for support services as set forth on Exhibit B (“Support Services Description”)
+
+4.
+Royalty Payments.
+
+In addition to the License and Development Fee
+and the Maintenance Fee Licensee shall pay to Licensor, earned royalties (the “Running Royalties”) equal to fifteen percent
+(15%) of Subscriber Revenues generated by Licensee Applications. Subscriber Revenues are deemed earned as of the date of receipt by Licensee.
+Within thirty (30) days after the end of each calendar quarter ending on March 31, June 30, September 30 or December 31 (“Calendar
+Quarter”) occurring during the Term, Licensee shall pay to Licensor all Running Royalties due in respect of the Subscriber Revenues
+received during such quarter.
+
+Minimum Royalty. Beginning with calendar year
+2024, Licensee shall pay Licensor minimum annual Royalty payments as follows (the “Minimum Royalty”):
+
+●
+$400,000 for calendar year 2024;
+
+●
+$1,000,000 for calendar year 2025;
+
+●
+Commencing with calendar year 2026 and for each calendar year thereafter, the Minimum Royalty shall be
+increased by an additional $250,000. each calendar year such that, for example, the Minimum Royalty for 2028 shall be $1,750,000.
+
+(c) In the event the Running Royalty payable to
+Licensor with respect to any calendar year is less than the Minimum Royalty for such year, then, either: (i) to maintain the exclusivity
+of the license granted hereunder, Licensee, shall remit to Licensee within forty-five (45) days of the end of such calendar year, a sum
+of money equal to the excess of the applicable Minimum Royalty over the Running Royalty for such year; or (ii) the License granted hereunder
+shall become non-exclusive forty-five (45) days after the end of such calendar year.
+
+(d) Within thirty (30) days after each Calendar
+Quarter occurring during the Term, Licensee shall furnish Licensor a written report covering such quarter showing: (i) the Subscriber
+Revenues derived from Licensee Applications during such period and, in the case of the 2nd through 4th quarter of
+each calendar year, on a year to date basis; (ii) the Running Royalty, payable in Dollars, which has accrued hereunder in favor of Licensee
+in respect of such Revenues; and (iii) withholding taxes, if any, required by law to be deducted in respect of such Revenues. The report
+shall be accompanied by the payment of royalty monies due at that time.
+
+22
+
+(e) Except as otherwise provided, any payments due
+hereunder on sales made by Licensee in a currency other than US Dollars shall be payable
+to Licensor in United States Dollars at the prevailing rate of exchange of the currency in which the sales are made (said exchange
+rate being taken as the rates published in the Wall Street Journal under the caption “Currency Trading -- Exchange Rates” on
+the last business day of the Calendar Quarter for which the royalties are payable).
+
+(f) Any sum required under the tax laws of the United
+States or any other country, to be withheld by Licensee from payments to Licensor, shall be promptly paid by Licensee for and on behalf
+of Licensor to the appropriate tax authorities and Licensee shall furnish Licensor with official tax receipts or other appropriate evidence
+issued by the appropriate tax authorities sufficient to enable Licensor to support a claim for income tax credit in respect of any sum
+so withheld.
+
+ 5. Principal Contacts
+
+ Licensor Contacts:
+
+ Licensee Contacts:
+
+ Mark White
+
+ Brett Barnes
+
+ +44 7973803488
+
+ (760) 315-6114
+
+ mark@kr8.ai
+
+ bbarnesworkhorse21@gmail.com
+
+IN WITNESS WHEREOF, the Parties hereto have executed
+this Order Form as of the date first above written.
+
+ KR8 AI INC.
+
+ By 
+
+ /s/
+ Mark White
+
+ Name: 
+
+ Mark White
+
+ Title: 
+
+ CEO
+
+ FOXO Technologies Inc.
+
+ By
+
+ /s/
+ Brett Barnes
+
+ Name:  
+
+ Brett Barnes
+
+ Title: 
+
+ Chairman
+
+23
+
+SCHEDULE 2
+
+FORM OF SERVICE ORDER
+
+Service Order #___
+
+Date: ____________________________
+
+THIS IS SERVICE ORDER #____, BEING EXECUTED PURSUANT
+TO THE PROCEEDING AGREEMENT.
+
+Project: ____________________ Hourly Rate: _____ Actual # of Hours
+_____ Billed # of Hours ____ Actual Cost ______ Billed Cost ______
+
+Total: $ ________________________ (ESTIMATE FOR
+PROJECT)
+
+Notes:
+
+ 1. Above fees are billed in advance.
+
+2. All
+work is performed on a time and materials basis. This Service Order is a good faith estimate of the work required to complete the Service
+Order based on past experience and basic analysis of the project.
+
+Professional Services Rate Schedule:
+
+Development Resource: $______ per hour
+
+Account Management Resource: $______per hour
+
+Accepted by: Licensee:
+
+ By: 
+
+ Name: 
+
+ Title: 
+
+24

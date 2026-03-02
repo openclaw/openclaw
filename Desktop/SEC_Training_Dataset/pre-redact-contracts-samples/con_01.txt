@@ -1,0 +1,400 @@
+EX-10.2
+3
+exhibit1022.htm
+EX-10.2
+
+CONSULTING AGREEMENT
+
+This Consulting Agreement (“Consulting Agreement”) is effective as of February 20, 2024 (the “Effective Date”) by and between Salarius Pharmaceuticals, Inc., a Delaware corporation (the “Company”), and David J. Arthur (“Consultant”), effective generally as of the Effective Date except as otherwise expressly provided below. Consultant and the Company are sometimes referred to herein, individually, as a “Party” or, collectively, as the “Parties.”
+
+RECITALS
+
+WHEREAS, the Company desires to engage Consultant, and Consultant desires to provide consulting services to the Company pursuant to the terms and conditions contained herein.
+
+NOW, THEREFORE, in consideration of the premises and mutual promises, covenants and obligations contained herein, and for other good and valuable consideration, the receipt and sufficiency of which are hereby acknowledged, the Parties hereby agree as follows:
+
+1.Consulting Services, Fees, Other Compensation and Expenses. During the Term, Consultant will provide the Company with the consulting services described in Exhibit A (Services, Fees, Other Compensation and Expenses) (the “Services”), attached hereto and incorporated herein for all purposes. The Parties agree that the Services will solely be performed by Consultant. Consultant will not have any authority to obligate the Company in any way absent specific direction and approval to do so from the Board of Directors of the Company or except by reason of any other position (officer, director, or otherwise) Consultant may hold with the Company as further addressed in Exhibit A. In exchange for the Services, the Company will pay Consultant the fees, other compensation and certain related expenses also described in Exhibit A (Services, Fees, Other Compensation and Expenses). Upon the termination of this Consulting Agreement in accordance with Section 6.A herein, the Company shall have no obligation to pay fees, commissions, or any other amounts under this Consulting Agreement for Services or expenses with respect to any period on or after the date of such termination. All Services will be performed and completed in a competent fashion in accordance with applicable industry and Company’s standards, and all Services are subject to final approval by the Company prior to payment.
+
+2.Term. Unless earlier terminated as provided for in Section 6.A, this Consulting Agreement is effective as of the Effective Date until the twelve (12) month anniversary of the Effective Date (the “Term”). 
+
+3. Proprietary Agreement. Prior to any effectiveness of this Consulting Agreement, Consultant shall execute and deliver to the Company a copy of the Proprietary Information and Invention Assignment Agreement in the form attached hereto as Exhibit B (Proprietary Agreement) (the “Proprietary Agreement”). For purposes of clarity and the avoidance of doubt, in the event of a conflict between the terms and provisions of the Proprietary Agreement and any other confidentiality and/or non-disclosure agreement entered into by and between the Company and Consultant, the Proprietary Agreement shall control.
+
+1
+
+4.Conflicting Obligations. 
+
+A.Conflicts. Consultant certifies that Consultant does not have any outstanding agreement or obligation that is in conflict with any of the provisions of this Consulting Agreement or that would preclude Consultant from complying with the provisions of this Consulting Agreement or any agreements provided for herein. Consultant agrees that Consultant will not enter into any such conflicting agreement during the Term. Consultant’s violation of this Section 4.A will be considered a Material Breach under Section 6.A(ii).
+
+B.Substantially Similar Designs. In view of Consultant’s access to the Company’s trade secrets and proprietary know-how, Consultant will not, without the Company’s prior written approval, design, or assist others in the design of, identical or substantially similar designs as those developed under this Consulting Agreement for any third party during the Term and after the termination of this Consulting Agreement for a period of one (1) year. Consultant acknowledges that the obligations in this Section 4.B. are ancillary to Consultant’s obligations under Exhibit B (Proprietary Agreement).
+
+C.Separation. The Company acknowledges that Consultant may in the future be engaged in consulting services with other entities and that the Consultant is subject to certain confidentiality agreements with other entities. Consultant shall be solely responsible for ensuring Consultant’s compliance with those agreements and any other limitations that may be imposed on Consultant. Consultant shall use Consultant’s best efforts to minimize or avoid any questions of disclosure of, or rights under, any inventions made by Consultant in providing the Services to the Company (and to assist the Company and Consultant’s other clients in fairly resolving any questions which may arise). All Services and related documentation in connection with this Consulting Agreement shall be kept completely separate from Consultant’s other consulting activities in order to avoid any preemptions or overlap of other rights or obligations of the Consultant.
+
+1.Reports. Consultant will, from time to time during the Term, keep the Company advised as to the Services under this Consulting Agreement. In addition, Consultant will, as requested by the Company, prepare written reports with respect to such progress. The time required to prepare such written reports will be considered time devoted to the performance of the Services.
+
+2.Termination of Consulting Agreement; Survival
+
+A.Termination of Consulting Agreement.
+
+(i)This Consulting Agreement shall terminate upon the expiration of the Term. This Consulting Agreement may terminate earlier upon any of the following:
+
+(1)Consultant’s death or incapacity;
+
+(2)Assignment of this Consulting Agreement by Consultant with the Company’s written consent;
+
+(3)Ten (10) days’ notice to Consultant by the Company;
+
+(4)Written notice to Consultant by the Company, effective immediately, of a Material Breach (as defined below) by Consultant; or
+
+2
+
+(5)Ten (10) days’ notice to the Company by the Consultant.
+
+(ii)For purposes of this Consulting Agreement, “Material Breach” shall include failure to perform the Services in a timely fashion (e.g., failure to work cooperatively with Company staff, negligence or wrongdoing in the performance of Consultant’s duties, or any other breach of a provision hereof or of the Proprietary Agreement). 
+
+B.Survival. Upon termination or expiration of this Consulting Agreement, all rights and duties of the Company and Consultant toward each other shall cease; provided that the following shall survive the termination or expiration of this Consulting Agreement:
+
+(i)The Company will pay, within thirty (30) days after the effective date of such termination, all amounts owing to Consultant for Services completed and accepted by the Company prior to the termination date and related expenses, if any, submitted in accordance with the Company’s policies and in accordance with the provisions of Exhibit A (Services, Fees, Other Compensation and Expenses); 
+
+(ii)Consultant will promptly deliver to the Company any and all documents, records, data, notes, reports, proposals, lists, correspondence, specifications, drawings, blueprints, sketches, materials, devices, equipment, other property, or reproductions of any aforementioned items developed by Consultant pursuant to this Consultant Agreement or otherwise belonging to the Company, its successors or assigns; and 
+
+(iii)Section 3 (Proprietary Agreement), Section 4 (Conflicting Obligations), Section 7 (Independent Contractor; No Benefits), Section 8 (Indemnification), Section 9 (Representations and Warranties), Section 10 (Miscellaneous), and Exhibit B (Proprietary Agreement) will survive termination of this Consulting Agreement.
+
+1.Independent Contractor; No Benefits. 
+
+A.Independent Contractor. It is the express intention of the Company and Consultant that Consultant provides the Services as an independent contractor to the Company. Nothing in this Consulting Agreement shall in any way be construed to deem Consultant as an employee of the Company during the Term. Without limiting the generality of the foregoing, during the Term, Consultant is not authorized to bind the Company to any liability or obligation or to represent that Consultant has any such authority, except where expressly delegated in writing by the Company’s Board of Directors or by reason of any other position (officer, director, or otherwise) Consultant may hold with the Company as further described in Exhibit A. Consultant is obligated to report as income all fees and other compensation received pursuant to under this Consulting Agreement in compliance with applicable laws. Further, Consultant acknowledges Consultant’s obligation to pay all, as the case may be, self-employment and other taxes on such income. 
+
+B.No Benefits. Excluding any other agreement that Consultant might have with the Company to the contrary, during the Term, Consultant will not receive Company-sponsored benefits that the Company may make available to its employees, including, but not limited to, group health or life insurance, profit-sharing or retirement benefits. If Consultant were to be reclassified by a state or federal agency or court as 
+
+3
+
+Company’s employee under applicable law or otherwise with respect to the provision of Services hereunder, Consultant will not be eligible to receive any employee benefits from the Company, except those mandated by state or federal law, even if by the terms of the Company’s benefit plans or programs in effect at the time of such reclassification, Consultant would otherwise be eligible for such benefits. Notwithstanding the foregoing, Consultant may receive benefits from the Company as provided for by any separation and release or severance agreements entered into by the Company and Consultant on or prior to the Effective Date or through agreements pertaining to stock awards/grants.
+
+C.Taxes; Workers’ Compensation and Other Benefits. The Company will not withhold any taxes from payments made to Consultant related to the Services and will only report Consultant’s gross fees or other compensation related to the Services to the extent required by law. Consultant is also solely responsible for the payment of all federal, state, local, or other applicable taxes, income or otherwise, incurred or due as a result of the receipt of gross fees or other compensation for the Services hereunder, and Consultant will file, on a timely basis, all tax returns required to be filed by any federal, state, or local tax authority with respect to the receipt of gross fees or other compensation for the Services hereunder. Consultant shall make such payments referred to in this paragraph as required by law.
+
+2.Indemnification. 
+
+A.With regard to the Services provided hereunder, Consultant will indemnify and hold harmless the Company and its shareholders, managers, directors, officers and employees from and against all taxes, losses, damages, liabilities, costs and expenses, including attorneys’ fees and other legal expenses, arising directly or indirectly from or in connection with (i) any negligent, reckless or intentionally wrongful act of Consultant related to the provision of the Services hereunder or (ii) any violation or claimed violation of a third party’s rights resulting in whole or in part from the Company’s use of the work product of Consultant under this Consulting Agreement; provided, however, that, except for intentional or negligent breaches of Exhibit B (Proprietary Agreement), the amounts required for indemnification under this paragraph shall in no event exceed the total fees or other compensation paid to Consultant for the Services provided by Consultant during the Term.
+
+B.With regard to the Services, the Company will indemnify and hold harmless Consultant from and against all taxes, losses, damages, liabilities, costs and expenses, including attorneys’ fees and other legal expenses, arising directly or indirectly from or in connection with (i) any negligent, reckless or intentionally wrongful act of the Company or its shareholders, managers, directors, officers, employees or agents or (ii) any violation or claimed violation of a third party’s rights resulting in whole or in part from Consultant’s use of any Confidential Information provided to Consultant by the Company under this Consulting Agreement.
+
+C.In no event shall either Party be liable to the other Party or any of their respective shareholders, members, managers, directors, officers and employees for consequential, special or incidental damages arising under or in connection with this Consulting Agreement, even if such Party has been advised of the possibility of such damages.
+
+D.Notwithstanding anything herein to the contrary, the Parties agree and acknowledge that Consultant, in Consultant’s capacity as an officer or director of the Company, shall be entitled to (i) any indemnification protection made available to officers and directors of the Company, including (without limitation) pursuant to the 
+
+4
+
+Company’s governing documents, and (ii) coverage under any insurance policy maintained by the Company providing directors’ and officers’ liability insurance. 
+
+3.Representations and Warranties. 
+
+A.Each Party represents that this Consulting Agreement shall, when duly executed and delivered, constitute the legal, valid and binding obligation of each Party, as applicable, enforceable in accordance with its terms. Each Party further represents and warrants that: (i) it has all rights necessary to enter into and perform its obligations under this Consulting Agreement (including the maintenance by Consultant of all applicable state, city, and local business licenses and permits to perform the Services); (ii) there are no other contracts, agreements, restrictive covenants or other restrictions preventing such Party from entering into this Consulting Agreement or performing its obligations hereunder; and (iii) the performance of its obligations pursuant to this Consulting Agreement shall comply with all applicable laws.
+
+B.Consultant represents, warrants and covenants that Consultant has not been, or during the Term will become, the target of or designated under any sanctions program that is established by statute or regulation of the United States, order of the President of the United States or by designations of any department or agency of the United States government including those designations reflected in the “list of Specifically Designated Nationals and Blocked Persons” of the Office of Foreign Assets Control, U.S. Department of the Treasury or the Office of Inspector General. If Consultant becomes the target of or is designated under any such sanctions program during the Term, Consultant shall immediately notify the Company thereof.
+
+C.Consultant represents and warrants that Consultant has not been debarred pursuant to the Federal Food, Drug and Cosmetic Act and are not currently excluded, debarred, suspended, or otherwise ineligible to participate in the federal health care programs or in federal procurement or non-procurement programs. Moreover, if Consultant subsequently becomes debarred, excluded, suspended or ineligible as set forth in the preceding sentence, or is convicted of a criminal offense that falls within the scope of the federal statute providing for mandatory exclusion from participation in federal health care programs but has not yet been excluded, debarred, suspended, or otherwise declared ineligible to participate in those programs, Consultant agrees to immediately notify the Company of such event. Failure of Consultant to comply with this provision shall be a Material Breach of this Consulting Agreement warranting immediate termination.
+
+3.Miscellaneous 
+
+A.Governing Law; Jurisdiction; Venue. This Consulting Agreement shall be governed by the laws of the State of Texas, excluding any conflict-of-laws rule or principle that might refer to the governance or the construction of this Consulting Agreement to the law of another jurisdiction. To the fullest extent permitted by law, each of the Parties to this Consulting Agreement expressly and irrevocably submits to the exclusive venue and jurisdiction of the state or federal courts located in Harris County Texas and irrevocably waives any objection or claim of inconvenient forum or venue. TO THE FULLEST EXTENT PERMITTED BY LAW, THE PARTIES HERETO WAIVE ALL RIGHT TO TRIAL BY JURY IN ANY ACTION, SUIT OR PROCEEDING TO ENFORCE OR DEFEND ANY RIGHTS OR REMEDIES ARISING UNDER OR IN CONNECTION WITH THIS AGREEMENT.
+
+5
+
+B.Assignability. Consultant shall not sell, assign or delegate any rights or obligations under this Consulting Agreement without the previous written consent of the Company. This Agreement may be assigned by the Company to any affiliate or, in connection with a merger, consolidation, or sale of all or substantially all of the assets to which this Consulting Agreement relates. Any assignment not in compliance with this Consulting Agreement will be null, void and of no effect. This Consulting Agreement will be binding upon and inure to the benefit of each Party’s permitted assigns and successors-in-interest. No assignment will relieve either Party of the performance of any accrued obligation that such Party may then have under this Consulting Agreement. 
+
+C.Entire Agreement. This Consulting Agreement (including the Exhibits thereto) and the Proprietary Agreement (collectively, the “Subject Documents”) constitute the entire agreement between the Parties with respect to the subject matter therein and supersede all prior written and oral agreements between the Parties regarding the subject matter in the Subject Documents. Except for the Separation Agreement and General Release dated February 20, 2024 between the Company and Consultant, the Indemnification Agreement dated February 20, 2024, and the Notice of Amendment dated February 20, 2024, in the event that any such agreements or understandings exist, and it is determined that its terms are in conflict with the Subject Documents, the terms of the Subject Documents will prevail.
+
+D.Headings. Headings are used in this Consulting Agreement for reference only and shall not be considered when interpreting this Consulting Agreement.
+
+E.Notices. All notices, consents, approvals, or other communications hereunder shall be in writing and shall be deemed given if delivered personally or sent by overnight courier service, or sent by facsimile or e-mail, promptly confirmed by overnight courier service, as set forth above, addressed to the Parties at the following addresses (or at such other address for a Party as shall be specified by like notice, provided that notice of a change of address shall effective only upon receipt):
+
+(1)If to Consultant: 
+
+David J. Arthur
+
+[***]
+
+[***]
+
+Email: [***]
+
+(2)    If to the Company, to:
+
+Salarius Pharmaceuticals, Inc. 
+
+Attn: William K. McVicar, Chair of the Board
+
+[***]
+
+[***]
+
+Email: [***]
+
+Any notice, consent, approval and other communication shall be deemed given, in the case of overnight courier service, on the next business day following its deposit with the courier, and, in the case of facsimile or e-mail, upon transmission.
+
+F.Severability. If any provision of this Consulting Agreement is found to be illegal or unenforceable, the other provisions shall remain effective and enforceable to the greatest extent permitted by law.
+
+6
+
+G.Incorporation of Exhibits. The exhibits attached hereto and referred to herein (the “Exhibits”) are hereby incorporated by reference herein and made part of this Consulting Agreement for all purposes as if fully set forth herein. In the event of a conflict between the terms contained in any Exhibit and this Agreement, the terms of this Agreement shall control, unless specifically agreed upon to the contrary in the relevant Exhibit.
+
+H.Counterparts; Electronic Copies of Signatures and Original Agreement. This Consulting Agreement may be executed simultaneously in two or more counterparts, each of which shall be deemed an original, but all of which together shall constitute one and the same instrument. Facsimiles and scanned images of original signatures shall be considered as valid and binding as original signatures, and as such, a facsimile or scanned image of an original signature delivered by the executing Party to the other Party shall create a valid and binding obligation of the Party executing (or on whose behalf such signature is executed) with the same force and effect as if such facsimile or scanned signature was an original signature. In addition, images of an original of the fully executed Consulting Agreement (which original Consulting Agreement may have original signatures, facsimile or scanned images of original signatures, or combinations thereof as provided herein) may be stored electronically. The Parties intend that electronic copies or images of an original Consulting Agreement and which accurately reflect the original Consulting Agreement, shall be valid as an original. 
+
+I.Amendment. This Consulting Agreement and its Exhibits may be amended by the Parties hereto only by an instrument in writing signed on behalf of each of the Parties hereto. 
+
+J.Confidentiality. Neither Party shall, at any time disclose to any third party the terms and conditions of this Consulting Agreement except with the prior written consent of the other Party or by reason of legal compulsion in any legal proceedings pursuant to law. The Parties agree that any breach of this Section 10.J or Exhibit B (Proprietary Agreement) could cause irreparable harm and that in addition to any and all other available remedies, the non-breaching Party may seek injunctive relief, without the necessity of bond or other security.
+
+K.Expenses of Agreement. Each Party shall bear its own attorneys’ fees and costs with respect to the negotiation of this Consulting Agreement. 
+
+[Remainder of Page Intentionally Left Blank; Signature Page Follows]
+
+7
+
+IN WITNESS WHEREOF, the Parties hereto have executed this Consulting Agreement as of the Effective Date.
+
+COMPANY:
+
+SALARIUS PHARMACEUTICALS, INC.,
+
+a Delaware corporation
+
+                        By: /s/ William K. McVicar            
+
+                        Name:    William K. McVicar
+
+                        Title:    Chair of the Board
+
+                        CONSULTANT:
+
+                        /s/ David J. Arthur                
+
+                        David J. Arthur
+
+[Signature Page to Consulting Agreement]
+
+EXHIBIT A
+
+SERVICES, FEES, OTHER COMPENSATION AND EXPENSES
+
+1.Contact. Consultant’s principal Company contact (the “Company Contact”): William K. McVicar, Chairman of the Board
+
+2.Services. Consultant shall provide services as may be requested by the Company (the “Services”). During the Term, such Services shall include, among other things, continued service by Consultant to the Company as its Chief Executive Officer (“CEO”) and President along with all the duties and responsibilities that customarily go with serving the Company as its CEO. Consultant shall devote at least one-fourth (1/4) of his time on a weekly basis (on average 10 or more hours/week) to performing the Services hereunder. In addition to the Services, Consultant continues to serve the Company as a member of its Board of Directors.
+
+3.Company Equipment. Company shall furnish supplies, laptop computer, and other equipment necessary for Consultant’s use during the Consulting Period, such to remain the property of the Company. Upon termination of this agreement, Consultant may purchase the laptop computer from the Company, subject to the deletion of any and all Proprietary Information contained on the laptop, at a value determined by reference to mutually agreed upon independent third-party’s valuation. 
+
+4.Compensation. In consideration of the Services performed by Consultant under the Consulting Agreement, the Company shall pay to Consultant $10,417 per month for Services provided (the “Consulting Fee”). Consultant shall invoice Company for amounts due hereunder on a monthly basis, and amounts due hereunder shall be paid by Company within thirty (30) days of receipt of the applicable invoice. In performing the Services, Consultant is acting as an independent contractor for the Company and is solely responsible for payment of all income and self-employment taxes with respect to the monthly payment. Consultant hereby agrees that such amount is reasonable and sufficient given the nature of the Services and Consultant hereby irrevocably waives and discharges any claim against the Company arguing that this Consulting Agreement shall be unenforceable due to insufficient consideration. However, such waiver does not cover any possible claim of Consultant against the Company in the event that Company breaches this Consulting Agreement. 
+
+5.Reimbursements. During the Term, the Company will reimburse Consultant for all reasonable and actual business expenses incurred by Consultant in providing the Services pursuant to the Consulting Agreement (“Reimbursements”). Reimbursements are subject to Consultant’s timely submission of receipts in accordance with Company policy and within thirty (30) days following the date such receipts are received. Any Reimbursements in excess of $2,500 per month shall require pre-approval from Consultant’s principal Company Contact. The Consultant will continue to have use of a Salarius issued Company Credit card for reasonable business expenses, which shall be subject to compliance with this Section regarding Reimbursements. The Company’s payment of any Reimbursements will be made within thirty (30) days following Consultant’s submission of a proper reimbursement request.
+
+6.Changes in Scope of Work. All changes in the scope of work of the Services, resulting in either an increase or decrease of the Services identified in this document, must be approved in writing prior to initiation of the change in scope by an authorized Company representative.
+
+[Remainder of Page Intentionally Left Blank; Signature Page Follows]
+
+A-1
+
+IN WITNESS WHEREOF, the Parties hereto have executed this Exhibit A as of the Effective Date (as defined in the Consulting Agreement).
+
+COMPANY:
+
+SALARIUS PHARMACEUTICALS, INC.,
+
+a Delaware corporation
+
+                        By: /s/ William K. McVicar            
+
+                        Name:    William K. McVicar
+
+                        Title:    Chair of the Board
+
+                        CONSULTANT:
+
+                        /s/ David J. Arthur                
+
+                        David J. Arthur
+
+[Signature Page to Exhibit A of the Consulting Agreement]
+
+EXHIBIT B
+
+PROPRIETARY INFORMATION, INVENTIONS ASSIGNMENT, NON-COMPETITION AND NON-SOLICITATION AGREEMENT
+
+In consideration of the engagement with or continued engagement by Salarius Pharmaceuticals, Inc., its subsidiaries, parents, affiliates, successors and assigns (together, the “Company”) and other valuable consideration described herein, David J. Arthur (“Consultant”), hereby enter into on February 20, 2024 to this Proprietary Information, Inventions Assignment, Non-Competition and Non-Solicitation Agreement (this “Agreement”) and agree as follows:
+
+1.NONDISCLOSURE
+
+1.1Access to Proprietary Information, Specialized Training and Other Consideration. My engagement by the Company requires on-going access to very sensitive areas of the business of the Company, including Proprietary Information (as defined below). My engagement also requires Specialized Training (as defined below) regarding the Company’s products, use of the products, and other technical areas. This Agreement sets forth the terms and conditions of the Company’s agreement to provide me access to and use of its Proprietary Information and/or my continued access to and use of that information and Specialized Training. I understand and agree that compliance with this Agreement is essential to my relationship or continued relationship with the Company because, without on-going access to the Company’s Proprietary Information as well as on-going Specialized Training, I would be unable to commence or continue my relationship with the Company. Accordingly, in consideration of the Company providing me with on-going access to and use of the Company’s Proprietary Information and Specialized Training as well as other valuable consideration to be provided to me, the Company and I agree to terms set forth herein.
+
+1.2Recognition of Company’s Rights; Nondisclosure. I understand and acknowledge that my engagement by the Company creates a relationship of confidence and trust with respect to the Company’s Proprietary Information and that the Company has a protectable interest therein. At all times during my engagement and thereafter, I will hold in strictest confidence and will not disclose, use, lecture upon or publish any of the Company’s Proprietary Information, except as such disclosure, use or publication may be required in connection with my work for the Company, or unless an authorized officer of the Company expressly authorizes such in writing. I will obtain the Company’s written approval before publishing or submitting for publication any material (written, verbal, or otherwise) that relates to my work at the Company and/or incorporates any Proprietary Information. I hereby assign to the Company any rights I may have or acquire in such Proprietary Information and recognize that all Proprietary Information shall be the sole property of the Company and its assigns. I will take all reasonable precautions to prevent the inadvertent or accidental disclosure of Proprietary Information. For avoidance of doubt, preparation of confidential presentations and/or discussions and/or interactions whether oral or in writing related to business development and/or due diligence activities done on behalf of the Company and provided such disclosure is to persons authorized by the Company to receive such disclosures shall not require prior written authorization. 
+
+1.3Proprietary Information. The term “Proprietary Information” shall mean any and all confidential and/or proprietary knowledge, data or information of the Company, its affiliates, parents and subsidiaries, whether having existed, now existing, or to be developed during my engagement. By way of illustration but not limitation, “Proprietary Information” includes (a) trade secrets, inventions, mask works, ideas, processes, formulas, source and object codes, data, programs, other works of authorship, know-how, improvements, discoveries, 
+
+B-1
+
+developments, designs and techniques and any other proprietary technology and all Proprietary Rights therein (hereinafter collectively referred to as “Inventions”); (b) information regarding research, development, new products, marketing and selling, business plans, budgets and unpublished financial statements, licenses, prices and costs, margins, discounts, credit terms, pricing and billing policies, quoting procedures, methods of obtaining business, forecasts, future plans and potential strategies, financial projections and business strategies, operational plans, financing and capital-raising plans, activities and agreements, internal services and operational manuals, methods of conducting Company business, suppliers and supplier information, and purchasing; (c) information regarding customers and potential customers of the Company, including customer lists, names, representatives, their needs or desires with respect to the types of products or services offered by the Company, proposals, bids, contracts and their contents and parties, the type and quantity of products and services provided or sought to be provided to customers and potential customers of the Company and other non-public information relating to customers and potential customers; (d) information regarding any of the Company’s business partners and their services, including names, representatives, proposals, bids, contracts and their contents and parties, the type and quantity of products and services received by the Company, and other non-public information relating to business partners; (e) information regarding personnel, employee lists, compensation, and employee skills; and (f) any other non-public information which a competitor of the Company could use to the competitive disadvantage of the Company. Notwithstanding the foregoing, it is understood that, at all such times, I am free to use information which is generally known in the trade or industry through no breach of this Agreement, and I am free to discuss the terms and conditions of my engagement with others to the extent expressly permitted by Section 7 of the National Labor Relations Act.
+
+1.4Specialized Training. I agree that I could not perform or continue to perform my position absent on-going “Specialized Training,” which the Company agrees to provide to me. Specialized Training includes, but is not limited to, training regarding the Company’s product(s) and/or sales processes which are confidential and/or proprietary. I acknowledge that use or disclosure of Specialized Training, except as necessary in carrying out my work for the Company, would be detrimental to the legitimate competitive interests of the Company.
+
+1.5Restricted Access Granted. In exchange for my agreement not to disclose or use Proprietary Information except as authorized herein, and for the non-competition covenants, non-solicitation covenants, and the other promises made by me herein, the Company grants me immediate, current, and future access to Proprietary Information and Specialized Training required to fulfill the duties of my position. I agree that the Company has no pre-existing obligation to reveal Proprietary Information or provide Specialized Training. I further agree to hold all Proprietary Information in the strictest confidence and not to disclose it to any person or entity or to use it, except as necessary in carrying out my work for the Company.
+
+1.6Third Party Information. I understand, in addition, that the Company has received and, in the future, will receive confidential and/or proprietary knowledge, data, or information from third parties (“Third Party Information”). During my engagement and thereafter, I will hold Third Party Information in the strictest confidence and will not disclose to anyone (other than Company personnel who need to know such information in connection with their work for the Company) or use, except in connection with my work for the Company, Third Party Information unless expressly authorized by an authorized officer of the Company in writing.
+
+1.7Term of Nondisclosure Restrictions. I understand that Proprietary Information and Third-Party Information is never to be used or disclosed by me, as provided in this Section 1. If, however, a court decides that this Section 1 or any of its provisions is unenforceable for lack of reasonable temporal limitation and the Agreement or its restriction(s) cannot otherwise be enforced, I agree and the Company agrees that the two (2) year period after the date my 
+
+B-1
+
+engagement ends shall be the temporal limitation relevant to the contested restriction; provided, however, that this sentence shall not apply to trade secrets protected without temporal limitation under applicable law. 
+
+1.8No Improper Use of Information of Prior Employers and Others. During my engagement by the Company I will not improperly use or disclose any confidential information or trade secrets, if any, of any former employer or any other person to whom I have an obligation of confidentiality, and I will not bring onto the premises of the Company any unpublished documents or any property belonging to any former employer or any other person to whom I have an obligation of confidentiality unless consented to in writing by that former employer or person. 
+
+2.ASSIGNMENT OF INVENTIONS.
+
+1.1Proprietary Rights. The term “Proprietary Rights” shall mean all trade secrets, patents, copyrights, trademarks, mask works and other intellectual property rights throughout the world. 
+
+1.2Prior Inventions. Inventions, if any, patented or unpatented, which I made prior to the commencement of my engagement with the Company are excluded from the scope of this Agreement. To preclude any possible uncertainty, I have set forth on Exhibit 1 (Prior Inventions) attached hereto a complete list of all Inventions that I have, alone or jointly with others, conceived, developed or reduced to practice or caused to be conceived, developed or reduced to practice prior to the commencement of my engagement with the Company, that I consider to be my property or the property of third parties, and that I wish to have excluded from the scope of this Agreement (collectively referred to as “Prior Inventions”). If disclosure of any such Prior Invention would cause me to violate any prior confidentiality agreement, I understand that I am not to list such Prior Inventions in Exhibit 1 but am only to disclose a cursory name for each such invention, a listing of the party(ies) to whom it belongs and the fact that full disclosure as to such inventions has not been made for that reason. A space is provided on Exhibit 1 for such purpose. If no such disclosure is attached, I represent that there are no Prior Inventions. If, in the course of my engagement with the Company, I incorporate a Prior Invention into a Company product, process or machine, the Company is hereby granted and shall have a nonexclusive, royalty-free, irrevocable, perpetual, fully-paid, worldwide license (with rights to sublicense through multiple tiers of sublicensees) to make, have made, modify, make derivative works of, publicly perform, use, sell, import, and exercise any and all present and future rights in such Prior Invention. Notwithstanding the foregoing, I agree that I will not incorporate, or permit to be incorporated, Prior Inventions in any Company Inventions without the Company’s prior written consent.
+
+1.3Assignment of Inventions. Subject to Subsection 2.4, I hereby assign, grant and convey to the Company all my right, title and interest in and to any and all Inventions (and all Proprietary Rights with respect thereto) whether or not patentable or registrable under copyright or similar statutes, made or conceived or reduced to practice or learned by me, either alone or jointly with others, during the period of my engagement with the Company. Inventions assigned to the Company or its designee are hereinafter referred to as “Company Inventions.” 
+
+1.4Unassigned or Nonassignable Inventions. I recognize that this Agreement will not be deemed to require assignment of any Invention that I developed entirely on my own time without using the Company’s equipment, supplies, facilities, trade secrets, or Proprietary Information, except for those Inventions that either (i) relate to the Company’s actual or anticipated business, research or development, or (ii) result from or are connected with work performed by me for the Company. In addition, this Agreement does not apply to any Invention which qualifies fully for protection from assignment to the Company under any specifically applicable state law, regulation, rule, or public policy (“Specific Inventions Law”).
+
+B-2
+
+1.5Obligation to Keep Company Informed. During the period of my engagement and for one (1) year after termination of my engagement with the Company, I will promptly disclose to the Company fully and in writing all Inventions authored, conceived or reduced to practice by me, either alone or jointly with others. In addition, I will promptly disclose to the Company all patent applications filed by me or on my behalf within a year after termination of engagement. At the time of each such disclosure, I will advise the Company in writing of any Inventions that I believe fully qualify for protection under the provisions of a Specific Inventions Law; and I will at that time provide to the Company in writing all evidence necessary to substantiate that belief. The Company will keep in confidence and will not use for any purpose or disclose to third parties without my consent any confidential information disclosed in writing to the Company pursuant to this Agreement relating to Inventions that qualify fully for protection under a Specific Inventions Law. I will preserve the confidentiality of any Invention that does not fully qualify for protection under a Specific Inventions Law.
+
+1.6Ownership of Work Product. I agree that the Company will exclusively own all work product that is made by me (solely or jointly with others) within the scope of my engagement, and I hereby irrevocably and unconditionally assign to the Company all right, title, and interest worldwide in and to such work product. I acknowledge that all original works of authorship which are made by me (solely or jointly with others) within the scope of my engagement and which are protectable by copyright are “works made for hire,” pursuant to United States Copyright Act (17 U.S.C., Section 101). I understand and agree that I have no right to publish on, submit for publishing, or use for any publication any work product protected by this Section, except as necessary to perform services for the Company.
+
+1.7Enforcement of Proprietary Rights. I will assist the Company in every proper way to obtain, and from time to time enforce, United States and foreign Proprietary Rights relating to Company Inventions in any and all countries. To that end I will execute, verify and deliver such documents and perform such other acts (including appearances as a witness) as the Company may reasonably request for use in applying for, obtaining, perfecting, evidencing, sustaining and enforcing such Proprietary Rights and the assignment thereof. In addition, I will execute, verify and deliver assignments of such Proprietary Rights to the Company or its designee, including the United States or any third party designated by the Company. My obligation to assist the Company with respect to Proprietary Rights relating to such Company Inventions in any and all countries shall continue beyond the termination of my engagement, but the Company shall compensate me at a reasonable rate after my termination for the time actually spent by me at the Company’s request on such assistance. In the event the Company is unable for any reason, after reasonable effort, to secure my signature on any document needed in connection with the actions specified in the preceding paragraph, I hereby irrevocably designate and appoint the Company and its duly authorized officers and agents as my agent and attorney in fact, which appointment is coupled with an interest, to act for and in my behalf to execute, verify and file any such documents and to do all other lawfully permitted acts to further the purposes of this Section with the same legal force and effect as if executed by me. I hereby waive and quitclaim to the Company any and all claims, of any nature whatsoever, which I now or may hereafter have for infringement of any Proprietary Rights assigned under this Agreement to the Company.
+
+3.RECORDS. I agree to keep and maintain adequate and current records (in the form of notes, sketches, drawings and in any other form that may be required by the Company) of all Proprietary Information developed by me and all Inventions made by me during the period of my engagement at the Company, which records shall be available to and remain the sole property of the Company at all times.
+
+4.DUTY OF LOYALTY DURING ENGAGEMENT. I agree that during the period of my engagement by the Company I will not, without the Company’s express written consent, 
+
+B-3
+
+directly or indirectly engage in any engagement or business activity which is directly or indirectly competitive with, or would otherwise conflict with, my engagement by the Company. 
+
+5.NO SOLICITATION OF EMPLOYEES, CONSULTANTS, CONTRACTORS, OR CUSTOMERS OR POTENTIAL CUSTOMERS. I agree and understand that the Company invests substantial time, effort and resources in creating and maintaining Customer and/or Potential Customer relationships and that, from time to time, I will have access to Proprietary Information and/or Specialized Training that provides me with special insight into and knowledge of these Customer and/or Potential Customer relationships. I further agree and understand that the Company invests substantial time, effort and resources in recruiting and assembling its personnel and that, from time to time, I will have access to Proprietary Information and/or Specialized Training that provides me with special insight into and knowledge of these relationships. Accordingly, I agree that during the period of my engagement and for the one (1) year period after the date my engagement ends for any reason, including but not limited to voluntary termination by me or involuntary termination by the Company, I will not, as an officer, director, employee, consultant, owner, partner, or in any other capacity, either directly or through others, except on behalf of the Company: (i) solicit, induce, encourage, or participate in soliciting, inducing, or encouraging any employee of the Company to terminate his or her relationship with the Company; (ii) hire, engage, or engage in business with or attempt to hire, engage, or engage in business with any person employed by the Company or who has left the engagement of the Company within the preceding three (3) months of any such prohibited activity or discuss any potential engagement or business association with such person, even if I did not initiate the discussion or seek out the contact; (iii) solicit, induce or attempt to induce any Customer or Potential Customer, or any consultant or independent contractor with whom I had direct or indirect contact during my engagement with the Company or whose identity I learned as a result of my engagement with the Company, to terminate, diminish, or materially alter in a manner harmful to the Company its relationship with the Company; or (iv) solicit, perform, provide or attempt to perform or provide any Conflicting Services (as defined in Section 6 below) for a Customer or Potential Customer. The parties agree that for purposes of this Agreement, a “Customer or Potential Customer” is any person or entity who or which, at any time during the one (1) year prior to the date my engagement with the Company ends, (i) contracted for, was billed for, or received from the Company any product, service or process with which I worked directly or indirectly during my engagement by the Company or about which I acquired Proprietary Information; or (ii) was in contact with me or in contact with any other employee, owner, or agent of the Company, of which contact I was or should have been aware, concerning any product, service or process with which I worked directly or indirectly during my engagement with the Company or about which I acquired Proprietary Information; or (iii) was solicited by the Company in an effort in which I was involved or of which I was or should have been aware.
+
+6.NON-COMPETE PROVISION. In consideration for the Company’s agreement to commence and/or continue my access to and use of Proprietary Information and Specialized Training related to my position as well as other valuable consideration, I agree that for the one (1) year period after the date my engagement ends for any reason, including but not limited to voluntary termination by me or involuntary termination by the Company, I will not, directly or indirectly, as an officer, director, employee, consultant, owner, manager, member, partner, or in any other capacity solicit, perform, or provide, or attempt to perform or provide Conflicting Services anywhere in the world where the Company is conducting or is planning to conduct business, including but not limited to locations where the Company performs research or development activities related to the Company’s products, services or processes, nor will I assist another person to solicit, perform or provide or attempt to perform or provide Conflicting Services anywhere in the world where the Company is conducting or is planning to conduct business, including but not limited to locations where the Company performs research or development activities related to the Company’s products, services or processes. The parties 
+
+B-4
+
+agree that for purposes of this Agreement, “Conflicting Services” means any product, service, or process or the research and development thereof, of any person or organization other than the Company that is substantially similar to or competitive with a product, service, or process, including the research and development thereof, involving the research, development and/or commercialization of LSD1 inhibitor for treatment of Ewing sarcoma or hematologic cancers, and use of cereblon binding targeted protein degraders for the treatment of non-Hodgkins lymphomas with which I worked directly or indirectly during my engagement by the Company or about which I acquired Proprietary Information during my engagement by the Company.
+
+7.REASONABLENESS OF RESTRICTIONS. I agree that I have read this entire Agreement and understand it. I agree that this Agreement does not prevent me from earning a living or pursuing my career and that I have the ability to secure other non-competitive engagement using my marketable skills. I agree that the restrictions contained in this Agreement are reasonable, proper, and necessitated by the Company’s legitimate, competitive business interests based on my access to and use of Proprietary Information and/or Specialized Training. I represent and agree that I am entering into this Agreement freely and with knowledge of its contents with the intent to be bound by the Agreement and the restrictions contained in it. In the event that a court finds this Agreement, or any of its restrictions, to be ambiguous, unenforceable, or invalid, the Company and I agree that the court shall read the Agreement as a whole and interpret the restriction(s) at issue to be enforceable and valid to the maximum extent allowed by law.
+
+8.NO CONFLICTING AGREEMENT OR OBLIGATION. I represent that my performance of all the terms of this Agreement does not and will not breach any agreement or obligation of any kind to keep in confidence information acquired by me in confidence or in trust prior to my engagement by the Company. I have not entered into, and I agree I will not enter into, any agreement either written or oral in conflict with this Agreement.
+
+9.RETURN OF COMPANY PROPERTY. Upon termination of my engagement or upon Company’s request at any other time, I will deliver to Company all of Company’s property, equipment, and documents, together with all copies thereof, and any other material containing or disclosing any Inventions, Third Party Information or Proprietary Information and certify in writing that I have fully complied with the foregoing obligation. I agree that I will not copy, delete, or alter any information contained upon my Company computer or Company equipment before I return it to Company. In addition, if I have used any personal computer, server, or e-mail system to receive, store, review, prepare or transmit any Company information, including but not limited to, Proprietary Information, I agree to provide the Company with a computer-useable copy of all such Proprietary Information and then permanently delete and expunge such Proprietary Information from those systems; and I agree to provide the Company access to my system as reasonably requested to verify that the necessary copying and/or deletion is completed. I further agree that any property situated on Company’s premises and owned by Company is subject to inspection by Company’s personnel at any time with or without notice. Prior to the termination of my engagement or promptly after termination of my engagement, I will agree to sign and deliver the “Termination Certification” attached hereto as Exhibit 2. 
+
+10.LEGAL AND EQUITABLE REMEDIES
+
+3.1I agree that it may be impossible to assess the damages caused by my violation of this Agreement or any of its terms. I agree that any threatened or actual violation of this Agreement or any of its terms will constitute immediate and irreparable injury to the Company and the Company shall have the right to enforce this Agreement and any of its provisions by injunction, specific performance or other equitable relief, without bond and without prejudice to any other rights and remedies that the Company may have for a breach or threatened breach of this Agreement.
+
+B-5
+
+3.2In the event the Company enforces this Agreement through a court order, I agree that the restrictions of Sections 5 and 6 shall remain in effect for a period of twelve (12) months from the effective date of the court order enforcing the Agreement.
+
+3.NOTICES. Any notices required or permitted under this Agreement will be given to the Company at its headquarters location at the time notice is given, labeled “Attention Chief Executive Officer,” and to me at my address as listed on the Consulting Agreement, or at such other address as the Company or I may designate by written notice to the other. Notice will be effective upon receipt or refusal of delivery. If delivered by certified or registered mail, notice will be considered to have been given five (5) business days after it was mailed, as evidenced by the postmark. If delivered by courier or express mail service, notice will be considered to have been given on the delivery date reflected by the courier or express mail service receipt.
+
+4.PUBLICATION OF THIS AGREEMENT TO SUBSEQUENT EMPLOYERS OR BUSINESS ASSOCIATES OF CONSULTANT. 
+
+3.1If I am offered engagement or the opportunity to enter into any business venture as owner, partner, consultant or other capacity while the restrictions described in Sections 5 and 6 of this Agreement are in effect I agree to inform my potential employer, partner, co-owner and/or others involved in managing the business with which I have an opportunity to be associated of my obligations under this Agreement and also agree to provide such person or persons with a copy of this Agreement.
+
+3.2I agree to inform the Company of all engagement and business ventures which I enter into while the restrictions described in Sections 5 and 6 of this Agreement are in effect and I also authorize the Company to provide copies of this Agreement to my employer, partner, co-owner and/or others involved in managing the business with which I am employed or associated and to make such persons aware of my obligations under this Agreement.
+
+1.GENERAL PROVISIONS
+
+3.1Governing Law: Consent to Personal Jurisdiction. This Agreement will be governed by and construed according to the laws of the State of Texas as such laws are applied to agreements entered into and to be performed entirely within the State of Texas between Texas residents. I hereby expressly consent to the personal jurisdiction and venue of the state and federal courts located in the State of Texas for any lawsuit filed there against me by Company arising from or related to this Agreement. 
+
+3.2Severability. In case any one or more of the provisions, subsections, or sentences contained in this Agreement shall, for any reason, be held to be invalid, illegal or unenforceable in any respect, such invalidity, illegality or unenforceability shall not affect the other provisions of this Agreement, and this Agreement shall be construed as if such invalid, illegal or unenforceable provision had never been contained in this Agreement. If moreover, any one or more of the provisions contained in this Agreement shall for any reason be held to be excessively broad as to duration, geographical scope, activity or subject, it shall be construed by limiting and reducing it, so as to be enforceable to the extent compatible with the applicable law as it shall then appear.
+
+3.3Successors and Assigns. This Agreement is for my benefit and the benefit of the Company, its successors, assigns, parent corporations, subsidiaries, affiliates, and purchasers, and will be binding upon my heirs, executors, administrators and other legal representatives. 
+
+3.4Survival. The provisions of this Agreement shall survive the termination of my engagement, regardless of the reason, and the assignment of this Agreement by the Company to 
+
+B-6
+
+any successor in interest or other assignee. I understand that my obligations under this Agreement will continue in accordance with its express terms regardless of any change in my title, position, status, role, duties, compensation or other terms and conditions of engagement or service. 
+
+3.5Engagement At-Will. I agree and understand that nothing in this Agreement shall change my at-will engagement status or confer any right with respect to continuation of engagement by the Company, nor shall it interfere in any way with my right or the Company’s right to terminate my engagement at any time, with or without cause or advance notice. 
+
+3.6Waiver. No waiver by the Company of any breach of this Agreement shall be a waiver of any preceding or succeeding breach. No waiver by the Company of any right under this Agreement shall be construed as a waiver of any other right. The Company shall not be required to give notice to enforce strict adherence to all terms of this Agreement.
+
+3.7Advice of Counsel. I ACKNOWLEDGE THAT, IN EXECUTING THIS AGREEMENT, I HAVE HAD THE OPPORTUNITY TO SEEK THE ADVICE OF INDEPENDENT LEGAL COUNSEL, AND I HAVE READ AND UNDERSTOOD ALL OF THE TERMS AND PROVISIONS OF THIS AGREEMENT. THIS AGREEMENT SHALL NOT BE CONSTRUED AGAINST ANY PARTY BY REASON OF THE DRAFTING OR PREPARATION OF THIS AGREEMENT.
+
+3.8 Entire Agreement. The obligations pursuant to Sections 1 and 2 (except Subsection 2.6) of this Agreement shall apply to any time during which I was previously engaged, or am in the future engaged, by the Company as a consultant if no other agreement governs nondisclosure and assignment of inventions during such period. This Agreement is the final, complete and exclusive agreement of the parties with respect to the subject matter of this Agreement and supersedes and merges all prior discussions between us. No modification of or amendment to this Agreement, nor any waiver of any rights under this Agreement, will be effective unless in writing and signed by the party to be charged. 
+
+B-7
+
+IN WITNESS WHEREOF, the Parties have executed this Proprietary Agreement as of the Effective Date (as defined in the Consulting Agreement).
+
+COMPANY:
+
+SALARIUS PHARMACEUTICALS, INC.,
+
+a Delaware corporation
+
+                        By: /s/ William K. McVicar            
+
+                        Name:    William K. McVicar
+
+                        Title:    Chair of the Board
+
+                        CONSULTANT:
+
+                        /s/ David J. Arthur                
+
+                        David J. Arthur
+
+[Signature Page to Exhibit B of the Consulting Agreement]
+
+EXHIBIT 1 
+
+PRIOR INVENTIONS
+
+TO:    Salarius Pharmaceuticals, Inc.
+
+FROM:    David J. Arthur
+
+DATE:    February 20, 2024
+
+SUBJECT:    Prior Inventions 
+
+1.    Except as listed in Section 2 below, the following is a complete list of all inventions or improvements relevant to the subject matter of my engagement by Salarius Pharmaceuticals, Inc. (the “Company”) that have been made or conceived or first reduced to practice by me alone or jointly with others prior to my engagement by the Company:
+
+☒    No inventions or improvements.
+
+☐    See below:
+
+☐    Additional sheets attached.
+
+2.    Due to a prior confidentiality agreement, I cannot complete the disclosure under Section 1 above with respect to inventions or improvements generally listed below, the proprietary rights and duty of confidentiality with respect to which I owe to the following party(ies):
+
+Invention or Improvement    Party(ies)    Relationship
+
+1.__________________________        _________________        ___________________
+
+2.__________________________        _________________        ___________________
+
+3.__________________________        _________________        ___________________
+
+☐    Additional sheets attached.
+
+EXHIBIT 2
+
+TERMINATION CERTIFICATION
+
+The undersigned (the “Consultant”), hereby certifies that the Consultant (i) does not have a Salarius computer in the Consultant’s possession, or (ii) has not failed to return, any documents, records, data, notes, reports, proposals, lists, correspondence, specifications, drawings, blueprints, sketches, materials, devices, equipment, or other property, or reproductions of any aforementioned items belonging to Salarius Pharmaceuticals, its parent company, subsidiaries, affiliates, successors or assigns (collectively, the “Company”).
+
+Consultant further certifies that Consultant has complied with all the terms of the Company’s Proprietary Information, Inventions Assignment, Non-Competition and Non-Solicitation Agreement (the “Agreement”), including, without limitation, those related to any Inventions (as defined therein), conceived or made by Consultant (solely or jointly with others) covered by the Agreement.
+
+Consultant further agrees that, in compliance with the Agreement, Consultant will preserve as strictly confidential Proprietary Information (as defined therein) relating to products, processes, know-how, designs, formulas, developmental or experimental work, computer programs, data bases, other original works of authorship, customer lists, business plans, financial information or other subject matter pertaining to any business of the Company or any of its employees, clients, consultants or licensees.
+
+Consultant further agrees that, for the applicable periods and as otherwise set forth in the Agreement, Consultant will honor the post-termination restrictions applicable to Consultant under the Agreement.
+
+By:    __________________________________
+
+Title:_________________________________
+
+Date:_________________________________
+
+Address:______________________________

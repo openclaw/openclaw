@@ -1,0 +1,588 @@
+EX-10.3
+4
+ex10-3.htm
+
+Exhibit
+10.3
+
+LIMITED
+GUARANTY, PLEDGE AND SECURITY AGREEMENT
+
+THIS
+LIMITED GUARANTY AND PLEDGE AGREEMENT (“Guaranty Agreement”) is made as of May 30, 2024 by GLASSBRIDGE ENTERPRISES
+INC., a Delaware corporation (the “Guarantor”), whose address is set forth below, in favor of WESTERN ALLIANCE BANK,
+an Arizona corporation (“Bank”), whose address is set forth below.
+
+recitals
+
+A.
+Greenway Mortgage Funding Corp., a New Jersey corporation (“Borrower”) and Bank are parties to that certain Loan and
+Security Agreement dated as of even date herewith (as the same may be amended or otherwise modified from time to time, the “Loan
+Agreement”). Capitalized terms which are used herein but not otherwise defined herein shall have the meanings set forth in
+the Loan Agreement.
+
+B.
+Pursuant to the Loan Agreement and the Loan Documents, Bank has agreed to make loans to Borrower in the original principal amount of
+up to $65,000,000 which may be increased to a maximum amount of up to $100,000,000 on the terms and conditions more particularly set
+forth in the Loan Agreement (the “Loan”), and the Loan is secured by, inter alia, certain mortgage servicing
+rights held by Borrower associated with the MSR Mortgage Loans as more particularly described in the Loan Agreement (the “Pledged
+Servicing Rights”).
+
+C.
+The obligations of Borrower under the Loan Documents have been guaranteed by Greenway Mortgage Holding Corporation, a Delaware corporation
+(“HoldCo Guarantor”) pursuant to that certain Guaranty executed and delivered by HoldCo Guarantor in favor of Bank.
+
+D.
+Borrower and Guarantor have entered into that certain True Excess Servicing Spread Acquisition Agreement For FNMA Mortgage Loans dated
+as of May 21, 2024 (the “TESPA Agreement”) pursuant to which Guarantor has purchased the Excess Servicing Spreads
+associated with the Fannie Mae Mortgage Loans.
+
+E.
+HoldCo Guarantor and Guarantor have entered into that certain Reference Spread Payment Agreement dated and effective as of September
+29, 2023 (the “RESPA Agreement”) pursuant to which Guarantor has acquired rights to receive certain portions of Excess
+Servicing Spreads associated with the Fannie Mae Mortgage Loans.
+
+F.
+As a condition precedent to making the Loan and undertaking the commitments under the Loan Agreement, Bank has required that Guarantor
+pledge to Bank all of its right, title and interest in the TESPA Agreement and the RESPA Agreement and the Excess Servicing Spread and
+other assets acquired by Guarantor pursuant to the TESPA Agreement and the RESPA Agreement.
+
+G.
+Guarantor has an interest in continuing to acquire Excess Servicing Spreads and in permitting Borrower to have access to the Loan which
+will enable it to potentially continue to purchase mortgage servicing rights, and therefore has determined that the execution, delivery
+and performance of this Guaranty directly benefits and is in the best interest of Guarantor.
+
+1
+
+Guaranty
+
+1.
+As collateral security for the payment, performance and observation of all of the Guaranteed Indebtedness (as defined below), Guarantor
+hereby pledges and assigns to Bank a continuing security interest in and to all of Guarantor’s right, title and interest in the
+TESPA Agreement and the RESPA Agreement and all assets and property acquired by Guarantor pursuant to the terms thereof (whether Guarantor
+has acquired an ownership interest in the same or a security interest in the same) (all of the foregoing, collectively, the “Collateral”),
+which Collateral shall include without limitation (a) any deposit and securities accounts into which any Excess Servicing Spread in respect
+of the Mortgage Loans or any other amounts associated with the MSR Mortgage Loans or Pledged Servicing Rights are deposited, including
+the deposit accounts specified as the “Distribution Account” under the TESPA Agreement or the RESPA Agreement together with
+all money, instruments, certificates of deposit, and other property of Guarantor now or hereafter held in any such account; (b) any right
+to any Excess Servicing Spread associated with the Mortgage Loans or Pledged Servicing Rights, including the “True Excess Spread”
+as defined in the TESPA Agreement or any “Reference Spread” as defined in the RESPA Agreement; (c) all rights to have and
+receive any of the Collateral described above, all accessions or additions to and substitutions for any of such Collateral, together
+with all renewals and replacements of any of such Collateral, all other rights and interests now owned or hereafter acquired by Guarantor
+in, under or relating to any of such Collateral or referred to above and all proceeds of any of such Collateral and (d) any instruments,
+documents or writings evidencing any monetary obligation, contract right, account or security interest in any of such property or its
+proceeds accruing or accrued and all other rights and interests in and to any and all security for or claims against others in respect
+of any of the property described or referred to in this definition; all books, records, contract rights, instruments, documents (including
+all documents of title), chattel paper and proceeds relating to, arising from or by virtue of or collections with respect to, or comprising
+part of, any of such property described or referred to herein, including all insurance and claims for insurance effected or held for
+the benefit of Borrower or Bank in respect of any of the foregoing, in each case whether now existing or hereafter arising, accruing
+or accrued; and all other rights and interests in and to any and all security for or claims against others in respect of any of the rights,
+interests and property described or referred to herein.
+
+2.
+Subject to the following paragraph, Guarantor hereby irrevocably and unconditionally guarantees to Bank the full and prompt payment and
+performance of the Guaranteed Indebtedness (hereinafter defined). The term “Guaranteed Indebtedness”, as used herein
+means all obligations, indebtedness, and liabilities of Borrower to Bank, now existing or hereafter arising under or in connection with
+the Loan Agreement or any other Loan Document, whether direct, indirect, related, fixed, contingent, liquidated, unliquidated, joint,
+several, or joint and several, and all extensions, renewals, and modifications thereof, including, without limitation, the obligations,
+indebtedness, and liabilities of Borrower to make payments under Sections 2.9 (Payments), 6.5 (Expenses of Bank), 10.10
+(Indemnification of Bank), or 11.7 (Additional Sums). The term “Guaranteed Indebtedness” shall include any
+and all post-petition interest and expenses (including attorneys’ fees) whether or not allowed under any bankruptcy, insolvency,
+or other similar law. It is anticipated that fluctuations may occur in the aggregate amount of the Guaranteed Indebtedness covered by
+this Guaranty, and Guarantor specifically acknowledges and agrees that reductions in the amount of the Guaranteed Indebtedness, even
+to zero dollars, shall not constitute a termination of this Guaranty. This Guaranty is binding upon the Guarantor and Guarantor’s
+successors and assigns so long as any of the Guaranteed Indebtedness remains unpaid and even though the Guaranteed Indebtedness may from
+time to time be zero dollars.
+
+2
+
+Notwithstanding
+anything set forth herein, Guarantor has guaranteed the Guaranteed Indebtedness to Bank for the sole purpose of supporting the pledge
+to Bank of the Collateral, and as such ,Bank’s recourse against Guarantor in respect of the foregoing guarantee shall be limited
+solely to the pledge to Bank of the Collateral pursuant to this Guaranty and provided, further, that the foregoing guarantee shall terminate
+upon the release of the Collateral and shall have no force and effect separate and apart from, and may not be enforced except in connection
+with, this Guaranty Agreement. Nothing contained herein shall limit or derogate from any other guaranty given to Bank in connection with
+Borrower’s obligations with respect to the Loan.
+
+3.
+This instrument shall be an absolute, continuing, irrevocable, and unconditional guaranty of payment and performance, and not a guaranty
+of collection, and Guarantor shall remain liable on its obligations hereunder until the payment and performance in full of the Guaranteed
+Indebtedness (excluding contingent indemnification obligations to the extent no unsatisfied claim giving rise thereto has been asserted).
+No set off, counterclaim, recoupment, reduction, or diminution of any obligation, or any defense of any kind or nature which Borrower
+may have against Bank or any other party (other than a defense of payment or performance or in the case of willful misconduct or gross
+negligence by Bank or such other party), or which Guarantor may have against Borrower, Bank, or any other party (other than a defense
+of payment or performance or in the case of willful misconduct or gross negligence by Bank or such other party), shall be available to,
+or shall be asserted by, Guarantor against Bank or any subsequent holder of the Guaranteed Indebtedness or any part thereof or against
+payment of the Guaranteed Indebtedness or any part thereof.
+
+4.
+If Guarantor becomes liable for any indebtedness owing by Borrower to Bank by endorsement or otherwise, other than under this Guaranty
+Agreement, such liability shall not be in any manner impaired or affected hereby, and the rights of Bank hereunder shall be cumulative
+of any and all other rights that Bank may ever have against Guarantor. The exercise by Bank of any right or remedy hereunder or under
+any other instrument, or at law or in equity, shall not preclude the concurrent or subsequent exercise of any other right or remedy.
+
+5.
+In the event of default by Borrower in payment or performance of the Guaranteed Indebtedness, or any part thereof, it shall not be necessary
+for Bank, in order to enforce such payment by Guarantor and remedies against the Collateral pursuant to the terms of this Guaranty Agreement,
+first to institute suit or exhaust its remedies against Borrower or others liable on such Guaranteed Indebtedness, or to enforce any
+rights against or with respect to any collateral pledged by any Obligated Party other than Guarantor. In the event such payment is made
+by Guarantor, then Guarantor shall be subrogated to the rights then held by Bank with respect to the Guaranteed Indebtedness to the extent
+to which the Guaranteed Indebtedness was discharged by Guarantor and, in addition, upon payment by Guarantor of any sums to Bank hereunder,
+all rights of Guarantor against Borrower or with respect to any Collateral for which such payment had been made arising by way of right
+of subrogation, reimbursement, or otherwise shall in all respects be subordinate and junior in right of payment to the prior indefeasible
+payment in full of the Guaranteed Indebtedness.
+
+3
+
+6.
+If acceleration of the time for payment of any amount payable by Borrower under the Guaranteed Indebtedness is stayed upon the insolvency,
+bankruptcy, or reorganization of Borrower, all such amounts otherwise subject to acceleration under the terms of the Guaranteed Indebtedness
+shall nonetheless be payable by Guarantor on the terms and conditions provided for herein.
+
+7.
+Guarantor hereby agrees that its obligations under this Guaranty Agreement shall not be released, discharged, diminished, impaired, reduced,
+or affected for any reason or by the occurrence of any event, including, without limitation, one or more of the following events, whether
+or not with notice to or the consent of Guarantor: (a) the taking or accepting of collateral as security for any or all of the Guaranteed
+Indebtedness or the release, surrender, exchange, or subordination of any collateral now or hereafter securing any or all of the Guaranteed
+Indebtedness or the release, surrender, exchange, or subordination of any Collateral; (b) any partial release of the liability of Guarantor
+hereunder, or the full or partial release of any other guarantor from liability for any or all of the Guaranteed Indebtedness; (c) any
+disability of Borrower, or the dissolution, insolvency, or bankruptcy of Borrower, Guarantor, or any other party at any time liable for
+the payment of any or all of the Guaranteed Indebtedness; (d) any renewal, extension, modification, waiver, or amendment of any or all
+of the Guaranteed Indebtedness or any instrument, document, or agreement evidencing, securing, or otherwise relating to any or all of
+the Guaranteed Indebtedness; (e) any adjustment, indulgence, forbearance, waiver, or compromise that may be granted or given by Bank
+to Borrower, Guarantor, or any other party ever liable for any or all of the Guaranteed Indebtedness; (f) any neglect, delay, omission,
+failure, or refusal of Bank to take or prosecute any action for the collection of any of the Guaranteed Indebtedness or to foreclose
+or take or prosecute any action in connection with any collateral or any instrument, document, or agreement evidencing, securing, or
+otherwise relating to any or all of the Guaranteed Indebtedness; (g) the unenforceability or invalidity of any collateral or of any instrument,
+document, or agreement evidencing, securing, or otherwise relating to any collateral; (h) any payment by Borrower or any other party
+to Bank is held to constitute a preference under applicable bankruptcy or insolvency law or if for any other reason Bank is required
+to refund any payment or pay the amount thereof to someone else; (i) the settlement or compromise of any of the Guaranteed Indebtedness;
+(j) the non-perfection of any security interest or lien securing any or all of the Guaranteed Indebtedness; (k) any impairment of any
+Collateral or any collateral securing any or all of the Guaranteed Indebtedness or (l) any change in the corporate existence, structure,
+or ownership of Borrower.
+
+Guarantor
+waives any and all rights or defenses based on suretyship or impairment of collateral including, but not limited to, any rights or defenses
+arising by reason of any “one action” or “anti-deficiency” law or any other law which may prevent Bank from bringing
+any action, including a claim for deficiency, against Guarantor, before or after Bank’s commencement or completion of any foreclosure
+action, either judicially or by exercise of a power of sale. Guarantor expressly waives, to the extent permitted by Arizona law, all
+of Guarantor’s rights under sections 12-1641 through 12-1646 inclusive, 44-142 of the Arizona Revised Statutes, and Rule 17(e)
+of the Arizona Rules of Civil Procedure, as now enacted or hereafter modified, amended or replaced.
+
+4
+
+8.
+Guarantor represents and warrants to Bank as follows:
+
+(a)
+Guarantor has the power and authority and legal right to execute, deliver, and perform its obligations under this Guaranty Agreement
+and this Guaranty Agreement constitutes the legal, valid, and binding obligation of Guarantor, enforceable against Guarantor in accordance
+with its terms, except as limited by bankruptcy, insolvency, or other laws of general application relating to the enforcement of creditor’s
+rights.
+
+(b)
+The execution, delivery, and performance by Guarantor of this Guaranty Agreement does not and will not violate or conflict with any law,
+rule, or regulation or any order, writ, injunction, or decree of any court, governmental authority or agency, or arbitrator and does
+not and will not conflict with, result in a breach of, or constitute a default under, or result in the imposition of any lien upon any
+assets of Guarantor pursuant to the provisions of any indenture, mortgage, deed of trust, security agreement, franchise, permit, license,
+or other instrument or agreement to which Guarantor or its properties is bound.
+
+(c)
+No authorization, approval, or consent of, and no filing or registration with, any court, governmental authority, or third party is necessary
+for the execution, delivery, or performance by Guarantor of this Guaranty Agreement or the validity or enforceability thereof.
+
+(d)
+The value of the consideration received and to be received by Guarantor as a result of Bank entering into the Loan Agreement with the
+Borrower and Guarantor executing and delivering this Guaranty Agreement is reasonably worth at least as much as the liability and obligation
+of Guarantor hereunder, and such liability and obligation and such extensions of credit have benefited or may reasonably be expected
+to benefit Guarantor directly or indirectly.
+
+(e)
+Guarantor is not now insolvent, nor will the execution of this Guaranty render Guarantor insolvent; the execution of this Guaranty will
+not leave Guarantor with unreasonably small capital or assets in order to conduct the business of Guarantor as it is currently conducted;
+the obligations incurred under this Guaranty have not been incurred with the intent to hinder, delay, or defraud present or future creditors;
+and the execution of this Guaranty is not intended or believed by Guarantor to be an incurrence of an obligation or debt of Guarantor
+beyond Guarantor’s ability to pay such obligation or debt as it becomes due.
+
+(f)
+Guarantor has, independently and without reliance upon Bank and based upon such documents and information as Guarantor has deemed appropriate,
+made its own analysis and decision to enter into this Guaranty Agreement.
+
+(g)
+Guarantor has adequate means to obtain from Borrower on a continuing basis information concerning the financial condition and assets
+of Borrower and Guarantor is not relying upon Bank to provide (and Bank shall have no duty to provide) any such information to Guarantor
+either now or in the future.
+
+(h)
+No reports, financial statements, certificates or other information furnished by or on behalf of Guarantor to Bank in connection with
+this Guaranty Agreement or any other Loan Document or delivered hereunder or thereunder contains any material misstatement of fact or
+omits to state any material fact necessary to make the statements therein, in the light of the circumstances under which they were made,
+not misleading.
+
+5
+
+(i)
+Intentionally Omitted
+
+(j)
+Guarantor has not pledged any right, title or interest in the TESPA Agreement or in the RESPA Agreement or in any of the Collateral to
+any Person nor assigned any of its rights under the TESPA Agreement or the RESPA Agreement or to any of the Collateral to any Person
+other than the grant made to Bank hereunder.
+
+9.
+In the event that, notwithstanding the representations, warranties and acknowledgements of Guarantor contained in Section 7 above,
+the incurring of the obligations under this Guaranty is found, by a final, non-appealable judgment or order of a court, to constitute
+a fraudulent transfer under the Uniform Fraudulent Transfer Act (Arizona Revised Statutes (“ARS”) Section 44-1001
+et seq., as amended, and any successor statute), the Bankruptcy Code (Title 11 of the United States Code), or any similar statutes, then
+the amount of the Guaranteed Obligations of Guarantor pursuant to this Guaranty shall be reduced to $1.00 less than the amount that would
+otherwise make this Guaranty a fraudulent conveyance. The limitation on the liability of Guarantor contained in this Section 9
+shall not limit any right of Bank against Guarantor available at law or in equity, including, without limitation, rights of Bank against
+Guarantor based upon any inaccuracy of, or the failure of Guarantor to comply with, the provisions of Section 8 or Section
+10.
+
+10.
+Guarantor covenants and agrees that, as long as the Guaranteed Indebtedness or any part thereof is outstanding or the Loan Agreement
+is in effect:
+
+(a)
+Intentionally Omitted
+
+(b)
+Intentionally Omitted
+
+(c)
+Guarantor will furnish to Bank, upon prior written request, copies of the federal income tax returns filed by Guarantor for such applicable
+tax year.
+
+(d)
+Guarantor will promptly notify Bank of any material adverse change in Guarantor’s financial status.
+
+(e)
+Except to the extent Borrower would be permitted to do so pursuant to the express rights granted to Borrower under the Loan Agreement,
+Guarantor has not and will not, without the prior written consent of Bank, sell, lease, assign, encumber, hypothecate, transfer or otherwise
+dispose of all or any of the Collateral.
+
+(f)
+Intentionally Omitted
+
+(g)
+Guarantor will furnish promptly to Bank such additional information concerning Guarantor as Bank may reasonably request.
+
+(h)
+Guarantor will obtain at any time and from time to time all authorizations, licenses, consents or approvals as shall now or hereafter
+be necessary or desirable under all applicable laws or regulations or otherwise in connection with the execution, delivery and performance
+of this Guaranty Agreement and will promptly furnish copies thereof to Bank.
+
+6
+
+(i)
+Guarantor hereby agrees to take any or all action that may be necessary or that Bank may request in order for Bank to obtain control
+in accordance with the Uniform Commercial Code (the “UCC”) with respect to the Collateral. Guarantor hereby acknowledges
+and agrees that any agent or designee of Bank shall be deemed to be a “secured party” with respect to the Collateral under
+the control of such agent or designee for all purposes.
+
+11.
+To the maximum extent permitted by applicable law, and for the purpose of taking any action that Bank may reasonably deem necessary or
+advisable to accomplish the purposes of this Guaranty Agreement, Guarantor hereby (i) authorizes Bank to file in any appropriate filing
+office one or more financing or continuation statements and amendments thereto, relating to the Collateral and (ii) ratifies such authorization
+to the extent that Bank has filed any such financing statements, continuation statements, or amendments thereto, prior to the date hereof.
+A photocopy or other reproduction of this Guaranty Agreement or any financing statement covering the Collateral or any part thereof shall
+be sufficient as a financing statement where permitted by law.
+
+12.
+Intentionally Omitted
+
+13.
+If any Event of Default shall have occurred and be continuing:
+
+(a)
+Bank may exercise in respect of the Collateral, in addition to any other rights and remedies provided for herein or otherwise available
+to it, all of the rights and remedies of a secured party upon default under the UCC (whether or not the UCC applies to the affected Collateral)
+or otherwise available to Bank at law or in equity, and also may (i) take absolute control of the Collateral, including transfer into
+Bank’s name or into the name of its nominee or nominees (to the extent Bank has not theretofore done so) and thereafter receive,
+for the benefit of Bank and Banks, all payments made thereon, give all consents, waivers and ratifications in respect thereof and otherwise
+act with respect thereto as though it were the outright owner thereof, (ii) foreclose upon or otherwise enforce its security interest
+in and lien on the Collateral, or on such portions or elements of the Collateral as Bank shall elect to proceed against from time to
+time; (iii) without notice except as specified below and without any obligation to prepare or process the Collateral for sale, (A) sell
+the Collateral or any part thereof in one or more parcels at public or private sale, at any of Bank’s offices, at any exchange
+or broker’s board or elsewhere, for cash, on credit or for future delivery, and at such price or prices and upon such other terms
+as Bank may reasonably deem commercially reasonable and/or (B) lease, license or otherwise dispose of the Collateral or any part thereof
+upon such terms as Bank may reasonably deem commercially reasonable; (iv) at Bank’s option and in its sole discretion, to notify
+any or all makers obligated under any or all items of Collateral, that the Collateral has been assigned to Bank and that all payments
+thereon are to be made directly to Bank or such other Person as may be designated by the Bank; (v) settle, compromise, or release, in
+whole or in part, any amounts owing on the Collateral or any portion of the Collateral, on terms acceptable to Bank and (vi) enforce
+payment and performance and prosecute any action or proceeding with respect to any and all Collateral. Guarantor agrees that, to the
+extent notice of sale or any other disposition of the Collateral shall be required by law, at least ten (10) days’ prior notice
+to Guarantor of the time and place of any public sale or the time after which any private sale or other disposition of the Collateral
+is to be made shall constitute reasonable notification. Bank shall not be obligated to make any sale or other disposition of Collateral
+regardless of notice of sale having been given. Bank may adjourn any public or private sale from time to time by announcement at the
+time and place fixed therefor, and such sale may, without further notice, be made at the time and place to which it was so adjourned.
+Guarantor hereby waives any claims against Bank and Banks arising by reason of the fact that the price at which the Collateral may have
+been sold at a private sale was less than the price which might have been obtained at a public sale or was less than the aggregate amount
+of the Secured Obligations, even if Bank accepts the first offer received and does not offer the Collateral to more than one offeree,
+and waives all rights that Guarantor may have to require that all or any part of the Collateral be marshaled upon any sale (public or
+private) thereof. Guarantor hereby acknowledges that (i) any such sale of the Collateral by Bank shall be made without warranty, (ii)
+Bank may specifically disclaim any warranties of title, possession, quiet enjoyment or the like, (iii) Bank may bid (which bid may be,
+in whole or in part, in the form of cancellation of indebtedness), if permitted by law, for the purchase, lease, license or other disposition
+of the Collateral or any portion thereof for the account of Bank (on behalf of itself and Banks) and (iv) such actions set forth in clauses
+(i), (ii) and (iii) above shall not adversely affect the commercial reasonableness of any such sale of the Collateral
+
+7
+
+(b)
+Reserved
+
+(c)
+In the event that the proceeds of any such sale, collection or realization are insufficient to pay all amounts to which Bank is legally
+entitled, Guarantor, subject to Section 2 hereof, shall be liable for the deficiency, together with interest thereon at the highest
+rate specified in any applicable Loan Document for interest on overdue principal thereof or such other rate as shall be fixed by applicable
+law, together with the costs of collection and the reasonable fees, costs, expenses and other client charges of any attorneys employed
+by Bank to collect such deficiency.
+
+(d)
+Guarantor hereby acknowledges that if Bank complies with any applicable requirements of law in connection with a disposition of the Collateral,
+such compliance will not adversely affect the commercial reasonableness of any sale or other disposition of the Collateral.
+
+(e)
+Bank shall not be required to marshal any present or future collateral security (including, but not limited to, this Guaranty Agreement
+and the Collateral) for, or other assurances of payment of, the Guaranteed Obligations or any of them or to resort to such collateral
+security or other assurances of payment in any particular order, and all of Bank’s rights hereunder and in respect of such collateral
+security and other assurances of payment shall be cumulative and in addition to all other rights, however existing or arising. To the
+extent that Guarantor lawfully may, Guarantor hereby agrees that it will not invoke any law relating to the marshalling of collateral
+which might cause delay in or impede the enforcement of Bank’s rights under this Guaranty Agreement or under any other instrument
+creating or evidencing any of the Secured Obligations or under which any of the Secured Obligations is outstanding or by which any of
+the Secured Obligations is secured or payment thereof is otherwise assured, and, to the extent that it lawfully may, Guarantor hereby
+irrevocably waives the benefits of all such laws.
+
+8
+
+(f)
+Guarantor irrevocably and unconditionally:
+
+(i)
+consents to the appointment of pre-judgment and/or post-judgment receivers with all of the same powers that would otherwise be available
+to Guarantor, including, but not limited to the power to (A) hold, manage, control or dispose of the Collateral wherever located, (B)
+take any action with respect to the Collateral to the maximum extent permitted by law and (C) conduct a public or private sale of any
+or all of Bank’ right, title and interest in and to such Collateral, including any disposition of the Collateral to Bank in exchange
+for cancellation of all or a portion of the Guaranteed Obligations;
+
+(ii)
+agrees not to oppose or otherwise interfere (directly or indirectly) with any effort by Bank to seek the appointment of a receiver;
+
+(iii)
+waives any right to demand that a bond be posted in connection with the appointment of any such receiver; and
+
+(iv)
+waives any right to appeal the entry of an order authorizing the appointment of a receiver.
+
+14.
+All rights of Bank, all liens and all obligations of Guarantor hereunder shall be absolute and unconditional irrespective of (i) any
+lack of validity or enforceability of the Loan Agreement or any other Loan Document, (ii) any change in the time, manner or place of
+payment of, or in any other term in respect of, all or any of the Secured Obligations, or any other amendment or waiver of or consent
+to any departure from the Loan Agreement or any other Loan Document, (iii) any exchange or release of, or non-perfection of any Lien
+on any Collateral, or any release or amendment or waiver of or consent to departure from any guaranty, for all or any of the Secured
+Obligations, or (iv) any other circumstance that might otherwise constitute a defense available to, or a discharge of, Guarantor in respect
+of the Secured Obligations. All authorizations and agencies contained herein with respect to any of the Collateral are irrevocable and
+powers coupled with an interest. Guarantor does hereby (a) waive notice of acceptance of this Guaranty Agreement by Bank and, except
+as specifically set forth herein or in the other Loan Documents, any and all notices and demands of every kind that may be required to
+be given by any statute, rule or law, (b) waive all suretyship defenses, (c) waive, and agree to refrain from asserting, any defense,
+right of set-off or other claim that Guarantor or Borrower may have against Bank or the holder of the Note, but Guarantor may bring a
+separate claim or separate action against such party and mandatory or compulsory counterclaims, (d) waive any and all rights Guarantor
+may have under any anti-deficiency statute or other similar protections, (e) waive any and all rights and defenses Guarantor may have:
+(i) because the Note is secured by real property, (ii) under or by virtue of any anti-deficiency, “one form of action” and
+other similar Laws, or (iii) under or by virtue of Laws that would limit or discharge any Borrower’s indebtedness, (f) waive presentment
+for payment, demand for payment, notice of nonpayment or dishonor, protest and notice of protest, diligence in collection and any and
+all formalities which otherwise might be legally required to charge Guarantor with liability, (g) waive any and all rights or defenses
+Guarantor may have by reason of any election of remedies by Bank, (h) waive, at all times while this Guaranty Agreement is in effect,
+any and all rights of subrogation, reimbursement, indemnification and contribution from and against any Borrower, and (i) waive any failure
+by Bank to inform Guarantor of any facts Bank may now or hereafter know about any Borrower, any Property, the Loan, or the transactions
+contemplated by the Loan Agreement, it being understood and agreed that Bank has no duty to so inform and that Guarantor is fully responsible
+for being and remaining informed by Borrowers of all circumstances bearing on the risk of nonperformance of the Obligations. Credit may
+be granted or continued from time to time by Bank to any Borrower without notice to or authorization from Guarantor, regardless of the
+financial or other condition of any Borrower at the time of any such grant or continuation. Bank shall have no obligation to disclose
+or discuss with Guarantor its assessment of the financial condition of any Borrower. Guarantor acknowledges that no representations of
+any kind whatsoever have been made to Guarantor by Bank.
+
+9
+
+15.
+Guarantor further agrees that its liability as guarantor shall not be impaired or affected by any renewals, extensions or increases in
+the amount of the Loan which may be made from time to time, with or without the knowledge or consent of Guarantor of the time for payment
+of interest or principal under the Loan or by any forbearance or delay in collecting interest or principal under the Note, or by any
+waiver by Bank under the Loan Agreement, any or any other Loan Documents, or by Bank’s failure or election not to pursue any other
+remedies it may have against any Borrower or any guarantor, or by any change or modification in the Loan Agreement or any other Loan
+Document (including but not limited to any increase in the principal amount of the Loan), or by the acceptance by Bank of any additional
+security or any increase, substitution or change therein, or by the release by Bank of any security or any withdrawal thereof or decrease
+therein, or by the application of payments received from any source to the payment of any obligation owing to Bank under the Loan Documents
+other than the indebtedness due under the Loan Documents even though Bank might lawfully have elected to apply such payments to any part
+or all of the indebtedness due under the Loan, it being the intent hereof that, subject to Bank’s compliance with the terms of
+this Guaranty Agreement, Guarantor shall remain liable for the performance of its obligations hereunder, notwithstanding any act or thing
+that might otherwise operate as a legal or equitable discharge of a surety. Guarantor further understands and agrees that Bank may at
+any time enter into agreements with any Borrower to amend and modify the Loan Agreement or other Loan Documents, and may waive or release
+any provision or provisions of the Loan Agreement and other Loan Documents or any thereof, and, with reference to such instruments, may
+make and enter into any such agreement or agreements as Bank and Borrower may deem proper and desirable, without in any manner impairing
+or affecting this Guaranty Agreement or any of Bank’s rights hereunder or Guarantor’s obligations hereunder.
+
+16.
+No amendment or waiver of any provision of this Guaranty Agreement nor consent to any departure by the Guarantor therefrom shall in any
+event be effective unless the same shall be in writing and signed by Bank. No failure on the part of Bank to exercise, and no delay in
+exercising, any right, power, or privilege hereunder shall operate as a waiver thereof; nor shall any single or partial exercise of any
+right, power, or privilege hereunder preclude any other or further exercise thereof or the exercise of any other right, power, or privilege.
+The remedies herein provided are cumulative and not exclusive of any remedies provided by law.
+
+10
+
+17.
+Any acknowledgment or new promise, whether by payment of principal or interest or otherwise and whether by Borrower or others (including
+Guarantor), with respect to any of the Guaranteed Indebtedness shall, if the statute of limitations in favor of Guarantor against Bank
+shall have commenced to run, toll the running of such statute of limitations and, if the period of such statute of limitations shall
+have expired, prevent the operation of such statute of limitations.
+
+18.
+This Guaranty Agreement is for the benefit of Bank and its successors and assigns, and in the event of an assignment of the Guaranteed
+Indebtedness, or any part thereof, the rights and benefits hereunder, to the extent applicable to the indebtedness so assigned, may be
+transferred with such indebtedness. This Guaranty Agreement is binding not only on Guarantor, but on Guarantor’s successors and
+assigns. It is not necessary for Bank to inquire into the powers of Borrower or Guarantor or of the officers, directors, or other agents
+acting or purporting to act on their behalf, and any indebtedness made or created in reliance upon the professed exercise of such powers
+shall be guaranteed under this Guaranty.
+
+19.
+Guarantor recognizes that Bank is relying upon this Guaranty Agreement and the undertakings of Guarantor hereunder in making extensions
+of credit to Borrower and further recognizes that the execution and delivery of this Guaranty Agreement is a material inducement to Bank
+in making extensions of credit to Borrower. Guarantor hereby acknowledges that there are no conditions to the full effectiveness of this
+Guaranty Agreement.
+
+20.
+This Guaranty Agreement is executed and delivered as an incident to a lending transaction negotiated, consummated, and performable in
+Maricopa County, Arizona, and shall be governed by and construed in accordance with the laws of the State of Arizona.
+
+21.
+Guarantor shall defend, protect, indemnify and hold harmless Bank from and against any and all claims, losses, damages, liabilities,
+obligations, penalties, fees, reasonable costs and expenses (including reasonable attorneys’ fees, costs, expenses and disbursements)
+incurred by Bank to the extent that they arise out of or otherwise result from or relate to or are in connection with a violation by
+Guarantor under this Guaranty Agreement (including enforcement of this Guaranty Agreement), except claims, losses or liabilities resulting
+solely and directly from Bank’s gross negligence or willful misconduct, as determined by a final judgment of a court of competent
+jurisdiction. Guarantor agrees to pay to Bank upon demand the amount of any and all costs and expenses, including the reasonable fees,
+costs, expenses and disbursements of counsel for Bank in the exercise or enforcement of any of the rights of Bank hereunder, or as the
+result of the failure by Guarantor to perform or observe any of the provisions hereof, and in no event shall the limitations set forth
+in Section 2 hereof apply to the obligations of Guarantor under this Section 21.
+
+22.
+Except as explicitly set forth in the Loan Agreement, Guarantor hereby waives promptness, diligence, notice of any default under the
+Guaranteed Indebtedness, demand of payment, notice of acceptance of this Guaranty Agreement, presentment, notice of protest, notice of
+dishonor, notice of the incurring by Borrower of additional indebtedness, and all other notices and demands with respect to the Guaranteed
+Indebtedness and this Guaranty Agreement.
+
+11
+
+23.
+All notices, requests and other communications to any party hereunder shall be in writing (including electronic transmission) and shall
+be given to such party at its address set forth below. Each such notice, request or other communication shall be effective (a) if given
+by mail, three (3) days after such communication is deposited in the mails with first class postage prepaid, addressed as aforesaid,
+(b) if given by reputable overnight delivery service, when delivered, or (c) if given by any other means, when delivered (or, in the
+case of electronic transmission, received) at the address specified below.
+
+ To
+ Bank:
+
+ WESTERN
+ ALLIANCE BANK
+
+ 2701
+ East Camelback Road, Suite 110
+
+ Phoenix,
+ Arizona 85016
+
+ Attention:
+ Joshua Ormiston
+
+ Email:
+ jormiston@westernalliancebank.com
+
+ To
+ Guarantor:
+
+ GLASSBRIDGE
+ ENTERPRISES, INC.
+
+ 551
+ Madison Avenue, Suite 800
+
+ New
+York, New York 10022
+
+ Attention:
+Daniel Strauss
+
+ Email:
+ dstrauss@glassbridge.com
+
+ With
+ a copy to:
+
+ Loeb
+ & Loeb LLP
+
+ 345
+ Park Avenue
+
+ New
+ York, New York 10154
+
+ Attention:
+ Lloyd Rothenberg
+
+ Email:
+ lrothenberg@loeb.com
+
+24.
+Each Loan Document, and all of the terms thereof, are incorporated herein by reference, the same as if stated verbatim herein, and Guarantor
+agrees that the Bank may exercise any and all rights granted to it under any Loan Document without affecting the validity or enforceability
+of this Guaranty Agreement.
+
+25.
+THIS GUARANTY AGREEMENT EMBODIES THE FINAL, ENTIRE AGREEMENT OF GUARANTOR AND BANK WITH RESPECT TO GUARANTOR’S GUARANTY OF THE
+GUARANTEED INDEBTEDNESS AND SUPERSEDES ANY AND ALL PRIOR COMMITMENTS, AGREEMENTS, REPRESENTATIONS, AND UNDERSTANDINGS, WHETHER WRITTEN
+OR ORAL, RELATING TO THE SUBJECT MATTER HEREOF. THIS GUARANTY AGREEMENT IS INTENDED BY GUARANTOR AND BANK AS A FINAL AND COMPLETE EXPRESSION
+OF THE TERMS OF THE GUARANTY AGREEMENT, AND NO COURSE OF DEALING BETWEEN GUARANTOR AND BANK, NO COURSE OF PERFORMANCE, NO TRADE PRACTICES,
+AND NO EVIDENCE OF PRIOR, CONTEMPORANEOUS OR SUBSEQUENT ORAL AGREEMENTS OR DISCUSSIONS OR OTHER EXTRINSIC EVIDENCE OF ANY NATURE SHALL
+BE USED TO CONTRADICT, VARY, SUPPLEMENT OR MODIFY ANY TERM OF THIS GUARANTY AGREEMENT. THERE ARE NO ORAL AGREEMENTS BETWEEN GUARANTOR
+AND BANK.
+
+26.
+TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, GUARANTOR HEREBY IRREVOCABLY AND EXPRESSLY WAIVES ALL RIGHT TO A TRIAL BY JURY IN
+ANY ACTION, PROCEEDING, OR COUNTERCLAIM (WHETHER BASED UPON CONTRACT, TORT OR OTHERWISE) ARISING OUT OF OR RELATING TO THIS GUARANTY
+AGREEMENT OR THE TRANSACTIONS CONTEMPLATED HEREBY OR THE ACTIONS OF BANK IN THE NEGOTIATION, ADMINISTRATION, OR ENFORCEMENT THEREOF.
+
+[REMAINDER
+OF PAGE INTENTIONALLY LEFT BLANK.]
+
+12
+
+IN
+WITNESS WHEREOF, Guarantor has executed this Guaranty Agreement as of the day and year first above written.
+
+GUARANTOR: 
+
+GLASSBRIDGE ENTERPRISES INC.,
+
+a Delaware corporation
+
+By:
+
+/s/
+Daniel Strauss
+
+Name:
+
+ Daniel Strauss
+
+Title:
+ Chief Executive Officer
+
+Signature
+Page to
+
+Limited
+Guaranty, Pledge and Security Agreement

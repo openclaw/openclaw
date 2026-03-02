@@ -1,0 +1,608 @@
+EX-10.3
+12
+tm2419663d1_ex10-3.htm
+EXHIBIT 10.3
+
+Exhibit 10.3
+
+EXECUTION VERSION
+
+INTERCOMPANY LICENSE AGREEMENT
+
+THIS INTERCOMPANY LICENSE
+AGREEMENT (“Agreement”) is entered into as of July 22, 2024 (the “Effective Date”), by and
+between Muvico, LLC, a Texas limited liability company (“Licensor”), on the one hand, and American Multi-Cinema, Inc.,
+a Missouri corporation (“Licensee”), on the other hand. Licensor and Licensee are sometimes referred to in this Agreement
+collectively as the “Parties” and each individually as a “Party.”
+
+A.            This
+Agreement is made and entered into in connection with the closing of the transactions contemplated by that certain Asset Transfer Agreement
+(the “ATA”), dated as of July 22, 2024, by and among, Licensor, Licensee and Centertainment Development, LLC
+(“CDL”).
+
+B.            The
+Parties are members of a group of affiliated companies as of the Effective Date.
+
+C.            Licensee
+assigned its entire ownership interest in and to the Licensed IP (as defined below), along with the associated goodwill, to Licensor
+in that certain Intellectual Property Assignment Agreement (the “IP Assignment Agreement”), dated as of July 22,
+2024, by and between Licensor and Licensee.
+
+D.            Licensor
+and Licensee are party to that certain Management Services Agreement (the “MSA”), dated as of July 22, 2024,
+by and between Licensor and Licensee, pursuant to which Licensee has agreed to manage and operate certain movie theatres owned or leased
+by Licensor.
+
+E.            Subject
+to the terms and conditions of this Agreement, Licensee desires to obtain from Licensor, and Licensor desires to grant to Licensee, a
+license to use the Licensed IP in connection with the operation of the Business (as defined below) in accordance with the terms and conditions
+of this Agreement.
+
+NOW, THEREFORE, in consideration
+of the mutual covenants and undertakings contained in this Agreement, and for good and valuable consideration, the receipt and sufficiency
+of which is acknowledged, the Parties agree as follows:
+
+1.             Definitions.
+In this Agreement, the following capitalized terms shall have the meanings specified in this Section 1. Capitalized terms
+used but not defined herein shall have the respective meanings to such terms in the ATA.
+
+1.1            “Agreement”
+has the meaning set forth in the Recitals.
+
+1.2            “Affiliates”
+shall mean with respect to any Person, any other Person directly or indirectly controlling, controlled by or under direct or indirect
+common control with such Person. For the purposes of this definition, “control” when used with respect to any specified Person
+means the power to direct or cause the direction of the management and policies of such Person, directly or indirectly, whether through
+the ownership of voting securities, by contract or otherwise, and the terms “controlling” and “controlled” have
+meanings correlative of the foregoing.
+
+1.3            “ATA”
+has the meaning set forth in the Recitals.
+
+1.4            “Business”
+shall mean (i) the operation and management of movie theatres owned or leased, or managed on behalf of third parties under the “AMC”
+brand, by Licensee or any of its Affiliates, (ii) the production and distribution of motion picture films or other live or recorded
+entertainment by or on behalf of Licensee or any of its Affiliates, or (iii) the manufacture, distribution and sale of food and
+beverage products, concession items and merchandise by or on behalf of Licensee or any of its Affiliates, including the sale of any of
+the foregoing at third party retail locations.
+
+1.5            “Business
+Day” shall mean a day (other than a Saturday or Sunday) on which banks are open for business in Leawood, Kansas.
+
+1.6            “CDL”
+has the meaning set forth in the Recitals.
+
+1.7            “Claim”
+has the meaning set forth in Section 8.1.
+
+1.8            “Confidential
+Information” has the meaning set forth in Section 15.1.
+
+1.9            “Debt
+Documentation” means (i) with respect to the Term Loans, the Term Loan Credit Agreement, and (ii) with respect to
+the Exchangeable Notes, the Exchangeable Notes Indenture.
+
+1.10          “Discharge
+of Licensor Indebtedness” means the satisfaction and discharge in full of all principal, interest, fees, costs, expenses, premiums
+and other debts and liabilities owing by Licensor under the Debt Documentation.
+
+1.11          “Effective
+Date” has the meaning set forth in the Recitals.
+
+1.12          “Exchangeable
+Notes” means the Licensor’s 6.00%/8.00% Cash/PIK Toggle Senior Secured Exchangeable Notes due 2030 issued under the Exchangeable
+Notes Indenture.
+
+1.13          “Exchangeable
+Notes Indenture” means that certain Indenture, dated as of July 22, 2024, among the Licensor, CDL, the guarantors party
+thereto from time to time and GLAS Trust Company LLC, as trustee and collateral agent.
+
+1.14          “Fiscal
+Year” means the fiscal year of Licensee.
+
+1.15          “Gross
+Revenues” means, for any period, all revenues of the Business received by Licensee or any of its Affiliates other than Licensor
+or any of Licensor’s subsidiaries, including, but not limited to, those from movie tickets, the manufacture, distribution and sale
+of food and beverage products, concessions, merchandise sales and sublicensing fees, in each case, for such period, net of sales taxes
+payable in connection with the foregoing. Gross Revenues will not include: (i) complimentary passes or rain checks; (ii) all
+sums or credits received in settlement of claims for loss or damage to merchandise; (iii) any exchange of merchandise between movie
+theatres where such exchange is made solely for the convenient operation of a movie theatre and not for the purpose of consummating a
+sale made in, at or from such movie theatre; (iv) cash or credit refunds to patrons on transactions otherwise included in Gross
+Revenues; (v) sales of machinery and equipment after use thereof in the operation of a movie theatre; (vi) sales by any subtenant,
+sublicensee or any other Person permitted by Licensee to use the premises (in each case other than an Affiliate of Licensee); (vii) the
+amount of any discount on sales to employees; (viii) subleasing revenues; or (ix) sales of gift cards, package tickets, gift
+certificates and similar deferred revenue products but solely to the extent that Gross Revenues include allocable amounts upon use or
+redemption of such gift cards, package tickets, gift certificates and similar deferred revenue products, in each case of (i) –
+(ix) in the ordinary course consistent with past practice.
+
+2 
+
+1.16            “Holder”
+means any holder or beneficial owner of an Exchangeable Note.
+
+1.17            “Indemnified
+Parties” has the meaning set forth in Section 8.1.
+
+1.18            “Initial
+Term” has the meaning set forth in Section 11.1.
+
+1.19            “IP
+Assignment Agreement” has the meaning set forth in the Recitals.
+
+1.20            “License
+Fee” has the meaning set forth in Section 3.
+
+1.21            “Licensee”
+has the meaning set forth in the Recitals.
+
+1.22            “Licensed
+IP” shall mean the Transferred Intellectual Property, including the Registered Transferred Intellectual Property set forth
+on Exhibit A and Exhibit B.
+
+1.23            “Licensor”
+has the meaning set forth in the Recitals.
+
+1.24            “Parties”
+has the meaning set forth in the Recitals.
+
+1.25            “Party”
+has the meaning set forth in the Recitals.
+
+1.26            “Person”
+shall mean any individual or corporation, association, partnership, limited liability company, joint venture, joint stock or other company,
+business trust, trust, organization, governmental or regulatory body or authority or other entity of any kind.
+
+1.27            “Re-Branding
+Period” has the meaning set forth in Section 2.3.
+
+1.28            “Term”
+has the meaning set forth in Section 11.2.
+
+1.29            “Term
+Lenders” has the meaning set forth in the definition of “Term Loan Credit Agreement”.
+
+1.30            “Term
+Loans” means the “Loans” under and as defined in the Term Loan Credit Agreement.
+
+1.31            “Term
+Loan Credit Agreement” means that certain Credit Agreement, dated as of July 22, 2024, among the Licensor, as a borrower,
+AMC Entertainment Holdings, Inc., a Delaware corporation, as a borrower, the lenders from time to time party thereto (the “Term
+Lenders”) and Wilmington Savings Fund Society, FSB, as administrative agent and as collateral agent.
+
+3 
+
+1.32            “Territory”
+shall mean the entire world.
+
+2.             License
+Grant to Intellectual Property.
+
+2.1              Licensor
+hereby grants to Licensee a non-exclusive, non-transferrable (except as expressly permitted by Section 14), non-sub-licensable
+(except as set forth in Section  2.2), royalty-bearing (as set forth in Section 3), license to use the Licensed
+IP in the operation of the Business in the Territory for the duration of the Term.
+
+2.2              Licensee
+may sublicense its rights under the Agreement (a) without Licensor’s consent to: (i) an Affiliate of Licensee, but only
+for so long as such entity is an Affiliate of Licensee and such sublicense shall terminate when such entity ceases to be an Affiliate
+of Licensee and (ii) in the ordinary course of business consistent with past practice to (A) vendors, contractors and service
+providers to facilitate their provision of services for or on behalf of Licensee or its Affiliates or (B) customers of Licensee
+and its Affiliates to facilitate their receipt of management services by or on behalf of Licensee or its Affiliates; and (b) to
+any other third party with the prior written consent of Licensor, such consent not to be unreasonably withheld or delayed; provided that
+in each case of the foregoing, Licensee assumes liability for the acts and omissions of its sublicensees with respect to their operations
+pursuant to this Agreement and Licensee guarantees payment of the License Fee owed to Licensor pursuant to this Agreement. For the avoidance
+of doubt, all payments received by any Affiliate of Licensee shall be included in the calculation of Gross Revenues, subject to the exclusions
+expressly set forth in the definition thereof. Any sublicense granted by Licensee after the Effective Date pursuant to and in accordance
+with Section 2.2(b) must (x) include a written agreement by the applicable sublicensee to assume and otherwise
+comply with all applicable obligations of Licensee hereunder with regard to the Licensed IP, and (y) must be approved in writing
+by Licensor (such approval not to be unreasonably withheld or delayed). For the avoidance of doubt, nothing in this Section 2.2
+shall require that any preexisting license or sublicense agreements between Licensee or its Affiliates, on the one hand, and any
+third parties, on the other hand, be amended or terminated.
+
+2.3              Notwithstanding
+anything to the contrary contained in this Agreement, Licensee’s license to use the Licensed IP granted pursuant to Section 2.1
+of this Agreement and any and all sublicenses granted by Licensee pursuant to Section 2.2 shall continue after the termination
+or expiration of this Agreement solely to the extent and duration reasonably necessary to allow Licensee or any third party operating
+a movie theatre on behalf or at the direction of Licensee to remove all Licensed IP from each applicable movie theatre, giving due consideration
+to the requirements of the jurisdiction in which such movie theatre is located, but in no event for a period in excess of twelve (12)
+months following such termination or expiration (the “Re-Branding Period”); provided that if this Agreement
+is terminated pursuant to Section 12.5 on account of a breach of the MSA by Licensee, the Re-Branding Period shall be limited
+to sixty (60) days. For the avoidance of doubt, the License Fee shall continue to be payable during the Re-Branding Period.
+
+3.             License
+Fee. In consideration for the license granted to Licensee pursuant to Section 2 of this Agreement, Licensee shall pay
+Licensor a license fee in an amount equal to one-half of one percent (0.5%) of the Gross Revenues of Licensee’s and its Affiliates’
+operation of the Business for each Fiscal Year of the Term (“License Fee”). The License Fee shall be paid by Licensee
+to Licensor on a quarterly basis, and Licensee shall render quarterly a statement setting forth, in reasonable detail the amount then
+payable, along with reasonable supporting documentation sufficient to allow Licensor to verify the calculation of such License Fee. Upon
+Licensor’s reasonable request, Licensee shall provide to Licensor such other information as Licensor may from time to time reasonably
+require for the purposes of calculating the License Fee.
+
+4 
+
+4.             Quality
+Control for the Licensed IP. Licensee acknowledges the high standards, quality and reputation of the Licensed IP and that the quality
+control provisions of this Section 4 are necessary to ensure that all uses of such Licensed IP by Licensee are consistent
+with the reputation for high quality symbolized by such Licensed IP and attributed to Licensor. Licensee shall maintain the quality of
+the products and services of its Business at a level at least equal to the level of quality of the products and services of its Business
+immediately prior to the Effective Date. Licensee shall not use any Licensed IP in any manner that would reflect adversely on the reputation
+for high quality symbolized by such Licensed IP, nor in any other manner not expressly permitted by the license grant set forth in Section 2.1.
+Licensee shall not engage in any conduct that would be reasonably likely to place such Licensed IP or Licensor in a negative light or
+context. Licensee shall not use such Licensed IP in any manner that would be reasonably likely to devalue, injure, demean, disparage
+or dilute the reputation of such Licensed IP.
+
+5.             Ownership.
+Licensee acknowledges and agrees that the Licensed IP and all rights therein are, and shall be, owned exclusively by Licensor, and any
+and all goodwill that arises from Licensee’s and its sublicensees’ use of the Licensed IP shall inure to the sole benefit
+of the Licensor. To the extent that any right, title or interest in or to any Licensed IP vests, by operation of applicable Law or otherwise
+in Licensee or any of its sublicensees, Licensee hereby irrevocably assigns (and shall cause such sublicensees to irrevocably assign)
+to Licensor all worldwide right, title and interest therein and thereto.
+
+6.             Registration,
+Maintenance, and Enforcement of Licensed IP.
+
+6.1              Licensor
+shall use commercially reasonable efforts to maintain the registrations for the Licensed IP during the Term, and, subject to its reasonable
+business judgment, shall ensure that all post-registration filings and renewal applications, including any registration, renewal or maintenance
+fees, required by a government entity or by applicable law in connection with the foregoing are completed and paid in a timely manner.
+At Licensor’s reasonable request, Licensee shall cooperate with Licensor to provide information reasonably required by Licensee
+to submit to the U.S. Patent and Trademark Office and relevant offices in foreign jurisdictions such post-registration filings and renewal
+applications. At Licensee’s reasonable request during the Term and at Licensee’s expense, Licensor shall prepare and file
+new applications to register the Licensed IP with the US Patent and Trademark Office or any applicable state government entity, subject
+to Licensor’s reasonable business judgment. At Licensee’s reasonable request and sole cost, Licensor shall, during the Term,
+provide Licensee with copies of documentation relating to the preparation, filing, prosecution and maintenance of Licensed IP in the
+Territory. Licensee shall not, whether during or following the Term, directly or indirectly challenge (or assist any other Person in
+challenging) the validity or enforceability of, or Licensor’s ownership of or rights in, any of the Licensed IP.
+
+5 
+
+6.2             As
+between the Parties, and except as provided in this Agreement, Licensor shall be solely responsible for the payment of all costs associated
+with the enforcement, prosecution, and maintenance of the registrations for and applications for registration of the Licensed IP, and
+the enforcement and defense of the Licensed IP. Licensor may, in its sole discretion, remove Licensee as its agent with respect to any
+of its maintenance obligations hereunder, including the payment of any registration, renewal or maintenance fees and filing of documents
+with the U.S. Patent and Trademark Office and relevant offices in foreign jurisdictions.
+
+6.3              During
+the Term, each Party shall promptly inform the other of any potential infringements, dilution, or other misuse of any Licensed IP in
+the Territory, or use of any marks or designs confusingly similar to any Licensed IP, or if either Party receives notice of any claims
+from any third party alleging that any Licensed IP (or such Party’s use thereof) infringes or otherwise violates the rights of
+a third party. Licensor shall have the first right to commence, control or respond to any such action or claim, and the authority and
+sole control of the defense or settlement of such claim, including the negotiation, litigation, prosecution or settlement of any such
+action or claim, as well as the first right to recover profits and damages from such actions. Licensee shall cooperate with all reasonable
+requests for assistance by Licensor in connection with the foregoing, including by joining and being named as a party in any related
+court proceedings. Subject to privilege considerations, Licensor shall provide Licensee copies of all notices, complaints, court proceedings,
+and other documentation relating to the foregoing, and Licensee will have the option to participate in any such proceeding and be represented
+by counsel of its choosing (but reasonably approved by Licensor) at its cost and expense.
+
+6.4              If
+Licensor fails to bring an action or proceeding with respect to infringement of the Licensed IP within ninety (90) days following notice
+by Licensee or any alleged third party infringement, dilution of misuse of the Licensed IP or use of confusingly similar marks to any
+Licensed IP (except where Licensor declined to bring such action or proceeding due to Licensor’s reasonable assessment that such
+action or proceeding would not be in the best interests of Licensor, the Business, or the Licensed IP portfolio), or Licensor requests
+Licensee assume control of any such action, then Licensee shall have the right to bring and control any such action, by counsel of its
+choosing. To the extent Licensee assumes such control, all costs associated with an action shall be at Licensee’s sole expense,
+and any settlement must be approved by Licensor in writing, such approval not to be unreasonably withheld or delayed. Licensor shall
+cooperate with all reasonable requests for assistance by Licensee in connection with the foregoing, including being named as a party
+in any related court proceedings. Unless otherwise agreed by the Parties in writing, any damages or other payments (including settlement
+payments) arising in connection with any such proceedings shall, as between the Parties and their respective Affiliates, accrue solely
+and exclusively to Licensor.
+
+7.             Representations
+and Warranties.
+
+7.1              Licensee
+represents and warrants to Licensor that (a) this Agreement, and the License Fee to be paid by Licensee to Licensor pursuant to
+this Agreement, are and will all be for reasonably equivalent value, and are and will all be made for fair consideration and in good
+faith and (b) Licensee’s use of the Licensed IP shall not be in conflict with any other agreement.
+
+6 
+
+7.2              Each
+Party represents and warrants to the other Party, that: (a) it is duly authorized and licensed to do business and carry out its
+obligations under this Agreement; (b) it has full power and authority to enter into this Agreement and the execution, delivery and
+performance of this Agreement has been authorized by all necessary corporate action; (c) it has obtained all third party consents
+required to enter into this Agreement and neither the execution, delivery or performance of this Agreement will conflict with or constitute
+a breach of its certificate of incorporation, charter or by-laws; and (d) the provisions of this Agreement are not and were not
+intended to hinder, delay, or defraud any creditor. Each Party hereby agrees not to challenge the validity or enforceability of this
+Agreement.
+
+8.             Indemnification
+and Limitation of Liability.
+
+8.1              Licensee
+agrees to protect, indemnify and hold harmless Licensor, and its directors, officers, employees, licensees, agents, representatives,
+successors and assigns (collectively, the “Indemnified Parties”), from and against any and all claims, suits, actions
+or allegations brought or asserted by a third party (each, a “Claim”) and any resulting liabilities, judgments, costs
+and expenses, including reasonable attorneys’ fees, arising out of or related to (a) Licensee’s use of the Licensed
+IP pursuant to this Agreement and (b) Licensee’s breach of its representations, warranties and other obligations under this
+Agreement. Licensee shall keep Licensor fully informed of the status and progress with regard to any Claim, and shall provide Licensor
+with copies of all documentation relating to the foregoing.
+
+8.2              Licensor
+shall promptly notify Licensee upon the assertion of any Claim against an Indemnified Party, and shall give Licensee a reasonable opportunity
+to defend and/or settle the Claim at its own expense. Licensee shall have the sole right to designate the counsel to handle any such
+defense or settlement negotiations, and the Indemnified Parties shall provide Licensee with such assistance as it may reasonably request
+in order to ensure a proper and adequate defense of a Claim. Any settlement of a Claim must be approved in writing by the applicable
+Indemnified Party prior to the execution of any settlement agreement.
+
+8.3              Neither
+Party shall in any circumstances be liable for any Claim, whether arising in contract, tort or otherwise, for consequential (including
+lost profits (except to the extent recoverable as or deemed a direct damage under applicable law), contracts, business, goodwill, income,
+production or accruals of any such other Party), economic, special or other indirect loss of any other Party. Provided, however, that
+if in connection with any Claim a Party is required to pay damages to a third party based on consequential, economic, special or other
+indirect losses of such third party, such liability for such damages shall be deemed to be a direct loss of the Party that is required
+to pay such amounts to such third party
+
+9.             Disclaimer
+of Warranties. Licensee acknowledges and agrees that Licensor licenses the Licensed IP to Licensee “as is.” Except as
+set forth in this Agreement, Licensor makes no warranties of any kind, express or implied, in relation to the Licensed IP. Without limiting
+the foregoing, Licensor expressly disclaims any and all implied warranties relating to the Licensed IP, including any representations
+or warranties concerning merchantability, fitness for a particular purpose, ownership, validity, enforceability or non-infringement.
+
+7 
+
+10.           Further
+Assurances. Licensor and Licensee shall promptly execute, acknowledge and deliver, at the reasonable request of the other Party to
+this Agreement, such additional documents, instruments, conveyances and assurances and take such further actions as such other Party
+may reasonably request to carry out the provisions of this Agreement and to give effect to the transactions contemplated by this Agreement.
+
+11.           Term.
+
+11.1            This
+Agreement shall commence on the Effective Date and shall continue for a period of ten (10) years (the “Initial Term”)
+unless terminated earlier by one of the Parties, as permitted by and in accordance with Section 12.
+
+11.2            At
+the end of the Initial Term, the term of the Agreement shall automatically renew for successive one (1) year periods (the Initial
+Term, all such renewal periods and the Re-Branding Period, collectively referred to as the “Term”).
+
+12.           Termination
+and Events of Default.
+
+12.1            If
+Licensee fails to pay any portion of the License Fee or make any other payment as required by this Agreement within ten (10) days
+after Licensee has received written notice from Licensor of such failure, then Licensor may immediately terminate this Agreement upon
+written notice to Licensee.
+
+12.2            Subject
+to Section 12.1 above which covers Licensor’s right to terminate this Agreement for a failure by Licensee to pay any
+portion of the License Fee or make any other payment as required by this Agreement, Licensor may terminate this Agreement upon thirty
+(30) days’ written notice to Licensee in the event that Licensee fails to cure a material breach of this Agreement after Licensee
+has received written notice of such breach. Any failure by Licensee to comply with the quality control provisions included in Section 4
+of this Agreement shall be deemed a material breach of this Agreement. In the event any material breach cannot be cured within thirty
+(30) days, except for non-payment by Licensee which must be cured within ten (10) days after Licensee has received written notice
+of such breach, and so long as Licensee is making reasonable efforts to implement a cure, the cure period will be automatically extended
+by a reasonable amount of time to permit such cure (if a cure is feasible).
+
+12.3            At
+any time after the Discharge of Licensor Indebtedness (but not before), the Parties may terminate this Agreement by mutual consent.
+
+12.4            If
+Licensor terminates this Agreement in accordance with Section 12.1 or 12.2 above, then (a) all rights of Licensee
+and its Affiliates (other than Licensor and CDL) under this Agreement shall automatically and immediately cease, (b) all rights
+of Licensee under Section 6 regarding registration, maintenance and enforcement of the Licensed IP will automatically and
+immediately revert to Licensor and Licensor shall have the exclusive right and authority, in its sole discretion, to make decisions and
+take all actions with respect to registration, enforcement and maintenance of the Licensed IP, (c) all sublicenses granted by Licensee
+and its Affiliates pursuant to Section 2.2 shall automatically and immediately terminate, and (d) Licensee and its Affiliates
+(except for Licensor and CDL) shall immediately cease using in any manner the Licensed IP. Licensee agrees that upon such failure to
+make any payment or cure any other material breach, it and its Affiliates (except for Licensor and CDL) shall have no rights to use the
+Licensed IP in any manner and as between Licensor and Licensee, Licensor shall have the exclusive rights to use and exploit the Licensed
+IP.
+
+8 
+
+12.5            This
+Agreement and the license provided for herein shall automatically terminate and be of no further effect if the MSA expires or is terminated
+on account of a breach thereof by Licensee, provided that Section 2.3 shall continue to apply for the Re-Branding Period
+following any termination or expiration of the MSA.
+
+12.6            Notwithstanding
+any of the foregoing or any other provision of this Agreement, if any of the Exchangeable Notes and/or Term Loans are then outstanding
+and Licensee is permitted to, and wishes to, terminate this Agreement for any reasons, Licensee shall give notice to the applicable agent,
+trustee or trustees in respect of the outstanding Exchangeable Notes and/or Term Loans, as applicable, not fewer than ninety (90) days
+prior to such termination taking effect and an opportunity during such ninety (90)-day period for the Holders or Term Lenders, as applicable,
+to cure, or cause to be cured, any breach giving rise to a right of termination. Licensee shall reasonably cooperate with any Holders
+or Term Lenders, as applicable, in connection with a proposed cure and, for the avoidance of doubt, if any applicable breach is in fact
+cured during such 90-day period, then termination on account of the applicable breach shall not be permitted.
+
+12.7            This
+Agreement may be terminated by Licensor immediately and without notice in the event Licensee: (a) admits in writing its inability
+to pay its debts generally as they become due in the ordinary course of business in accordance with their terms; (b) makes a general
+assignment for the benefit of creditors; (c) voluntarily commences any proceeding or files any petition seeking liquidation, court
+protection, reorganization or other relief under any applicable bankruptcy, insolvency, receivership or similar law; or (d) is the
+subject of an involuntary proceeding or petition that is filed seeking liquidation, court protection, reorganization or other relief
+under any applicable bankruptcy, insolvency, receivership or similar law, which is undismissed or unstayed for sixty (60) days or an
+order or decree approving or ordering any of the foregoing is entered.
+
+13.           Effects
+of Termination. In the event of any expiration or termination of this Agreement, the following provisions of this Agreement shall
+survive: Sections 1, 2.1 (solely as set forth in Sections 2.3 and 12.5), 2.3, 5, 6.1,
+6.2, 7, 8, 9, 10 12.4, 12.5, 13, 15, and 16. In addition, any payment
+obligations that have accrued under this Agreement (including with respect to any License Fee pursuant to Section 3) shall
+remain in full force and effect until they are satisfied in full.
+
+14.           Assignment.
+Licensor may assign, transfer, delegate or otherwise dispose of any or all of its rights and responsibilities under this Agreement to
+any entity without the consent of Licensee upon prior written notice to Licensee; provided, however, Licensor may not assign, transfer,
+delegate or otherwise dispose of any of its right, title or interest in and to the Licensed IP without Licensee’s prior written
+consent, such consent not to be unreasonably withheld or delayed. Except as otherwise permitted in this Agreement, Licensee may not assign,
+transfer, delegate or otherwise dispose of any of its rights or obligations under this Agreement without Licensor’s prior written
+consent, such consent not to be unreasonably withheld or delayed; provided, however, that a merger, consolidation, combination or restructuring
+involving Licensee or a change in control of Licensee shall not be deemed to be an assignment of this Agreement. Any assignment, delegation
+and/or pledge in violation of this provision or Section 2.2 will be without force or effect. The Agreement shall be binding
+upon and shall inure to the benefit of the Parties and their successors and permitted assigns, each of which must agree in writing to
+be bound by the Agreement.
+
+9 
+
+15.           Confidentiality.
+
+15.1            Confidential
+Information. “Confidential Information” means information disclosed by one Party hereunder to the other in connection
+this Agreement, which information is or should be reasonably understood to be confidential or proprietary to the disclosing Party, including
+product designs, costs, unpublished marketing, sales and financial information, product and business plans, projections, and marketing
+data. “Confidential Information” will not include information that is: (a) already lawfully known to or independently
+developed by the receiving party; (b) disclosed in published materials without a breach of this Agreement; (c) generally known
+to the public without a breach of this Agreement; or (d) lawfully obtained from any third party who was not under an obligation
+to keep such information confidential.
+
+15.2            Obligation.
+Neither Party will (a) disclose any Confidential Information of the other Party to any third party, or (b) fail to take all
+reasonable measures to maintain the confidentiality of Confidential Information in its possession or control, which measures shall in
+no event be less than the measures it uses to maintain the confidentiality of its own information of similar importance. Notwithstanding
+the foregoing, a Party may disclose the other’s Confidential Information to investors, legal, financial advisors and financial
+creditors of the Licensor (including the Holders, but in each case subject to the confidentiality obligations governing the applicable
+indebtedness), who are subject to confidentiality restrictions not less restrictive than those in this Agreement; provided, however,
+that Party shall be liable to the other Party for any breach of the confidentiality obligations of such investors, legal and/or financial
+advisors, and to the extent reasonably necessary to comply with a court order or government order to which the disclosing Party is subject,
+provided that prior to such disclosure of Confidential Information, the disclosing Party will provide the other Party prompt notice of
+the anticipated disclosure so that the other Party can take all necessary measures to prevent the disclosure and/or maintain the confidentiality
+of such information. A Party may also disclose Confidential Information in areas specifically required to meet General Accepted Accounting
+Principles (GAAP) or Securities Exchange Commission (SEC) filing requirements or the listing requirements of any securities exchange
+on which the capital stock of either Party is traded or any automated quotation system.
+
+10 
+
+16.           Miscellaneous.
+
+16.1            Notices.
+All notices given pursuant to this Agreement shall be in writing and either (a) delivered personally, (b) delivered or mailed
+by registered or certified mail, postage prepaid, (c) sent by a nationally recognized overnight delivery or courier service, with
+delivery charges prepaid, and proof of delivery or receipt requested or (d) delivered by electronic mail, as follows:
+
+To Licensee:
+
+American Multi-Cinema, Inc.
+
+11500 Ash Street
+
+Leawood, Kansas 66211
+
+Attention: SVP Development
+
+email: 0411-LeaseAdministration@amctheatres.com
+
+with a copy to:
+
+American Multi-Cinema, Inc.
+
+11500 Ash Street
+
+Leawood, Kansas 66211
+
+Attention: General Counsel
+
+email: 0411-Legal@amctheatres.com
+
+To Licensor:
+
+Muvico, LLC
+
+11500 Ash Street
+
+Leawood, Kansas 66211
+
+Attention: SVP Development
+
+email: 0411-LeaseAdministration@amctheatres.com
+
+with a copy to:
+
+Muvico, LLC
+
+11500 Ash Street
+
+Leawood, Kansas 66211
+
+Attention: General Counsel
+
+email: 0411-Legal@amctheatres.com
+
+All notices as required
+here shall be effective upon the earlier of (w) delivery, (x) three (3) days after the mailing, (y) the next business
+day if sent by overnight courier, or (z) if sent by electronic mail, upon receipt of confirmation of good transmission if such confirmation
+is received prior to 5:00 p.m. on a business day or, if received after such time, on the first business day following such receipt
+of confirmation.
+
+16.2            Third
+Party Beneficiaries. This Agreement is for the sole benefit of the Parties and their permitted successors and assigns and nothing
+in this Agreement, express or implied, is intended to or shall confer upon any other party or entity any legal or equitable right, benefit
+or remedy of any nature whatsoever under or by reason of this Agreement; provided, for the avoidance of doubt, the Trustees in respect
+of the Notes and each Holder are hereby made express third party beneficiaries of Sections 12.5 and 12.6, this Section 16.2
+and Section 16.5 of this Agreement.
+
+16.3            Choice
+of Law; Choice of Forum. This Agreement, and any dispute arising from this Agreement or the subject matter of this Agreement, shall
+be governed by the laws of the State of Delaware, without regard to its conflicts of law principles, and the federal and state courts
+in the State of Delaware shall be the exclusive jurisdiction for resolving all disputes relating to this Agreement. The Parties submit
+to the jurisdiction of such courts over such a dispute and waive any objection to the propriety or convenience of venue in such courts.
+
+11 
+
+16.4            No
+Construction. The Parties have participated jointly in the negotiation and drafting of this Agreement, and in the event an ambiguity
+or question of intent or interpretation arises, this Agreement shall be construed as if drafted jointly by the Parties, and no presumption
+or burden of proof shall arise favoring or disfavoring any Party by virtue of the authorship of any provisions of this Agreement.
+
+16.5            Amendment.
+This Agreement may only be amended, supplemented or modified, and any of the terms, covenants, representations, warranties or conditions
+may only be waived, by a written amendment executed by both Parties, or in the case of a waiver, by the Party waiving compliance; provided
+that any amendment, waiver, termination, consent or other modification (any of the foregoing, a “Modification”) to
+this Agreement shall be ineffective and void ab initio to the extent such Modification would result in an “event of default”
+under or otherwise violate the Debt Documentation. No waiver by either Party of any breach of this Agreement shall be deemed to be a
+waiver of any preceding or succeeding breach of the same or any other provision of this Agreement.
+
+16.6            Severability.
+If any provision of this Agreement or the application of any such provision to any person, entity or circumstance is held invalid, illegal
+or unenforceable in any respect by a court of competent jurisdiction, such invalidity, illegality or unenforceability shall not affect
+any other provision of this Agreement or the application of such provision to any other persons, entities or circumstances and, to the
+extent permissible under applicable law, any such invalid, illegal or unenforceable provision shall be deemed amended lawfully to conform
+with the intent of the Parties.
+
+16.7            Integration.
+This Agreement (including any amendments and exhibits hereto) constitutes the entire agreement between the Parties with respect to its
+subject matter, and supersedes all prior and/or contemporaneous oral or written negotiations, offers, representations, warranties, and
+agreements with respect to this subject matter.
+
+16.8            Counterparts.
+This Agreement may be executed in one or more counterparts, each of which when executed and delivered shall be deemed to be an original
+and all of which counterparts taken together shall constitute one and the same instrument. This Agreement shall become binding when one
+or more counterparts taken together shall have been shown to have been executed by each Party and delivered to the other.
+
+[Signature Page Follows]
+
+12 
+
+IN WITNESS WHEREOF, the Parties
+have executed this Agreement effective as of the Effective Date.
+
+ AMERICAN MULTI-CINEMA, INC.
+
+ /s/
+ Sean D. Goodman
+
+ Name:
+
+ Sean D. Goodman
+
+ Title:
+
+ Executive Vice President, Chief Financial Officer, International
+ and Treasurer
+
+ MUVICO, LLC
+
+ /s/
+ Sean D. Goodman
+
+ Name:
+
+ Sean D. Goodman
+
+ Title:
+
+ Executive Vice President, Chief Financial Officer
+ and Treasurer
+
+[Signature Page to Intercompany License Agreement]

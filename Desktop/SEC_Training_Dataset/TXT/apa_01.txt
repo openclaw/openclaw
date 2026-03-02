@@ -1,0 +1,3257 @@
+EX-10.1
+2
+ea0210606ex10-1_complete.htm
+ASSET PURCHASE AGREEMENT, DATED AUGUST 5, 2024, BY AND AMONG THE COMPANY, SUNPOWER CORPORATION AND THE DEBTORS
+
+Exhibit 10.1
+
+FOR
+DISCUSSION PURPOSES ONLY
+
+ASSET
+PURCHASE AGREEMENT
+
+Dated
+as of August 5, 2024
+
+by and
+AMONG
+
+Complete
+SolarIA, inc., as Purchaser,
+
+and
+
+SUNPOWER
+CORPORATION
+
+AND
+ITS SUBSIDIARIES NAMED HEREIN,
+
+as sellerS
+
+table of contents
+
+ Page
+
+ Article I Purchase and Sale of Acquired Assets;  Assumption of Assumed Liabilities
+
+ 2
+
+ Section 1.1
+
+ Purchase and Sale of the Acquired Assets
+
+ 2
+
+ Section 1.2
+
+ Excluded Assets
+
+ 3
+
+ Section 1.3
+
+ Assumption of Certain Liabilities
+
+ 4
+
+ Section 1.4
+
+ Excluded Liabilities
+
+ 4
+
+ Section 1.5
+
+ Assumption/Rejection of Certain Contracts
+
+ 7
+
+ Article II Consideration; Payment; Closing
+
+ 9
+
+ Section 2.1
+
+ Consideration; Payment
+
+ 9
+
+ Section 2.2
+
+ Deposit.
+
+ 9
+
+ Section 2.3
+
+ Closing
+
+ 10
+
+ Section 2.4
+
+ Closing Deliveries by Sellers
+
+ 10
+
+ Section 2.5
+
+ Closing Deliveries by Purchaser
+
+ 10
+
+ Section 2.6
+
+ Withholding
+
+ 11
+
+ Article III Representations and Warranties of Sellers
+
+ 11
+
+ Section 3.1
+
+ Organization and Qualification
+
+ 11
+
+ Section 3.2
+
+ Authorization of Agreement
+
+ 11
+
+ Section 3.3
+
+ Conflicts; Consents
+
+ 12
+
+ Section 3.4
+
+ Title to Assets; Sufficiency of Assets
+
+ 12
+
+ Section 3.5
+
+ Assigned Contracts and Assumed Leases
+
+ 13
+
+ Section 3.6
+
+ Real Property
+
+ 13
+
+ Section 3.7
+
+ Employees
+
+ 13
+
+ Section 3.8
+
+ Litigation; Decrees
+
+ 14
+
+ Section 3.9
+
+ Data Privacy
+
+ 14
+
+ Section 3.10
+
+ Environmental Matters
+
+ 14
+
+ Section 3.11
+
+ Taxes
+
+ 15
+
+ Section 3.12
+
+ Intellectual Property
+
+ 16
+
+ Section 3.13
+
+ Compliance with Laws; Permits
+
+ 20
+
+ Section 3.14
+
+ Brokers
+
+ 21
+
+ Section 3.15
+
+ No Other Representations or Warranties
+
+ 21
+
+ Article IV Representations and Warranties of Purchaser
+
+ 21
+
+ Section 4.1
+
+ Organization and Qualification
+
+ 21
+
+ Section 4.2
+
+ Authorization of Agreement
+
+ 21
+
+ Section 4.3
+
+ Conflicts; Consents
+
+ 21
+
+ Section 4.4
+
+ Financing
+
+ 21
+
+ Section 4.5
+
+ Brokers
+
+ 22
+
+ Section 4.6
+
+ Solvency
+
+ 22
+
+ Section 4.7
+
+ SEC Reports; Undisclosed Liabilities
+
+ 22
+
+ Section 4.8
+
+ No Additional Representations or Warranties
+
+ 24
+
+ Section 4.9
+
+ No Outside Reliance
+
+ 24
+
+i
+
+ Article V Covenants and Agreements
+
+ 25
+
+ Section 5.1
+
+ Conduct of Sellers
+
+ 25
+
+ Section 5.2
+
+ Bankruptcy Actions
+
+ 25
+
+ Section 5.3
+
+ Alternative Transactions
+
+ 26
+
+ Section 5.4
+
+ Cure Costs
+
+ 27
+
+ Section 5.5
+
+ Sale Order
+
+ 27
+
+ Section 5.6
+
+ Bankruptcy Court Milestones
+
+ 28
+
+ Section 5.7
+
+ Approval
+
+ 28
+
+ Section 5.8
+
+ Access to Information
+
+ 28
+
+ Section 5.9
+
+ Employee Matters
+
+ 29
+
+ Section 5.10
+
+ Further Assurances
+
+ 29
+
+ Section 5.11
+
+ Tax Matters
+
+ 29
+
+ Section 5.12
+
+ Seller Guarantees
+
+ 31
+
+ Article VI Conditions to Closing
+
+ 31
+
+ Section 6.1
+
+ Conditions Precedent to the Obligations of Purchaser and Sellers
+
+ 31
+
+ Section 6.2
+
+ Conditions Precedent to the Obligations of Purchaser
+
+ 32
+
+ Section 6.3
+
+ Conditions Precedent to the Obligations of Sellers
+
+ 32
+
+ Section 6.4
+
+ Waiver of Conditions
+
+ 33
+
+ Article VII Termination
+
+ 33
+
+ Section 7.1
+
+ Termination of Agreement
+
+ 33
+
+ Section 7.2
+
+ Effect of Termination
+
+ 34
+
+ Article VIII Miscellaneous
+
+ 35
+
+ Section 8.1
+
+ Non-Survival of Representations and Warranties and Certain Covenants; Certain Waivers
+
+ 35
+
+ Section 8.2
+
+ Expenses
+
+ 36
+
+ Section 8.3
+
+ Notices
+
+ 36
+
+ Section 8.4
+
+ Binding Effect; Assignment
+
+ 37
+
+ Section 8.5
+
+ Amendment and Waiver
+
+ 37
+
+ Section 8.6
+
+ Third Party Beneficiaries
+
+ 37
+
+ Section 8.7
+
+ Non-Recourse
+
+ 38
+
+ Section 8.8
+
+ Severability
+
+ 38
+
+ Section 8.9
+
+ Construction
+
+ 38
+
+ Section 8.10
+
+ Complete Agreement
+
+ 38
+
+ Section 8.11
+
+ Specific Performance
+
+ 39
+
+ Section 8.12
+
+ Jurisdiction and Exclusive Venue
+
+ 39
+
+ Section 8.13
+
+ Governing Law; Waiver of Jury Trial
+
+ 40
+
+ Section 8.14
+
+ No Right of Set-Off
+
+ 40
+
+ Section 8.15
+
+ Counterparts and PDF
+
+ 40
+
+ Section 8.16
+
+ Publicity
+
+ 41
+
+ Section 8.17
+
+ Bulk Sales Laws
+
+ 41
+
+ Section 8.18
+
+ Fiduciary Obligations
+
+ 41
+
+ Section 8.19
+
+ Sellers’ Representative
+
+ 41
+
+ Section 8.20
+
+ Schedules
+
+ 41
+
+ Article IX Additional Definitions and Interpretive Matters
+
+ 42
+
+ Section 9.1
+
+ Certain Definitions
+
+ 42
+
+ Section 9.2
+
+ Rules of Interpretation
+
+ 54
+
+ii
+
+ASSET PURCHASE AGREEMENT
+
+This Asset Purchase Agreement
+(this “Agreement”), dated as of August 5, 2024, is made by and among, (a) Complete Solaria, Inc., a Delaware corporation
+(“Purchaser”), and (b)(i) SunPower Corporation, a Delaware corporation (“SunPower Corporation”),
+and (ii) the direct and indirect subsidiaries of SunPower Corporation as set forth in the signature pages attached hereto1
+(together with SunPower Corporation, each a “Seller” and, collectively, the “Sellers”). Purchaser
+and Sellers are referred to herein individually as a “Party” and together as the “Parties.” Capitalized
+terms used herein shall have the meanings set forth herein including Article IX.
+
+WHEREAS, on or shortly following
+the date of this Agreement, each Seller intends to file a voluntary petition and commence cases (the “Chapter 11 Cases”)
+under chapter 11 of the United States Code, 11 U.S.C. §§ 101–1532 (the “Bankruptcy Code”),
+in the United States Bankruptcy Court for the District of Delaware (the “Bankruptcy Court”);
+
+WHEREAS, Purchaser desires
+to purchase the Acquired Assets (as defined below) and assume the Assumed Liabilities (as defined below) from Sellers, and Sellers desire
+to sell, convey, assign, and transfer to Purchaser the Acquired Assets together with the Assumed Liabilities, in a sale authorized by
+the Bankruptcy Court pursuant to, inter alia, sections 105, 363 and 365 of the Bankruptcy Code, in accordance with the
+other applicable provisions of the Bankruptcy Code and the Federal Rules of Bankruptcy Procedure and the local rules for the Bankruptcy
+Court, all on the terms and subject to the conditions set forth in this Agreement and subject to the entry and terms of the Sale Order;
+and
+
+WHEREAS, in connection with
+the Chapter 11 Cases and subject to the terms and conditions contained herein, following entry of the Sale Order finding the Purchaser
+as the Successful Bidder at the Auction, Sellers shall sell and transfer to the Purchaser, and the Purchaser shall purchase and acquire
+from Sellers, pursuant to, inter alia, sections 105, 363 and 365 of the Bankruptcy Code, in accordance with the other applicable
+provisions of the Bankruptcy Code and the Federal Rules of Bankruptcy Procedure and the local rules for the Bankruptcy Court, the Acquired
+Assets, and the Purchaser shall assume from Sellers the Assumed Liabilities, all as more specifically provided herein and in the Sale
+Order.
+
+NOW, THEREFORE, the Parties
+hereby agree as follows.
+
+1
+Note to Draft:
+ This is intended to include all entities that will be party to the Chapter 11 Cases.
+
+Article
+I
+
+Purchase and Sale of Acquired Assets;
+
+Assumption of Assumed Liabilities
+
+Section 1.1 Purchase
+and Sale of the Acquired Assets. Pursuant to sections 105,
+363 and 365 of the Bankruptcy Code, on the terms and subject to the conditions set forth herein and in the Sale Order at the Closing
+(as defined below), each Seller shall sell, transfer, assign, convey, and deliver to Purchaser, and Purchaser shall purchase, acquire,
+and accept from such Seller, all of such Seller’s right, title and interest in and to, as of the Closing, the Acquired Assets,
+free and clear of all Encumbrances other than Permitted Encumbrances. “Acquired Assets” means all of each Seller’s
+right, properties, title and interest in and to, as of the Closing, to all assets relating to the (i) New Homes Business, (ii) Non-Installing
+Dealer Business and (iii) the Blue Raven Business, in each case, as presently conducted (collectively the “Acquired Businesses”),
+including, solely to the extent relating to the Acquired Businesses, the following assets of such Seller, but excluding in all cases
+the Excluded Assets (as defined below):
+
+(a) Subject
+to modification in accordance with Section 1.5, all Contracts listed on Schedule 1.1(a), including any backup data
+maintained by Sellers in connection therewith (collectively, the “Assigned Contracts”) and all rights and benefits
+thereunder;
+
+(b) copies
+of the Transferred Employee Records, but excluding from the foregoing any credit card numbers or related customer payment sources, social
+security numbers, or other information to the extent prohibited by Law;
+
+(c) the
+Transferred Intellectual Property set forth on Schedule 1.1(c);
+
+(d) the
+name “SunPower” or any derivation thereof;
+
+(e) all
+prepositioned Inventory associated with the New Homes Business set forth on Schedule 1.1(e) and held by certain of its installer
+partners as set forth therein;
+
+(f) all
+goodwill associated with the Acquired Assets and Acquired Businesses;
+
+(g) to
+the extent transferable, all benefits, proceeds and other amounts payable under any policy of insurance relating to the Acquired Assets
+and all rights and benefits thereunder, which shall be Assigned Contracts;
+
+(h) the
+Leases set forth on Schedule 1.1(h) (the “Assumed Leases”), together with (to the extent of the Sellers’
+interest therein) the buildings, fixtures and improvements, including tenant improvements, located on or attached to the underlying real
+property, and all rights arising thereunder, and all tenements, hereditaments, appurtenances and other real property rights appertaining
+thereto, subject to the rights of the applicable landlord (including rights to ownership or use of such property) under such Assumed Leases;
+
+(i) all
+prepaid expenses (other than prepaid insurance), including certain deposits, of any Seller, which are related to the Acquired Businesses
+and are set forth on Schedule 1.1(i);
+
+(j) all
+Computer Systems set forth on Schedule 1.1(j);
+
+(k) all
+information technology systems and applications set forth on Schedule 1.1(k);
+
+(l) to
+the extent transferable, the Permits issued to, or for the benefit of, any Seller, all rights and benefits thereunder, and all pending
+applications or filings therefor and renewals thereof, which are related to the Acquired Businesses and that are set forth on Schedule
+1.1(l);
+
+2
+
+(m) the
+list of each non-installing dealer relating to the Non-Installing Dealer Business and select information regarding such non-installing
+dealer, in each case, as set forth on Schedule 1.1(m);
+
+(n) all
+Accounts Receivable related solely to the Acquired Businesses and Acquired Assets;
+
+(o) a
+copy of the books and records of any Seller related solely to the Acquired Assets or the Assumed Liabilities; and
+
+(p) other
+assets of the Sellers (other than Excluded Assets and Excluded Liabilities) that related solely to the operation of the Acquired Assets
+and Acquired Businesses which are identified after the date hereof and mutually agreed in writing by Purchaser and Sellers prior to the
+Closing.
+
+Section 1.2 Excluded
+Assets.
+Notwithstanding anything to the contrary in this Agreement, in no event shall any Seller be deemed to sell, transfer, assign, convey
+or deliver, and such Seller shall retain all right, title and interest to, in and under any properties, rights interests or other assets
+of such Seller other than the Acquired Assets (collectively, the “Excluded Assets”) which shall include:
+
+(a) all
+Accounts Receivable of the Sellers to the extent not related to the Acquired Assets or Acquired Businesses;
+
+(b) all
+Equity Interests of any of the Sellers’ direct or indirect Subsidiaries;
+
+(c) all
+of the Sellers’ rights under this Agreement;
+
+(d) all
+of the Sellers’ rights under any Excluded Asset;
+
+(e) all
+Contracts to which any Seller is a party other than the Assigned Contracts, including independent contractor agreements;
+
+(f) all
+payments for the purchase of goods, including but not limited to customer deposits and prepaid amounts;
+
+(g) all Leases
+to which any Seller is a party other than the Assumed Leases;
+
+(h) all
+assets of Albatross Software;
+
+(i) all
+Tax Returns or Tax refunds of a Seller Tax Group or any Seller or Affiliate thereof;
+
+(j) all
+Tax refunds with respect to the Acquired Assets (excluding, for the avoidance of doubt, any Tax refund described in Section 1.2(i) and
+any Tax refunds received by the Seller in relation a Tax attributable to the Acquired Assets and paid by the Purchaser after Closing)
+allocable to a Pre-Closing Tax Period, as determined pursuant to Section 5.11; and
+
+3
+
+(k) all
+software, Intellectual Property Rights, Computer Systems, and information technology systems and applications, including the PVS6 gateway
+and related technology, that are owned, used in, relate to, or are necessary for the conduct and performance of (i) services to all lease
+customers under the existing maintenance services agreements pursuant to which Sellers provide certain operating and maintenance services
+to those subsidiaries of SunStrong Capital Holdings, LLC who own PV and storage systems (each, an “Owner”), (ii) the
+existing lease and loan services agreements, pursuant to which SunPower Capital Services, LLC provides certain lease and loan services
+to the Owners, and (iii) the existing transaction management and asset management agreements pursuant to which SunStrong Capital Holdings,
+LLC and SunPower Capital Services, LLC provide certain administrative and management services, provided, however, the Sellers shall (A)
+subject to the entry of an Order by the Bankruptcy Court, provide the purchaser with a license to utilize the PVS6 gateway and related
+technology with respect to the Acquired Assets and (B) use commercially reasonable efforts to transfer the servicing of the Acquired Assets
+to a go-forward servicer; and
+
+(l) all
+computers of Sellers’ employees that are ultimately hired by Purchaser; provided, however that at such time that the Sellers
+no longer need to maintain and/or preserve the computers and it is determined that the computers may be transferred, all computers of
+Sellers will be transferred to Purchaser at no additional cost.
+
+Section 1.3 Assumption
+of Certain Liabilities. On the
+terms and subject to the conditions set forth herein and in the Sale Order effective as of the Closing, Purchaser shall irrevocably assume
+from each Seller (and from and after the Closing pay, perform, discharge, or otherwise satisfy in accordance with their respective terms),
+and such Seller shall irrevocably transfer, assign, convey, and deliver to Purchaser, only the following Liabilities, without duplication
+(collectively, the “Assumed Liabilities”):
+
+(a) all
+Liabilities arising out of or relating to the ownership and operation of the Acquired Assets, Assigned Contracts or Acquired Businesses,
+arising at or after the Petition Date that are due and payable after the Closing (including, for the avoidance of doubt, accounts payable
+due and payable after the Closing);
+
+(b) all
+Liabilities (i) in respect of Transferred Employees arising at or after the Closing and (ii) assumed by Purchaser pursuant to Section
+5.9;
+
+(c) all
+cure costs required to be paid pursuant to section 365 of the Bankruptcy Code in connection with the assumption and assignment of the
+Assigned Contracts (the “Cure Costs”);
+
+(d) any
+Liability for Taxes (including the payment thereof) attributable to the Acquired Assets for a taxable period (or portion thereof) beginning
+after the Closing Date (as determined pursuant to Section 5.11);
+
+(e) Transfer
+Taxes; and
+
+(f) subject
+to Purchaser’s further review, certain customer deposits to be identified by the Parties in good faith prior to the Closing.
+
+Section 1.4 Excluded
+Liabilities. Except
+for the Assumed Liabilities, Purchaser shall not assume, be obligated to pay, perform or otherwise discharge or in any other manner be
+liable or responsible for any Liabilities of, or Action against, Sellers of any kind or nature whatsoever, whether absolute, accrued,
+contingent or otherwise, liquidated or unliquidated, due or to become due, known or unknown, currently existing or hereafter arising,
+matured or unmatured, direct or indirect, and however arising, whether existing before or on the Closing Date (as defined below) or arising
+thereafter as a result of any act, omission, or circumstances taking place prior to the Closing (collectively, the “Excluded
+Liabilities”), including the following Liabilities of any of the Sellers or of any predecessor of any of the Sellers, whether
+incurred or accrued by any of the Sellers before or after the Closing Date:
+
+(a) all
+Cure Costs for Contracts or Leases to which any Seller is a party that are not Assigned Contracts or Assumed Leases;
+
+4
+
+(b) any
+Liability of the Sellers or of any of their predecessors associated with any and all indebtedness, including any guarantees of third party
+obligations and reimbursement obligations to guarantors of the Sellers’ or any of their respective Affiliates’ obligations,
+and including any guarantee obligations or imputed Liability through veil piercing incurred in connection with the Sellers’ Affiliates;
+
+(c) all
+Liability of the Sellers or of any of their predecessors associated with payments for the purchase of goods, including but not limited
+to customer deposits and prepaid amounts;
+
+(d) all
+Retained Taxes;
+
+(e) all
+Liabilities of the Sellers or of any of their predecessors under this Agreement and the transactions contemplated hereby or thereby;
+
+(f) any
+Liabilities in respect of any Contracts or Leases to which any Seller is a party that are not Assigned Contracts or Assumed Leases, including
+any Liabilities arising out of the rejection of any such Contracts or Leases pursuant to Section 365 of the Bankruptcy Code;
+
+(g) except
+for Liabilities expressly identified as Assumed Liabilities, all Liabilities for fees, costs and expenses that have been incurred or that
+are incurred or owed by the Sellers or of any of their predecessors in connection with this Agreement or the administration of the Bankruptcy
+Cases (including all fees and expenses of professionals engaged by the Sellers) and administrative expenses and priority claims accrued
+through the Closing Date and specified post-closing administrative wind-down expenses of the bankrupt estates pursuant to the Bankruptcy
+Code (which such amounts shall be paid by the Sellers from the proceeds collected in connection with the Excluded Assets) and all costs
+and expenses incurred in connection with (i) the negotiation, execution and consummation of the transactions contemplated under this Agreement
+and each of the other documents delivered in connection herewith; and (ii) the consummation of the transactions contemplated by this Agreement,
+including any retention bonuses, “success” fees, change of control payments and any other payment obligations of the Sellers
+or of any of their predecessors payable as a result of the consummation of the transactions contemplated by this Agreement and the documents
+delivered in connection herewith;
+
+(h) except
+for Liabilities expressly identified as Assumed Liabilities, all employment-related Liabilities of the Sellers, including (i) Liabilities
+for any action resulting from the Sellers’ employees’ separation of employment with the Sellers, including any severance or
+separation pay, (ii) employment-related Liabilities resulting from the transactions contemplated hereby whether before, on or after the
+Closing, (iii) Liabilities arising out of or relating to any collective bargaining Contract, labor negotiation, employment Contract, and
+consulting Contract with the Sellers, (iv) any Liabilities arising from or related to payroll and payroll Taxes for the current and former
+employees or independent contractors or other service providers of the Sellers to such person at any time on or prior to the Closing,
+(v) Liabilities of the Sellers for vacation, sick leave, parental leave, and other paid-time off accrued by the Sellers on and prior to
+Closing, (vi) all Liabilities with respect to any current or former employee of the Sellers including the Executive Employment Contracts,
+and (vii) all Liabilities for any failure to comply with applicable Laws or obligations under any Contract, in each case arising out of
+or related to employment of employees of the Sellers or engagement of independent contractors of the Sellers;
+
+5
+
+(i) all
+Liabilities related to the WARN Act, to the extent applicable, with respect to the Sellers’ termination of employment of the Sellers’
+employees on or prior to Closing (for the avoidance of doubt reference to the Sellers in clause (h) and (i) shall refer
+to the Sellers and its Affiliates);
+
+(j) all
+Liabilities arising under or relating to Company Benefit Plans (including all assets, trusts, insurance policies and administration service
+contracts related thereto);
+
+(k) all
+Liabilities of the Sellers or of any of their predecessors to their respective equity holders respecting dividends, distributions in liquidation,
+redemptions of interests, option payments or otherwise, and any Liability of the Sellers or of any of their predecessors pursuant to any
+Contract or Lease set forth on Schedule 1.1(a), or has any material business arrangement with, or has any material financial obligations
+to or is owed any financial obligations from, any Seller or, to the Knowledge of the Sellers, any actual competitor, vendor or licensor
+of any Seller that is not an Assigned Contract;
+
+(l) all
+Liabilities arising out of or relating to any business or property formerly owned or operated by any of the Sellers, any Affiliate or
+predecessor thereof, but not presently owned and operated by any of the Sellers as of the date hereof;
+
+(m) all
+Liabilities relating to claims, actions, suits, arbitrations, litigation matters, proceedings or investigations (in each case whether
+involving private parties, Governmental Authorities, or otherwise) involving, against, or affecting any Acquired Asset, the Acquired Businesses,
+the Sellers, any of their Affiliates or predecessors, or any assets or properties of the Sellers or of any of their predecessors, in each
+case arising out of the ownership or operation of the Acquired Businesses or any Acquired Asset prior to the Closing;
+
+(n) all
+Liabilities arising under Environmental Laws, other than to the extent arising out of the ownership or operation of the Acquired Businesses
+or any Acquired Asset from and after the Closing, whether or not yet booked as accounts payable by Sellers as of or prior to the Closing;
+
+(o) all
+accounts payable of the Sellers or of any of their predecessors existing as of or prior to the Closing;
+
+(p) all
+Liabilities outstanding as of and arising after the Closing for any contract for delivery of or returns of products previously sold to
+customers, whether or not any customer has provided a deposit for the sale except for under any Assigned Contract;
+
+(q) all
+Liabilities of the Sellers or of any of their predecessors arising out of any Contract, Permit, or claim that is not transferred to Purchaser
+hereunder; and
+
+(r) all Liabilities
+for all Professional Fees Amounts.
+
+6
+
+Section 1.5 Assumption/Rejection of Certain Contracts.
+
+(a) Sellers
+shall provide timely and proper written notice of a proposed Sale Order to all parties to any executory Contracts or unexpired leases
+to which Sellers or any of their respective Subsidiaries or Affiliates is a party that are Assigned Contracts and take all other
+actions reasonably necessary to cause such Contracts to be assumed by Sellers and assigned to Purchaser pursuant to Section 365 of
+the Bankruptcy Code to the extent that such Contracts are Assigned Contracts at the Closing. The Sale Order shall provide that as of and
+conditioned on the occurrence of the Closing, Sellers shall assign or cause to be assigned to Purchaser or an Affiliate of Purchaser designated
+by Purchaser, as applicable, the Assigned Contracts, each of which shall be identified by the name or appropriate description and date
+of the Assigned Contract (if available), the other party to the Assigned Contract and the address of such party for notice purposes, all
+included in a notice filed with the Bankruptcy Court the Bankruptcy Court (the “Cure Notice”). The Cure Notice shall
+also set forth Sellers’ good faith estimate of the amounts necessary to cure any defaults under each of the Assigned Contracts as
+determined by Sellers based on their books and records or as otherwise determined by the Bankruptcy Court. At the Closing, Sellers shall,
+pursuant to the Sale Order and the Assignment and Assumption Agreement, assign to Purchaser (the consideration for which is included in
+the Purchase Price), all Assigned Contracts that may be assigned by Sellers to Purchaser pursuant to sections 363 and 365 of the
+Bankruptcy Code.
+
+(b) Sellers
+shall transfer and assign, or shall cause to be transferred or assigned, all Assigned Contracts to Purchaser or an Affiliate of Purchaser
+designated by Purchaser, and Purchaser or such designated Affiliate of Purchaser shall assume all Assigned Contracts, as of the Closing
+Date pursuant to section 365 of the Bankruptcy Code and the Sale Order. As promptly as practicable following the date hereof, Purchaser
+and Sellers shall use commercially reasonable efforts to cooperate and determine the Cure Costs under each Assigned Contract, if any,
+so as to permit the assumption and assignment of each such Assigned Contract pursuant to section 365 of the Bankruptcy Code in connection
+with the Transaction.
+
+(c) Purchaser
+shall have the right to notify Sellers in writing of any Assigned Contract (other than purchase orders) that it does not wish to assume
+or a Contract that is related to the Acquired Assets to which any Seller is a party that Purchaser wishes to add as an Assigned Contract
+up to two (2) Business Days prior to the Bid Deadline (as defined in the Bidding Procedures Order), and (i) any such previously considered
+Assigned Contract that Purchaser no longer wishes to assume shall be automatically deemed removed from the Schedules related to Assigned
+Contracts and automatically deemed added to the Excluded Assets, in each case, without any adjustment to the Purchase Price, and (ii) any
+such previously considered Contract that is related to the Acquired Assets that Purchaser wishes to assume as an Assigned Contract shall
+be automatically deemed added to the Schedules related to Assigned Contracts, automatically deemed removed from the Excluded Assets, and
+assumed by Sellers to sell and assign to Purchaser, in each case, without any adjustment to the Purchase Price. Purchaser shall be solely
+responsible for the payment, performance and discharge when due of the Liabilities under the Assigned Contracts arising or that are otherwise
+payable from the time of and after the Closing.
+
+7
+
+(d) Notwithstanding
+anything to the contrary in this Agreement, a Contract shall not be assigned to, or assumed by, Purchaser to the extent that such Contract
+is rejected by any Seller or its Affiliates or terminated by such Seller, its Affiliates or any other party thereto, or terminates or
+expires by its terms, on or prior to such time as it is to be assumed by Purchaser as an Assigned Contract hereunder and is not continued
+or otherwise extended upon assumption.
+
+(e) Notwithstanding
+anything to the contrary in this Agreement, to the extent an Acquired Asset requires any consent or approval from any party, including
+any Governmental Body (other than, and in addition to and determined after giving effect to any Order of the Bankruptcy Court, including
+the Sale Order) in order to permit the sale or transfer to Purchaser of the applicable Seller’s right, title and interest in and
+to such asset, and such consent or approval has not been obtained prior to such time as such right, title and interest is to be transferred
+by Purchaser hereunder, such asset shall not be transferred to, or received by, Purchaser. If any Acquired Asset is deemed not to be assigned
+pursuant to this clause (e), the Closing shall nonetheless take place subject to the other terms and conditions set forth
+herein and, thereafter, through the earlier of (x) such time as such consent or approval from the applicable party, including any Governmental
+Body, is obtained and (y) six (6) months following the Closing (or the closing of the Chapter 11 Cases or dissolution of Sellers, if earlier),
+Sellers and Purchaser shall (A) use reasonable best efforts to secure such consents or approvals as promptly as practicable after the
+Closing and (B) cooperate in good faith in any lawful and commercially reasonable arrangement reasonably proposed by Purchaser, including
+subcontracting, licensing, or sublicensing to Purchaser any or all of Sellers’ rights and obligations with respect to any such Acquired
+Asset, under which (1) Purchaser shall obtain (without infringing upon the legal rights of such third party or violating any Law) the
+economic rights and benefits (net of the amount of any related Tax costs imposed on Sellers or their respective Affiliates or any direct
+costs associated with the retention and maintenance of such Acquired Asset incurred by Sellers or their respective Affiliates) with respect
+to such Acquired Asset with respect to which such consent or approval has not been obtained and (2) Purchaser shall assume and timely
+discharge all related burdens and obligations with respect to such Acquired Asset. Upon satisfying any requisite consent or approval requirement
+applicable to such Acquired Asset after the Closing, the applicable Seller’s right, title and interest in and to such Acquired Asset
+shall promptly be transferred and assigned to Purchaser in accordance with the terms of this Agreement, the Sale Order and the Bankruptcy
+Code.
+
+(f) If
+at any time after the Closing, any Seller or Purchaser becomes aware that such Seller continues to hold any Acquired Asset, including
+an Assigned Contract, or any asset necessary for the operation of the Acquired Businesses that should have been conveyed in accordance
+with this Agreement, such Party will promptly notify the other Party and such Seller shall use its commercially reasonable efforts to
+transfer (or cause to be transferred) such Acquired Asset or asset to Purchaser. Following written confirmation from the Purchaser, the
+Purchaser will assume any Assumed Liabilities associated therewith upon receipt, in each case, without further consideration being due
+or paid from Purchaser to such Seller. If at any time after the Closing, Purchaser becomes aware that it holds any Excluded Asset, Purchaser
+will promptly notify Sellers and use its commercially reasonable efforts to transfer (or cause to be transferred) such Excluded Asset
+to the applicable Seller, without further consideration being due or paid from any Seller to Purchaser.
+
+8
+
+Article
+II
+
+Consideration; Payment; Closing
+
+Section 2.1 Consideration;
+Payment. The aggregate
+consideration (collectively, the “Purchase Price”) to be paid by Purchaser for the purchase of the Acquired Assets
+shall be: (i) the assumption of Assumed Liabilities and (ii) a cash payment in an amount equal to forty five million United
+States Dollars ($45,000,000) (the “Cash Consideration”). At the Closing, Purchaser shall deliver, or cause to be delivered,
+to Sellers Cash Consideration less the Deposit (the “Closing Date Payment”) and shall assume the Assumed Liabilities.
+The Cash Consideration and any payment required to be made pursuant to any other provision hereof shall be made in cash by wire transfer
+of immediately available funds to such bank account as shall be designated in writing by the applicable Party to (or for the benefit
+of) whom such payment is to be made at least two (2) Business Days prior to the date such payment is to be made.
+
+Section 2.2 Deposit.
+
+(a) Purchaser
+has or will within two (2) Business Days of the date hereof, made an earnest money deposit with Epiq Corporate Restructuring, LLC (the
+“Escrow Agent”) in a cash amount equal to 10% of the Cash Consideration (the “Deposit”), by wire
+transfer of immediately available funds for deposit into a separate, segregated, interest bearing escrow account maintained by the Escrow
+Agent in accordance with the Bidding Procedures Order. The Deposit shall not be subject to any Encumbrance, attachment, trustee process,
+or any other judicial process of any creditor of any Sellers or Purchaser and shall be applied against payment of the Purchase Price on
+the Closing Date.
+
+(b) If,
+prior to the Closing, this Agreement has been terminated by Sellers pursuant to Section 7.1(d) or Section 7.1(f) (or by
+Purchaser pursuant to Section 7.1(b) or Section 7.1(c), in each case in circumstances where Sellers would be entitled to
+terminate this Agreement pursuant to Section 7.1(d) or Section 7.1(f)), then Sellers shall retain the Deposit together with
+all received investment income, if any.
+
+(c) If,
+prior to the Closing, this Agreement has been terminated by any Party, other than as contemplated by Section 2.2(b), then the Deposit,
+together with all received investment income, if any, shall be returned to Purchaser within five Business Days after such termination.
+
+(d) The
+Parties agree that Sellers’ right to retain the Deposit, as set forth in Section 2.2(b), is not a penalty, but rather is
+liquidated damages in a reasonable amount that will compensate Sellers for their efforts and resources expended and the opportunities
+foregone while negotiating this Agreement and in reliance on this Agreement and on the expectation of the consummation of the Transactions,
+which amount would otherwise be impossible to calculate with precision.
+
+(e) If
+the Closing occurs, at the Closing the Parties shall deliver joint written instructions to the Escrow Agent directing the Escrow Agent
+to transfer by wire transfer of immediately available funds 100% of the Deposit (together with any and all investment interest thereon,
+if any) to such account(s) as may be designated by Sellers.
+
+9
+
+Section 2.3 Closing.
+The closing of the purchase and sale of the Acquired Assets, the delivery of the Purchase Price and the assumption of the Assumed Liabilities
+in accordance with this Agreement (the “Closing”) will take place by telephone conference and electronic exchange
+of at 9:00 a.m. Central Time on the second (2nd) Business Day following full satisfaction or due waiver (by the Party entitled
+to the benefit of such condition) of the closing conditions set forth in Article VI (other than conditions that by their terms
+or nature are to be satisfied at the Closing, but subject to the satisfaction or waiver of such conditions at the Closing), or at such
+other place, time and date as the Parties may agree in writing. The date on which the Closing actually occurs is referred to herein as
+the “Closing Date.”
+
+Section 2.4 Closing
+Deliveries by Sellers.
+At or prior to the Closing, Sellers shall deliver to Purchaser:
+
+(a) a
+bill of sale and assignment and assumption agreement substantially in the form of Exhibit A attached hereto (the “Assignment
+and Assumption Agreement”) duly executed by each applicable Seller, in each case, with respect to the applicable Acquired
+Assets;
+
+(b) an
+IRS Form W-9 executed by each Seller or its regarded owner;
+
+(c) an
+Intellectual Property Assignment Agreement and such other documents that may be reasonably requested by Purchaser to transfer the Transferred
+Intellectual Property, each in a form and substance mutually agreed by Purchaser and Seller Representative prior to the Closing;
+
+(d) To
+the extent Sellers are able, using commercially reasonable efforts to provide any post-Closing transition services and as may be requested
+by the Purchaser for market rate with all costs to be borne by Purchaser or as otherwise determined after the date hereof by the Parties,
+a duly executed transition services agreement, in form and substance to be mutually agreed by Purchaser and Seller Representative prior
+to the Closing (the “TSA”); and
+
+(e) an
+officer’s certificate, dated as of the Closing Date, executed by a duly authorized officer of each Seller certifying that the conditions
+set forth in Section 6.3(a) and Section 6.3(b) have been satisfied.
+
+Section 2.5 Closing
+Deliveries by Purchaser.
+At the Closing, Purchaser shall deliver to (or at the direction of) Sellers:
+
+(a) payment
+of the Cash Consideration as set forth in Section 2.1;
+
+10
+
+(b) the
+Assignment and Assumption Agreement duly executed by Purchaser;
+
+(c) a
+duly executed TSA, to the extent necessary;
+
+(d) an
+officer’s certificate, dated as of the Closing Date, executed by a duly authorized officer of Purchaser certifying that the conditions
+set forth in Section 6.2(a) and Section 6.2(b) have been satisfied; and
+
+(e) countersigned
+Intellectual Property Assignment Agreement.
+
+Section 2.6 Withholding.
+Purchaser shall not be entitled to deduct or withhold any Taxes from any amounts payable pursuant to this Agreement.
+
+Article
+III
+
+Representations and Warranties of Sellers
+
+Except as disclosed in any
+forms, statements or other documents filed with the Bankruptcy Court, as disclosed in any public filings of Sellers, or as set forth in
+the Schedules delivered by Sellers concurrently herewith and as updated from time to time, each Seller represents and warrants to Purchaser
+as of the date hereof and solely with respect to each such Seller and the applicable Acquired Assets as follows:
+
+Section
+3.1 Organization and Qualification. Such Seller is
+a corporation, limited liability company or limited partnership, as applicable, duly incorporated or organized, validly existing,
+and in good standing under the Laws of the jurisdiction of its incorporation or formation. Such Seller is duly licensed or qualified
+to do business under the Laws of each jurisdiction in which the nature of the business conducted by it makes such licensing or
+qualification necessary, except where failure to be so licensed, qualified or in good standing would not, individually or in the
+aggregate, reasonably be expected to result in a Material Adverse Effect.
+
+Section 3.2 Authorization
+of Agreement.
+Subject to requisite Bankruptcy Court approvals:
+
+(a) such
+Seller has all necessary power and authority to execute and deliver this Agreement and the other Transaction Agreements to which such
+Seller is a party and to perform its obligations hereunder and to consummate the Transactions;
+
+(b) the
+execution, delivery and performance by such Seller of this Agreement and the other Transaction Agreements to which Seller is a party,
+and the consummation by such Seller of the Transactions, have been duly authorized by all requisite corporate action, limited liability
+company action or limited partnership action on the part of such Seller, as applicable, and no other organizational proceedings on such
+Seller’s part are necessary to authorize the execution, delivery and performance by such Seller of this Agreement or the other Transaction
+Agreements and the consummation by it of the Transactions; and
+
+(c) this
+Agreement and the other Transaction Agreements to which such Seller is a party have been, or will be, duly executed and delivered by such
+Seller and, assuming due authorization, execution and delivery hereof and thereof by the other parties hereto and thereto, constitutes,
+or will constitute, legal, valid and binding obligations of such Seller, enforceable against such Seller in accordance with its and their
+terms, except that such enforceability (a) may be limited by bankruptcy, insolvency, fraudulent transfer, reorganization, moratorium
+and other similar Laws of general application affecting or relating to the enforcement of creditors’ rights generally and (b) is
+subject to general principles of equity, whether considered in a proceeding at law or in equity (collectively, the “Enforceability
+Exceptions”).
+
+11
+
+Section
+3.3 Conflicts; Consents.
+Except as related to, or as a result of, the filing or pendency of the Bankruptcy Cases, as set forth
+on Schedule 3.3 and assuming that requisite Bankruptcy Court approvals are obtained
+and, neither the execution and delivery by such Seller of this Agreement or the other Transaction Agreements, nor the consummation by
+such Seller of the Transactions, nor performance or compliance by such Seller with any of the terms or provisions hereof or thereof,
+will (i) conflict with or violate any provision of such Seller’s certificate of incorporation or bylaws, certificate of formation
+or limited liability company agreement, certificate of limited partnership, partnership agreement or other governing documents, as applicable
+(ii) violate or constitute a breach of or default (with or without notice or lapse of time, or both) under or give rise to a right
+of termination, modification, or cancelation of any obligation or to the loss of any benefit, any of the terms or provisions of any assigned
+contract or accelerate such Seller’s obligations under any such assigned contract, or (iii) result in the creation of any
+Encumbrance (other than a Permitted Encumbrance) on any Acquired Assets, except, in each case, as would not, individually or in the aggregate,
+reasonably be expected to have a Material Adverse Effect. 
+
+Section 3.4 Title
+to Assets; Sufficiency of Assets.
+
+(a) Except
+as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect, the Sellers have good and valid
+title to, or, in the case of leased or subleased Acquired Assets, valid and subsisting leasehold interests in, all Acquired Assets, free
+and clear of all Encumbrances (other than Permitted Encumbrances). Pursuant to the Sale Order, the Sellers will convey such title to or
+rights to use, all of the Acquired Assets, free and clear of all Encumbrances (other than Permitted Encumbrances).
+
+(b) Except
+as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect or as set forth on Schedule
+3.4(b), all tangible assets of the Acquired Assets and the Acquired Businesses are (i) in good working order and condition in all
+material respects, ordinary wear and tear excepted, (ii) have been reasonably maintained, (iii) are suitable in all material respects
+for the uses for which they are being utilized in the Acquired Assets and the Acquired Businesses as conducted by Sellers as of the date
+hereof, (iv) do not require more than regularly scheduled maintenance in the Ordinary Course consistent with past practice and the established
+maintenance policies of Sellers, as applicable, in order to keep them in good operating condition, and (v) comply in all material respects
+with all requirements under any Laws and any licenses which govern the use and operation thereof. Except as would not, individually or
+in the aggregate, reasonably be expected to have a Material Adverse Effect, the Acquired Assets constitute the material properties, assets
+and rights reasonably necessary, and are sufficient in all material respects, for the conduct of the Acquired Assets and the Acquired
+Businesses as currently conducted, taking into account the fact that the Excluded Assets shall not be acquired by Purchaser pursuant to
+the terms of this Agreement.
+
+12
+
+Section 3.5 Assigned
+Contracts and Assumed Leases.
+Schedule 3.5 sets forth a complete list, as of the date hereof, of all (i) Assigned Contracts and (ii) Assumed Leases.
+
+Section 3.6 Real
+Property. Schedule
+3.6(b)(i) sets forth a list of each Assumed Lease and the real property location which is the subject thereof (together, the “Leased
+Real Property”). The Sellers have made available to Purchaser, prior to the date of this Agreement, a true, correct and complete
+copy of each Assumed Lease. With respect to each Assumed Lease, (a) assuming due authorization and delivery by the other party thereto,
+such Assumed Lease constitutes the valid and legally binding obligation of the Sellers party thereto and, to the Sellers’ Knowledge,
+the counterparty thereto, enforceable against such Sellers and, to the Sellers’ Knowledge, the counterparty thereto in accordance
+with its terms and conditions, subject to applicable bankruptcy, insolvency, moratorium or other similar Laws relating to creditors’
+rights and general principles of equity, and (b) except as set forth in Schedule 3.6(ii) neither such Sellers nor, to the Sellers’
+Knowledge, the counterparty thereto is in breach or default under such Assumed Lease, and to the Sellers’ Knowledge no event has
+occurred or condition exists that, with notice or lapse of time, or both, would constitute a default by any Seller or, to the Sellers’
+Knowledge, by any other party thereto, except (i) for those defaults that will be cured by the payment of Cure Costs in accordance with
+the Sale Order or waived in accordance with section 365 of the Bankruptcy Code (or that need not be cured under the Bankruptcy Code to
+permit the assumption and assignment of the Assumed Leases) or (ii) to the extent such breach or default would not reasonably be expected
+to have a Material Adverse Effect. To the Sellers’ Knowledge, no Person that is not a Seller has any right to possess, use or occupy
+any of the Leased Real Property except as set forth on Schedule 3.6(iii). The leasehold interests of the Sellers in the Assumed Leases
+are subject to no Encumbrances other than Permitted Encumbrances.
+
+Section
+3.7 Employees.
+
+(a) No Seller (with respect to the Transferred Employees) or the Acquired Businesses or the Acquired Assets is party to any collective
+bargaining agreements or similar labor-related Contracts with any labor union representing any Continuing Employees. Except as would
+not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect, (i) there is no written demand from any
+labor union seeking recognition as the exclusive bargaining representative of any Continuing Employees by such Seller or any Acquired
+Businesses or the Acquired Assets and (ii) there is no pending or, to the Knowledge of Sellers, threatened, strike, lockout, organized
+labor slowdown, or concerted work stoppage by any Continuing Employees.
+
+(b) Each
+Seller (with respect to Transferred Employees) and the Acquired Businesses and the Acquired Assets are in compliance with all applicable
+Laws respecting employment practices and labor, including those related to wages and hours, collective bargaining, unemployment insurance,
+workers’ compensation, immigration, harassment and discrimination, disability rights and benefits, affirmative action, and employee
+layoffs except where the failure to be in compliance would not reasonably be expected to result in a Material Adverse Effect.
+
+13
+
+(c) There
+is no Action pending or, to the Knowledge of Sellers, threatened in writing against such Seller (with respect to Transferred Employees)
+or any Acquired Business or Acquired Asset alleging a violation of any applicable labor or employment Law brought by any Continuing Employee
+before any Governmental Body, except for such Actions (or threatened Actions) that, if adversely determined, would not, individually
+or in the aggregate, reasonably be expected to result in a Material Adverse Effect.
+
+Section 3.8 Litigation;
+Decrees. Except as set forth in Schedule 3.8 or arising in connection with, or out of, the Bankruptcy Cases (or any
+actions which are the subject matter thereof), there is no Litigation pending that (a) would reasonably be expected to be material
+to the Acquired Assets or (b) challenges the validity or enforceability of this Agreement or that seeks to enjoin or prohibit
+consummation of the transactions contemplated hereby and thereby. Other than the Bankruptcy Case, no Seller is subject to any
+outstanding Decree that would (i) reasonably be expected to be material to the Acquired Assets or Acquired Businesses or (ii)
+prevent or materially delay such Seller’s ability to consummate the transactions contemplated hereby or by the Related
+Agreements or perform in any material respect its obligations hereunder.
+
+Section 3.9 Data Privacy. Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse
+Effect and except as set forth on Schedule 3.9, in connection with its collection, storage, transfer, marketing, sales, security,
+and/or use of any Personal Information, each Seller is and, during the last twelve (12) months, has been in compliance in all material
+respects with applicable Laws that regulate the privacy and/or security of Personal Information (the “Privacy Laws”). Except
+as set forth on Schedule 3.9, neither the execution, delivery, or performance of this Agreement, nor the consummation of any of
+the transactions contemplated under this Agreement will violate applicable Privacy Laws in any material respects. Each Seller has commercially
+reasonable physical, technical, organizational and administrative security measures in place that are designed to protect all Personal
+Information collected by it or on its behalf from and against material unauthorized access, loss, modification, destruction, use or disclosure,
+and all such measures are in accordance with applicable Privacy Laws in all material respects. Except as would not, individually or in
+the aggregate, reasonably be expected to have a Material Adverse Effect and to the Knowledge of Sellers, since June 30, 2024 there has
+been no unauthorized access, use, modification, or disclosure of Personal Information, or any event that constitutes a security breach
+or similar term under applicable Law, in the possession or control of each Seller or any.
+
+Section 3.10 Environmental Matters. Except as would not, individually or in the aggregate, reasonably be expected to have a Material
+Adverse Effect and solely with respect to the Assumed Leases:
+
+(a) The
+Sellers are, and to the Knowledge of the Sellers, during the twelve (12) months prior to the date hereof have been, in compliance in all
+material respects with all Environmental Laws, which compliance has included obtaining, maintaining, and making required filings for issuance
+or renewal of all Material Permits, licenses and authorizations required under Environmental Laws for the operations of the Sellers and
+their respective Subsidiaries as currently conducted.
+
+14
+
+(b) The
+Sellers have not, during the twelve (12) months prior to the date hereof, received, nor is there any pending or, to the Knowledge of the
+Sellers, any threatened, written notice or Litigation regarding any actual or alleged violation of, or liability or obligation under,
+Environmental Laws that would reasonably be expected to be material to the Sellers and their respective Subsidiaries taken as a whole.
+
+(c) Except
+for a Release that would not reasonably be expected to be material to the Sellers and their Subsidiaries taken as a whole, there has been
+no Release of a Hazardous Substance (x) at, on, about, under or from the corporate offices, or (y) arising from or relating to the operations
+of the Sellers or their respective Subsidiaries.
+
+(d) None
+of the Sellers or any of their respective Subsidiaries, has manufactured, distributed, treated, stored, arranged for or permitted the
+disposal of, transported, handled, or exposed any Person to, any Hazardous Substance, except for such action that was taken in compliance
+in all material respects with applicable Environmental Law or would not reasonably be expected to be material to the Sellers and their
+respective Subsidiaries taken as a whole.
+
+(e) None
+of the Sellers or any of their respective Subsidiaries has contractually assumed, pursuant to any acquisition, divestiture, or merger,
+any obligation of another Person under any Environmental Law that could reasonably be expected to result in material liability or any
+other material obligation to the Sellers or their respective Subsidiaries under any applicable Environmental Law.
+
+(f) Neither
+the execution of this Agreement nor the consummation of the transactions contemplated hereby will require any investigation or remediation
+activities or notice to, filing or registration with, or consent of any Governmental Authority or other third party pursuant to any transaction-triggered
+Environmental Law, including with respect to the New Jersey Industrial Site Recovery Act, N.J.S.A. 13:1K-6 et seq.
+
+(g) The
+Sellers have made available to Purchaser copies and results of any material reports, studies, analyses, tests, or monitoring and any other
+material documents or correspondence in the Sellers’ possession relating to environmental conditions or Liabilities under Environmental
+Law with respect to the operations of the Sellers and their respective Subsidiaries, corporate offices.
+
+Section 3.11 Taxes.
+
+(a) The
+Sellers have timely filed all material Tax Returns required to be filed by the Sellers with respect to the Acquired Assets or the Acquired
+Businesses with the appropriate Governmental Authorities (taking into account any extension of time to file granted or to be obtained
+on behalf of the Sellers); and all such Tax Returns are true, complete, and correct in all material respects;
+
+15
+
+(b) All
+material Taxes imposed on the Sellers with respect to the Acquired Assets or the Acquired Businesses that are due and owing (taking into
+account applicable extensions) have been paid (other than any Taxes (i) the nonpayment of which is permitted or required by the Bankruptcy
+Code, or (ii) that are being contested in good faith and for which appropriate reserves have been made in accordance with GAAP);
+
+(c) There
+are no material pending (or threatened) audits, examinations, investigations or other proceedings, in each case for which a Seller has
+received written notice or to the Knowledge of the Sellers, relating to a material amount of Taxes with respect to the Acquired Assets
+or the Acquired Businesses;
+
+(d) There
+are no Encumbrances relating to material Taxes (other than Permitted Encumbrances) on any Acquired Assets; and
+
+(e) In
+the last twelve (12) months and other than as set forth in public filings of SunPower Corporation, no claim has been made in writing by
+a Governmental Authority in a jurisdiction where a Seller does not currently file Tax Returns with respect to an Acquired Asset that such
+Seller may be subject to Tax by that jurisdiction with respect to such Acquired Asset.
+
+(f) Sellers
+have not received written notice of any material Tax deficiency outstanding, proposed or assessed, with respect to the Acquired Assets.
+
+(g) None
+of the Acquired Assets constitutes stock, partnership interests or any other equity interest in any Person for U.S. federal income Tax
+purposes.
+
+(h) Notwithstanding
+anything herein to the contrary, this Section 3.11 contains the sole and exclusive representations and warranties with
+respect to Taxes, and no representation or warranty is made in this Section 3.11 regarding (i) any taxable period (or portion
+thereof) beginning after the Closing Date, or (ii) the availability or unavailability of any tax attribute or tax refund.
+
+Section 3.12 Intellectual
+Property.
+
+(a) Except
+as set forth on Schedule 3.12(a), the Sellers own all right, title and interest in and to the Transferred Intellectual Property
+that is owned or purported to be owned by the Sellers (the “Owned Intellectual Property”), free and clear of all Encumbrances
+(other than Permitted Encumbrances). Except as would not, individually or in the aggregate, reasonably be expected to have a Material
+Adverse Effect, and to the Knowledge of the Sellers, except as set forth in Schedule 3.12(a) or as otherwise contemplated by this
+Agreement, the Transferred Intellectual Property constitutes all Intellectual Property Rights owned or held for use by the Sellers in
+the conduct of the Acquired Businesses. Except as would not, individually or in the aggregate, reasonably be expected to have a Material
+Adverse Effect, Sellers own all right, title and interest in, or have a valid and enforceable written license or other permission to use,
+all Transferred Intellectual Property. Except as would not, individually or in the aggregate, reasonably be expected to have a Material
+Adverse Effect, and to the Knowledge of the Sellers, the Transferred Intellectual Property is sufficient to conduct the Acquired Businesses
+as presently conducted. Except as set forth in Schedule 3.12(a), all Owned Intellectual Property is currently owned by the Sellers.
+
+16
+
+(b)
+Trademarks:
+
+(i)
+Schedule 3.12(b) contains a complete and accurate list of all registered and applied for Transferred Trademarks, including for
+each applicable trademark or service mark, trademark registration numbers and registration dates, as applicable (the “Registered
+Trademarks”).
+
+(ii)
+Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, and except as
+set forth on Schedule 3.12(b), all of the material Registered Trademarks are subsisting and in full force and effect.
+
+(iii)
+ Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, and except
+as set forth on Schedule 3.12(b), no material Registered Trademark is the subject of any opposition, invalidation or cancellation
+proceeding, in each case which is pending and unresolved, and no such action has been threatened in writing during the past twelve (12)
+months.
+
+(c)
+Copyrights:
+
+(i)
+Schedule 3.12(c) contains a complete and accurate list of all registered Transferred Copyrights, including title, registration
+number and registration date (the “Registered Copyrights”).
+
+(ii)
+Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, all of the Registered
+Copyrights are in full force and effect.
+
+(d)
+Patents:
+
+(i)
+Schedule 3.12(d) contains a complete and accurate list of all issued Transferred Patents, including owner, patent number and issuance
+date (the “Registered Patents”).
+
+(ii)
+Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, all of the Registered
+Patents are subsisting and in full force and effect.
+
+(e)
+Except as set forth on Schedule 3.12(d), to the Knowledge of the Sellers, during the past twelve (12) months, there has not been
+and there is not now any actual unauthorized use, infringement or misappropriation of any of the Owned Intellectual Property by any third
+party, except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect.
+
+(f)
+Except as set forth in Schedule 3.12(f), during the past twelve (12) months, the Sellers have not brought any actions or lawsuits
+that are pending and unresolved alleging infringement, misappropriation or other violation of any of the Owned Intellectual Property
+by any third party. Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect,
+and except as set forth in Schedule 3.12(f), to the Knowledge of Sellers, no Person is infringing upon any Owned Intellectual
+Property. Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect, and to the
+Knowledge of the Sellers, the Sellers have not entered into any Contract granting any third party the right to bring infringement actions
+with respect to any of the Owned Intellectual Property that will survive the Closing. Except as would not, individually or in the aggregate,
+reasonably be expected to have a Material Adverse Effect, to the Knowledge of the Sellers there is no pending claim or claim threatened
+in writing with respect to the Owned Intellectual Property: (i) contesting the right of the Sellers to use, exercise, sell, license,
+transfer or dispose of any of the Owned Intellectual Property; or (ii) challenging the ownership, validity or enforceability of any of
+the Owned Intellectual Property. Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse
+Effect, and to the Knowledge of the Sellers, no Owned Intellectual Property is subject to any outstanding order, judgment, decree, stipulation
+or agreement related to or restricting in any manner the use, licensing, assignment, transfer or conveyance thereof by the Sellers.
+
+17
+
+(g)
+Schedule 3.12(a) contains a listing of all material Contracts to which the Sellers are a party that relates to the settlement
+of any claims related to the Owned Intellectual Property (including co-existence agreements).
+
+(h)
+Except as set forth on Schedule 3.12(a), and to the Knowledge of the Sellers, the operation and conduct of the Acquired Businesses
+as currently conducted by the Sellers, including the Sellers’ marketing, license, sale or use of any products or services anywhere
+in the world in connection with the Acquired Businesses has not, in the last twelve (12) months, and does not as of the Closing Date
+infringe, misappropriate or violate any Intellectual Property Rights of any third party, in each case except as would not, individually
+or in the aggregate, reasonably be expected to be have a Material Adverse Effect. To the Knowledge of the Sellers, there is no pending
+claim or claim threatened in writing alleging that the operation of the Acquired Businesses (including the Sellers’ marketing,
+license, sale or use of any products or services anywhere in the world in connection with the Acquired Businesses) as currently conducted
+by the Sellers infringes, misappropriates or otherwise violates any Intellectual Property Rights of any third party or violates any Contract
+with any third party to which the Sellers are a party or by which they are bound, in each case except as would not, individually or in
+the aggregate, reasonably be expected to have a Material Adverse Effect.
+
+(i)
+Except as set forth in Schedule 3.12(a), to the Knowledge of the Sellers, the Sellers have the full right, power and authority
+to sell, assign, transfer and convey all of their right, title and interest in and to the Transferred Intellectual Property to Purchaser,
+and upon Closing, Purchaser will acquire from the Sellers good and marketable title to the Owned Intellectual Property, free of Encumbrances
+(other than Permitted Encumbrances).
+
+(j)
+Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, and to the Knowledge
+of the Sellers, except as set forth in Schedule 3.12(a), the Sellers have secured from each present or former employee, officer,
+director, agent, outside contractor or consultant of the Sellers who contributed to the development of any material Owned Intellectual
+Property on behalf of the Sellers a written and enforceable agreement that contain (A) a non-disclosure obligation with respect to the
+Sellers’ confidential information and (B) a valid assignment to one or more of the Sellers of all rights, title and interest in
+and to such Owned Intellectual Property, unless in respect of assignment agreements, a Seller owns such Owned Intellectual Property by
+operation of Law. Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses,
+the Sellers have taken commercially reasonable and appropriate steps to protect, maintain and preserve the confidentiality of any material
+trade secrets included in the Owned Intellectual Property. Except as would not, individually or in the aggregate, reasonably be expected
+to be material to the Acquired Businesses, any disclosure by the Sellers of such trade secrets to any third party has been pursuant to
+the terms of a written agreement with such third party.
+
+18
+
+(k)
+To the Knowledge of the Sellers, all material software owned, licensed, used, or otherwise held for use in the Acquired Assets and the
+Acquired Businesses is in good working order and condition and is sufficient in all material respects for the purposes for which it is
+currently used in the Acquired Assets and the Acquired Businesses, except in each case as would not reasonably be expected to be material
+to the Sellers and their respective Subsidiaries taken as a whole. To the Knowledge of the Sellers, the Sellers have not experienced
+any material defects in design, workmanship or material in connection with the use of such software that have not been corrected. Except
+as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, and to the Knowledge
+of the Sellers, no such software contains any computer code or any other procedures, routines or mechanisms which may: (i) disrupt, disable,
+harm or impair in any material way such software’s operation, (ii) cause such software to damage or corrupt any data, storage media,
+programs, equipment or communications of the Sellers or their clients, or otherwise interfere with the Sellers’ operations as currently
+conducted, or (iii) permit any third party to access any such software to cause disruption, disablement, harm, impairment, damage erasure
+or corruption (sometimes referred to as “traps”, “viruses”, “access codes”, “back doors”
+“Trojan horses,” “time bombs,” “worms,” or “drop dead devices”). The computer software,
+computer hardware, firmware, networks, interfaces and related systems (collectively, “Computer Systems”) used in the
+Acquired Businesses are sufficient in all material respects for the Sellers’ current needs in the operation of the Acquired Businesses
+as presently conducted, and, to the Knowledge of the Sellers, in the past twelve (12) months, there have been no material failures, crashes,
+security breaches or other adverse events affecting the Computer Systems which would, individually or in the aggregate, reasonably be
+expected to have a Material Adverse Effect on the Acquired Businesses. Except as would not, individually or in the aggregate, reasonably
+be expected to be material to the Acquired Businesses, the Sellers take commercially reasonable steps to provide for the back-up and
+recovery of material data and have implemented disaster recovery plans, procedures and facilities and, as applicable, have taken reasonable
+steps to implement such plans and procedures. The Sellers have taken reasonable actions designed to protect the integrity and security
+of the Computer Systems and the information stored therein from unauthorized use, access, or modification by third parties.
+
+(l)
+Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect, and to the Knowledge
+of the Sellers, all Owned Intellectual Property is subsisting, valid and enforceable.
+
+(m)
+Except as would not, individually or in the aggregate, reasonably be expected to be material to the Acquired Businesses, and to the Knowledge
+of the Sellers, no domain name or social media account included in the Transferred Intellectual Property has been, during the past twelve
+(12) months, or is now involved in any dispute over its ownership or use. Except as would not, individually or in the aggregate, reasonably
+be expected to be material to the Acquired Businesses, and to the Knowledge of the Sellers, Sellers have information sufficient to access,
+operate, and control all social media accounts and domain names included in the Transferred Intellectual Property. All domain names and
+social media accounts included in the Transferred Intellectual Property are set forth on Schedule 3.12(m).
+
+19
+
+Section
+3.13 Compliance with Laws; Permits.
+
+(a)
+Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect or as related to, or
+as a result of, the filing or pendency of the Bankruptcy Cases, the Sellers are in compliance, in all material respects, with all Laws
+applicable to the Acquired Assets. Except as related to or, as a result of, the filing or pendency of the Bankruptcy Cases, since June
+30, 2024 (i) none of the Sellers has received any written notice of, the material violation of any Laws, and (ii) to the Knowledge of
+the Sellers, no event has occurred or circumstance exists that (with or without notice, passage of time, or both) would constitute or
+result in a failure by any Seller or its Subsidiaries to comply, in any material respect, with any applicable Law, the failure of which
+would result in a Material Adverse Effect. Except as related to, or as a result of, the filing or pendency of the Bankruptcy Cases or
+as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect, no investigation in relation
+to any actual or alleged material violation of Law by any Seller or its Subsidiaries is pending or, to the Knowledge of the Sellers,
+threatened, nor since June 30, 2024 has any Seller or any of its Subsidiaries received any written notice from any Governmental Authority
+indicating an intention to conduct the same.
+
+(b)
+Except as would not, individually or in the aggregate, reasonably be expected to have a Material Adverse Effect or as related to, or
+as a result of, the filing or pendency of the Bankruptcy Cases, all material Permits required for any Seller and its Subsidiaries to
+conduct the Acquired Businesses as currently conducted by the Sellers are valid and in full force and effect (each a “Material
+Permit”). Since June 30, 2024, to the Knowledge of the Sellers, it has received no notice that any event has occurred that,
+would reasonably be expected to result in the revocation, cancellation, modification, suspension, lapse, limitation, or non-renewal of
+any Permit or Permits that, individually or in the aggregate, are material to the operation of the Acquired Business as currently conducted
+by the Sellers or that relate to the Acquired Assets. Since June 30, 2024, each Seller and its Subsidiaries have complied in all material
+respects, and are currently in compliance in all material respects, with all Permits that, individually or in the aggregate, are material
+to the operation of the Acquired Assets and the Acquired Businesses as currently conducted by the Sellers, and have made all appropriate
+filings for issuance or renewal of such Permits. No Litigation is pending or, to the Knowledge of the Sellers, threatened to terminate,
+revoke, limit, cancel, suspend or modify any Permit or Permits that, individually or in the aggregate, are material to the operation
+of the Acquired Assets and the Acquired Businesses as currently conducted by the Sellers, and which would have a Material Adverse Effect,
+and none of the Sellers has received written notice from any Governmental Authority that (i) any such Permit will be revoked or not reissued
+on the same or similar terms, (ii) any application for any new Permit by any Seller or their respective Subsidiaries or renewal of any
+Permit or Permits that, individually or in the aggregate, are material to the operation of the Acquired Assets and the Acquired Businesses
+as currently conducted by the Sellers will be denied, or (iii) the Permit holder is in material violation of any Permit or Permits that,
+individually or in the aggregate, are material to the operation of the Acquired Assets and the Acquired Businesses as currently conducted
+by the Sellers.
+
+20
+
+Section
+3.14 Brokers. Except for Moelis & Company, all of whose fees and expenses will be borne solely by Sellers, there is no
+investment banker, broker, finder, or other intermediary which has been retained by or is authorized to act on behalf of Purchaser that
+might be entitled to any fee or commission in connection with the Transactions.
+
+Section
+3.15 No Other Representations or Warranties. Except for the representations and warranties expressly contained in this Article
+III (as qualified by the Schedules and in accordance with the express terms and conditions (including limitations and exclusions)
+of this Agreement) (the “Express Representations”) (it being understood that Purchaser and the Purchaser Group have
+relied only on such Express Representations and warranties), Purchaser acknowledges and agrees, on its own behalf and on behalf of the
+Purchaser Group, that no Seller nor any other Person on behalf of such Seller makes, and neither Purchaser nor any member of the Purchaser
+Group has relied on, is relying on, or will rely on the accuracy or completeness of any express or implied representation or warranty
+with respect to such Seller, the Acquired Businesses, such Seller’s other businesses, the other Acquired Assets, or the Assumed
+Liabilities or with respect to any information, statements, disclosures, documents, projections, forecasts or other material of any nature
+made available or provided by any Person (including in any presentations or other materials prepared by Moelis & Company) or in that
+certain datasite administered by Datasite (the “Dataroom”) or elsewhere to Purchaser or any of its Affiliates or Advisors
+on behalf of such Seller or any of its Affiliates or Advisors. Without limiting the foregoing, no Seller or any of its Advisors nor any
+other Person will have or be subject to any Liability whatsoever to Purchaser, or any other Person, resulting from the distribution to
+Purchaser or any of its Affiliates or Advisors, or Purchaser’s or any of its Affiliates’ or Advisors’ use of or reliance
+on, any such information, including any information presentation, any information, statements, disclosures, documents, projections, forecasts
+or other material made available to Purchaser or any of its Affiliates or Advisors in the Dataroom or otherwise in expectation of the
+Transactions or any discussions with respect to any of the foregoing information.
+
+Article
+IV
+
+Representations and Warranties of Purchaser
+
+Purchaser
+represents and warrants to Sellers as follows.
+
+Section
+4.1 Organization and Qualification. Purchaser is a corporation
+duly formed, validly existing and in good standing under the laws of the State of Delaware and has all requisite power and authority
+necessary to carry on its business as it is now being conducted, except (other than with respect to Purchaser’s due formation
+and valid existence) as would not, individually or in the aggregate, reasonably be expected to have a material adverse effect on
+Purchaser’s ability to consummate the Transactions. Purchaser is duly licensed or qualified to do business and is in good
+standing (where such concept is recognized under applicable Law) in each jurisdiction in which the nature of the business conducted
+by it or the character or location of the properties owned or used by it makes such licensing or qualification necessary, except
+where the failure to be so licensed, qualified or in good standing would not, individually or in the aggregate, reasonably be
+expected to have a material adverse effect on Purchaser’s ability to consummate the Transaction by this
+Agreement.
+
+Section
+4.2 Authorization of Agreement. Purchaser has all necessary power and authority to execute and deliver this Agreement and
+to perform its obligations hereunder and to consummate the Transactions. The execution, delivery and performance by Purchaser of
+this Agreement, and the consummation by Purchaser of the Transactions, subject to requisite Bankruptcy Court approvals, have been duly
+authorized by all requisite corporate or similar organizational action and no other corporate or similar organizational proceedings on
+its part are necessary to authorize the execution, delivery and performance by Purchaser of this Agreement and the consummation by it
+of the Transactions. Subject to requisite Bankruptcy Court approvals, this Agreement has been duly executed and delivered by Purchaser
+and, assuming due authorization, execution and delivery hereof by the other Parties, constitutes a legal, valid and binding obligation
+of Purchaser, enforceable against Purchaser in accordance with its terms, except that such enforceability may be limited by the Enforceability
+Exceptions.
+
+Section
+4.3 Conflicts; Consents. Assuming that (i) the Sale Order and all other requisite Bankruptcy Court approvals are obtained,
+and (ii) the notices, authorizations, approvals, Orders, permits or consents set forth on Schedule 4.3 are made, given
+or obtained (as applicable), neither the execution and delivery by Purchaser of this Agreement, nor the consummation by Purchaser of
+the Transactions, nor performance or compliance by Purchaser with any of the terms or provisions hereof, will (A) conflict with
+or violate any provision of Purchaser’s organizational documents, (B) violate any Law or Order applicable to Purchaser, (C) violate
+or constitute a breach of or default (with or without notice or lapse of time, or both) under or give rise to a right of termination,
+modification, or cancelation of any obligation or to the loss of any benefit, any of the terms or provisions of any loan or credit agreement
+or other material Contract to which Purchaser is a party or accelerate Purchaser’s obligations under any such Contract, or (D) result
+in the creation of any Encumbrance (other than a Permitted Encumbrance) on any properties or assets of Purchaser or any of its subsidiaries,
+except, in the case of clauses (A) through (B), as would not, individually or in the aggregate, reasonably be expected
+to prevent or materially impair, alter or delay the ability of Purchaser to consummate the Transactions.
+
+Section
+4.4 Financing. Purchaser has, and will have at the Closing, sufficient funds in an aggregate amount necessary to pay the Cash
+Consideration, to perform the Assumed Liabilities as they become due in accordance with their terms and to consummate all of the other
+Transactions, including the payment of the Purchase Price and all fees, expenses of, and other amounts required to be paid by, Purchaser
+in connection with the Transactions. Purchaser is and shall be capable of satisfying the conditions contained in sections 365(b)(1)(C)
+and 365(f) of the Bankruptcy Code with respect to the Acquired Assets and the related Assumed Liabilities. Purchaser’s ability
+to consummate the Transactions is not contingent upon its ability to secure any financing or to complete any public or private placement
+of securities prior to or upon Closing.
+
+21
+
+Section
+4.5 Brokers. The Purchaser has no investment banker, broker, finder, or other intermediary which has been retained by or is
+authorized to act on behalf of Purchaser that might be entitled to any fee or commission in connection with the Transactions.
+
+Section
+4.6 Solvency. Purchaser is, and immediately after giving effect to the Transactions the Purchaser shall be, solvent and at
+all times shall: (a) be able to pay its debts as they become due; (b) own property that has a fair saleable value greater than the amounts
+required to pay its debt (including a reasonable estimate of the amount of all contingent Liabilities) and (c) have adequate capital
+to carry on its business. No transfer of property is being made and no obligation is being incurred in connection with the Transactions
+with the intent to hinder, delay or defraud either present or future creditors of Purchaser. In connection with the Transactions, Purchaser
+has not incurred, nor plans to incur, debts beyond its ability to pay as they become absolute and matured.
+
+Section
+4.7 SEC Reports; Undisclosed Liabilities.
+
+(a)
+Since June 30, 2024, Purchaser has timely filed or furnished, as applicable, all Purchaser SEC Reports. Each Purchaser SEC Report complied,
+as of its filing date (or, if amended or superseded by a filing prior to the date of this Agreement, on the date of such amended or superseding
+filing) or in the case of registration statements, on the date of effectiveness thereof, in all material respects with the then applicable
+requirements of the Securities Act, the Exchange Act, the Sarbanes-Oxley Act, to the extent applicable. As of its filing date (or, if
+amended or superseded by a filing prior to the date of this Agreement, on the date of such amended or superseded filing) or in the case
+of registration statements, on the date of effectiveness thereof, each Purchaser SEC Report did not contain any untrue statement of a
+material fact or omit to state any material fact necessary in order to make the statements made therein, in the light of the circumstances
+under which they were made, not misleading. Purchaser is, and since June 30, 2024 has been, in compliance in all material respects with
+the applicable provisions and requirements of the Securities Act, the Exchange Act, the Sarbanes-Oxley Act and the listing standards
+and rules of The Nasdaq Global Market (“Nasdaq”). Since the filing date of Purchaser’s most recent Form 10-K
+or Form 10-Q, no events, facts or circumstances have occurred such that management would not be able to complete its assessment of the
+effectiveness of Purchaser’s internal control over financial reporting in compliance with the requirements of Section 404 of the
+Sarbanes-Oxley Act when next due, and conclude, after such assessment, that such system was effective. There are no outstanding or unresolved
+comments received from the SEC with respect to the Purchaser SEC Reports or any registration statement filed by Purchaser and to the
+knowledge of Purchaser, none of the Purchaser SEC Reports is the subject of ongoing SEC review or investigation. No Subsidiary of Purchaser
+is, or since June 30, 2024 has been, required to file any forms, reports or documents with the SEC that have not otherwise been filed.
+
+22
+
+(b)
+The consolidated financial statements (including any related notes and schedules) of Purchaser and its Subsidiaries filed with the Purchaser
+SEC Reports (i) complied, as of their respective dates of filing with the SEC, in all material respects with the published rules and
+regulations of the SEC with respect thereto during the periods and at the dates indicated (except as may be indicated in the notes thereto
+or as otherwise permitted by Form 10-Q with respect to any financial statements filed on Form 10-Q); (ii) were prepared in accordance
+with GAAP (except as may be indicated in the notes thereto or as otherwise permitted by Form 10-Q with respect to any financial statements
+filed on Form 10-Q) applied on a consistent basis during the periods involved; and (iii) fairly present, in all material respects,
+the consolidated financial position and consolidated results of operations and cash flows of Purchaser and its consolidated Subsidiaries
+as of the dates thereof or for the periods then ended (subject, in the case of the unaudited financial statements, to normal and recurring
+year-end adjustments described therein). None of Purchaser or its Subsidiaries is a party to, or has any obligation or other commitment
+to become a party to, any “off balance sheet arrangement” (as defined in Item 303(a) of Regulation S-K promulgated by the
+SEC) that has not been so described in the Purchaser SEC Reports.
+
+(c)
+Purchaser has established and maintains “disclosure controls and procedures” and “internal control over financial reporting”
+(in each case as defined pursuant to Rule 13a-15 and Rule 15d-15 promulgated under the Exchange Act). Purchaser’s disclosure controls
+and procedures are designed to ensure that (i) all material information required to be disclosed by Purchaser in the reports and other
+documents that it files or furnishes pursuant to the Exchange Act is recorded, processed, summarized and reported within the time periods
+specified in the rules and forms of the SEC; and (ii) such material information is accumulated and made known to the Chief Executive
+Officer and Chief Financial Officer of Purchaser, as appropriate to allow timely decisions regarding required disclosure and to make
+the certifications required under the Exchange Act and Sections 302 and 906 of the Sarbanes-Oxley Act. Since June 30, 2024, the principal
+executive officer and principal financial officer of Purchaser have made all certifications required by Rules 13a-14 and 15d-14 under
+the Exchange Act and Sections 302 and 906 of the Sarbanes-Oxley Act, and the statements contained in any such certifications were true,
+correct and complete as of their filing dates. Neither Purchaser nor its principal executive officer or principal financial officer has
+received notice from any Governmental Body challenging or questioning the accuracy, completeness, form or manner of filing of such certifications.
+
+(d)
+Purchaser has established and maintains a system of internal controls over financial reporting (as defined in Rules 13a-15(f) and 15d-15(f)
+under the Exchange Act) that are designed to ensure reasonable assurance regarding the reliability of Purchaser’s financial reporting
+and the preparation of Purchaser’s financial statements for external purposes in accordance with GAAP. Since June 30, 2024, neither
+Purchaser nor Purchaser’s independent registered public accounting firm has identified or been made aware of (A) any material weakness
+in the system of internal control over financial reporting, including the design and operation thereof, used by Purchaser and its Subsidiaries
+that has not been subsequently remediated; (B) any fraud or illegal act that involves Purchaser’s management or other employees
+who have a role in the preparation of financial statements or the internal control over financial reporting utilized by Purchaser and
+its Subsidiaries; or (C) any claim or allegation regarding any of the foregoing and Purchaser has disclosed based on its most recent
+evaluation of Purchaser’s internal control over financial reporting prior to the date hereof, to Purchaser’s auditors and
+the audit committee of Purchaser’s board of directors, all matters described by the immediately preceding clauses (A) through
+(C). To the knowledge of Purchaser, since June 30, 2024, neither Purchaser nor any of its Affiliates has identified or been made
+aware of any material illegal act or fraud related to the business of Purchaser or its Subsidiaries.
+
+23
+
+(e)
+Neither Purchaser nor any of its Subsidiaries has any Liabilities or obligations of any nature (whether accrued, absolute, contingent,
+fixed or otherwise) required to be reflected or reserved against on the balance sheet prepared in accordance with GAAP or notes thereto,
+other than Liabilities or obligations (i) reflected or otherwise adequately reserved against in the consolidated balance sheet (or the
+notes thereto) of Purchaser and its Subsidiaries as of June 30, 2024 or in the consolidated financial statements of Purchaser and its
+Subsidiaries included in Purchaser SEC Reports or described in the notes thereto; (ii) arising pursuant to this Agreement or the
+other Transaction Agreements or incurred in connection with the Transaction or the other transactions contemplated by the Transaction
+Agreements; (iii) incurred in the ordinary course of business consistent with past practice on or after June 30, 2024; or (iv)
+that has not had, and would not reasonably be expected to have a Material Adverse Effect.
+
+Section
+4.8 No Additional Representations or Warranties. Except for the representations and warranties contained in this Article
+IV, Sellers are not relying on and will not rely on the accuracy or completeness of any other express or implied representation or
+warranty with respect to Purchaser or with respect to any other information provided to Sellers by Purchaser and acknowledge that neither
+Purchaser nor any other Person on behalf of Purchaser makes on behalf of Purchaser makes any other express or implied representation
+or warranty with respect to Purchaser or with respect to any other information provided to Sellers by Purchaser.
+
+Section
+4.9 No Outside Reliance. Notwithstanding anything contained in this Section 4.9 or any other provision of this Agreement
+to the contrary, Purchaser acknowledges and agrees, on its own behalf and on behalf of the Purchaser Group, that the Express Representations
+are the sole and exclusive representations, warranties and statements of any kind made to Purchaser or any member of the Purchaser Group
+and on which Purchaser and the Purchaser Group may rely in connection with the Transactions. Purchaser acknowledges and agrees, on its
+own behalf and on behalf of the Purchaser Group, that the Acquired Assets are being acquired by Purchaser “as is” and “where
+is” and with all faults and all other representations, warranties and statements of any kind or nature expressed or implied, whether
+in written, electronic or oral form, including (a) the completeness or accuracy of, or any omission to state or to disclose, any information
+(other than solely to the extent expressly set forth in the Express Representations), including in any information presentation, the
+Dataroom, any projections or in any meetings, calls or correspondence with management of any Seller or any other Person on behalf of
+any Seller or any of their respective Affiliates or Advisors, (b) any other statement relating to the historical, current or future
+businesses, financial condition, results of operations, assets, Liabilities, properties, Contracts, environmental compliance, employee
+matters, regulatory compliance, business risks and prospects of the Acquired Assets, the Acquired Businesses or any Seller, or the quality,
+quantity or condition of any Seller’s (c) any implied representation of merchantability or fitness for any particular use or purpose,
+(d) any implied representation regarding the use or operation of the Acquired Assets or the Acquired Businesses after the Closing in
+any manner, and (e) any implied representation regarding the probable success or profitability of the Acquired Assets or the Acquired
+Assets after the Closing, are, in each case specifically disclaimed by each Seller and that neither Purchaser nor any member of the Purchaser
+Group has relied on any such representations, warranties or statements. Purchaser acknowledges, on its own behalf and on behalf of the
+Purchaser Group, that it has conducted to its full satisfaction an independent investigation and verification of the business associated
+with the Acquired Assets, including its results of operations, assets, Liabilities, properties, Contracts, environmental compliance,
+employee matters, regulatory compliance, business risks and prospects of Sellers, and, in making its determination to proceed with the
+Transactions, Purchaser has relied solely on the results of the Purchaser Group’s own independent investigation and verification,
+and has not relied on, is not relying on, and will not rely on, any Seller, the any information presentation, any projections or any
+information, statements, disclosures, documents, projections, forecasts or other material made available to Purchaser or any of its Affiliates
+or Advisors in the Dataroom or otherwise, in each case, whether written or oral, made or provided by, or as part of, any of the foregoing
+or any Seller or any of their respective Affiliates or Advisors, or any failure of any of the foregoing to disclose or contain any information,
+except for the Express Representations (it being understood that Purchaser and the Purchaser Group have relied only on the Express Representations).
+
+24
+
+Article
+V
+
+Covenants and Agreements
+
+Section
+5.1 Conduct of Sellers. Except (A) as required by applicable Law, Order or a Governmental Body, (B) for any limitations
+or changes on operations as a result of a bankruptcy filing or otherwise imposed by the Bankruptcy Court or the Bankruptcy Code or Sellers’
+debtor-in-possession financing or use of cash collateral, as the case may be, (C) as expressly contemplated, required or permitted
+by this Agreement, (D) to the extent related to an Excluded Asset or an Excluded Liability, during the period from the date of this Agreement
+until the Closing (or such earlier date and time on which this Agreement is terminated pursuant to Article VII), unless Purchaser
+otherwise consents in writing (such consent not to be unreasonably withheld, delayed or conditioned), Sellers shall not sell, lease,
+transfer or assign to any Person, in a single transaction or series of related transactions, any of the Acquired Assets, and (E) Sellers
+shall use their commercially reasonable efforts to maintain the Acquired Assets in a manner consistent with past practice, in each case
+except as would not reasonably be expected to have a material detrimental effect on the Acquired Assets.
+
+Section
+5.2 Bankruptcy Actions.
+
+(a)
+The Sellers shall seek on an expedited basis if necessary, entry of the Sale Order, the Bidding Procedures Order, and any other necessary
+orders by the Bankruptcy Court to consummate the Closing as soon as reasonably practicable following the execution of this Agreement,
+subject to the terms of the Bidding Procedures Order and Sale Order. Sellers shall consult with Purchaser and its Representatives concerning
+the Bidding Procedures Order, the Sale Order, any other orders of the Bankruptcy Court relating to the Transaction. Purchaser shall promptly
+take such actions as are reasonably requested by Sellers to assist in obtaining entry of the Bidding Procedures Order and the Sale Order
+and a finding of adequate assurance of future performance by Purchaser, including furnishing affidavits or other documents or information
+for filing with the Bankruptcy Court for the purposes, among others, of providing necessary assurances of performance by Purchaser under
+this Agreement and demonstrating that Purchaser is a “good faith” purchaser; provided, however, in no event
+shall Purchaser or Sellers be required to agree to any amendment of this Agreement.
+
+25
+
+(b)
+Subject to Section 5.3, from the date hereof until the earlier of (i) the termination of this Agreement in accordance with Article
+VII and (ii) the Closing Date, the Parties shall use their respective commercially reasonable efforts to obtain entry by the Bankruptcy
+Court of the Sale Order.
+
+(c)
+Purchaser shall take actions that are reasonably requested by Sellers to assist in obtaining entry of the Sale Order, including by furnishing
+affidavits or other documents or information for filing with the Bankruptcy Court for the purposes, among others, of providing necessary
+assurances of performance by Purchaser under this Agreement. Purchaser shall not file, join in, or otherwise support in any manner whatsoever
+any motion or other pleading relating to the Transaction, unless Sellers have taken action inconsistent with their obligations under
+this Agreement. In the event the entry of the Sale Order shall be appealed in relation to this Agreement, Sellers and Purchaser shall
+use their respective commercially reasonable efforts to defend such appeal.
+
+Section
+5.3 Alternative Transactions.
+
+(a)
+From and after the date the Bidding Procedures Order is entered by the Bankruptcy Court and until the entry of the Sale Order, Sellers
+may, and may cause their respective Affiliates and Representatives, to initiate contact with, solicit or encourage submission of any
+inquiries, proposals or offers by, respond to any unsolicited inquiries, proposals or offers submitted by, and enter into any discussions
+or negotiations regarding any of the foregoing with, any Person (in addition to Purchaser and its Affiliates and Representatives) in
+connection with or for purposes of pursuing any Alternative Transaction in accordance with the Bidding Procedures Order. In addition,
+Sellers may supply information relating to the Acquired Assets and the Acquired Businesses to any other Person who may be or has expressed
+interest in being a prospective purchaser under an Alternative Transaction or who proposed to submit an Alternative Transaction.
+
+(b)
+If an Auction is conducted, and Purchaser is not the Successful Bidder, Purchaser shall, in accordance with and subject to the Bidding
+Procedures, be required to serve as the back-up bidder if Purchaser is the next highest or otherwise best bidder at the Auction (such
+party that is the next highest or otherwise best bidder at the Auction, the “Back-Up Bidder”) and, if Purchaser is
+the Back-Up Bidder, Purchaser shall, notwithstanding Section 7.1(h), be required to keep its bid to consummate the Transaction
+on the terms and conditions set forth in this Agreement (as the same may be improved upon by Purchaser in the Auction) open and irrevocable
+until the Back-Up Termination Date. Following the Auction, if the Successful Bidder fails to consummate the applicable Alternative Transaction
+as a result of a breach or failure to perform on the part of such Successful Bidder, then Purchaser, if Purchaser is the Back-Up Bidder,
+will be deemed to have the new prevailing bid, and Sellers may seek authority to consummate the Transaction on the terms and conditions
+set forth in this Agreement (as the same may be improved upon by Purchaser in the Auction) with the Back-Up Bidder.
+
+26
+
+(c)
+Sellers and Purchaser acknowledge that this Agreement and the sale of the Acquired Assets are subject to higher and better bids and Bankruptcy
+Court approval. Purchaser acknowledges that Sellers must take reasonable steps to demonstrate that they have sought to obtain the highest
+or otherwise best price for the Acquired Assets, including giving notice thereof to the creditors of Sellers and other interested parties,
+providing information about Sellers to prospective bidders, entertaining higher and better offers from such prospective bidders, and,
+in the event that additional qualified prospective bidders desire to bid for the Acquired Assets, conducting an Auction.
+
+(d)
+Purchaser shall provide adequate assurance of future performance as required under Section 365 of the Bankruptcy Code for the Assigned
+Contracts. Purchaser agrees that it will take all actions reasonably required to assist in obtaining a Bankruptcy Court finding that
+there has been a sufficient demonstration of adequate assurance of future performance under the Assigned Contracts, such as furnishing
+affidavits, non-confidential financial information and other documents or information for filing with the Bankruptcy Court and making
+Purchaser’s Advisors available to testify before the Bankruptcy Court.
+
+(e)
+Nothing in this Section 5.3 shall prevent Sellers from modifying the bidding procedures as necessary or appropriate to maximize
+value for Sellers’ estate in accordance with Sellers’ fiduciary obligations.
+
+Section
+5.4 Cure Costs. Subject to entry of the Sale Order and in connection with the assignment and assumption of the Assigned Contracts,
+Purchaser shall, on or prior to the Closing (or, in the case of any Contract that is to be assigned following the Closing pursuant to
+Section 1.5(a), on or prior to the date of such assignment), pay the Cure Costs and cure any and all other defaults and breaches
+under the Assigned Contracts so that such Contracts may be assumed by the applicable Seller and assigned to Purchaser in accordance with
+the provisions of Section 365 of the Bankruptcy Code and this Agreement.
+
+Section
+5.5 Sale Order. The Sale Order shall, among other things, (a) approve, pursuant to sections 105, 363 and 365 of
+the Bankruptcy Code, (i) the execution, delivery and performance by Sellers of this Agreement, (ii) the sale of the Acquired
+Assets to Purchaser on the terms set forth herein and free and clear of all Encumbrances (other than Encumbrances included in the Assumed
+Liabilities and Permitted Encumbrances), and (iii) the performance by Sellers of their obligations under this Agreement, (b) authorize
+and empower Sellers to assume and assign to Purchaser the Assigned Contracts, (c) find that Purchaser is a “good faith”
+buyer within the meaning of Section 363(m) of the Bankruptcy Code, find that Purchaser is not a successor to any Seller, and grant
+Purchaser the protections of Section 363(m) of the Bankruptcy Code, (d) find that Purchaser shall have no Liability or responsibility
+for any Liability or other obligation of any Seller arising under or related to the Acquired Assets other than as expressly set forth
+in this Agreement, including successor or vicarious Liabilities of any kind or character, including any theory of antitrust, environmental,
+successor, or transferee Liability, labor law, de facto merger, or substantial continuity, (e) find that Purchaser has provided adequate
+assurance (as that term is used in Section 365 of the Bankruptcy Code) of future performance in connection with the assumption of
+the Assigned Contracts and (f) find that Purchaser shall have no Liability for any Excluded Liabilities.
+
+27
+
+Section
+5.6 Bankruptcy Court Milestones. The Sellers shall comply with the following timeline (the “Bankruptcy Court Milestones”):
+
+(a)
+The Petition Date shall be no later than August 5, 2024;
+
+(b)
+Sellers shall file a motion to approve the Bidding Procedures, which shall contain this Agreement and which shall seek approval of the
+Bid Protections, no later than one (1) day after the Petition Date;
+
+(c)
+the Bankruptcy Court shall have entered an order approving the Bidding Procedures in a form satisfactory to Purchaser and the prepetition
+lenders no later than twenty-five (25) days after the Petition Date;
+
+(d)
+Sellers shall have delivered to Purchaser a true and correct version of the Schedules no more than twenty-five (25) days after the Petition
+Date;
+
+(e)
+Sellers shall have commenced an auction for the sale of the Acquired Assets no later than thirty-seven (37) days after the Petition Date;
+and
+
+(f)
+the Bankruptcy Court shall have entered an order approving the Sale no later than forty-five (45) days after the Petition Date;
+
+(g)
+the Sale shall be consummated no later than fifty-seven (57) days after the Petition Date.
+
+Section
+5.7 Approval. Sellers’ obligations under this Agreement and in connection with the Transaction are subject to entry
+of and, to the extent entered, the terms of any Orders of the Bankruptcy Court (including entry of the Bidding Procedures Order and the
+Sale Order). Nothing in this Agreement shall require Sellers or their respective Affiliates to give testimony to or submit a motion to
+the Bankruptcy Court that is untruthful or to violate any duty of candor or other fiduciary duty to the Bankruptcy Court or its stakeholders.
+
+Section
+5.8 Access to Information.
+
+(a)
+Sellers shall use commercially reasonable efforts to, prior to the Closing, provide to Purchaser, through its officers, employees and
+representatives (including their respective legal Advisors and accountants), reasonable access, during normal business hours, and upon
+reasonable advance written request, to the books and records, including work papers, schedules, memoranda, Tax Returns, Tax schedules,
+Tax rulings, and other documents (for the purpose of examining and copying) relating to the Acquired Assets, the Acquired Businesses,
+the Excluded Assets, the Assumed Liabilities or the Excluded Liabilities with respect to periods or occurrences prior to the Closing
+Date, and reasonable access, during normal business hours, and upon reasonable advance notice, to employees, officers, Advisors, accountants,
+offices and properties of Purchaser (including for the purpose of better understanding the books and records). The information provided
+pursuant to this Section 5.2 will be used solely for the purpose of consummating the transactions contemplated hereby, and will
+be governed by the Confidentiality Agreement. Purchaser will, and will cause their Advisors to, abide by the terms of the Confidentiality
+Agreement. Sellers make no representation or warranty as to the accuracy of any information, if any, provided pursuant to this Section
+and Purchaser may not rely on the accuracy of any such information.
+
+(b)
+Purchaser will not, and will not permit any member of the Purchaser Group to, contact any officer, manager, director, employee, customer,
+supplier, lessee, lessor, lender, licensee, licensor, distributor, noteholder or other material business relation of Sellers prior to
+the Closing with respect to Sellers or the Transactions, in each case without the prior written consent of Sellers for each such contact.
+
+28
+
+Section
+5.9 Employee Matters.
+
+(a)
+Prior to Closing, Sellers shall use commercially reasonable efforts to make available to Purchaser for interviews certain employees as
+requested in writing by Purchaser. Purchaser may extend to any employee employed by the applicable Seller a written offer of employment,
+for employment effective as of the Closing Date, in Purchaser’s sole discretion (“Transfer
+Offer”); provided that Purchaser shall, and shall cause its Affiliates to, comply will all employment Laws, including
+anti-discrimination Laws, in connection with making such offers of employment. Employees who accept such Transfer Offers and begin employment
+with Purchaser or an Affiliate of Purchaser shall be collectively referred to herein as “Transferred
+Employees.” Each of the Transferred Employees, shall be collectively referred to herein as “Continuing Employees.”
+Purchaser shall notify such Seller (i) with respect to: each employee to whom it made a Transfer Offer (no later than three Business
+Days after making such Transfer Offer), and (ii) in a reasonable timeframe (but in any event within three Business Days of receiving
+a response from the applicable Transferred Employee and no later than immediately prior to the Closing) with respect to whether each
+such offer has been accepted or rejected. Nothing herein shall be construed as a representation or guarantee by such Seller or any of
+its Affiliates that any or all employees employed by such Seller will accept the Transfer Offer, or that any Continuing Employee will
+continue in employment with Purchaser or any of its Affiliates following the Closing for any period of time. Purchaser shall provide
+the Seller with a list of the Transferred Employees three (3) days prior to the Auction. Purchaser shall carry out all necessary actions
+to effect the timely (as of the Closing Date) employment by it of each Transferred Employee who has accepted a Transfer Offer. Effective
+as of the Closing, each Transferred Employee previously employed by such Seller shall cease to be an employee of such Seller and become
+an employee of the Purchaser on comparable terms.
+
+(b)
+The provisions of this Section 5.9 are for the sole benefit of the Parties and nothing herein, express or implied, is intended
+or shall be construed to confer upon or give any Person (including for the avoidance of doubt any Continuing Employees), other than the
+Parties and their respective permitted successors and assigns, any legal or equitable or other rights or remedies (with respect to the
+matters provided for in this Section 5.9 or under or by reason of any provision of this Agreement). Nothing contained herein,
+express or implied: (i) shall be construed to establish, amend, or modify any benefit plan, program, agreement or arrangement; (ii) shall,
+subject to compliance with the other provisions of this Section 5.9, alter or limit Purchaser’s or such Seller’s ability
+to amend, modify or terminate any particular benefit plan, program, agreement or arrangement; or (iii) is intended to confer upon
+any current or former employee any right to employment or continued employment for any period of time by reason of this Agreement, or
+any right to a particular term or condition of employment.
+
+(c)
+For any Continuing Employees who are principally based outside the United States, the provisions of this Section 5.9 shall apply
+to such employees mutatis mutandis to the maximum extent permitted by applicable Law.
+
+Section
+5.10 Further Assurances. From time to time, as and when requested by any Party and at such requesting Party’s expense,
+any other Party will execute and deliver, or cause to be executed and delivered, all such documents and instruments and will take, or
+cause to be taken, all such further or other actions as such requesting Party may reasonably deem necessary or desirable to evidence
+and effectuate the Transactions.
+
+Section
+5.11 Tax Matters.
+
+(a)
+Any sales, use, purchase, transfer, franchise, deed, fixed asset, stamp, documentary stamp, use or other Taxes and recording charges
+(including all related interest, penalties, and additions to any of the foregoing) payable by reason of the sale of the Acquired Assets
+or the assumption of the Assumed Liabilities under this Agreement or the Transactions not to exceed capped amount to be agreed between
+Purchaser and SunPower Corporation prior to the Closing (the “Transfer Taxes”) shall be borne and timely paid by Purchaser,
+and Purchaser shall timely file all Tax Returns related to any Transfer Taxes.
+
+(b)
+For U.S. federal and applicable state and local income tax purposes, the Purchase Price (and all other relevant items treated as consideration
+for U.S. federal income tax purposes) shall be allocated to the Acquired Assets (the “Asset Amount”). The Asset Amount
+shall be allocated consistent with the methodology set forth on Section 1060 of the Tax Code. Purchaser shall prepare a statement setting
+forth such allocation of the Asset Amount (the “Purchase Price Allocation Statement”). Purchaser shall deliver the
+Purchase Price Allocation Statement to Seller within 45 days after the Closing Date. Seller shall have thirty days after receipt of the
+Purchase Price Allocation Statement within which to review the Purchase Price Allocation Statement. If Seller does not object in writing
+to the Purchase Price Allocation Statement during such 30-day period, the Purchase Price Allocation Statement shall set forth the final
+allocation of the Asset Amount for all Tax purposes (the “Purchase Price Allocation”). If Seller objects in writing,
+Purchaser and Seller shall attempt in good faith to resolve such objections within 15 days thereafter, but if Seller and Purchaser are
+unable to resolve such objections within such fifteen days, then any remaining items in dispute shall be resolved by a mutually agreeable
+accounting firm. Once the Purchase Price Allocation is finalized in accordance with the above procedures, the Purchase Price Allocation
+shall be binding upon the parties hereto for all Tax purposes unless otherwise required by applicable Law. The parties hereto shall report
+for Tax purposes, act for Tax purposes, and file Tax Returns, in all respects consistent with the Purchase Price Allocation.
+
+29
+
+(c)
+Purchaser shall not make any election under Tax Code Section 338 or Tax Code Section 336 (or any similar provision under state, local
+or non-U.S. Law) with respect to the purchase of the Acquired Assets.
+
+(d)
+Without the prior written consent of Seller, Purchaser shall not, and, following the Closing, shall cause its Affiliates not to, (A)
+approach a Governmental Body with respect to any Taxes with respect to the Acquired Assets for any Pre-Closing Tax Period (including
+the entrance into any voluntary disclosure or other similar agreement with any Governmental Body), (B) amend, file or re-file any Tax
+Return with respect to the Acquired Assets for a Pre-Closing Tax Period, (C) agree to waive or extend the statute of limitations relating
+to any Taxes with respect to the Acquired Assets for any Pre-Closing Tax Period, or (D) make, revoke or change any tax election with
+respect to the Acquired Assets with respect to, or that has a retroactive effect to, any Pre-Closing Tax Period, in each case, if any
+such action would reasonably be expected to impact a Consolidated Tax Return.
+
+(e)
+Notwithstanding any other provision in this Agreement to the contrary, Seller shall have the exclusive right to control in all respects,
+and neither Purchaser nor any of its Affiliates shall be entitled to participate in the preparation or filing of, or any dispute, audit,
+or other proceeding of any kind, with respect to any Consolidated Tax Return.
+
+(f) In the
+case of any Straddle Period, for all applicable purposes of this Agreement, the amount of any Taxes based on or measured by income,
+gross or net sales, receipts, transactions, proceeds, profits, payroll or similar items for the Pre-Closing Tax Period of such
+Straddle Period shall be determined based on an interim closing of the books as of the end of the day on the Closing Date and the
+amount of other Taxes for a Straddle Period that relates to the Pre-Closing Tax Period shall be deemed to be the amount of such Tax
+for the entire taxable period multiplied by a fraction, the numerator of which is the number of days in the taxable period ending on
+the Closing Date and the denominator of which is the number of days in such Straddle Period; provided that exemptions,
+allowances or deductions that are calculated on an annual basis (including depreciation and amortization deductions), other than
+with respect to property placed in service after the Closing Date, shall be allocated on a per diem basis.
+
+(g)
+Purchaser and Seller shall cooperate fully with each other, as and to the extent reasonably requested by the other Party, in connection
+with tax matters related to the Acquired Assets for a Pre-Closing Tax Period, including the preparation, filing and execution of Tax
+Returns, and any audit, litigation or other proceeding with respect to Taxes. Such cooperation shall include the retention and (upon
+the other Party’s reasonable request) the provision of records and information that are reasonably relevant to any such audit,
+litigation or other proceeding during normal business hours and making employees available (as reasonably requested) on a mutually convenient
+basis to provide additional information and explanation of any materials provided hereunder. Notwithstanding anything in this agreement
+to the contrary, in no event will Purchaser or any Affiliate of Purchaser have any rights with respect to (including the preparation
+thereof) or access to any Tax Return (including a Consolidated Tax Return) or other Tax information or workpapers of Seller and its Affiliates
+that do not relate exclusively to an Acquired Business or Acquired Asset; provided, that Seller shall use commercially reasonable
+efforts (at Purchaser’s cost) to provide any information reflected in such Tax Returns or other materials that is reasonably relevant
+to the Acquired Businesses and reasonably requested by Purchaser.
+
+30
+
+Section
+5.12 Seller Guarantees. Purchaser acknowledges that in the course of conduct of the business of Sellers, Sellers and their
+respective Affiliates may have entered into various arrangements (a) in which guarantees, letters of credit, sureties, bonds or similar
+arrangements were issued by any Seller or its Affiliates and (b) in which such Seller or its Affiliates are the primary obligors on other
+Contracts, in any such case to support or facilitate the business of Sellers. The arrangements entered into by any Seller and its Affiliates
+referred to in the foregoing clauses (a) and (b), solely to the extent relating to any Acquired Assets or Assumed Liabilities
+and including those which are set forth in Section 5.12, are referred to as the “Seller Credit Support Obligations”.
+It is understood that the Seller Credit Support Obligations are not intended to continue after the Closing. Purchaser agrees that it
+shall use its reasonable best efforts to obtain replacements for the Seller Credit Support Obligations (which shall include the full
+and unconditional release of such Seller and its Affiliates) that will be in effect at the Closing or, in the case of Seller Credit Support
+Obligations described in the foregoing clause (b), will use its commercially reasonable efforts to arrange for itself or
+one of its Subsidiaries to be substituted as the primary obligor thereon as of the Closing through an assumption, accession, acknowledgement
+or similar agreement (which shall include the full and unconditional release of Sellers and their respective Affiliates) with the beneficiary
+of the applicable Seller Credit Support Obligation. Whether or not Purchaser is able to satisfy the terms of the immediately preceding
+sentence, Purchaser shall indemnify Sellers and their respective Affiliates and Representatives from and against any and all Liabilities
+incurred by any of them relating to the Seller Credit Support Obligations. Purchaser agrees that, with respect to any Seller Credit Support
+Obligation, its reasonable best efforts pursuant to this Section 5.12 shall include, if requested, the execution and delivery
+by Purchaser, or by an affiliate of Purchaser acceptable to the beneficiary of such Seller Credit Support Obligation, of a replacement
+guarantee that is substantially in the form of such Seller Credit Support Obligation. All costs and expenses incurred in connection with
+providing the release or substitution of the Seller Credit Support Obligations shall be borne by Purchaser.
+
+Article
+VI
+
+Conditions to Closing
+
+Section
+6.1 Conditions Precedent to the Obligations of Purchaser and Sellers. The respective obligations of each Party to consummate
+the Closing are subject to the satisfaction (or to the extent permitted by Law, written waiver by Sellers and Purchaser) on or prior
+to the Closing Date, of each of the following conditions:
+
+(a)
+no court of competent jurisdiction shall have issued, enacted, entered, promulgated or enforced any Order (including any temporary restraining
+Order or preliminary or permanent injunction) restraining, enjoining or otherwise prohibiting the Transactions that is still in effect;
+and
+
+(b)
+the Bankruptcy Court shall have entered the Sale Order and the Sale Order shall not have been stayed, reversed, or modified in a manner
+not reasonably acceptable to the Parties.
+
+31
+
+Section
+6.2 Conditions Precedent to the Obligations of Purchaser. The obligations of Purchaser to consummate the Closing are subject
+to the satisfaction (or to the extent permitted by Law, written waiver by Purchaser in its sole discretion), at the Closing, of each
+of the following conditions:
+
+(a)
+(i) the representations and warranties made by Sellers in Article III (in each case, other than the Fundamental Representations)
+shall be true and correct in all respects as of the Closing Date as though made on and as of the Closing Date, except (A) that representations
+and warranties that are made as of a specified date need be true and correct only as of such date and (B) to the extent the failure of
+such representations and warranties to be true and correct as of such dates has not had a Material Adverse Effect and (ii) the representations
+and warranties set forth in Section 3.1, Section 3.2 and Section 3.14 (collectively, the “Fundamental
+Representations”) shall be true and correct in all material respects as of the Closing Date as though made on and as
+of the Closing Date, except that such Fundamental Representations that are made as of a specified date need be true and correct in all
+material respects only as of such date;
+
+(b)
+No Seller shall have breached in a manner that is material with respect to the Transactions, taken as a whole, the covenants required
+to be performed or complied with by such Seller under this Agreement on or prior to Closing without curing such breach prior to the Closing
+Date; and
+
+(c)
+Sellers shall have delivered, or caused to be delivered, to Purchaser all of the items set forth in Section 2.4.
+
+Section
+6.3 Conditions Precedent to the Obligations of Sellers. The obligations of Sellers to consummate the Closing are subject to
+the satisfaction (or to the extent permitted by Law, written waiver by Sellers in their sole discretion), at the Closing, of each of
+the following conditions:
+
+(a)
+the representations and warranties made by Purchaser in Article IV shall be true and correct in all material respects as of the
+Closing Date as though made on and as of the Closing Date, except that representations and warranties that are made as of a specified
+date need be true and correct in all material respects only as of such date;
+
+(b)
+Purchaser shall not have breached in a manner that is material with respect to the Transactions, taken as a whole, the covenants required
+to be performed or complied with by it under this Agreement on or prior to the Closing Date without curing such breach prior to the Closing
+Date; and
+
+(c)
+Purchaser shall have delivered, or caused to be delivered, to Sellers all of the items set forth in Section 2.5.
+
+32
+
+Section
+6.4 Waiver of Conditions. Upon the occurrence of the Closing, any condition set forth in this Article VI that was not
+satisfied as of the Closing will be deemed to have been waived for all purposes by the Party having the benefit of such condition as
+of and after the Closing. None of Purchaser or Sellers may rely on the failure of any condition set forth in this Article VI,
+as applicable, to be satisfied if such failure was caused by such Party’s failure to perform any of its obligations under this
+Agreement, including its obligation to use its reasonable best efforts to consummate the Transactions as required under this Agreement.
+
+Article
+VII
+
+Termination
+
+Section
+7.1 Termination of Agreement. This Agreement may be terminated at any time prior to the Closing only in accordance with this
+Section 7.1, and in no other matter:
+
+(a)
+by the mutual written consent of Sellers and Purchaser;
+
+(b)
+by written notice of either Purchaser or Sellers, upon the issuance of an Order by a court of competent jurisdiction restraining, enjoining
+or otherwise prohibiting the consummation of the Closing or declaring unlawful the Transactions, and such Order having become final,
+binding and non-appealable; provided that no Party may terminate this Agreement under this Section 7.1(b) if the issuance
+of such Order was caused by such Party’s failure to perform any of its obligations under this Agreement;
+
+(c)
+by written notice of either Purchaser or Sellers, if the Closing shall not have occurred on or before September 30, 2024 (the “Outside
+Date”); provided that a Party shall not be permitted to terminate this Agreement pursuant to this Section 7.1(c)
+if the failure of the Closing to have occurred by the Outside Date was caused by such Party’s failure to perform any of its
+obligations under this Agreement; provided further that Sellers may extend the Outside Date up to an additional 60 days to the
+extent necessary to satisfy the conditions set forth in Section 6.1 so long as the other conditions in Article VI (other
+than conditions that by their nature are to be satisfied at the Closing) have been satisfied or waived;
+
+(d)
+by written notice from Sellers to Purchaser, upon a breach of any covenant or agreement on the part of Purchaser, or if any representation
+or warranty of Purchaser will have become untrue, in each case, such that the conditions set forth in Section 6.2(a) or Section
+6.2(b) would not be satisfied, including a breach of Purchaser’s obligation to consummate the Closing; provided that
+(i) if such breach is curable by Purchaser, then Sellers may not terminate this Agreement under this Section 7.1(d) unless such
+breach has not been cured by the date which that the earlier of (A) two Business Days prior to the Outside Date and (B) 30
+days after Sellers notify Purchaser of such breach and (ii) the right to terminate this Agreement pursuant to this Section 7.1(d)
+will not be available to Sellers at any time that Sellers are in material breach of, any covenant, representation or warranty hereunder;
+
+33
+
+(e)
+by written notice from Purchaser to Sellers, upon a breach of any covenant or agreement on the part of Sellers, or if any representation
+or warranty of Sellers will have become untrue, in each case, such that the conditions set forth in Section 6.3(a) or Section
+6.3(b) would not be satisfied; provided that (i) if such breach is curable by Sellers then Purchaser may not terminate this
+Agreement under this Section 7.1(e) unless such breach has not been cured by the date which is the earlier of (A) two Business
+Days prior to the Outside Date and (B) 30 days after Purchaser notifies Sellers of such breach and (ii) the right to terminate
+this Agreement pursuant to this Section 7.1(e) will not be available to Purchaser at any time that Purchaser is in material breach
+of, any covenant, representation or warranty hereunder;
+
+(f)
+by written notice from Sellers to Purchaser, if all of the conditions set forth in Section 6.1 and Section 6.2 have been
+satisfied (other than conditions that by their nature are to be satisfied at the Closing, but subject to the satisfaction or waiver of
+such conditions at the Closing) or waived and Purchaser fails to complete the Closing at the time required by Section 2.3;
+
+(g)
+by written notice from Sellers to Purchaser, if SunPower Corporation or the board of directors (or similar governing body) of SunPower
+Corporation determines that proceeding with the Transactions or failing to terminate this Agreement would be inconsistent with its fiduciary
+duties;
+
+(h)
+by written notice of either Purchaser or Sellers, if (i) any Seller enters into one or more Alternative Transactions with one or more
+Persons other than Purchaser or the Successful Bidder or the Back-Up Bidder at the Auction (ii) the Bankruptcy Court approves an
+Alternative Transaction other than with the Successful Bidder or the Back-Up Bidder, or (iii) Sellers consummate an Alternative
+Transaction with the Successful Bidder; or
+
+(i)
+by either Purchaser, if, following the Sale Hearing, the Purchaser is not the Successful Bidder or the Back-Up Bidder at the Auction;
+
+(j)
+by the Purchaser, if (i) following entry by the Bankruptcy Court of the Bidding Procedures Order, such order is voided, reversed or vacated
+or is subject to a stay and is not re-issued or re-instated or (ii) following entry by the Bankruptcy Court of the Sale Order, the Sale
+Order is voided, reversed or vacated or is subject to a stay and is not re-issued or re-instated.
+
+Section
+7.2 Effect of Termination. In the event of termination of this Agreement pursuant to Section 7.1, this Agreement shall
+forthwith become null and void and no Party or any of its partners, officers, directors, managers or equityholders will have any Liability
+under this Agreement; provided that this Section 7.2 and Article VIII shall survive any such termination; provided further
+that no termination will relieve Purchaser from any Liability for damages, losses, costs or expenses resulting from any Willful Breach
+of this Agreement prior to the date of such termination (which, for the avoidance of doubt, will be deemed to include any failure by
+Purchaser to consummate the Closing if and when it is obligated to do so hereunder).
+
+(a)
+In consideration for Purchaser having expended considerable time and expense in connection with this Agreement and the negotiation thereof,
+if this Agreement is terminated pursuant to Section 7.1(g), Section 7.1(h), Section 7.1(i), or Section 7.1(j),
+then Sellers will pay to Purchaser by wire transfer of immediately available funds within three (3) Business Days following such
+termination of this Agreement an amount equal to the reasonable and documented out-of-pocket costs and expenses (including fees and expenses
+of counsel) incurred by Purchaser in connection with the negotiation, diligence, execution, performance and enforcement of this Agreement,
+which amount will shall not exceed five hundred and fifty thousand United States Dollars ($550,000) (“Expense Reimbursement”).
+
+34
+
+(b)
+In consideration for Purchaser having expended considerable time and expense in connection with this Agreement and the negotiation
+thereof, if this Agreement is terminated pursuant to Section 7.1(g), Section 7.1(h), Section 7.1(i) or Section
+7.1(j), Sellers shall pay to Purchaser a break-up fee in an amount equal to 3% of the Purchase Price (the “Breakup Fee”);
+provided that the Breakup Fee shall be payable concurrently with the consummation of, and only out of the cash proceeds of, an
+Alternative Transaction, to an account designated by Purchaser in writing to Sellers. Each of the Parties acknowledges and agrees that
+the agreements contained in this Section 7.2(b) are an integral part of this Agreement and that the Expense Reimbursement and the
+Breakup Fee are not a penalty, but rather represent liquidated damages in a reasonable amount that will reasonably compensate Purchaser
+in the circumstances in which such Expense Reimbursement or Breakup Fee, as applicable, is payable for the efforts and resources expended
+and opportunities foregone by Purchaser while negotiating and pursuing this Agreement and in reasonable reliance on this Agreement and
+on the reasonable expectation of the consummation of the Transactions, which amount would otherwise be impossible to calculate with precision.
+
+(c)
+Subject in all cases to Section 8.11, prior to the Closing, in the event of any breach by any Seller of this Agreement,
+the sole and exclusive remedy of Purchaser shall be to terminate this Agreement in accordance with Section 7.1 and, if applicable,
+to receive the Expense Reimbursement or the Breakup Fee, as applicable, in accordance with Section 7.2(b). Pursuant to the Bidding
+Procedures Order and subject to approval by the Bankruptcy Court and entry of any Agreement Order, the claim of Purchaser in respect of
+the Expense Reimbursement or the Breakup Fee is and constitutes an allowed administrative expense claim against Sellers under Sections 503
+and 507(b) of the Bankruptcy Code in the Chapter 11 Cases.
+
+Article
+VIII
+
+Miscellaneous
+
+Section 8.1 Non-Survival
+of Representations and Warranties and Certain Covenants; Certain Waivers. Each of the representations and warranties and the
+covenants and agreements (to the extent such covenant or agreement contemplates or requires performance by such Party prior to the
+Closing) of the Parties set forth in this Agreement or in any other document contemplated hereby will terminate effective
+immediately as of the Closing such that no claim for breach of any such representation, warranty, covenant or agreement, detrimental
+reliance or other right or remedy (whether in contract, in tort or at law or in equity) may be brought with respect thereto after
+the Closing. Each covenant and agreement that explicitly contemplates performance after the Closing, will, in each case and to such
+extent, expressly survive the Closing in accordance with its terms (such term to survive the applicable statute of limitations for
+any Tax covenant with respect to Consolidated Tax Returns), and if no term is specified, then for five (5) years following the
+Closing Date.
+
+35
+
+Section 8.2 Expenses.
+Whether or not the Closing takes place, except as otherwise provided herein, all fees, costs and expenses (including fees, costs and
+expenses of Advisors) incurred in connection with the negotiation of this Agreement and the other agreements contemplated hereby,
+the performance of this Agreement and the other agreements contemplated hereby and the consummation of the Transactions will be paid
+by the Party incurring such fees, costs and expenses.
+
+Section 8.3 Notices.
+Except as otherwise expressly provided herein, all notices, demands and other communications to be given or delivered under or by
+reason of the provisions of this Agreement will be in writing and will be deemed to have been given (a) when personally
+delivered, (b) when transmitted by electronic mail (having obtained electronic delivery confirmation thereof), if delivered by
+5:00 P.M. local time of the recipient on a Business Day and otherwise on the following Business Day, (c) the day following the
+day on which the same has been delivered prepaid to a reputable national overnight air courier service or (d) the third
+Business Day following the day on which the same is sent by certified or registered mail, postage prepaid, in each case, to the
+respective Party at the number, electronic mail address or street address, as applicable, set forth below, or at such other number,
+electronic mail address or street address as such Party may specify by written notice to the other Party.
+
+Notices to Purchaser:
+
+ c/o Complete Solaria, Inc.
+
+ 45700 Northport Loop E,
+
+ Fremont, CA 94538
+
+ Attention:
+
+ Nick Santhanam
+
+ Email:
+
+ nick.santhanam@fernweh.com
+
+with a copy to (which shall not constitute notice):
+
+ DLA Piper LLP (US)
+
+ 1251 Avenue of the Americas,
+
+ New York, NY 10020
+
+ Attention:
+
+ Richard A. Chesley and Jamila Justine Willis
+
+ Email:
+
+ richard.chesley@us.dlapiper.com
+
+ jamila.willis@us.dlapiper.com
+
+36
+
+Notices to Sellers:
+
+ SunPower Corporation, Systems
+
+ 880 Harbour Way South, Suite 600
+
+ Richmond, CA 94804
+
+ Attention:
+
+ Chief Legal Officer
+
+ Email:
+
+ legalnotices@sunpower.com
+
+with copies to (which shall not constitute notice):
+
+ Kirkland & Ellis LLP
+
+ 609 Main Street
+
+ Houston, TX 77002
+
+ Attention:
+
+ Adam D. Larson, P.C.; Claire Campbell, P.C.
+
+ Email:
+
+ adam.larson@kirkland.com; claire.campbell@kirkland.com
+
+Section 8.4
+Binding Effect; Assignment.
+
+(a)
+This Agreement shall be binding upon Purchaser and, subject to the terms of the Bidding Procedures Order (with respect to the matters
+covered thereby) and the entry and terms of the Sale Order, Sellers, and shall inure to the benefit of and be so binding on the Parties
+and their respective successors and permitted assigns, including any trustee or estate representative appointed in the Chapter 11 Cases
+or any successor Chapter 7 cases; provided that neither this Agreement nor any of the rights or obligations hereunder may be assigned
+or delegated without the prior written consent of Purchaser and Sellers, and any attempted assignment or delegation without such prior
+written consent shall be null and void.
+
+(b)
+In furtherance of the foregoing, Purchaser may, without the consent of Sellers, designate, in accordance with the terms of this
+paragraph and effective as of the Closing, one or more Persons who is a wholly-owned subsidiary of Purchaser to acquire all, or any portion
+of, the Acquired Assets and assume all or any portion of the Assumed Liabilities or to be jointly obligated to pay all or any portion
+of the Purchase Price; provided that for the avoidance of doubt, any such assignment of the payment obligation shall not relieve Purchaser
+of its obligation to deliver the Purchase Price under Section 2.1. The above designation may be made by Purchaser by written notice
+to Sellers at any time prior to the Closing Date. The Parties agree to modify any Closing deliverables in accordance with the foregoing
+designation.
+
+Section 8.5 Amendment
+and Waiver. Any provision of this Agreement or the Schedules or exhibits hereto may be (a) amended only in a writing
+signed by Purchaser and Sellers or (b) waived only in a writing executed by the Party against which enforcement of such waiver
+is sought. No waiver of any provision hereunder or any breach or default thereof will extend to or affect in any way any other
+provision or prior or subsequent breach or default.
+
+Section 8.6 Third
+Party Beneficiaries. Except as otherwise expressly provided herein, nothing expressed or referred to in this Agreement will
+be construed to give any Person other than (i) for purposes of Section 8.7, the Non-Recourse Persons (as defined below)
+and (ii) the Parties hereto and such permitted assigns, any legal or equitable right, remedy, or claim under or with respect to this
+Agreement or any provision of this Agreement.
+
+37
+
+Section 8.7 Non-Recourse.
+This Agreement may only be enforced against, and any Action based upon, arising out of or related to this Agreement may only be
+brought against, the Persons that are expressly named as parties to this Agreement. Except to the extent named as a party to this
+Agreement, and then only to the extent of the specific obligations of such parties set forth in this Agreement, no past, present or
+future shareholder, member, partner, manager, director, officer, employee, Affiliate, agent or Advisor of any Party (each, a
+“Non-Recourse Person”) will have any Liability (whether in contract, tort, equity or otherwise) for any of the
+representations, warranties, covenants, agreements or other obligations or Liabilities of any of the parties to this Agreement or
+for any Agreement Dispute (as defined below) and (ii) in no event shall any Party have any shared or vicarious liability, or
+otherwise be the subject of legal or equitable claims, for the actions, omissions or fraud (including through equitable claims (such
+as unjust enrichment) not requiring proof of wrongdoing committed by the subject of such claims) of any other Person, and each of
+such Persons are intended third party beneficiaries of this Section 8.7 and shall be entitled to enforce this Section
+8.7 as if a party directly hereto.
+
+Section 8.8 Severability.
+Whenever possible, each provision of this Agreement will be interpreted in such manner as to be effective and valid under applicable
+Law, but if any provision of this Agreement is held to be prohibited by or invalid under applicable Law in any jurisdiction, such
+provision will be ineffective only to the extent of such prohibition or invalidity in such jurisdiction, without invalidating the
+remainder of such provision or the remaining provisions of this Agreement or in any other jurisdiction.
+
+Section 8.9 Construction.
+The language used in this Agreement will be deemed to be the language chosen by the Parties to express their mutual intent, and no
+rule of strict construction will be applied against any Person.
+
+Section 8.10 Complete
+Agreement. This Agreement, together with the Confidentiality Agreement and any other agreements expressly referred to herein
+or therein, contains the entire agreement of the Parties respecting the sale and purchase of the Acquired Assets and the Assumed
+Liabilities and the Transactions and supersedes all prior agreements among the Parties respecting the sale and purchase of the
+Acquired Assets and the Assumed Liabilities and the Transactions. In the event an ambiguity or question of intent or interpretation
+arises with respect to this Agreement, the terms and provisions of the execution version of this Agreement will control and prior
+drafts of this Agreement and the documents referenced herein will not be considered or analyzed for any purpose (including in
+support of parol evidence proffered by any Person in connection with this Agreement), will be deemed not to provide any evidence as
+to the meaning of the provisions hereof or the intent of the Parties with respect hereto and will be deemed joint work product of
+the Parties.
+
+38
+
+Section 8.11 Specific
+Performance. The Parties agree that irreparable damage, for which monetary relief, even if available, would not be an
+adequate remedy, would occur in the event that any provision of this Agreement is not performed in accordance with its specific
+terms or is otherwise breached, including if any of the Parties fails to take any action required of it hereunder to consummate the
+Transactions. It is accordingly agreed that (a) the Parties will be entitled to an injunction or injunctions, specific
+performance or other equitable relief to prevent breaches of this Agreement and to enforce specifically the terms and provisions
+hereof in the courts described in Section 8.12 without proof of damages or otherwise, this being in addition to any other
+remedy to which they are entitled under this Agreement, and (b) the right of specific performance and other equitable relief is
+an integral part of the Transactions and without that right, neither Sellers nor Purchaser would have entered into this Agreement.
+The Parties acknowledge and agree that any Party pursuing an injunction or injunctions or other Order to prevent breaches of this
+Agreement and to enforce specifically the terms and provisions of this Agreement in accordance with this Section 8.11 will
+not be required to provide any bond or other security in connection with any such Order. The remedies available to Sellers pursuant
+to this Section 8.11 will be in addition to any other remedy to which they were entitled at law or in equity, and the
+election to pursue an injunction or specific performance will not restrict, impair or otherwise limit Sellers from seeking to
+collect or collecting damages. If, prior to the Outside Date, any Party brings any action, in each case in accordance with Section
+8.12, to enforce specifically the performance of the terms and provisions hereof by any other Party, the Outside Date will
+automatically be extended (i) for the period during which such action is pending, plus ten (10) Business Days or (ii) by
+such other time period established by the court presiding over such action, as the case may be. In no event will this Section
+8.11 be used, alone or together with any other provision of this Agreement, to require Sellers to remedy any breach of any
+representation or warranty made by Sellers herein.
+
+Section 8.12 Jurisdiction
+and Exclusive Venue. Each of the Parties irrevocably agrees that any Action of any kind whatsoever, including a
+counterclaim, cross-claim, or defense, regardless of the legal theory under which any Liability or obligation may be sought to be
+imposed, whether sounding in contract or in tort or under statute, or whether at law or in equity, or otherwise under any legal or
+equitable theory, that may be based upon, arising out of, or related to this Agreement or the negotiation, execution, or performance
+of this Agreement or the Transactions and any questions concerning the construction, interpretation, validity and enforceability of
+this Agreement (each, an “Agreement Dispute”) brought by any other Party or its successors or assigns will be
+brought and determined only in (a) the Bankruptcy Court and any federal court to which an appeal from the Bankruptcy Court may
+be validly taken or (b) if the Bankruptcy Court is unwilling or unable to hear such Action, in the Court of Chancery of the State of
+Delaware (or if such court lacks jurisdiction, any other state or federal court sitting in the State of Delaware) (the
+“Chosen Courts”), and each of the Parties hereby irrevocably submits to the exclusive jurisdiction of the Chosen
+Courts for itself and with respect to its property, generally and unconditionally, with regard to any Agreement Dispute. Each of the
+Parties agrees not to commence any Agreement Dispute except in the Chosen Courts, other than Actions in any court of competent
+jurisdiction to enforce any Order, decree or award rendered by any Chosen Courts, and no Party will file a motion to dismiss any
+Agreement Dispute filed in a Chosen Court on any jurisdictional or venue-related grounds, including the doctrine of forum
+non-conveniens. The Parties irrevocably agree that venue would be proper in any of the Chosen Court, and hereby irrevocably
+waive any objection that any such court is an improper or inconvenient forum for the resolution of any Agreement Dispute. Each of
+the Parties further irrevocably and unconditionally consents to service of process in the manner provided for notices in Section
+8.3. Nothing in this Agreement will affect the right of any Party to serve process in any other manner permitted by Law.
+
+39
+
+Section 8.13 Governing
+Law; Waiver of Jury Trial.
+
+(a)
+Except to the extent the mandatory provisions of the Bankruptcy Code apply, this Agreement and any Agreement Dispute will be governed
+by and construed in accordance with the internal Laws of the State of Delaware applicable to agreements executed and performed entirely
+within such State without regards to conflicts of law principles of the State of Delaware or any other jurisdiction that would cause the
+Laws of any jurisdiction other than the State of Delaware to apply.
+
+(b)
+EACH PARTY ACKNOWLEDGES AND AGREES THAT ANY AGREEMENT DISPUTE IS LIKELY TO INVOLVE COMPLICATED AND DIFFICULT ISSUES AND THEREFORE
+HEREBY WAIVES, TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, ANY RIGHT IT MAY HAVE TO A TRIAL BY JURY IN ANY AGREEMENT DISPUTE. EACH
+OF THE PARTIES AGREES AND CONSENTS THAT ANY SUCH AGREEMENT DISPUTE WILL BE DECIDED BY COURT TRIAL WITHOUT A JURY AND THAT THE PARTIES
+MAY FILE AN ORIGINAL COUNTERPART OF A COPY OF THIS AGREEMENT WITH ANY COURT AS WRITTEN EVIDENCE OF THE CONSENT OF THE PARTIES TO THE IRREVOCABLE
+WAIVER OF THEIR RIGHT TO TRIAL BY JURY. EACH PARTY (I) CERTIFIES THAT NO ADVISOR OF ANY OTHER PARTY HAS REPRESENTED, EXPRESSLY OR
+OTHERWISE, THAT SUCH OTHER PARTY WOULD NOT, IN THE EVENT OF ANY AGREEMENT DISPUTE, SEEK TO ENFORCE THE FOREGOING WAIVER AND (II) ACKNOWLEDGES
+THAT IT AND THE OTHER PARTIES HAVE BEEN INDUCED TO ENTER INTO THIS AGREEMENT BY, AMONG OTHER THINGS, THE MUTUAL WAIVERS AND CERTIFICATIONS
+IN THIS SECTION 8.13(B).
+
+Section 8.14 No
+Right of Set-Off. Purchaser, on its own behalf and on behalf the Purchaser Group and its and their respective successors and
+permitted assigns, hereby waives any rights of set-off, netting, offset, recoupment or similar rights that Purchaser, any member of
+the Purchaser Group or any of its or their respective successors and permitted assigns has or may have with respect to the payment
+of the Purchase Price or any other payments to be made by Purchaser pursuant to this Agreement or any other document or instrument
+delivered by Purchaser in connection herewith.
+
+Section 8.15 Counterparts
+and PDF. This Agreement and any other agreements referred to herein or therein, and any amendments hereto or thereto, may be
+executed in multiple counterparts, any one of which need not contain the signature of more than one party hereto or thereto, but all
+such counterparts taken together will constitute one and the same instrument. Any counterpart, to the extent signed and delivered by
+means of a .PDF or other electronic transmission, will be treated in all manner and respects as an original Contract and will be
+considered to have the same binding legal effects as if it were the original signed version thereof delivered in person. No party
+hereto or to any such Contract will raise the use of a .PDF or other electronic transmission to deliver a signature or the fact that
+any signature or Contract was transmitted or communicated through the use of PDF or other electronic transmission as a defense to
+the formation of a Contract and each such party forever waives any such defense.
+
+40
+
+Section 8.16 Publicity.
+Neither Sellers nor Purchaser shall issue any press release or public announcement
+concerning this Agreement or the Transactions without obtaining the prior written approval of the other Party, which approval will not
+be unreasonably conditioned, withheld or delayed, unless, in the reasonable judgment of Purchaser or Sellers, disclosure is otherwise
+required by applicable Law or by the Bankruptcy Court with respect to filings to be made with the Bankruptcy Court in connection with
+this Agreement or by the applicable rules of any stock exchange on which Purchaser or Sellers (or their respective Affiliates) lists
+securities; provided that the Party intending to make such release shall use its reasonable efforts consistent with such applicable
+Law or Bankruptcy Court requirement to consult with the other Party with respect to the text thereof. The Sellers and Purchaser shall
+use reasonable efforts to resolve any objections to any press release or public announcement within twenty-four (24) hours after the
+request.
+
+Section 8.17
+Bulk Sales Laws. The Parties intend that pursuant to section 363(f) of the Bankruptcy Code, the transfer of the
+Acquired Assets shall be free and clear of any Encumbrances in the Acquired Assets including any Encumbrances or claims arising out of
+the bulk transfer laws except Permitted Encumbrances, and the Parties shall take such steps as may be necessary or appropriate to so provide
+in the Sale Order. In furtherance of the foregoing, each Party hereby waives compliance by the Parties with the “bulk sales,”
+“bulk transfers” or similar Laws and all other similar Laws in all applicable jurisdictions in respect of the Transactions.
+
+Section 8.18 Fiduciary
+Obligations. Nothing in this Agreement, or any document related to the Transactions, will require any Seller or any of its
+managers, officers or members, in each case, in their capacity as such, to take any action, or to refrain from taking any action, to
+the extent inconsistent with their fiduciary obligations or applicable Law. For the avoidance of doubt, Sellers retain the right to
+pursue any transaction or restructuring strategy that, in Sellers’ business judgment, will maximize the value of its
+estates.
+
+Section 8.19 Sellers’
+Representative. Each Party agrees that SunPower Corporation has the power and authority to unilaterally act on behalf of all
+or any of the Sellers for the purposes specified under this Agreement. Such power will include the power to make all decisions,
+actions, consents and determinations on behalf of the Sellers, including to make any waiver of any closing condition or agree to any
+amendment to this Agreement. No Seller shall have any right to object, dissent, protest or otherwise contest the same. Purchaser
+shall be entitled to rely on any action or omission taken by SunPower Corporation on behalf of the Sellers.
+
+Section 8.20 Schedules.
+
+(a) The
+Schedules have been arranged for purposes of convenience in separately numbered sections corresponding to the sections of this
+Agreement; provided that each section of the Schedules will be deemed to incorporate by reference all information disclosed
+in any other section of the Schedules, and any disclosure in the Schedules will be deemed a disclosure against any representation or
+warranty set forth in this Agreement. Capitalized terms used in the Schedules and not otherwise defined therein have the meanings
+given to them in this Agreement. The specification of any dollar amount or the inclusion of any item in the representations and
+warranties contained in this Agreement, the Schedules or the attached exhibits is not intended to imply that the amounts, or higher
+or lower amounts, or the items so included, or other items, are or are not required to be disclosed (including whether such amounts
+or items are required to be disclosed as material or threatened) or are within or outside of the Ordinary Course, and no Party will
+use the fact of the setting of the amounts or the fact of the inclusion of any item in this Agreement, the Schedules or exhibits in
+any dispute or controversy between the Parties as to whether any obligation, item or matter not set forth or included in this
+Agreement, the Schedules or exhibits is or is not required to be disclosed (including whether the amount or items are required to be
+disclosed as material or threatened) or are within or outside of the Ordinary Course. In addition, matters reflected in the
+Schedules are not necessarily limited to matters required by this Agreement to be reflected in the Schedules. Such additional
+matters are set forth for informational purposes only and do not necessarily include other matters of a similar nature. No
+information set forth in the Schedules will be deemed to broaden in any way the scope of the Parties’ representations and
+warranties. Any description of any agreement, document, instrument, plan, arrangement or other item set forth on any
+Schedule is qualified in its entirety by the terms of such agreement, document, instrument, plan, arrangement, or item which
+terms will be deemed disclosed for all purposes of this Agreement. The information contained in this Agreement, in the Schedules and
+exhibits hereto is disclosed solely for purposes of this Agreement, and no information contained herein or therein will be deemed to
+be an admission by any Party to any third party of any matter whatsoever, including any violation of Law or breach of Contract.
+
+41
+
+(b)
+The Sellers shall deliver to Purchaser a true and correct copy of the Schedules in accordance with the milestone set forth in Section
+5.6. From time to time prior to the Closing, Sellers may supplement or amend any of the Schedules (each a “Schedule Supplement”).
+Any disclosure in any such Schedule Supplement shall not be deemed to give rise to any Purchaser termination rights pursuant to Article
+VII.
+
+Article
+IX
+
+Additional Definitions and Interpretive Matters
+
+Section 9.1 Certain
+Definitions.
+
+(a)
+“Accounts Receivable” means, (a) the trade accounts receivable, and other rights to payment, of Sellers and
+the full benefit of all security for such accounts or rights to payment, including all trade accounts receivable representing amounts
+receivable in respect of goods shipped or products sold or services rendered by Sellers, (b) the other accounts or notes receivable of
+Sellers and the full benefit of all security for such accounts or notes, and (c) any claim, cause of action, remedy or other right related
+to any of the foregoing, in each case, which are solely related to the Acquired Businesses and the Acquired Assets.
+
+(b)
+“Acquired Assets” shall have the meaning set forth in Section 1.1.
+
+(c)
+“Acquired Businesses” shall have the meaning set forth Section 1.1.
+
+(d)
+“Action” means any action, suit, litigation, arbitration, mediation, audit, proceeding (including any civil,
+criminal, administrative, investigative or appellate proceeding) or prosecution of any kind whatsoever whether sounding in contract
+or tort, or whether at law or in equity, or otherwise under any legal or equitable theory, commenced, brought, conducted or heard by
+or before any Governmental Body.
+
+42
+
+(e)
+“Advisors” means, with respect to any Person as of any relevant time, any directors, officers, employees, investment
+bankers, financial advisors, accountants, agents, attorneys, consultants, or other representatives of such Person.
+
+(f)
+“Affiliate” means, with respect to any Person, any other Person that, directly or indirectly through one or more
+intermediaries, controls, or is controlled by, or is under common control with, such Person, and the term “control”
+(including the terms “controlled by” and “under common control with”) means the possession, directly or
+indirectly, of the power to direct or cause the direction of the management, affairs and policies of such Person, whether through
+ownership of voting securities, by Contract or otherwise.
+
+(g)
+“Agreement” shall have the meaning set forth in the Preamble.
+
+(h)
+“Agreement Dispute” shall have the meaning set forth in Section 8.12.
+
+(i)
+“Assets Amount” shall have the meaning set forth in Section 5.11(b).
+
+(j)
+“Assigned Contracts” shall have the meaning set forth in Section 1.1(a).
+
+(k)
+“Assignment and Assumption Agreement” shall have the meaning set forth in Section 2.4(a).
+
+(l)
+“Assumed Liabilities” shall have the meaning set forth in Section 1.3.
+
+(m)
+“Auction” shall have the meaning ascribed to it in the Bidding Procedures.
+
+(n)
+“Back-Up Bidder” shall have the meaning set forth in Section 5.2.
+
+(o)
+“Bankruptcy Code” shall have the meaning set forth in the Recitals.
+
+(p)
+“Bankruptcy Court” shall have the meaning set forth in the Recitals.
+
+(q)
+“Bidding Procedures” means the bidding procedures approved by the Bankruptcy Court pursuant to the Bidding Procedures
+Order, (i) in the form attached hereto as Exhibit B and, in any case, (ii) in form and substance satisfactory to Purchaser in its
+reasonable discretion; it being understood that Bidding Procedures in substantially the form of Exhibit B will be deemed satisfactory
+to Purchaser.
+
+(r)
+“Bidding Procedures Order” means the Order (I)(A) Approving Bidding Procedures for the Sale or Sales of the
+Debtors’ Assets; (B) Authorizing the Debtors to Enter into Stalking Horse Purchase Agreement with Bid Protections for Blue
+Raven and Other Assets; (C) Scheduling Auctions and Approving the Form and Manner of Notice Thereof; (D) Approving Assumption and
+Assignment Procedures; (E) Scheduling Sale Hearings and Approving the Form and Manner of Notice Thereof; (II) (X) Approving the Sale
+of the Debtors’ Assets Free and Clear of Encumbrances, Claims, Interests and Encumbrances and (Y) Approving the Assumption and
+Assignment of Executory Contracts and Unexpired Leases; and (III) Granting Related Relief.
+
+43
+
+(s)
+“Blue Raven Business” means the solar business offered by Blue Raven HoldCo and its direct and indirect
+subsidiaries that provide simple ways to get solar technology to homeowners; provided that the Blue Raven Business does not
+include the business or assets of Albatross Software, LLC, a Delaware limited liability company (“Albatross
+Software”) except that the Blue Raven Business includes a perpetual license to Albatross Software’s customer
+management relationship CRM software platform known as “Albatross” and owns the improvements made to such software since
+October 04, 2023 (which is included on Schedule 1.1(a) attached hereto).
+
+(t)
+“Blue Raven HoldCo” means Falcon Acquisition HoldCo, Inc., a Delaware corporation.
+
+(u)
+“Breakup Fee” shall have the meaning set forth in Section 7.2(b).
+
+(v)
+“Business Day” means any day other than a Saturday, Sunday or other day on which banks in San Francisco, California
+are authorized or required by Law to be closed.
+
+(w)
+“Cash Consideration” shall have the meaning set forth in Section 2.1.
+
+(x)
+“Chapter 11 Cases” shall have the meaning set forth in the Recitals.
+
+(y)
+“Chosen Courts” shall have the meaning set forth in Section 8.12.
+
+(z)
+“Closing” shall have the meaning set forth in Section 2.3.
+
+(aa)
+“Closing Date” shall have the meaning set forth in Section 2.3.
+
+(bb)
+“Closing Date Payment” shall have the meaning set forth in Section 2.1.
+
+(cc)
+“Company Benefit Plans” means any “employee benefit plan” (as defined under section 3(3) of ERISA,
+whether or not subject to ERISA) or any agreement, plan, or practice providing for compensation, employee benefits, severance pay or
+benefits, change in control payments, equity awards, fringe benefits, or other remuneration or benefit of any kind, whether written
+or unwritten, funded or unfunded, for the benefit of any employee, contractor, advisor or other service provider of the Acquired
+Business that is sponsored, maintained, contributed to or required to be contributed to by any Seller or pursuant to which any
+Seller has any liability (contingent or otherwise).
+
+(dd)
+“Confidentiality Agreement” means that certain letter agreement, dated as of July 18, 2024, by and between Complete
+Solar and SunPower Corporation.
+
+(ee)
+“Consolidated Tax Return” means any Tax Return of the Seller Tax Group with respect to any U.S. federal, state or
+local or non-U.S. Taxes (including income Taxes) that are paid on an affiliated, consolidated, combined, unitary or similar group
+basis.
+
+44
+
+(ff) “Continuing
+Employees” shall have the meaning set forth in Section 5.9(a).
+
+(gg)
+“Contract” means any written contract, indenture, note, bond, lease, sublease, mortgage, agreement, guarantee,
+or other agreement that is binding upon a Person or its property, in each case, other than a purchase order, service order, or sales order.
+
+(hh)
+“Cure Costs” shall have the meaning set forth in Section 1.3(a).
+
+(ii) “Cure
+Notice” shall have the meaning set forth in Section 1.5(a).
+
+(jj)
+“Dataroom” shall have the meaning set forth in Section 3.15.
+
+(kk)
+“Deposit” shall have the meaning set forth in Section 2.2(a).
+
+(ll)
+“Encumbrances” means any lien (as defined in section 101(37) of the Bankruptcy Code), encumbrance, claim (as
+defined in section 101(5) of the Bankruptcy Code), charge, mortgage, deed of trust, encumbrance, lien, pledge, option to
+purchase or lease, right of first offer or refusal, conditional sale or other title retention agreement or lease in the nature
+thereof, preemptive right (whether statutory or contractual), adverse claim (as defined in Section 8-102(a)(1) of the Uniform
+Commercial Code), any subordination arrangement in favor of another Person, security interest or agreement, easement or similar
+encumbrance, other than restrictions on transfer arising under applicable securities Laws, leases and licenses granted in the
+Ordinary Course, and any encroachment, defect in title, or right of way, including any agreement to give any of the foregoing in the
+future, in each case, that is not eliminated as of the Closing.
+
+(mm) “Enforceability
+Exceptions” shall have the meaning set forth in Section 3.2(c).
+
+(nn)
+“Environmental Laws” means all Laws relating in any way to pollution or protection of the environment (including,
+without limitation, ambient air, vapor, surface water, ground water, land surface or subsurface strata), management, use, preservation
+or reclamation of natural resources, the presence, management or release or threatened releases of, or exposure to, hazardous materials,
+or to human health and safety, including the Comprehensive Environmental Response, Compensation and Liability Act (42 U.S.C. § 9601
+et seq.), the Hazardous Materials Transportation Act (49 U.S.C. § 5101 et seq.), the Resource Conservation and Recovery Act (42 U.S.C.
+§ 6901 et seq.), the Clean Water Act (33 U.S.C. § 1251 et seq.), the Clean Air Act (42 U.S.C. § 7401 et seq.), the Safe
+Drinking Water Act (42 U.S.C. § 300f et seq.), the Toxic Substances Control Act (15 U.S.C. § 2601 et seq.), the Federal Insecticide,
+Fungicide and Rodenticide Act (7 U.S.C. § 136 et seq.), and the Occupational Safety and Health Act (29 U.S.C. § 651 et seq.)
+(but only as such Law relates to or regulates workplace exposures to Hazardous Materials), each of their state and local counterparts
+or equivalents, each of their foreign and international equivalents, and any environmental transfer of ownership notification or approval
+statute, as each has been amended and the regulations promulgated pursuant thereto.
+
+45
+
+(a)
+“Equity Interests” means, with respect to a Person, any membership
+interests, partnership interests, profits interests, capital stock or other equity securities (including profit participation
+features or equity appreciation rights, phantom stock rights or other similar rights) or ownership interests of such Person, or any
+securities (including debt securities or other indebtedness) exercisable or exchangeable for or convertible into, or other rights to
+acquire, membership interests, partnership interests, capital stock or other equity securities or ownership interests of such Person
+(or otherwise constituting an investment in such Person).
+
+(oo)
+“ERISA” means the Employee Retirement Income Security Act of 1974.
+
+(pp)
+“Escrow Agent” shall have the meaning set forth in Section 2.2(a).
+
+(qq)
+“Exchange Act” means the U.S. Securities Exchange Act of 1934, as amended, and the rules and regulations promulgated
+thereunder.
+
+(rr)
+“Excluded Assets” shall have the meaning set forth in Section 1.2.
+
+(ss)
+“Excluded Liabilities” shall have the meaning set forth in Section 1.4.
+
+(tt)
+“Expense Reimbursement” shall have the meaning set forth in Section 7.2(a).
+
+(uu)
+“Express Representations” shall have the meaning set forth in Section 3.15.
+
+(vv)
+“Fundamental Representations” shall have the meaning set forth in Section 6.2(a).
+
+(ww)
+“Governmental Body” means any government, quasi-governmental entity, or other governmental or regulatory body,
+agency or political subdivision thereof of any nature, whether foreign, federal, state or local, or any agency, branch, department, official,
+entity, instrumentality or authority thereof, or any court or arbitrator of applicable jurisdiction.
+
+(xx)
+“Intellectual Property Licenses” means (i) any grant by any Seller to a third Person of any right to use any
+Intellectual Property Rights owned (or purported to be owned) by or licensed to any Seller, and (ii) any grant to any Seller of a right
+to use a third Person’s Intellectual Property Rights, and in each case, including any amendments thereto.
+
+46
+
+(yy)
+“Intellectual Property Rights” means, collectively, all intellectual property rights in any jurisdiction
+throughout the world, whether registered, unregistered, or registrable, including any and all of the following: (A) inventions,
+discoveries, improvements, ideas, know-how, methodology, models, algorithms, formulae, systems, processes, technology, whether
+patentable or not, and all patents, patent applications of any kind, industrial designs, utility models, and like rights, and all
+applications pertaining to the foregoing, in any jurisdiction, including re-issues, continuations, divisionals,
+continuations-in-part, re-examinations, renewals and extensions; (B) rights in registered and unregistered trademarks, service
+marks, trade names, trade dress, logos, packaging design, slogans, product configurations, trade names and other indications of
+origin, and Internet domain names, and registrations and applications for registration of any of the foregoing and all goodwill
+associated therewith; (C) copyrights and registrations and applications for registration thereof, and copyrightable works and any
+other works of authorship in any medium, including applications or registrations in any jurisdiction for the foregoing and all moral
+rights in the foregoing; (D) trade secret and other rights in any information (including inventions, discoveries and invention
+disclosures (whether or not patented), formulae, patterns, compilations, programs, devices, methods, strategies, techniques, or
+processes), in each case that derives independent economic value, actual or potential, from not being generally known or readily
+ascertainable by others who can obtain economic value from its disclosure or use; (E) rights in software, including interpreted or
+compiled source code, object code, development documentation, programming tools, drawings, specifications, metadata and data; (F)
+data and database rights; (G) domain names, websites and social media accounts and identifiers, including, as applicable, the
+usernames and passwords associated therewith and all content contained therein; (H) any other intellectual property or proprietary
+rights of any kind, nature or description; and (I) any tangible embodiments of the foregoing (in whatever form or medium).
+
+(zz)
+“Interest” means any interest within the meaning of section 363(f) of the Bankruptcy Code, including any interest
+of a Governmental Authority, and all other interests, pledges, security interests, rights of setoff, restrictions or limitations on
+use, successor liabilities, conditions, rights of first refusal, options to purchase, obligations to allow participation, agreements
+or rights, rights asserted in litigation matters, competing rights of possession, obligations to lend, matters filed of record that
+relate to, evidence or secure an obligation of the Sellers (and all created expenses and charges) of any type under, among other
+things, any document, instrument, agreement, affidavit, matter filed of record, cause, or state or federal Law, whether known or
+unknown, legal or equitable, and all Liens, rights of offset, replacement Liens, adequate protection Liens, charges, obligations, or
+claims granted, allowed or directed in any Decree.
+
+(aaa)
+“Inventory” means all raw materials, work in progress, finished goods inventory.
+
+(bbb)
+“Intellectual Property Assignment Agreement” shall have the meaning set forth in Section 2.4(c).
+
+(ccc)
+“Knowledge of Sellers”, or words of like import, means the actual
+knowledge, as of the date of this Agreement, without independent verification (and in no event encompass constructive, imputed or
+similar concepts of knowledge) of Tony Garzolini, Eileen Evans and Shawn Fitzgerald, none of whom, for the sake of clarity and
+avoidance of doubt, shall have any personal Liability or obligations regarding such knowledge.
+
+(ddd)
+“Law” means any federal, state, provincial, local, municipal, foreign or international, multinational or other
+law, statute, legislation, constitution, principle of common law, ordinance, code, decree, treaty, convention, rule, regulation or Order
+issued, enacted, adopted, promulgated, implemented or otherwise put into effect by or under the authority of any Governmental Body.
+
+47
+
+(eee)
+“Liability” means, as to any Person, any debt, adverse claim, liability, duty, responsibility, Tax, obligation,
+commitment, assessment, cost, expense, loss, expenditure, charge, fee, penalty, fine, contribution, or premium of any kind or nature
+whatsoever, whether known or unknown, asserted or unasserted, absolute or contingent, direct or indirect, accrued or unaccrued,
+liquidated or unliquidated, or due or to become due, and regardless of when sustained, incurred or asserted or when the relevant
+events occurred or circumstances existed.
+
+(fff)
+“Material Adverse Effect” means a material adverse effect on the Acquired Assets and Assumed Liabilities, taken
+as whole; provided that none of the following (or consequences thereof), either alone or in combination, shall constitute, or
+be taken into account in determining whether or not there has been, a Material Adverse Effect: (i) any matter, event, change,
+development, occurrence, circumstance or effect (each, an “Effect”) in, arising from or relating to general
+business or economic conditions affecting the industry in which Sellers operate, including Effects arising from or relating to
+competition or Ordinary Course matters and other Effects within such industry, new entrants into such industry, new products from
+other participants in such industry, changes in product pricing due to such competition, changes in market share or financial
+results due to such competition, and other related changes resulting from such competition; (ii) Effects in, arising from or
+relating to national or international political or social conditions, including tariffs, riots, protests, the engagement by the
+United States or other country in hostilities or the escalation thereof, whether or not pursuant to the declaration of a national
+emergency or war, or the occurrence or the escalation of any military, cyber or terrorist (whether or not state-sponsored) attack
+upon the United States or any other country, or any of its territories, possessions, or diplomatic or consular offices or upon any
+military installation, asset, equipment or personnel of the United States or of any other country; (iii) Effects in, arising from or
+relating to any fire, flood, hurricane, earthquake, tornado, windstorm, other calamity or act of God, global or national health
+concern, epidemic, pandemic (whether or not declared as such by any Governmental Body), viral outbreak (including
+“Coronavirus” or “COVID-19” or the worsening thereof) or any quarantine or trade restrictions related
+thereto or any other force majeure; (iv) Effects in, arising from or relating to the decline or rise in price of any
+currency or any equipment or supplies necessary to or used in the provision of services by Sellers or any of their respective
+Subsidiaries (including any resulting inability to meet customer demands or fulfill purchase orders and any resulting breaches of
+Contracts); (v) Effects in, arising from, or relating to financial, banking, or securities markets (including (A) any disruption of
+any of the foregoing markets, (B) any change in currency exchange rates, (C) any decline or rise in the price of any security,
+commodity, Contract, or index, and (D) any increased cost, or decreased availability, of capital or pricing or terms related to any
+financing for the Transactions); (vi) Effects in, arising from or relating to changes in, GAAP or the interpretation thereof;
+(vii) Effects in, arising from or relating to changes in, Laws or other binding directives or determinations issued or made by
+or agreements with or consents of any Governmental Body and any increase (or decrease) in the terms or enforcement of (or
+negotiations or disputes with respect to) any of the foregoing; (viii ) Effects in, arising from or relating to (A) the
+taking of any action permitted or contemplated by this Agreement or at the request of Purchaser or its Affiliates, (B) the
+failure to take any action if such action is prohibited by this Agreement, (C) Purchaser’s failure to consent to any of
+the actions restricted in Section 5.1 or (D) the negotiation, announcement, or pendency of this Agreement or the
+Transactions, the identity, nature, or ownership of Purchaser or Purchaser’s plans with respect to the Acquired Assets and
+Assumed Liabilities, including the impact thereof on the relationships, contractual or otherwise, of the business of Sellers or
+their respective Affiliates with employees, customers, lessors, suppliers, vendors, or other commercial partners or litigation
+arising from or relating to this Agreement or the Transactions; (ix) Effects in, arising from, or relating to any existing
+event, occurrence or circumstance that is publicly known or disclosed or with respect to which Purchaser has knowledge as of the
+date hereof, including any matter set forth in the Schedules; (x) Effects in, arising from or relating to any action required
+to be taken under any existing Contract to which Sellers or their respective Subsidiaries (or any of their assets or properties) is
+bound; (xi) Effects that arise from any seasonal fluctuations in the business of Sellers; (xii) any failure, in and of itself,
+to achieve any budgets, projections, forecasts, estimates, plans, predictions, performance metrics or operating statistics or the
+inputs into such items (whether or not shared with Purchaser or its Affiliates or Advisors) and any other failure to win or maintain
+customers or business; (xiii) the Effect of any action taken by Purchaser or its Affiliates with respect to the Transactions or
+the financing thereof or any breach by Purchaser of this Agreement; (xiv) the matters set forth on the Schedules and any
+changes or developments in, or Effects or results arising from or relating to, matters set forth on the Schedules; or
+(xv) (A) the commencement or pendency of the Chapter 11 Cases; (B) any objections in the Bankruptcy Court to (1) this
+Agreement or any of the Transactions, (2) the Sale Order or the reorganization or liquidation of Sellers or their respective
+Affiliates, or (3) the assumption or rejection of any assigned contract; or (C) any Order of the Bankruptcy Court or any actions or
+omissions of Sellers or its Affiliates in compliance therewith; provided that any adverse Effect resulting or arising from
+any matter described in clauses (i) through (v) may be taken into account in determining whether there has been a
+Material Adverse Effect to the extent, and only to the extent, that such Effect has had a materially disproportionate adverse effect
+on Sellers relative to similarly situated participants in the industries and geographic areas in which Sellers operate (in which
+case only such incremental materially disproportionate adverse effect may be taken into account in determining whether there has
+been a Material Adverse Effect).
+
+48
+
+(ggg)
+“New Homes Business” means the solutions offered by Sellers to builders and homeowners in the new homes market,
+including all-in-one solutions that include a full suite of renewable energy systems: solar, storage, EV chargers, software, and services.
+
+(hhh)
+“Non-Installing Dealer Business” means the sales business of Sellers through a network of non-installing dealers.
+
+(iii)
+“Non-Equity Assets” shall have the meaning set forth in Section 5.11(b).
+
+(jjj)
+“Non-Recourse Person” shall have the meaning set forth in Section 8.7.
+
+(kkk)
+“Order” means any order, injunction, judgment, decree, ruling, writ or arbitration award of a Governmental Body
+of competent jurisdiction, including any order entered by the Bankruptcy Court in the Chapter 11 Cases (including the Sale Order).
+
+49
+
+(lll)  
+ “Ordinary Course” means the ordinary and usual course of operations
+of the business of Sellers with respect to the Acquired Assets, as applicable and taken as a whole, taking into account the contemplation,
+commencement and pendency of the Chapter 11 Cases and past practice in light of the current pandemic, epidemic or disease outbreak; provided
+that any action taken, or omitted to be taken, that relates to, or arises out of, any pandemic, epidemic or disease outbreak shall be
+deemed to be in the Ordinary Course.
+
+(mmm)
+“Outside Date” shall have the meaning set forth in Section 7.1(c).
+
+(nnn)
+“Party” or “Parties” shall have the meaning set forth in the Preamble.
+
+(ooo)
+“Permit” means any permit, license, franchise, clearance, registration, certificate, approval, qualification,
+or authorization issued by any Governmental Body or accrediting organization.
+
+(ppp)
+“Permitted Encumbrances” means (i) Encumbrances for utilities and Taxes not yet due and payable, or that
+are being contested in good faith, or the nonpayment of which is permitted or required by the Bankruptcy Code, (ii) easements, rights
+of way, restrictive covenants, encroachments and similar non-monetary encumbrances or non-monetary impediments against any of the Acquired
+Assets which do not, individually or in the aggregate, adversely affect the operation of the Acquired Assets, (iii) materialmans’,
+mechanics’, artisans’, shippers’, warehousemans’ or other similar common law or statutory liens incurred in the
+Ordinary Course for amounts not yet due and payable or that are being contested by appropriate proceedings, (iv) licenses granted
+on a non-exclusive basis, (v) such other Encumbrances or title exceptions which do not, individually or in the aggregate, materially
+and adversely affect the operation of the Acquired Assets, and (vii) solely prior to Closing, any Encumbrances that will be removed
+or released by operation of the Sale Order.
+
+(qqq)
+“Person” means an individual, corporation, partnership, limited liability company, joint venture, association,
+trust, unincorporated organization, labor union, organization, estate, Governmental Body or other entity or group.
+
+(rrr)
+“Personal Information” means any information that enables, or could reasonably enable, a Person in possession
+thereof to identify a natural person or that is otherwise considered personally identifiable information, personal information, personal
+data or any other similar term under applicable Law.
+
+(sss)
+“Pre-Closing Tax Period” means any taxable period (or portion thereof) ending on or prior to the Closing Date and
+the portion through the end of the Closing Date of any Straddle Period.
+
+(ttt)
+“Professional Fees Amount” means an amount equal to all fees and expenses incurred and estimated to be incurred
+on or prior to the Closing Date (regardless of whether such fees and expenses have been approved by the Bankruptcy Court as of the
+Closing Date) by any professional retained pursuant to sections 327 and 1103 of the Bankruptcy Code in the Bankruptcy Cases.
+
+50
+
+(uuu)
+ “Purchase Price” shall have the meaning set forth in Section 2.1.
+
+(vvv)
+“Purchase Price Allocation” shall have the meaning set forth in Section 5.11(b).
+
+(www)  “Purchase
+Price Allocation Statement” shall have the meaning set forth in Section 5.11(b).
+
+(xxx)
+“Purchaser” shall have the meaning set forth in the Preamble.
+
+(yyy)
+“Purchaser Group” means Purchaser, any Affiliate of Purchaser and each of their respective former, current or
+future Affiliates, officers, directors, employees, partners, members, managers, agents, Advisors, successors or permitted assigns.
+
+(zzz) “Purchaser
+SEC Reports” means all schedules, forms, statements, documents or reports filed or furnished by Purchaser with the SEC, as
+the case may be, together with all exhibits and schedules thereto and all information incorporated therein by reference.
+
+(aaaa) “Related Agreements” means the Assignment and Assumption Agreement, Intellectual Property Assignment Agreement,
+the TSA (if executed in connection with the Closing), and any certificates delivered pursuant to this Agreement.
+
+(bbbb) “Release”
+means any release, spill, emission, leaking, pumping, pouring, emitting, emptying, discharging, injecting, escaping, disposal, dumping,
+dispersing, leaching or migrating in, into, onto or through the indoor or outdoor environment.
+
+(cccc)  “Representatives”
+of a Person means any officer, director, manager or employee of such Person or any investment banker, attorney, accountant, consultant,
+agent or other advisor or representative of such Person.
+
+(dddd)  “Retained Taxes” means any Liability for Taxes (including the payment thereof) (i) attributable to the Acquired
+Assets for a Pre-Closing Tax Period as determined pursuant to Section 5.11, (ii) of any and all Sellers (or for which any Seller
+or any of their Affiliates are otherwise liable, including as a transferee, successor, by contract or otherwise pursuant to applicable
+Law, or arising as a result of being or having been a member of any consolidated, combined, unitary or other group or being or having
+included or required to be included in any Tax Return related thereto), or (iii) in respect of any Excluded Assets.
+
+(eeee) “Sale Order” means the sale Order or Orders (i) approving this Agreement and the terms and conditions hereof,
+including pursuant to sections 363 and 365 of the Bankruptcy Code and (ii) approving and authorizing Sellers to consummate the Transactions,
+in form and substance reasonably acceptable to the Parties.
+
+(ffff)
+“SEC” means the U.S. Securities and Exchange Commission.
+
+(gggg) “Securities
+Act” means the U.S. Securities Act of 1933, as amended, and the rules and regulations promulgated thereunder.
+
+51
+
+(hhhh)  “Seller” and “Sellers” shall have the meaning set forth in the Preamble.
+
+(iiii)
+“Seller Credit Support Obligations” shall have the meaning set forth in Section 5.12.
+
+(jjjj)
+“Seller Tax Group” means any consolidated, combined, unitary or similar
+Tax group of which Seller or any of its Affiliates (other than Blue Raven HoldCo) is the common parent.
+
+(kkkk) “Straddle
+Period” means any taxable period that includes (but does not end on) the Closing Date.
+
+(llll)
+“Subsidiary” means, with respect to any Person, any corporation, partnership, limited liability company or other
+entity, whether incorporated or unincorporated, of which such first Person directly or indirectly owns or controls a majority of the
+securities or other interests having by their terms ordinary voting power to elect a majority of the board of directors or others
+performing similar functions.
+
+(mmmm)
+“Successful Bidder” means, if an Auction is conducted, the prevailing party at the conclusion of such
+Auction.
+
+(nnnn) “Tax”
+or “Taxes” means any federal, state, local, non-United States or other tax of any kind, including income, gross receipts,
+capital stock, franchise, profits, withholding, social security, unemployment, disability, real property, ad valorem/personal property,
+stamp, excise, occupation, sales, use, transfer, value added, import, export, alternative minimum or estimated tax, including any interest,
+penalty or addition thereto.
+
+(oooo) “Tax Code” means the United States Internal Revenue Code of 1986, as
+amended.
+
+(pppp) “Tax Return” means any return, claim for refund, report, statement or information return relating to Taxes required
+to be filed with a Governmental Body, including any schedule or attachment thereto, and including any amendments thereof.
+
+(qqqq) “Transaction
+Agreements” means this Agreement and any other agreements, instruments or documents entered into pursuant to this Agreement.
+
+(rrrr) “Transactions” means the transactions contemplated by this Agreement and the other Transaction Agreements.
+
+(ssss)
+“Transfer Offer” shall have the meaning set forth in Section 5.9(a).
+
+(tttt)
+“Transfer Taxes” shall have the meaning set forth in Section 5.11.
+
+(uuuu) “Transferred
+Employee Records” means physical or electronic copies of all personnel records (including those as required by
+applicable Law and those pertaining to performance, training history, job experience and history, and for the three (3)-year period
+immediately preceding the Closing, compensation history) for the Transferred Employees, except where (i) the transfer or disclosure
+of such records is prohibited by applicable Law or would include medical records, or (ii) consent of the relevant employee is
+required by applicable Law but not given.
+
+52
+
+(vvvv) “Transferred
+Employees” shall have the meaning set forth in Section 5.9(a).
+
+(wwww)
+“Transferred Intellectual Property” means any and all worldwide rights in and to all tangible and intangible
+interests, rights, or assets of the Sellers (whether arising under statutory or common law, contract, or otherwise), which include
+all of the following items owned (or purported to be owned) by the Sellers, for which any Seller is a licensee, sub-licensee,
+licensor, sub-licensor, assignee, or in which any Seller has an interest or right, in each case that is used or held for use by the
+Sellers in the Acquired Businesses or is otherwise related to the Acquired Businesses: (a) inventions, discoveries, processes,
+designs, tools & molds, techniques, developments and related improvements whether or not patentable; (b) patents, patent
+applications, industrial design registrations and applications therefor, divisions, divisionals, continuations,
+continuations-in-part, reissues, substitutes, renewals, registrations, confirmations, re-examinations, extensions and any
+provisional applications, or any such patents or patent applications, and any foreign or international equivalent of any of the
+foregoing (collectively, the “Transferred Patents”); (c) trademarks (whether registered, unregistered or
+pending), trade dress, service marks, service names, trade names, brand names, product names, logos, domain names, internet rights
+(including IP Addresses and AS numbers), corporate names, fictitious names, other names, symbols (including business symbols),
+slogans, translations of any of the foregoing and any foreign or international equivalent of any of the foregoing and all goodwill
+associated therewith and (to the extent transferable by law) any applications and/or registrations in connection with the foregoing
+and all advertising and marketing collateral including any of the foregoing (collectively, the “Transferred
+Trademarks”); (d) work specifications, databases and artwork; (e) technical, scientific and other know-how and information
+(including promotional material), trade secrets, confidential information, methods, processes, practices, formulas, designs,
+patterns, tools & molds, assembly procedures, or specifications; (f) rights associated with works of authorship including
+copyrights, moral rights, design rights, rights in databases, copyright applications, copyright registrations, rights existing under
+any copyright laws and rights to prepare derivative works (collectively, the “Transferred Copyrights”); (g) work
+for hire; (h) the Acquired Businesses’ entire customer list and database (including (1) all lists of current and past
+customers of the Acquired Businesses, (2) any and all information relating in any way to the use of such lists for or by the
+Acquired Businesses, (3) personal information, such as name, address, telephone number, email address, website and any other
+database information and (4) customer purchase history at a transaction level (including with respect to dollar amounts, dates, and
+items purchased) but excluding from the foregoing any credit card numbers or related customer payment source, social security
+numbers, or financial information prohibited by law); (i) all assets used or useful by the Sellers, in connection with the Acquired
+Businesses, in the conduct of its business over the internet and/or in any other electronic medium, including any websites, social
+media sites and accounts (including the content contained therein, user names and passwords), diagrams, drawings, domain names, and
+all advertising and marketing materials and collateral (including all physical, digital, or electronic imagery and design files),
+samples, product catalogs, product designs, tech packs, tools, molds, and specifications (including tech specifications) vendor and
+merchandise supplier data and information; (j) all goodwill, rights, contracts (including all licenses and sublicenses granted or
+obtained with respect thereto) and assets related to the foregoing; and (k) all other intellectual property and Intellectual
+Property Rights owned or purported to be owned by the Sellers, which are used in, held for use in, or relate to the Acquired
+Businesses; provided that the Transferred Intellectual Property shall not include any Excluded Assets.
+
+53
+
+(xxxx) “TSA”
+has the meaning set forth in Section 2.4(d).
+
+(yyyy) 
+“WARN Act” means the Worker Adjustment and Retraining Notification Act of 1988 or any similar Laws.
+
+(zzzz) “Willful
+Breach” shall mean a deliberate act or a deliberate failure to act regardless of whether breaching was the conscious object
+of the act or failure to act.
+
+Section 9.2
+Rules of Interpretation. Unless otherwise expressly provided in this Agreement, the following will apply to this Agreement,
+the Schedules and any other certificate, instrument, agreement or other document contemplated hereby or delivered hereunder.
+
+(a)
+The terms “hereof,” “herein” and “hereunder” and terms of similar import are references to
+this Agreement as a whole and not to any particular provision of this Agreement. Section, clause, Schedule and exhibit references contained
+in this Agreement are references to sections, clauses, Schedules and exhibits in or to this Agreement, unless otherwise specified. All
+exhibits and Schedules annexed hereto or referred to herein are hereby incorporated in and made a part of this Agreement as if set forth
+in full herein. Any capitalized terms used in any Schedule or exhibits but not otherwise defined therein shall be defined as set forth
+in this Agreement.
+
+(b)
+Whenever the words “include,” “includes” or “including” are used in this Agreement, they will
+be deemed to be followed by the words “without limitation.” Where the context permits, the use of the term “or”
+will be equivalent to the use of the term “and/or.”
+
+(c)
+The words “to the extent” shall mean “the degree by which” and not simply “if.”
+
+(d)
+When calculating the period of time before which, within which or following which any act is to be done or step taken pursuant
+to this Agreement, the date that is the reference date in calculating such period will be excluded. If the last day of such period is
+a day other than a Business Day, the period in question will end on the next succeeding Business Day.
+
+(e)
+Words denoting any gender will include all genders, including the neutral gender. Where a word is defined herein, references to
+the singular will include references to the plural and vice versa.
+
+54
+
+(f) The word
+“will” will be construed to have the same meaning and effect as the word “shall”. The words
+“shall,” “will,” or “agree(s)” are mandatory, and “may” is permissive.
+
+(g)
+All references to a day or days will be deemed to refer to a calendar day or calendar days, as applicable, unless otherwise specifically
+provided.
+
+(h)
+Any document or item will be deemed “delivered,” “provided” or “made available” by Sellers,
+within the meaning of this Agreement if such document or item is (i) included in the Dataroom, (ii) actually delivered or provided
+to Purchaser or any of Purchaser’s Advisors or (iii) made available upon request, including at Sellers’ offices.
+
+(i) Any
+reference to any agreement or Contract will be a reference to such agreement or Contract, as amended, modified, supplemented or waived.
+
+(j) A
+reference to any Party to this Agreement or any other agreement or document shall include such Party’s successors and assigns,
+but only if such successors and assigns are not prohibited by this Agreement.
+
+(k)
+A reference to a Person in a particular capacity excludes such Person in any other capacity or individually.
+
+[Signature pages follow.]
+
+55
+
+IN WITNESS WHEREOF,
+the Parties have caused this Agreement to be executed by their respective duly authorized officers as of the date first above written.
+
+ PURCHASER:
+
+ COMPLETE SOLARIA, INC.
+
+ By:
+
+ /s/ Thurman J. Rodgers            
+
+ Name: 
+
+ Thurman J. Rodgers
+
+ Title:
+
+ Chief Executive Officer
+
+[Signature
+Page to Asset Purchase Agreement]
+
+IN WITNESS WHEREOF,
+the Parties have caused this Agreement to be executed by their respective duly authorized officers as of the date first above written.
+
+ SELLERS:
+
+ SUNPOWER CORPORATION
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ SUNPOWER CORPORATION, SYSTEMS
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ FALCON ACQUISITION HOLDCO, INC.
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ BLUE RAVEN SOLAR HOLDINGS, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ BRS FIELD OPS, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name: 
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+[Signature
+Page to Asset Purchase Agreement]
+
+IN WITNESS WHEREOF,
+the Parties have caused this Agreement to be executed by their respective duly authorized officers as of the date first above written.
+
+ BLUE RAVEN SOLAR, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name: 
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ SUNPOWER CAPITAL SERVICES, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ SUNPOWER CAPITAL, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ SUNPOWER NORTH AMERICA, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+ SUNPOWER HOLDCO, LLC
+
+ By:
+
+ /s/ Matt Henry
+
+ Name:
+
+ Matt Henry
+
+ Title:
+
+ Chief Transformation Officer
+
+[Signature
+Page to Asset Purchase Agreement]
+
+EXHIBIT A
+
+BILL OF SALE, ASSIGNMENT AND ASSUMPTION AGREEMENT
+
+[ATTACHED]
+
+EXHIBIT B
+
+BIDDING PROCEDURES
+
+[ATTACHED]

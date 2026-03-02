@@ -1,0 +1,2095 @@
+EX-2.1
+2
+ea021640301ex2-1_180life.htm
+ASSET PURCHASE AGREEMENT DATED SEPTEMBER 29, 2024, BY AND AMONG ELRAY RESOURCES, INC., AS SELLER AND 180 LIFE SCIENCES CORP., AS PURCHASER
+
+Exhibit 2.1
+
+ASSET PURCHASE AGREEMENT
+
+Dated September 29, 2024,
+
+By and Among Elray Resources, Inc.,
+
+as Seller
+
+and
+
+180 Life Sciences Corp.,
+
+as Purchaser
+
+TABLE OF CONTENTS
+
+ ARTICLE I.
+ DEFINITIONS
+
+ 1
+
+ 1.1.
+
+ Definitions.
+
+ 1
+
+ ARTICLE II.
+ THE TRANSACTION; RECITALS
+
+ 6
+
+ 2.1.
+
+ Purchased Assets.
+
+ 6
+
+ 2.2.
+
+ Assumed Liabilities.
+
+ 6
+
+ 2.3.
+
+ Excluded Assets.
+
+ 6
+
+ 2.4.
+
+ Non-Assignable Assets.
+
+ 7
+
+ ARTICLE III.
+ CONSIDERATION
+
+ 8
+
+ 3.1.
+
+ Consideration.
+
+ 8
+
+ 3.2.
+
+ Transfer Taxes; Prorations.
+
+ 8
+
+ 3.3.
+
+ Other Actions.
+
+ 8
+
+ ARTICLE IV.
+ CLOSING
+
+ 8
+
+ 4.1.
+
+ Closing.
+
+ 8
+
+ 4.2.
+
+ Closing Deliveries by Seller.
+
+ 8
+
+ 4.3.
+
+ Closing Deliveries by Purchaser.
+
+ 8
+
+ 4.4.
+
+ Closing Deliveries by Seller and Purchaser.
+
+ 8
+
+ ARTICLE V.
+ REPRESENTATIONS AND WARRANTIES OF SELLER
+
+ 9
+
+ 5.1.
+
+ Organization.
+
+ 9
+
+ 5.2.
+
+ Authority.
+
+ 9
+
+ 5.3.
+
+ Required Consents.
+
+ 9
+
+ 5.4.
+
+ No Conflict.
+
+ 9
+
+ 5.5.
+
+ Litigation.
+
+ 9
+
+ 5.6.
+
+ No Employees.
+
+ 10
+
+ 5.7.
+
+ Purchased Assets.
+
+ 10
+
+ 5.8.
+
+ Brokers.
+
+ 10
+
+ 5.9.
+
+ Title.
+
+ 10
+
+ 5.10.
+
+ Intellectual Property.
+
+ 10
+
+ 5.11.
+
+ Securities Representations.
+
+ 11
+
+ 5.12.
+
+ Data Room; Information Supplied.
+
+ 14
+
+ 5.13.
+
+ No Other Representations and Warranties.
+
+ 14
+
+ ARTICLE VI.
+ REPRESENTATIONS AND WARRANTIES OF PURCHASER
+
+ 14
+
+ 6.1.
+
+ Organization.
+
+ 14
+
+ 6.2.
+
+ Purchaser Capitalization.
+
+ 14
+
+ 6.3.
+
+ Listing and Maintenance Requirements.
+
+ 14
+
+ 6.4.
+
+ Authority.
+
+ 14
+
+ 6.5.
+
+ Required Consents.
+
+ 14
+
+ 6.6.
+
+ No Conflict.
+
+ 15
+
+Asset Purchase Agreement 
+ i
+
+ 6.7.
+
+ Independent Investigation.
+
+ 15
+
+ 6.8.
+
+ Litigation.
+
+ 15
+
+ 6.9.
+
+ Status of Purchased Assets.
+
+ 15
+
+ 6.10.
+
+ Brokers.
+
+ 15
+
+ ARTICLE VII.
+ COVENANTS
+
+ 15
+
+ 7.1.
+
+ Conduct of Purchased Assets Prior to the Closing.
+
+ 15
+
+ 7.2.
+
+ Access to Information.
+
+ 15
+
+ 7.3.
+
+ No Solicitation of Other Bids.
+
+ 16
+
+ 7.4.
+
+ Notice of Certain Events.
+
+ 16
+
+ 7.5.
+
+ Confidentiality.
+
+ 17
+
+ 7.6.
+
+ Closing Conditions.
+
+ 17
+
+ 7.7.
+
+ Public Announcements.
+
+ 17
+
+ ARTICLE VIII.
+ CONDITIONS TO CLOSING
+
+ 17
+
+ 8.1.
+
+ Conditions to Obligations of All Parties.
+
+ 17
+
+ 8.2.
+
+ Conditions to Obligations of Purchaser.
+
+ 18
+
+ 8.3.
+
+ Conditions to Obligations of Seller.
+
+ 19
+
+ 8.4.
+
+ Preferred Stock Shares.
+
+ 20
+
+ ARTICLE IX.
+ INDEMNIFICATION
+
+ 20
+
+ 9.1.
+
+ Survival.
+
+ 20
+
+ 9.2.
+
+ Indemnification.
+
+ 20
+
+ 9.3.
+
+ Indemnification Procedures.
+
+ 21
+
+ 9.4.
+
+ Certain Limitations.
+
+ 21
+
+Asset Purchase Agreement 
+ ii
+
+ ARTICLE X.
+ TERMINATION
+
+ 22
+
+ 10.1.
+
+ Termination.
+
+ 22
+
+ 10.2.
+
+ Effect of Termination.
+
+ 23
+
+ ARTICLE XI.
+ POST-CLOSING OBLIGATIONS
+
+ 23
+
+ 11.1.
+
+ Assistance with Operations and Development.
+
+ 23
+
+ 11.2.
+
+ Proxy Statement and Stockholder Meeting.
+
+ 24
+
+ 11.3.
+
+ Public Announcements.
+
+ 24
+
+ 11.4.
+
+ No Further Transfer of Purchased Assets.
+
+ 24
+
+ ARTICLE XII.
+ MISCELLANEOUS PROVISIONS
+
+ 25
+
+ 12.1.
+
+ Amendments and Waivers.
+
+ 25
+
+ 12.2.
+
+ Notices.
+
+ 25
+
+ 12.3.
+
+ Governing Law; Assignments Prohibited; Successors and
+ Assigns; No Third-Party Beneficiaries.
+
+ 26
+
+ 12.4.
+
+ Limitation on Consequential Damages.
+
+ 26
+
+ 12.5.
+
+ Arm’s Length Negotiations.
+
+ 27
+
+ 12.6.
+
+ Remedies.
+
+ 27
+
+ 12.7.
+
+ Dispute Resolution.
+
+ 27
+
+ 12.8.
+
+ JURY TRIAL WAIVER.
+
+ 27
+
+ 12.9.
+
+ Counterparts, Effect of Facsimile, Emailed and Photocopied
+ Signatures.
+
+ 27
+
+ 12.10.
+
+ Severability; Entire Agreement.
+
+ 28
+
+ 12.11.
+
+ Interpretation and Construction.
+
+ 28
+
+ 12.12.
+
+ Expenses of the Parties.
+
+ 28
+
+ 12.13.
+
+ Further Assurances.
+
+ 28
+
+ Exhibits
+
+ A
+
+ Certificate of Designations of 180 Life Sciences Corp. Establishing the Designations, Preferences, Limitations and Relative Rights of Its Series B Convertible Preferred Stock
+
+ B
+
+ Purchased Assets
+
+ C
+
+ Bill of Sale
+
+ D
+
+ Intellectual Property Assignment
+
+Asset Purchase Agreement 
+ iii
+
+ASSET PURCHASE AGREEMENT
+
+This Asset Purchase Agreement
+(this “Agreement”) is made as of September 29, 2024, by and among Elray Resources, Inc., a Nevada corporation
+(“Seller”), and 180 Life Sciences Corp., a Delaware corporation (“Purchaser”). Capitalized
+terms used and not otherwise defined herein have the meanings specified or referred to in ARTICLE I.
+
+RECITALS
+
+WHEREAS, Seller owns,
+free and clear of any liens, pledges, pending, threatened or reasonably foreseeable claims, rights of third parties or any other Encumbrances,
+the assets listed on Exhibit B attached hereto, which shall specifically include all Software Assets (as defined
+below)(collectively, the “Purchased Assets”); and
+
+WHEREAS, Purchaser
+desires to purchase from Seller, and Seller desires to sell to Purchaser, all of the Purchased Assets on the terms and conditions set
+forth herein.
+
+NOW, THEREFORE, in
+consideration of the foregoing recitals and the mutual representations, warranties, covenants and promises contained herein, the adequacy
+and sufficiency of which are hereby acknowledged by the parties, the parties hereto agree as follows:
+
+AGREEMENT
+
+ARTICLE
+I.
+
+DEFINITIONS
+
+1.1.
+Definitions. In addition to the terms defined elsewhere in this Agreement, for all purposes of this Agreement, the following
+terms have the meanings set forth in this Section 1.1:
+
+(a)
+“Affiliate” of a Person means any other Person that directly or indirectly, through one or more intermediaries,
+controls, is controlled by, or is under common control with, such Person. The term “control” (including the
+corollary terms “controlled by” and “under common control with”) means the possession,
+directly or indirectly, of the power to direct or cause the direction of the management and policies of a Person, whether through the
+ownership of voting securities, by Contract or otherwise.
+
+(b)
+“Agreement” shall have the meaning set forth in the Preamble (including all schedules and exhibits attached
+hereto), as amended from time to time.
+
+(c)
+“Business Day” means any day other than (i) a Saturday or a Sunday or (ii) a day on which banking institutions
+are authorized or required by law to be closed in the State of California.
+
+(d)
+“Closing Date” shall have the meaning specified in Section 4.1.
+
+(e)
+“Closing” shall have the meaning specified in Section 4.1.
+
+Asset Purchase Agreement 
+ Page 1 of 29
+
+(f)
+“Consent” shall mean any approval, consent, ratification, permission, waiver or authorization (including
+any Governmental Approval).
+
+(g)
+“Contract” shall mean any agreement, contract, consensual obligation, promise, understanding, arrangement,
+commitment or undertaking of any nature (whether written or oral and whether express or implied), whether or not legally binding.
+
+(h)
+“Damages” shall mean and include any loss, damage, injury, decline in value, lost opportunity, Liability,
+claim, demand, settlement, judgment, award, fine, penalty, Tax, fee (including any legal fee, accounting fee, expert fee or advisory fee),
+charge, cost (including any cost of investigation) or expense of any nature.
+
+(i)
+“Designation” means the Certificate of Designations of 180 Life Sciences Corp. Establishing the Designations,
+Preferences, Limitations and Relative Rights of Its Series B Convertible Preferred Stock, in the form attached hereto as Exhibit
+A.
+
+(j)
+“Elray Rights” means the rights of, and ownership of, Seller in, and to, a copy of the Purchased Assets,
+subject to the Exclusive Rights (as defined in Section 11.5).
+
+(k)
+“Encumbrance” shall mean any lien, pledge, hypothecation, charge, mortgage, security interest, encumbrance,
+equity, trust, equitable interest, claim, preference, right of possession, lease, tenancy, license, encroachment, covenant, infringement,
+interference, third party intellectual property right or claim, Order, proxy, option, right of first refusal, preemptive right, community
+property interest, legend, defect, impediment, exception, reservation, limitation, impairment, imperfection of title (including, without
+limitation, any claim of intellectual property ownership by any Person other than the Seller), condition or restriction of any nature
+(including any restriction on the voting of any security, any restriction on the transfer of any security or other asset, any restriction
+on the receipt of any income derived from any asset, any restriction on the use of any asset and any restriction on the possession, exercise
+or transfer of any other attribute of ownership of any asset).
+
+(l)
+“Entity” shall mean any corporation (including any non-profit corporation), general partnership, limited
+partnership, limited liability partnership, joint venture, estate, trust or company (including any limited liability company or joint
+stock company).
+
+(m)
+“Front End” means the user interface (UI) of the website or software program utilizing the Purchased
+Assets and includes the design and user-friendly interface for the online casino, and would require designing a homepage, game lobby,
+and user account management system.
+
+(n)
+“Governmental Approval” shall mean any: (a) permit, license, certificate, concession, approval, consent,
+ratification, permission, clearance, confirmation, exemption, waiver, franchise, certification, designation, rating, registration, variance,
+qualification, accreditation or authorization issued, granted, given or otherwise made available by or under the authority of any Governmental
+Authority or pursuant to any Legal Requirement; or (b) right under any Contract with any Governmental Authority.
+
+Asset Purchase Agreement 
+ Page 2 of 29
+
+(o)
+“Governmental Authority” shall mean any: (a) nation, principality, state, commonwealth, province, territory,
+county, municipality, district or other jurisdiction of any nature; (b) federal, state, local, municipal, foreign or other government;
+(c) governmental or quasi-governmental authority of any nature (including any governmental division, subdivision, department, agency,
+bureau, branch, office, commission, council, board, instrumentality, officer, official, representative, organization, unit, body or Entity
+and any court or other tribunal); (d) multinational organization or body; or (e) individual, Entity or body exercising, or entitled to
+exercise, any executive, legislative, judicial, administrative, regulatory, police, military or taxing or arbitral authority or power
+of any nature.
+
+(p)
+“Intellectual Property” means all tangible or intangible proprietary information and materials, including
+without limitation, (i) all inventions (whether patentable or unpatentable and whether or not reduced to practice), all improvements thereon,
+and all patents, patent applications and patent disclosures, together with all continuations, continuations-in-part, divisions, reissues,
+extensions and re-examinations thereof, (ii) all trademarks, service marks, trade dress, logos, trade names (all of the foregoing, whether
+registered or unregistered), corporate names and limited liability company names, domain names (including www.splitrockcasino.com or
+any alternative name mutually agreed to by parties), URLs, and social media accounts, together with all translations, adaptations,
+derivations and combinations thereof, and all applications, registrations and renewals in connection therewith, (iii) all works of authorship
+(whether registered or unregistered) and copyrights and all applications, registrations and renewals in connection therewith, (iv) all
+trade secrets and confidential business information (including ideas, research and development, know-how, formulas, compositions, manufacturing
+and production process and techniques, methods, schematics, technology, technical data, designs, drawings, flowcharts, block diagrams,
+specifications, customer and supplier lists, pricing and cost information and business and marketing plans and proposals), (v) all software
+and firmware (including data, databases and related documentation), (vi) all documents, records and files relating to, and tangible embodiments
+of, all intellectual property described in clauses (i) through (v) above; and (vii) all licenses, agreements and other rights in any third
+party product or any third party intellectual property described in clauses (i) through (v) above, other than any “off the
+shelf” third party software or related intellectual property.
+
+(q)
+“Legal Requirement(s)” shall mean any federal, state, local, municipal, foreign or other law, statute,
+legislation, constitution, principle of common law, resolution, ordinance, code, Order, edict, decree, proclamation, treaty, convention,
+rule, regulation, permit, ruling, directive, pronouncement, requirement (licensing or otherwise), specification, determination, decision,
+opinion or interpretation that is, has been or may in the future be issued, enacted, adopted, passed, approved, promulgated, made, implemented
+or otherwise put into effect by or under the authority of any Governmental Authority.
+
+Asset Purchase Agreement 
+ Page 3 of 29
+
+(r)
+“Liability” shall mean any debt, obligation, duty or liability of any nature (including any unknown,
+undisclosed, unmatured, unaccrued, unasserted, contingent, indirect, conditional, implied, vicarious, derivative, joint, several or secondary
+liability), regardless of whether such debt, obligation, duty or liability would be required to be disclosed on a balance sheet prepared
+in accordance with generally accepted accounting principles and regardless of whether such debt, obligation, duty or liability is immediately
+due and payable.
+
+(s)
+“Licensed Intellectual Property” means all Intellectual Property of any third party that is licensed
+by Seller and expressly included in the list of the Purchased Assets on Exhibit B to this Agreement.
+
+(t)
+“Order” shall mean any: (a) temporary, preliminary or permanent order, judgment, injunction, edict, decree,
+ruling, pronouncement, determination, decision, opinion, verdict, sentence, stipulation, subpoena, writ or award that is or has been issued,
+made, entered, rendered or otherwise put into effect by or under the authority of any court, administrative agency or other Governmental
+Authority; or (b) Contract with any Governmental Authority that is or has been entered into in connection with any Proceeding.
+
+(u)
+“Owned Intellectual Property” means all Intellectual Property that is owned or purposed to be owned by
+Seller and expressly included in the list of the Purchased Assets on Exhibit B to this Agreement.
+
+(v)
+“Person” shall mean any individual, Entity or Governmental Authority.
+
+(w)
+“Proceeding” shall mean any material action, suit, litigation, arbitration, proceeding (including any
+civil, criminal, administrative, investigative or appellate proceeding), prosecution, contest, hearing, inquiry, inquest, audit, examination
+or investigation that is, has been or may in the future be commenced, brought, conducted or heard at law or in equity or before any Governmental
+Authority or any arbitrator or arbitration panel.
+
+(x)
+“Proxy Approval” means that Purchaser has filed a proxy statement with the SEC, all SEC comments to such
+proxy statement (if any) have been cleared by Purchaser and such proxy statement has been mailed to all Stockholders of Purchaser.
+
+(y)
+“Proxy Statement” means the proxy statement to be filed by Purchaser with the SEC and sent to Purchaser’s
+stockholders in connection with the Stockholder Meeting, the form of which shall be subject to Sellers’ prior written approval (not
+to be unreasonably delayed or withheld).
+
+(z)
+“Purchased Assets” shall have the meaning specified in the Recitals.
+
+(aa)
+“Purchaser” shall have the meaning set forth in the Preamble.
+
+(bb)
+“Representatives” shall mean officers, directors, employees, attorneys, accountants, advisors, agents,
+distributors, licensees, shareholders, subsidiaries and lenders of a party. In addition, all Affiliates of Seller shall be deemed to be
+“Representatives” of Seller.
+
+Asset Purchase Agreement 
+ Page 4 of 29
+
+(cc)
+“Securities Act” means the Securities Act of 1933, as amended, and the rules and regulations promulgated
+thereunder.
+
+(dd)
+“Seller” shall have the meaning set forth in the Preamble.
+
+(ee)
+“Seller Intellectual Property” means all Owned Intellectual Property and all Licensed Intellectual Property.
+
+(ff)
+“Seller Material Adverse Effect” means any event, occurrence, fact, condition or change that is, or could
+reasonably be expected to become, individually or in the aggregate, materially adverse to (a) the business, results of operations, condition
+(financial or otherwise) or assets of the Purchased Assets and/or Seller, (b) the value of the Purchased Assets, or (c) the ability of
+Seller to consummate the transactions contemplated hereby on a timely basis.
+
+(gg)
+“Stockholders Meeting” means the special meeting or annual meeting of the stockholders of Purchaser to
+be held to consider the approval of the terms of this Agreement and the issuance of Purchaser Common Stock to Sellers upon conversion
+of the Preferred Stock Shares and upon exercise of the Warrants in accordance with the rules and regulations of the Nasdaq and applicable
+law.
+
+(hh)
+“Software Assets” means all Software that forms a part of the Purchased Assets.
+
+(ii)
+“Software” means computer software, programs, and databases in any form, including source code, object
+code, operating systems and specifications, data, databases, database management code, tools, developers kits, utilities, graphical user
+interfaces, menus, artwork, images, icons, forms and software engines, and all versions, updates, corrections, enhancements and modifications
+thereof, and all related technical and functional documentation, developer notes, comments, and annotations.
+
+(jj)
+“Tax Authority” means Governmental Authority responsible for the imposition, assessment or collection
+of any Tax (domestic or foreign).
+
+(kk)
+“Tax” (and, with correlative meaning, “Taxes” and “Taxable”)
+means any net income, alternative or add-on minimum tax, gross income, gross receipts, sales, use, ad valorem, transfer, franchise, profits,
+license, withholding, payroll, employment, excise, severance, stamp, occupation, premium, property, environmental or windfall profit tax,
+custom, duty or other tax, governmental fee or other assessment or charge of any kind whatsoever, together with any interest or any penalty,
+addition to tax or additional amount and any interest on such penalty, addition to tax or additional amount, imposed by any Tax Authority.
+
+Asset Purchase Agreement 
+ Page 5 of 29
+
+(ll)
+“Transaction Documents” shall mean this Agreement and all other agreements, certificates, instruments,
+assignments, documents and writings delivered by Purchaser and/or Seller in connection with the Transaction, including, but not limited
+to the exhibits hereto.
+
+(mm)
+“Transaction” shall mean, collectively, the transactions contemplated by this Agreement.
+
+(nn)
+“Transfer Taxes” shall mean all federal, state, local or foreign sales, use, transfer, real property
+transfer, mortgage recording, stamp duty, value-added or similar Taxes that may be imposed in connection with the transfer of Purchased
+Assets, together with any interest, additions to Tax or penalties with respect thereto and any interest in respect of such additions to
+Tax or penalties.
+
+ARTICLE
+II.
+
+THE TRANSACTION; RECITALS
+
+2.1.
+Purchased Assets. Subject to the terms and conditions of this Agreement, at the Closing, Seller shall sell, transfer, convey,
+assign and deliver to Purchaser, and Purchaser shall purchase from Seller, all of Seller’s right, title and interest in all of the
+Purchased Assets, and all Intellectual Property associated therewith. Purchaser agrees that Purchaser is receiving a copy of the Purchased
+Assets from Seller and that Seller will retain the right to use the Purchased Assets, subject to the Exclusive Rights (as defined in Section
+11.5).
+
+2.2.
+Assumed Liabilities. Purchaser shall not assume any liabilities of Seller, except that Purchaser hereby assumes and agrees
+to pay, perform, and discharge when due any and all Liabilities arising out of or relating to Purchaser’s operation of the Purchased
+Assets on and after the Closing (collectively, the “Assumed Liabilities”). Other than Assumed Liabilities, Purchaser
+shall not assume and shall not be liable or responsible for any Liabilities of Seller.
+
+2.3.
+Excluded Assets. Other than the Purchased Assets, Purchaser expressly understands and agrees that it is not purchasing or acquiring,
+and Seller is not selling or assigning, any other assets or properties of Seller, and all such other assets and properties shall be excluded
+from the Purchased Assets (collectively, the “Excluded Assets”). Excluded Assets include, by way of example
+and not by way of limitation, all cash, bank and other accounts, intellectual property rights (other than those set out in the Intellectual
+Property Assignment in the form attached hereto as Exhibit D), social media, websites, URLs and all other assets (other
+than only the Purchased Assets) owned, licensed and/or operated by Seller. For the avoidance of doubt: (i) the Purchased Assets do
+not constitute all or substantially all of the assets of Seller and (ii) Purchaser is not purchasing any goodwill related to the Purchased
+Assets.
+
+Asset Purchase Agreement 
+ Page 6 of 29
+
+2.4.
+Non-Assignable Assets. 
+
+(a)
+Notwithstanding anything to the contrary in this Agreement, to the extent that the sale, assignment, transfer, conveyance or delivery,
+or attempted sale, assignment, transfer, conveyance or delivery, to Purchaser of any Purchased Asset would result in a violation of applicable
+law, or would require the consent, authorization, approval or waiver of a Person who is not a party to this Agreement or an Affiliate
+of a party to this Agreement (including any Governmental Authority), and such consent, authorization, approval or waiver shall not have
+been obtained prior to the Closing, this Agreement shall not constitute a sale, assignment, transfer, conveyance or delivery, or an attempted
+sale, assignment, transfer, conveyance or delivery, thereof; provided, however, that, subject to the satisfaction
+or waiver of the conditions contained in  ARTICLE VIII, the Closing shall occur notwithstanding the foregoing without any adjustment
+to the Purchase Price on account thereof. Following the Closing, Seller and Purchaser shall use commercially reasonable efforts, and shall
+cooperate with each other, to obtain any such required consent, authorization, approval or waiver, or any release, substitution or amendment
+required to novate all liabilities and obligations under any agreements or in connection with any liabilities that constitute Assumed
+Liabilities or to obtain in writing the unconditional release of all parties to such arrangements, so that, in any case, Purchaser shall
+be solely responsible for such liabilities and obligations from and after the Closing Date; provided, however,
+that neither Seller nor Purchaser shall be required to pay any consideration therefor. Once such consent, authorization, approval, waiver,
+release, substitution or amendment is obtained, Seller shall sell, assign, transfer, convey and deliver to Purchaser the relevant Purchased
+Asset to which such consent, authorization, approval, waiver, release, substitution or amendment relates for no additional consideration.
+
+(b)
+To the extent that any Purchased Asset or Assumed Liability cannot be transferred to Purchaser following the Closing pursuant to
+this Section 2.4, Purchaser and Seller shall use commercially reasonable efforts to enter into such arrangements (such as
+subleasing, sublicensing or subcontracting) to provide to the parties the economic and, to the extent permitted under applicable law,
+operational equivalent of the transfer of such Purchased Asset or Assumed Liability to Purchaser as of the Closing and the performance
+by Purchaser of its obligations with respect thereto. Purchaser shall, as agent or subcontractor for Seller pay, perform and discharge
+fully the liabilities and obligations of Seller thereunder from and after the Closing Date. To the extent permitted under applicable law,
+Seller shall, at Purchaser’s expense, hold in trust for and pay to Purchaser promptly upon receipt thereof, such Purchased Asset
+and all income, proceeds and other monies received by Seller to the extent related to such Purchased Asset in connection with the arrangements
+under this Section 2.4. Seller shall be permitted to set off against such amounts all reasonable direct costs associated with
+the retention and maintenance of such Purchased Assets.
+
+Asset Purchase Agreement 
+ Page 7 of 29
+
+ARTICLE
+III.
+
+CONSIDERATION
+
+3.1.
+Consideration. Subject to the terms and conditions of this Agreement and subject to the Closing having occurred, the full and
+complete consideration for the Seller’s full and complete sale, transfer, conveyance, assignment and delivery of all the Purchased
+Assets to the Purchaser, shall be (a) 1,000,000 shares of Series B Convertible Preferred Stock of the Purchaser (the “Series
+Preferred Stock”), with such rights and preferences as are set forth in the Designation (the “Preferred Stock
+Shares”), issuable by the Purchaser to the Seller at the Closing in book-entry/non-certificate form; and (b) warrants to
+purchase 3,000,000 shares of common stock of the Purchaser, evidenced by the Common Stock Purchase Warrant in the form of Exhibit
+E hereto (the “Warrants”), which shall have an exercise price equal to the closing sale’s price
+of the Purchaser’s common stock on the Nasdaq Capital Market on the Closing Date (collectively, (a) and (b), the “Purchase
+Price”).
+
+3.2.
+Transfer Taxes; Prorations. Notwithstanding any Legal Requirements to the contrary, Purchaser shall be responsible for and
+shall pay any Transfer Taxes when due, and shall, at its own expense, file all necessary tax returns and other documentation with respect
+to all such Transfer Taxes; provided, that, if required by any Legal Requirement, Seller will join in the execution of any
+such tax returns and other documentation.
+
+3.3.
+Other Actions. Purchaser and Seller agree that any Legal Requirements with respect to the transactions contemplated in
+this Agreement shall be completed at the Closing and that Seller shall, and shall cause its respective Affiliates and representatives
+at its own expense, to, provide any documents, invoices, bills of sales, assignment documents to transfer assets under Legal Requirements,
+certifications, procure local notarizations, licenses and regulatory approvals and pay any applicable local taxes (other than in relation
+to the transfer taxes as set forth in Section 3.2 above), dues, documentary stamps or fees related to, or required in connection
+with the transactions contemplated in this Agreement, in each case with a view toward providing Purchaser with good, valid, marketable
+and transferable title to all of the Purchased Assets, free and clear of any Encumbrances.
+
+ARTICLE
+IV.
+
+CLOSING
+
+4.1.
+Closing. Subject to the terms and conditions of this Agreement, the consummation of the transactions contemplated by this Agreement
+(the “Closing”) shall take place remotely by exchange of documents and signatures (or their electronic counterparts)
+on the second Business Day after all of the conditions to Closing set forth in ARTICLE VIII are either satisfied or waived (other than
+conditions that, by their nature, are to be satisfied on the Closing Date), or on such other date as Seller and Purchaser may mutually
+agree upon in writing. The date on which the Closing is to occur is herein referred to as the “Closing Date.”
+The Closing shall be deemed effective as of 12:01 a.m., Eastern Standard Time, on the Closing Date.
+
+4.2.
+Closing Deliveries by Seller. At the Closing, Seller shall deliver to Purchaser the Bill of Sale and the Intellectual
+Property Assignment Agreement, each substantially in the form attached hereto as Exhibit C and Exhibit
+D, respectively, as well as all source code relating to the Software Assets and the other Purchased Assets to the extent they
+represent tangible assets.
+
+4.3.
+Closing Deliveries by Purchaser. At the Closing, Purchaser shall issue to Seller the Preferred Stock Shares and Warrants pursuant
+to Section 3.1 above.
+
+4.4.
+Closing Deliveries by Seller and Purchaser. At the Closing, each of Purchaser and Seller shall deliver duly executed other
+certificates, instruments or documents required pursuant to the provisions of this Agreement or otherwise necessary or appropriate for
+Seller to transfer to Purchaser all of the Purchased Assets in accordance with the terms hereof and consummate the Transaction. Seller
+shall deliver all of the Purchased Assets to such location as Purchaser shall designate to Seller at or prior to Closing.
+
+Asset Purchase Agreement 
+ Page 8 of 29
+
+ARTICLE
+V.
+
+REPRESENTATIONS AND WARRANTIES OF SELLER
+
+Seller hereby represents and
+warrants to the Purchaser the following as of the date hereof, which shall be automatically deemed to be reconfirmed by the Seller at
+Closing:
+
+5.1.
+Organization. Seller is a limited liability company validly organized and existing, and in good standing, under the laws of
+the State of Nevada.
+
+5.2.
+Authority. Seller has all of the necessary power and authority to execute and deliver this Agreement and the other Transaction
+Documents, to fully and completely perform its obligations hereunder, and to consummate the Transaction. The execution and delivery of
+this Agreement and the other Transaction Documents and the consummation by Seller of the Transaction have been duly and validly authorized
+by all requisite action and no other proceedings on the part of Seller are necessary to authorize this Agreement or to consummate the
+Transaction. This Agreement and each of the other Transaction Documents has been duly and validly executed and delivered by Seller. This
+Agreement constitutes, and at Closing the other Transaction Documents will constitute, the legal, valid and binding obligation of Seller,
+enforceable against Seller in accordance with their respective terms.
+
+5.3.
+Required Consents. No Consents are required with respect to Seller’s execution and delivery of this Agreement, the other
+Transaction Documents, and the full and complete consummation of the Transaction.
+
+5.4.
+No Conflict. The execution, delivery and performance of this Agreement and the other Transaction Documents by Seller do not
+and will not: (i) require any consent by, approval of or notice to any Person or Governmental Authority other than as specifically referenced
+herein; (ii) conflict with or violate any provision of any Legal Requirement or result in the breach of, or constitute a default under
+any agreement or instrument to which it is a party or violate any judgment or order binding or imposed upon it; and (iii) require any
+consent or approval of, or filing with or notice to any Governmental Authority or other Person under the provisions of any Legal Requirement
+applicable to Seller or to the Transaction.
+
+5.5.
+Litigation. To Seller’s knowledge, there is no Proceeding pending, threatened or reasonably foreseeable against or affecting
+the Purchased Assets. Seller is not subject to any Order or any proposed Order that would prevent or materially delay the consummation
+of the Transaction.
+
+Asset Purchase Agreement 
+ Page 9 of 29
+
+5.6.
+No Employees. There are no employees employed or workers contracted in respect of the Purchased Assets or the business
+to which such Purchased Assets used as of the date hereof.
+
+5.7.
+Purchased Assets. The Purchased Assets are sufficient to support the operation of a fully functional online blockchain
+casino with the underlying blockchain technology and Intellectual Property.
+
+5.8.
+Brokers. No broker, finder or investment banker is entitled to any brokerage, finder’s or other fee or commission in
+connection with the Transaction based upon arrangements made, or alleged to have been made, by or on behalf of Seller. Seller shall be
+fully responsible for, and shall indemnify Purchaser in connection with, any such fee arrangement.
+
+5.9.
+Title. Seller, solely and exclusively, has good, valid, marketable and transferable title to all of the Purchased Assets, in
+each case free and clear of any Encumbrances. Seller, solely and exclusively, has the full right and power to sell, convey, assign, transfer
+and deliver to Purchaser good, valid, marketable and transferable title to all of the Purchased Assets, in each case free and clear of
+any and all Encumbrances. The Purchased Assets are not subject to, or potentially subject to, any preemptive right, right of first refusal
+or other right or restriction. Upon Closing, Purchaser will be entitled to the continued and sole exclusive ownership, copyright, possession
+and use of all Purchased Assets, subject to the Elray Rights.
+
+5.10.
+Intellectual Property. 
+
+(c)
+Seller is not in any material violation of any license, sublicense or other agreement to which it is a party or otherwise bound
+relating to any of the Seller Intellectual Property. Seller is not obligated to provide any consideration (whether financial or otherwise)
+to any Person and no Person is otherwise entitled to any consideration, with respect to any exercise of rights by Seller in the Seller
+Intellectual Property (other than licenses arising from the purchase of “off the shelf” or other standard products,
+as set forth in Schedule 5.10).
+
+(d)
+The use of the Seller Intellectual Property by Seller as currently used and as currently proposed to be used does not infringe
+any other Person’s Intellectual Property. No written claim (i) challenging the validity, enforceability, effectiveness or ownership
+of any of the Seller Intellectual Property or (ii) to the effect that the use, reproduction, modification, manufacture, distribution,
+licensing, sublicensing, sale, or any other exercise of rights in any Seller Intellectual Property by Seller infringes or has infringed
+on any other Person’s Intellectual Property has been received by Seller. To Seller’s best knowledge, there is no unauthorized
+use, infringement, or misappropriation of any of Owned Intellectual Property by any Person.
+
+(e)
+Seller has taken commercially reasonable steps to protect the proprietary nature of the Seller Intellectual Property and to maintain
+in confidence all trade secrets and confidential information owned or used by Seller. To Seller’s best knowledge, no Person has
+had access to the trade secrets and confidential information owned or used by Seller, other than Persons that (i) have entered into confidentiality
+and non-disclosure agreements with respect to such trade secrets and confidential information, (ii) have duties of confidentiality to
+Seller, under state or federal law (including fiduciary duties or professional duties), or (iii) are employees or service providers to
+Seller. Seller has not notified any Person of, and to Seller’s actual knowledge there is no basis for any notice to any Person with
+respect to, (y) the unauthorized use or disclosure by such Person of the trade secrets and confidential information owned or used by Seller
+thereto, including, but not limited to the Purchased Assets, or (z) the breach of any agreement between Seller and any Person relating
+to the trade secrets and confidential information owned or used by Seller, including, but not limited to the Purchased Assets.
+
+Asset Purchase Agreement 
+ Page 10 of 29
+
+(f)
+At no time during the conception of or reduction to practice of any Owned Intellectual Property was any developer, inventor or
+other contributor thereto operating under any grants from any Governmental Authority or private source, performing research sponsored
+by any Governmental Authority or private source or subject to any employment agreement or invention assignment or nondisclosure agreement
+or other obligation with any third party, in each case that would impair or limit Seller’s right in such Owned Intellectual Property.
+There exist no inventions by current or former employees or consultants of Seller made or otherwise conceived prior to their beginning
+employment or consultation with Seller that have been or are intended to be incorporated into any of the Seller Intellectual Property,
+other than any such inventions that have been validly and irrevocably assigned or licensed to Seller by written agreement.
+
+(g)
+Neither the execution, delivery or performance of this Agreement, nor the consummation of the transactions contemplated hereunder,
+will result in the loss or impairment of, or require the consent of any other person in respect of Seller’s rights to own or use
+any Seller Intellectual Property.
+
+5.11.
+Securities Representations.
+
+(a)
+Purchase for Own Account. The Preferred Stock Shares and shares of common stock of the Purchaser issuable upon conversion
+thereof (the “Conversion Shares”), Warrants and shares of common stock of the Purchaser issuable upon exercise
+of the Warrants (the “Warrant Shares”, and together with the Preferred Stock Shares, Conversion Shares and Warrants,
+the “Purchaser Securities”) to be issued to Seller hereunder will be acquired for investment for Seller’s
+own account, not as a nominee or agent, and not with a view to the public resale or distribution thereof within the meaning of the Securities
+Act, and Seller has no present intention of selling, granting any participation in, or otherwise distributing the same.
+
+(b)
+Disclosure of Information.
+
+(i)
+Seller has received or has had full access to all the information Seller considers necessary or appropriate to make an informed
+investment decision with respect to the Preferred Stock Shares and Warrants to be issued to Seller hereunder. Seller has had an opportunity
+to ask questions and receive answers from the Purchaser regarding the Purchaser and the Purchaser Securities, and all such questions,
+if any, have been satisfactorily answered as of the date of this Agreement.
+
+Asset Purchase Agreement 
+ Page 11 of 29
+
+(ii)
+Without limiting or reducing in any way Section 5.11(b)(i), above, the Seller acknowledges that it (A) is aware of,
+has received and had an opportunity to review (x) the Purchaser’s Annual Report on Form 10-K for the year ended December 31, 2023
+(the “Annual Report”); and (y) Purchaser’s Quarterly Reports on Form 10-Q and current reports on Form
+8-K filed with the Securities and Exchange Commission (the “SEC” or the “Commission”)
+from January 1, 2024, to the date of this Agreement (which filings can be accessed by going to https://www.sec.gov/edgar/searchedgar/companysearch.html,
+typing “180 Life Sciences Group” in the “Name, ticker symbol, or CIK” field, and clicking
+the “Search” button)(such Annual Report, Quarterly Reports on Form 10-Q and current reports on Form 8-K (collectively,
+the “SEC Reports”)), in each case (x) through (y), including, but not limited to, the audited and unaudited
+financial statements, description of business, risk factors, results of operations, certain transactions and related business disclosures
+described therein (collectively the “Disclosure Documents”) and an independent investigation made by it of Purchaser;
+and (B) is not relying on any oral representation of Purchaser or any other person, nor any written representation or assurance from Purchaser;
+in connection with Seller’s acceptance of the Preferred Stock Shares and Warrants and investment decision in connection therewith.
+
+(iii)
+Illiquid Securities. Seller realizes that the Purchaser Securities cannot readily be sold as they will be restricted securities
+and therefore the Purchaser Securities must not be accepted unless such Seller has liquid assets sufficient to assure that holding such
+Purchaser Securities indefinitely will cause no undue financial difficulties and such Seller can provide for current needs and possible
+personal contingencies.
+
+(iv)
+Discussions with Advisors. Seller has carefully considered and has, to the extent it believes such discussion necessary,
+discussed with its professional, legal, tax and financial advisors, the suitability of an investment in the Preferred Stock Shares and
+Warrants for its particular tax and financial situation and its advisers, if such advisors were deemed necessary, have determined that
+the Preferred Stock Shares and Warrants are a suitable investment for it.
+
+(v)
+No General Solicitation. Seller has not become aware of and has not been offered the Purchaser Securities by any form of
+general solicitation or advertising, including, but not limited to, advertisements, articles, notices or other communications published
+in any newspaper, magazine, or other similar media or television or radio broadcast or any seminar or meeting where, to such Seller’s
+knowledge, those individuals that have attended have been invited by any such or similar means of general solicitation or advertising.
+
+(vi)
+No Registration Rights. Seller confirms and acknowledges that Purchaser is not under any obligation to register or seek
+an exemption under any federal and/or state securities acts for any sale or transfer of the Purchaser Securities, and such Seller is solely
+responsible for determining the status, in its hands, of the Purchaser Securities acquired hereunder and the availability, if required,
+of exemptions from registration for purposes of sale or transfer of the Purchaser Securities.
+
+Asset Purchase Agreement 
+ Page 12 of 29
+
+(vii) Investment
+Experience. Seller understands that the acquisition of Purchaser Securities involves substantial risk. Seller acknowledges that
+Seller can bear the economic risk of Seller’s investment in the Purchaser Securities, and has sufficient knowledge and
+experience in financial or business matters such that Seller is capable of evaluating the merits and risks of this investment in the
+Purchaser Securities and protecting its own interests in connection with this investment. Seller hereby represents that it is an
+“accredited investor,” as such term is defined under Rule 501(a) of Regulation D promulgated under the
+Securities Act.
+
+(viii)
+Required Stockholder Approval. Seller understands that the conversion of the Preferred Stock Shares and the issuance of
+the Conversion Shares upon conversion thereof, and the exercise of the Warrants, and the issuance of the Warrant Shares upon exercise
+thereof, will be subject to the approval of such issuances pursuant to the rules and requirements of the Nasdaq Capital Market in all
+cases, as described in greater detail in the Designation and the Common Stock Purchase Warrant evidencing the Warrants, and such stockholder
+approval may never be received.
+
+(ix)
+Restricted Shares. Seller understands that the Purchaser Securities are characterized as “restricted securities”
+under the Securities Act inasmuch as they are being acquired from Purchaser in a transaction not involving a public offering and that,
+under the Securities Act and applicable regulations thereunder, such securities may be resold without registration under the Securities
+Act only in certain limited circumstances. In this connection, Seller represents that Seller is familiar with Rule 144 as promulgated
+under the Securities Act and as presently in effect, and understands the resale limitations imposed thereby and by other applicable provisions
+of the Securities Act.
+
+(x)
+Legend. Seller acknowledges and understands that the certificates or book-entry statements evidencing the Purchaser Securities
+will bear the legend set forth below:
+
+“THE SECURITIES REPRESENTED
+HEREBY [AND ISSUABLE UPON CONVERSION[EXERCISE] HEREOF] HAVE NOT BEEN REGISTERED UNDER THE SECURITIES ACT OF 1933, AS AMENDED (THE “ACT”),
+OR UNDER THE SECURITIES LAWS OF CERTAIN STATES. THESE SECURITIES ARE SUBJECT TO RESTRICTIONS ON TRANSFERABILITY AND RESALE AND MAY NOT
+BE TRANSFERRED OR RESOLD EXCEPT AS PERMITTED UNDER THE ACT AND THE APPLICABLE STATE SECURITIES LAWS, PURSUANT TO REGISTRATION OR EXEMPTION
+THEREFROM. INVESTORS SHOULD BE AWARE THAT THEY MAY BE REQUIRED TO BEAR THE FINANCIAL RISKS OF THIS INVESTMENT FOR AN INDEFINITE PERIOD
+OF TIME. THE ISSUER OF THESE SECURITIES MAY REQUIRE AN OPINION OF COUNSEL IN FORM AND SUBSTANCE SATISFACTORY TO THE ISSUER TO THE EFFECT
+THAT ANY PROPOSED TRANSFER OR RESALE IS IN COMPLIANCE WITH THE ACT AND ANY APPLICABLE STATE SECURITIES LAWS.”
+
+Asset Purchase Agreement 
+ Page 13 of 29
+
+5.12.
+Data Room; Information Supplied. All copies of and originals of all information, documents, financial statements, agreements
+and materials provided by the Seller (including its Representatives, and Affiliates) to the Purchaser, or its Affiliates or Representatives
+as part of the due diligence process leading up to the parties entry into this Agreement were and remain accurate and complete in all
+material respects when provided and as of the Closing Date.
+
+5.13.
+No Other Representations and Warranties. Except for the representations and warranties contained in this Agreement, neither
+Seller nor any other Person has made or makes any other express or implied representation or warranty, either written or oral, on behalf
+of Seller, including any representation or warranty as to the accuracy or completeness of any information, documents or material regarding
+Seller and/or the Purchased Assets furnished or made available to Purchaser and its Representatives in any form, any information, documents,
+or material delivered to Purchaser on behalf of Seller for purposes of this Agreement or any management presentations made in expectation
+of the transactions contemplated hereby, or as to the future revenue, profitability, or success of the Purchased Assets, or any representation
+or warranty arising from statute or otherwise in law.
+
+ARTICLE
+VI.
+
+REPRESENTATIONS AND WARRANTIES OF PURCHASER
+
+Purchaser hereby represents
+and warrants to Seller the following as of the date hereof, which shall be automatically deemed to be reconfirmed by the Purchaser at
+Closing:
+
+6.1.
+Organization. Purchaser is a corporation registered, incorporated and in good standing in the State of Delaware.
+
+6.2.
+Purchaser Capitalization. As of the date hereof and the Closing Date, the authorized capital stock of the Purchaser consists
+of 100,000,000 shares of common stock, $0.0001 par value per share (“Common Stock”) and 5,000,000 shares of
+preferred stock, $0.0001 par value per share, of which 1,000,000 shares have been designated as Series A Convertible Preferred Stock (of
+which none are outstanding), of which one share of preferred stock has been designated as a Class C Special Voting Share, of which none
+are outstanding, and one share of preferred stock has been designated as a Class K Special Voting Share, of which none are outstanding.
+As of the date hereof the Purchaser has outstanding 1,026,930 shares of common stock.
+
+6.3.
+Listing and Maintenance Requirements. The shares of Common Stock are registered pursuant to Section 12(b) of the Securities
+Exchange Act of 1934, as amended (the “Exchange Act”), and the Purchaser has taken no action designed to, or
+which to its knowledge is likely to have the effect of, terminating the registration of the Common Stock under the Exchange Act nor has
+the Purchaser received any notification that the Commission is contemplating terminating such registration, except as set forth in the
+SEC Reports.
+
+6.4.
+Authority. Purchaser has all necessary power and authority to execute and deliver this Agreement and the other Transaction
+Documents, to perform its obligations hereunder, and to consummate the Transaction. The execution and delivery of this Agreement and the
+other Transaction Documents and the consummation by Purchaser of the Transaction have been duly and validly authorized by all requisite
+action and no other proceeding on the part of Purchaser is necessary to authorize this Agreement and the other Transaction Documents or
+to fully and completely consummate the Transaction. This Agreement has been, and at Closing the other Transaction Documents will be, duly
+and validly executed and delivered by Purchaser. This Agreement constitutes, and at Closing the other Transaction Documents will constitute,
+the legal, valid and binding obligation of Purchaser, enforceable against Purchaser in accordance with their respective terms.
+
+6.5.
+Required Consents. No Consents are required with respect to Purchaser’s execution and delivery of this Agreement, the
+other Transaction Documents, and the full and complete consummation of the Transaction; provided that the approval of Purchaser’s
+stockholders is required for the conversion of the Preferred Stock Shares into shares of common stock of the Purchaser and exercise of
+the Warrants into Warrant Shares, pursuant to the applicable rule and requirements of Nasdaq.
+
+Asset Purchase Agreement 
+ Page 14 of 29
+
+6.6.
+No Conflict. The execution, delivery and performance of this Agreement and the other Transaction Documents by Purchaser do
+not and will not: (i) require any consent by, approval of or notice to any Person or Governmental Authority other than as specifically
+referenced herein; (ii) conflict with or violate any provision of any Legal Requirement or result in the breach of, or constitute a default
+under any agreement or instrument to which it is a party or violate any judgment or order binding or imposed upon it; and (iii) require
+any consent or approval of, or filing with or notice to any Governmental Authority or other Person under the provisions of any Legal Requirement
+applicable to Seller or to the Transaction.
+
+6.7.
+Independent Investigation. Purchaser has conducted its own independent investigation, review and analysis of Seller and
+the Purchased Assets, and acknowledges that it has been provided adequate access to the personnel, properties, assets, premises, books
+and records and other documents and data of Seller for such purpose. Purchaser acknowledges and agrees that: (a) in making its decision
+to enter into this Agreement and to consummate the transactions contemplated hereby, Purchaser has relied solely upon its own investigation
+and the express representations and warranties of Seller set forth in ARTICLE V of this Agreement; and (b) neither Seller nor any
+other Person has made any representation or warranty as to Seller, the Purchased Assets or this Agreement, except as expressly set forth
+in ARTICLE V of this Agreement.
+
+6.8.
+Litigation. Purchaser is not subject to any Order or any proposed Order that would prevent or materially delay the consummation
+of the Transaction.
+
+6.9.
+Status of Purchased Assets. Purchaser acknowledges that the Purchased Assets do not constitute a fully operational online blockchain
+casino and a Front End of such casino would need to be built and integrated to the Purchased Assets, the cost of which build is not included
+in the acquisition of the Purchased Assets.
+
+6.10.
+Brokers. No broker, finder or investment banker is entitled to any brokerage, finder’s or other fee or commission in
+connection with the Transaction based upon arrangements made, or alleged to have been made, by or on behalf of Purchaser. Purchaser shall
+be fully responsible for, and shall indemnify Purchaser in connection with, any such fee arrangement.
+
+ARTICLE
+VII.
+
+COVENANTS
+
+7.1.
+Conduct of Purchased Assets Prior to the Closing. From the date hereof until the Closing, except as otherwise provided in this
+Agreement or consented to in writing by Purchaser (which consent shall not be unreasonably withheld or delayed), Seller shall (x) operate
+the Purchased Assets in the ordinary course of business consistent with past practice; and (y) use reasonable best efforts to maintain
+and preserve intact the Purchased Assets.
+
+7.2.
+Access to Information. From the date hereof until the Closing, Seller shall (a) afford Purchaser and its Representatives
+full and free access to and the right to inspect all of the Purchased Assets and the books and records relating thereto; (b) furnish Purchaser
+and its Representatives with such financial, operating and other data and information related to the Purchased Assets as Purchaser or
+any of its Representatives may reasonably request; and (c) instruct the Representatives of Seller to cooperate with Purchaser in
+its investigation of the Purchased Assets. Any investigation pursuant to this Section 7.2 shall be conducted in such manner as
+not to interfere unreasonably with the conduct of the Purchased Assets or any other businesses of Seller. No investigation by Purchaser
+or other information received by Purchaser shall operate as a waiver or otherwise affect any representation, warranty or agreement given
+or made by Seller in this Agreement.
+
+Asset Purchase Agreement 
+ Page 15 of 29
+
+7.3.
+No Solicitation of Other Bids. 
+
+(a)
+Seller shall not, and shall not authorize or permit any of its Affiliates or any of its or their Representatives to, directly or
+indirectly, (i) encourage, solicit, initiate, facilitate or continue inquiries regarding an Acquisition Proposal; (ii) enter into discussions
+or negotiations with, or provide any information to, any Person concerning a possible Acquisition Proposal; or (iii) enter into any agreements
+or other instruments (whether or not binding) regarding an Acquisition Proposal. Seller shall immediately cease and cause to be terminated,
+and shall cause its Affiliates and all of its and their Representatives to immediately cease and cause to be terminated, all existing
+discussions or negotiations with any Persons conducted heretofore with respect to, or that could lead to, an Acquisition Proposal. For
+purposes hereof, “Acquisition Proposal” means any inquiry, proposal or offer from any Person (other than Purchaser
+or any of its Affiliates) relating to the direct or indirect disposition, whether by sale, merger or otherwise, of all or any portion
+of the Purchased Assets.
+
+(b)
+In addition to the other obligations under this Section 7.3, Seller shall promptly (and in any event within three (3) Business
+Days after receipt thereof by Seller or its Representatives) advise Purchaser orally and in writing of any Acquisition Proposal, any request
+for information with respect to any Acquisition Proposal, or any inquiry with respect to or which could reasonably be expected to result
+in an Acquisition Proposal, the material terms and conditions of such request, Acquisition Proposal or inquiry, and the identity of the
+Person making the same.
+
+(c)
+Seller agrees that the rights and remedies for noncompliance with this Section 7.3 shall include having such provision specifically
+enforced by any court having equity jurisdiction, it being acknowledged and agreed that any such breach or threatened breach shall cause
+irreparable injury to Purchaser and that money damages would not provide an adequate remedy to Purchaser.
+
+7.4.
+Notice of Certain Events. 
+
+(a)
+From the date hereof until the Closing, Seller shall promptly notify Purchaser in writing of:
+
+(i)
+any fact, circumstance, event or action the existence, occurrence or taking of which (A) has had, or could reasonably be expected
+to have, individually or in the aggregate, a Seller Material Adverse Effect, (B) has resulted in, or could reasonably be expected to result
+in, any representation or warranty made by Seller hereunder not being true and correct or (C) has resulted in, or could reasonably be
+expected to result in, the failure of any of the conditions set forth in Section 8.2 to be satisfied;
+
+(ii)
+any notice or other communication from any Person alleging that the consent of such Person is or may be required in connection
+with the transactions contemplated by this Agreement;
+
+(iii)
+any notice or other communication from any Governmental Authority in connection with the transactions contemplated by this Agreement;
+and
+
+(iv)
+any actions commenced or, to Seller’s knowledge, threatened against, relating to or involving or otherwise affecting the
+Purchased Assets that, if pending on the date of this Agreement, would have been required to have been disclosed pursuant to the terms
+of this Agreement or that relates to the consummation of the transactions contemplated by this Agreement.
+
+Asset Purchase Agreement 
+ Page 16 of 29
+
+(b)
+Purchaser’s receipt of information pursuant to this Section 7.4 shall not operate as a waiver or otherwise affect
+any representation, warranty or agreement given or made by Seller in this Agreement.
+
+7.5.
+Confidentiality. From and after the Closing, Seller shall, and shall cause its Affiliates to, hold, and shall use its reasonable
+best efforts to cause its or their respective Representatives to hold, in confidence any and all information, whether written or oral,
+concerning the Purchased Assets, except to the extent that Seller can show that such information (a) is generally available to and known
+by the public through no fault of Seller, any of its Affiliates or their respective Representatives; or (b) is lawfully acquired by Seller,
+any of its Affiliates or their respective Representatives from and after the Closing from sources which are not prohibited from disclosing
+such information by a legal, contractual or fiduciary obligation. If Seller or any of its Affiliates or their respective Representatives
+are compelled to disclose any information by judicial or administrative process or by other requirements of law, to the extent permitted
+by law or Governmental Authority, Seller shall promptly notify Purchaser in writing and shall disclose only that portion of such information
+which Seller is advised by its counsel in writing is legally required to be disclosed, provided that Seller shall use reasonable best
+efforts to obtain an appropriate protective order or other reasonable assurance that confidential treatment will be accorded such information.
+
+7.6.
+Closing Conditions. From the date hereof until the Closing, each party hereto shall use reasonable best efforts to take such
+actions as are necessary to expeditiously satisfy the closing conditions set forth in ARTICLE VIII hereof.
+
+7.7.
+Public Announcements. The Purchaser shall have the sole authority to publicly disclose the terms of this Agreement and the
+transactions contemplated herein, and the Seller shall not publicly disclose this Agreement or any terms hereof without the prior written
+consent of the Purchaser.
+
+ARTICLE
+VIII.
+
+CONDITIONS TO CLOSING
+
+8.1.
+Conditions to Obligations of All Parties. The obligations of each party to consummate the transactions contemplated by this
+Agreement shall be subject to the fulfillment, at or prior to the Closing, of each of the following conditions:
+
+(a)
+No Governmental Authority shall have enacted, issued, promulgated, enforced or entered any Governmental Order which is in effect
+and has the effect of making the transactions contemplated by this Agreement illegal, otherwise restraining or prohibiting consummation
+of such transactions or causing any of the transactions contemplated hereunder to be rescinded following completion thereof.
+
+(b)
+Seller shall have received all consents, authorizations, orders and approvals, in each case, in form and substance reasonably satisfactory
+to Purchaser and Seller, and no such consent, authorization, order and approval shall have been revoked.
+
+Asset Purchase Agreement 
+ Page 17 of 29
+
+8.2.
+Conditions to Obligations of Purchaser. The obligations of Purchaser to consummate the transactions contemplated by this Agreement
+shall be subject to the fulfillment or Purchaser’s waiver, at or prior to the Closing, of each of the following conditions:
+
+(a)
+The representations and warranties of Seller contained in ARTICLE V shall be true and correct in all respects as of the
+Closing Date with the same effect as though made at and as of such date (except those representations and warranties that address matters
+only as of a specified date, which shall be true and correct in all respects as of that specified date), except where the failure of such
+representations and warranties to be true and correct would not have a Seller Material Adverse Effect.
+
+(b)
+Seller shall have duly performed and complied in all material respects with all agreements, covenants and conditions required by
+this Agreement and each of the other Transaction Documents to be performed or complied with by it prior to or on the Closing Date.
+
+(c)
+Seller shall have delivered to Purchaser duly executed counterparts to the Transaction Documents (other than this Agreement).
+
+(d)
+Purchaser shall have received a certificate, dated the Closing Date and signed by a duly authorized officer of each Seller, that
+each of the conditions set forth in Section 8.2(a) and Section 8.2(b) have been satisfied (the “Seller
+Closing Certificate”).
+
+(e)
+Purchaser shall have received a certificate of the Secretary or an Assistant Secretary (or equivalent officer) of Seller certifying
+that attached thereto are true and complete copies of all resolutions adopted by the board of directors or managers of Seller authorizing
+the execution, delivery and performance of this Agreement and the other Transaction Documents and the consummation of the transactions
+contemplated hereby and thereby, and that all such resolutions are in full force and effect and are all the resolutions adopted in connection
+with the transactions contemplated hereby and thereby.
+
+(f)
+Purchaser shall have received a certificate of the Secretary or an Assistant Secretary (or equivalent officer) of Seller certifying
+the names and signatures of the officers of Seller authorized to sign this Agreement, the Transaction Documents and the other documents
+to be delivered hereunder and thereunder.
+
+(g)
+Purchaser shall have received an opinion of Hempstead & Co., LLC to the effect that, as of the date of such opinion and subject
+to the assumptions, qualifications, limitations and such other factors deemed relevant by Hempstead & Co., LLC, as set forth in such
+opinion, the Purchaser Price to be paid by Purchaser is fair, from a financial point of view, to Purchaser.
+
+Asset Purchase Agreement 
+ Page 18 of 29
+
+(h)
+Seller shall have delivered Purchaser a detailed business plan using a Churn Model detailing expected net profits of the Purchased
+Assets for the 24 months of operation following the Closing, which model will be based on industry standards (player acquisition costs,
+and LTV of players) which will support the valuation.
+
+(i)
+Since the date of this Agreement, there shall not have occurred any Seller Material Adverse Effect.
+
+8.3.
+Conditions to Obligations of Seller. The obligations of Seller to consummate the transactions contemplated by this Agreement
+shall be subject to the fulfillment or Seller’ waiver, at or prior to the Closing, of each of the following conditions:
+
+(a)
+The representations and warranties of Purchaser contained in ARTICLE VI shall be true and correct in all respects as
+of the Closing Date with the same effect as though made at and as of such date (except those representations and warranties that address
+matters only as of a specified date, which shall be true and correct in all respects as of that specified date), except where the failure
+of such representations and warranties to be true and correct would not have a material adverse effect on Purchaser’s ability to
+consummate the transactions contemplated hereby.
+
+(b)
+Purchaser shall have duly performed and complied in all material respects with all agreements, covenants and conditions required
+by this Agreement and each of the other Transaction Documents to be performed or complied with by it prior to or on the Closing Date.
+
+(c)
+Seller shall have received a certificate, dated the Closing Date and signed by a duly authorized officer of Purchaser, that each
+of the conditions set forth in Section 8.3(a) and Section 8.3(b) have been satisfied (the “Purchaser
+Closing Certificate”).
+
+(d)
+Seller shall have received a certificate of the Secretary or an Assistant Secretary (or equivalent officer) of Purchaser certifying
+that attached thereto are true and complete copies of all resolutions adopted by the board of directors of Purchaser authorizing the execution,
+delivery and performance of this Agreement and the other Transaction Documents and the consummation of the transactions contemplated hereby
+and thereby, and that all such resolutions are in full force and effect and are all the resolutions adopted in connection with the transactions
+contemplated hereby and thereby.
+
+(e)
+Seller shall have received a certificate of the Secretary or an Assistant Secretary (or equivalent officer) of Purchaser certifying
+the names and signatures of the officers of Purchaser authorized to sign this Agreement, the Transaction Documents and the other documents
+to be delivered hereunder and thereunder.
+
+(f)
+Purchaser shall have filed a Listing of Additional Shares notice with Nasdaq disclosing the planned issuance of the Preferred Stock
+Shares, Conversion Shares, Warrants and Warrant Shares.
+
+Asset Purchase Agreement 
+ Page 19 of 29
+
+(g)
+Purchaser shall have delivered to Seller a file stamped copy of the Designation as filed with the Secretary of State of Delaware.
+
+(h)
+Purchaser shall have delivered to Seller a signed copy of the Common Stock Purchase Warrant evidencing the Warrants.
+
+8.4.
+Preferred Stock Shares. Within three (3) Business Days following the Closing, the Purchaser shall issue the Seller the Preferred
+Stock Shares and shall provide the Seller a book entry statement showing the issuance thereof.
+
+ARTICLE
+IX.
+
+INDEMNIFICATION
+
+9.1.
+Survival. Subject to the limitations set forth in this Agreement, the representations and warranties (other than the Fundamental
+Representations and Warranties (as defined below)) contained herein shall survive the Closing and shall remain in full force and effect
+until the date that is one (1) year from the Closing Date. All Fundamental Representations and Warranties (as defined below) and all related
+rights to indemnification shall survive the Closing indefinitely. “Fundamental Representations and Warranties”
+means the applicable party’s representations and warranties set forth in each of Sections 5.1, 5.2, 5.8, 5.9,
+6.1, 6.2, 6.4 and 6.9 of this Agreement. None of the covenants or other agreements contained in this Agreement
+shall survive the Closing Date other than those which by their terms contemplate performance after the Closing Date, and except for those
+set forth under ARTICLE IX and ARTICLE XI and each such surviving covenant and agreement shall survive the Closing for the period contemplated
+by its terms, or where no term is provided, three years. Notwithstanding the foregoing, any claims asserted in good faith with reasonable
+specificity (to the extent known at such time) and in writing by notice from the non-breaching party to the breaching party prior to the
+expiration date of the applicable survival period shall not thereafter be barred by the expiration of such survival period and such claims
+shall survive until finally resolved.
+
+9.2.
+Indemnification. 
+
+(a)
+Indemnification by Seller. Seller shall indemnify, defend and hold harmless Purchaser and its Representatives from and against
+any and all Damages, whether or not involving a third-party claim, including reasonable attorneys’ fees, arising out of, relating
+to or resulting from (i) any breach of a representation or warranty of Seller contained in this Agreement or in any other Transaction
+Document, (ii) any breach of a covenant of Seller contained in this Agreement or in any other Transaction Document and/or (iii) any liability
+related to the Purchased Assets first arising prior to the Closing Date.
+
+(b)
+Indemnification by Purchaser. Purchaser shall indemnify, defend and hold harmless Seller from and against any and all Damages,
+whether or not involving a third-party claim, including reasonable attorneys’ fees, arising out of, relating to or resulting from
+(i) any breach of a representation or warranty of Purchaser contained in this Agreement or in any other Transaction Document, (ii) any
+breach of a covenant of Purchaser contained in this Agreement or in any other Transaction Document and/or (iii) any liability related
+to the Purchased Assets first arising on or after the Closing Date.
+
+Asset Purchase Agreement 
+ Page 20 of 29
+
+9.3.
+Indemnification Procedures. If any suit, action, proceeding (including any governmental
+or regulatory investigation), claim or demand shall be brought or asserted against any Person in respect of which indemnification may
+be sought pursuant to either Sections 9.2(a) or (b) above, such Person (the “Indemnified Person”)
+shall promptly notify the Person against whom such indemnification may be sought (the “Indemnifying Person”)
+in writing; provided that the failure to notify the Indemnifying Person
+shall not relieve it from any liability that it may have under Sections 9.2(a) or (b) above except to the extent that it
+has been materially prejudiced by such failure; and provided, further,
+that the failure to notify the Indemnifying Person shall not relieve it from any liability that it may have to an Indemnified Person otherwise
+than under Sections 9.2(a) or (b) above. If any such proceeding shall be brought or asserted against an Indemnified Person,
+the Indemnifying Person shall be entitled to participate in the defense thereof with counsel reasonably satisfactory to such Indemnified
+Person; provided, however,
+if the defendants in any such action include both the Indemnified Person and the Indemnifying Person and the Indemnified Person shall
+have reasonably, based on advice of counsel, concluded that a conflict may arise between the positions of the Indemnifying Person and
+the Indemnified Person in conducting the defense of any such action or that there may be legal defenses available to it and/or other Indemnified
+Persons which are inconsistent with those available to the Indemnifying Person, the Indemnifying Person or Indemnifying Persons shall
+have the right to select separate counsel to assume such legal defenses and to otherwise participate in the defense of such action on
+behalf of such Indemnified Persons or Indemnified Persons (it being understood, however, that the Indemnifying Person shall not be liable
+for the expenses of more than one separate counsel (together with local counsel (in each relevant jurisdiction)). If any proceeding is
+settled with such consent or if there be a final judgment for the plaintiff, the Indemnifying Person agrees to indemnify each Indemnified
+Person against any loss, claim, damage, liability or expense by reason of such settlement or judgment. No Indemnifying Person shall, without
+the written consent of the Indemnified Person, effect any settlement, compromise or consent to the entry of judgment in any pending or
+threatened action, suit or proceeding in respect of which any Indemnified Person is or could have been a party and indemnity was or could
+have been sought hereunder by such Indemnified Person, unless such settlement, compromise or consent (A) includes an unconditional release
+of such Indemnified Person from all liability on claims that are the subject matter of such action, suit or proceeding and (B) does not
+include any statement as to or any admission of fault, culpability or a failure to act by or on behalf of any Indemnified Person. The
+remedies provided for in this ARTICLE IX are not exclusive and shall not limit any rights or remedies that may otherwise be available
+to any Indemnified Person at law or in equity.
+
+9.4.
+Certain Limitations. 
+
+(a)
+Seller shall not be liable until the aggregate amount of all Damages in respect of indemnification exceeds $25,000. The aggregate
+amount of all Damages for which Seller shall be liable shall not exceed the Purchase Price. In no event shall Seller be liable for any
+punitive, incidental, consequential, special or indirect damages, including loss of future revenue or income, loss of business reputation
+or opportunity relating to the breach or alleged breach of this Agreement, or diminution of value or any damages based on any type of
+multiple.
+
+(b)
+Purchaser shall not be liable until the aggregate amount of all Damages in respect of indemnification exceeds $25,000. The aggregate
+amount of all Damages for which Purchaser shall be liable shall not exceed the Purchase Price. In no event shall Purchaser be liable for
+any punitive, incidental, consequential, special or indirect damages, including loss of future revenue or income, loss of business reputation
+or opportunity relating to the breach or alleged breach of this Agreement, or diminution of value or any damages based on any type of
+multiple.
+
+Asset Purchase Agreement 
+ Page 21 of 29
+
+ARTICLE
+X.
+
+TERMINATION
+
+10.1.
+Termination. This Agreement may be terminated at any time prior to the Closing:
+
+(a)
+by the mutual written consent of Seller and Purchaser;
+
+(b)
+by Purchaser by written notice to Seller if:
+
+(v)
+(i) Purchaser is not then in material breach of any provision of this Agreement and there has been a material breach, inaccuracy
+in or failure to perform any representation, warranty, covenant or agreement made by Seller pursuant to this Agreement that would give
+rise to the failure of any of the conditions specified in ARTICLE VIII and such breach, inaccuracy or failure cannot be cured
+by Seller by September 30, 2024 (the “Drop Dead Date”); or
+
+(vi)
+any of the conditions set forth in Section 8.1 or Section 8.2 shall not have been fulfilled by
+the Drop Dead Date, unless such failure shall be due to the failure of Purchaser to perform or comply with any of the covenants, agreements
+or conditions hereof to be performed or complied with by it prior to the Closing;
+
+(c)
+by Seller by written notice to Purchaser if:
+
+(i)  Seller
+is not then in material breach of any provision of this Agreement and there has been a material breach, inaccuracy in or failure to perform
+any representation, warranty, covenant or agreement made by Purchaser pursuant to this Agreement that would give rise to the failure of
+any of the conditions specified in  ARTICLE VIII and such breach, inaccuracy or failure cannot be cured by Purchaser by the Drop
+Dead Date; or
+
+(ii)  any
+of the conditions set forth in Section 8.1 or Section 8.3 shall not have been fulfilled by the Drop
+Dead Date, unless such failure shall be due to the failure of Seller to perform or comply with any of the covenants, agreements or conditions
+hereof to be performed or complied with by it prior to the Closing; or
+
+Asset Purchase Agreement 
+ Page 22 of 29
+
+(d)
+by Purchaser or Seller in the event that:
+
+(vii)
+there shall be any law that makes consummation of the transactions contemplated by this Agreement illegal or otherwise prohibited;
+or
+
+(viii)
+any Governmental Authority shall have issued a Governmental Order restraining or enjoining the transactions contemplated by this
+Agreement, and such Governmental Order shall have become final and non-appealable.
+
+(ix)
+by either party, if there has been a breach of any material representation, warranty, covenant, agreement, or undertaking made
+by the other party in this Agreement or the other Transaction Documents, which breach, if curable, is not cured within ten (10) calendar
+days after delivery by the non-breaching party to the breaching party of written notice, which shall specify the nature of such breach
+and the breaching party’s intention to terminate this Agreement if such breach or failure is not cured (provided, however, that
+if the cure reasonably requires more than ten (10) days to complete, then the breaching Party shall have an additional five (5) days,
+provided it timely commences the cure and continues diligently prosecuting the cure to completion); provided further, however, that the
+non-breaching Party shall be obligated to elect to terminate within ten (10) days of the end of the cure period (if applicable), or else
+it shall be required to close regardless of such breach.
+
+10.2.
+Effect of Termination. In the event of the termination of this Agreement in accordance with this Article, this Agreement shall
+forthwith become void and there shall be no liability on the part of any party hereto except: (a) as set forth in this ARTICLE X
+and ARTICLE IX hereof; and (b) that nothing herein shall relieve any party hereto from liability for any intentional breach
+of any provision hereof.
+
+ARTICLE
+XI.
+
+POST-CLOSING OBLIGATIONS
+
+11.1.
+Assistance with Operations and Development. 
+
+(a)
+Following the Closing, as part of the Consideration paid by the Purchaser to the Seller, the Seller will provide support and assistance
+to the Purchaser in connection with the building and launching of a fully operational casino operation utilizing the Purchased Assets,
+at no cost to the Purchaser for a period of six (6) months following the Closing, provided that such assistance shall not exceed 40 hours
+per week without the prior written approval of the Seller (the “Post-Closing Assistance”).
+
+Asset Purchase Agreement 
+ Page 23 of 29
+
+(b)
+The Post-Closing Assistance will also require the Seller to assist the Purchaser with obtaining payment gateways and licensing
+where required, acknowledging that Purchaser will require a Front End (the “Front-End Development”).
+
+(c)
+Following the Closing, at the request of the Purchaser, the Seller and Purchaser shall negotiate in good faith to come to agreement
+on an arrangement whereby Seller will, for an additional cost agreed to by Seller, help Purchaser complete the Front-End Development,
+or at the request of the Purchaser, Seller shall introduce the Purchaser to a vendor that would sell such a Front End for one or more
+casinos that will operate on the Purchased Assets at a cost to be agreed between such vendor and the Purchaser, in the Purchasers sole
+discretion. The Purchaser has sole discretion to determine which, if any, vendor it retains for the Front-End Development.
+
+11.2.
+Proxy Statement and Stockholder Meeting. 
+
+(a)
+In connection with the Stockholders Meeting, as soon as reasonably practicable following the Closing, Purchaser shall prepare and
+file with the SEC the Proxy Statement. Purchaser shall use its reasonable best efforts to: (i) cause the Proxy Statement to be mailed
+to Purchaser’s Stockholders as promptly as practicable following sign off from the SEC on such Proxy Statement, or no later than
+the twentieth (20th) day after such preliminary Proxy Statement is filed with the SEC, in the event the SEC does not notify the Purchaser
+of its intent to review such Proxy Statement, and (ii) ensure that the Proxy Statement complies in all material respects with the applicable
+provisions of the Securities Act and Exchange Act.
+
+(b)
+Purchaser shall take all action necessary to duly call, give notice of, convene, and hold the Stockholders Meeting as soon as reasonably
+practicable, and, in connection therewith, Purchaser shall mail the Proxy Statement to the holders of Purchaser Common Stock in advance
+of such meeting. The Company shall use reasonable best efforts to: (a) solicit from the holders of Purchaser Common Stock proxies in favor
+of Stockholder Approval; and (b) take all other actions necessary or advisable to secure Stockholder Approval. Purchaser shall keep Seller
+updated with respect to proxy solicitation results as requested by Seller. Once the Stockholders Meeting has been called and noticed,
+Purchaser and its Representatives shall not postpone or adjourn the Stockholders Meeting without the consent of Seller (other than: (i)
+in order to obtain a quorum of its stockholders; or (ii) as reasonably determined by Purchaser to comply with applicable law).
+
+11.3.
+Public Announcements. The Purchaser shall have the sole authority to publicly disclose the terms of this Agreement and the
+transactions contemplated herein, and the Seller shall not publicly disclose this Agreement or any terms hereof without the prior written
+consent of the Purchaser.
+
+11.4.
+No Further Transfer of Purchased Assets. Following the Closing, and in perpetuity the Seller shall never copy, sell, assign,
+hypothecate, or otherwise transfer the Purchased Assets to any other party, without the prior written consent of the Purchaser, the Purchaser
+shall be the sole owner of the Purchased Assets, subject to the Elray Rights, and the Seller shall use its commercially reasonable best
+efforts to ensure that the Purchaser, subject to the Elray Rights, is the sole owner of, and has the sole rights to, the Purchased Assets.
+
+Asset Purchase Agreement 
+ Page 24 of 29
+
+11.5.
+Rights to Purchased Assets. Seller confirms that no other copies of the Purchased Assets have been sold, or leased, to any
+Person other than the Purchaser hereunder and that no Person shall be granted or transferred any future rights to the Purchased Assets
+by or from the Seller, except that the Seller shall be authorized to retain and use the Purchased Assets for its own benefit and utilize
+such assets to provide SAAS solutions and hosted casino solutions to third party companies. The obligations of the Seller set forth in
+this Section 11.5 shall survive in perpetuity. The rights of the Purchaser set forth in this Section 11.5 shall be defined
+as the “Exclusive Rights”.
+
+ARTICLE
+XII.
+
+MISCELLANEOUS PROVISIONS
+
+12.1.
+Amendments and Waivers. This Agreement may not be amended, supplemented or modified, except by an agreement in writing signed
+by each of the parties. Either party may waive compliance by the other party with any term or provision of this Agreement; provided that
+such waiver shall not operate as a waiver of, or estoppel with respect to, any other or subsequent failure. No waiver shall be effective
+unless it is in writing and is signed by the party asserted to have granted such waiver.
+
+12.2.
+Notices. All notices, approvals, consents, requests, and other communications hereunder shall be in writing and shall be delivered
+(i) by personal delivery, or (ii) by international overnight courier service (which is mandatory with respect to any other Party not in
+the sending Party’s country), or (iii) by certified or registered mail, return receipt requested, or (iv) via facsimile transmission,
+with confirmed receipt, or (v) via email, with no error/undeliverable message. Notice shall be effective upon receipt except for notice
+via fax (as discussed above) or email, which shall be effective only when the recipient, by return or reply email or notice delivered
+by other method provided for in this Section 12.2, acknowledges having received that email (with an automatic “read
+receipt” or similar notice not constituting an acknowledgement of an email receipt for purposes of this Section 12.2,
+but which acknowledgement of acceptance shall also include cases where recipient ‘replies’ to such prior email, including
+the body of the prior email in such ‘reply’). Such notices shall be sent to the applicable Party or Parties at the address
+specified below, subject to notice of changes thereof from any Party with at least ten (10) Business Days’ notice to the other Parties.
+Rejection or other refusal to accept or the inability to deliver because of changed address of which no notice was given shall be deemed
+to be receipt of the notice as of the date of such rejection, refusal or inability to deliver.
+
+Asset Purchase Agreement 
+ Page 25 of 29
+
+If to Seller:
+
+ Attn:
+
+ Vincent Cai
+
+ General Manager
+
+ Elray Resources Inc
+
+ 3651 Lindell Rd, Ste D131
+
+ Las Vegas NV 89103
+
+ legal@elraygaming.com
+
+If to Purchaser:
+
+Attn: Blair Jordan
+
+Interim Chief Executive Officer
+
+180 Life Sciences Corp.
+
+3000 El Camino Real, Bldg.
+4, Suite 200
+
+Palo Alto, California 94306
+
+Email: bjordan@180lifesciences.com
+
+With copy to (which shall not constitute notice):
+
+The Loev Law Firm, PC
+
+Attn: David M. Loev and John S. Gillies
+
+6300 West Loop South, Suite 280
+
+Bellaire, Texas 77401
+
+Fax: +1 (713) 524-4122 
+
+Email: dloev@loevlaw.com; and john@loevlaw.com
+
+Any party may alter its notice
+address by notifying the other parties of such change of address in conformity with the provisions of this section.
+
+12.3.
+Governing Law; Assignments Prohibited; Successors and Assigns; No Third-Party Beneficiaries. This Agreement is to be construed
+in accordance with and governed by the laws of the State of Delaware, without giving effect to any choice or conflict of law, rule or
+regulation (whether of the State of Delaware or other jurisdiction) which would cause the application of any law, rule or regulation other
+than of the State of Delaware. Seller shall not assign, or suffer or permit an assignment (by operation of law or otherwise) of, its rights
+or obligations under or interest in this Agreement without the prior written consent of Purchaser. Any purported assignment or other disposition
+by Seller, except as permitted herein, shall be null and void. Subject to the foregoing, this Agreement shall be binding upon and shall
+inure to the benefit of the parties and their respective successors and permitted assigns. The terms and provisions of this Agreement
+are intended solely for the benefit of each party hereto and their respective successors and permitted assigns, and the parties do not
+intend to confer third-party beneficiary rights upon any other person.
+
+12.4.
+Limitation on Consequential Damages. EXCEPT IN THE CASE OF FRAUD BY SELLER, NEITHER PARTY SHALL BE LIABLE TO THE OTHER FOR
+LOSS OF PROFITS, OR ANY OTHER INDIRECT OR SPECIAL, CONSEQUENTIAL, PUNITIVE OR INCIDENTAL DAMAGES, HOWEVER CAUSED, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE. THE PARTIES ACKNOWLEDGE THAT THESE LIMITATIONS ON POTENTIAL LIABILITIES WERE AN ESSENTIAL ELEMENT IN SETTING
+CONSIDERATION UNDER THIS AGREEMENT.
+
+Asset Purchase Agreement 
+ Page 26 of 29
+
+12.5.
+Arm’s Length Negotiations. Each party herein expressly represents and warrants to all other parties hereto that (a) before
+executing this Agreement, said party has fully informed itself of the terms, contents, conditions and effects of this Agreement; (b) said
+party has relied solely and completely upon its own judgment in executing this Agreement; (c) said party has had the opportunity to seek
+and has obtained the advice of its own legal, tax and business advisors before executing this Agreement; (d) said party has acted voluntarily
+and of its own free will in executing this Agreement; and (e) this Agreement is the result of arm’s length negotiations conducted
+by and among the Parties and their respective counsel.
+
+12.6.
+Remedies. The remedies provided in this Agreement shall be cumulative and in addition to all other remedies available under
+this Agreement, at law or in equity (including a decree of specific performance and/or other injunctive relief).
+
+12.7.
+Dispute Resolution. The exclusive venue for all actions or disputes relating to this Agreement or to the Transaction shall
+be the state or federal courts located in the State of Delaware, and the parties hereto hereby agree (i) to promptly and voluntarily submit
+to the jurisdiction of such court and (ii) not to assert, by way of motion, as a defense, or otherwise in any such suit, action or proceeding
+that the suit, action or proceeding is brought in an inconvenient forum, that the venue of the suit, action or proceeding is improper
+or that this Agreement or the subject matter hereof may not be enforced by such courts.
+
+12.8.
+JURY TRIAL WAIVER. TO THE FULLEST EXTENT NOT PROHIBITED BY APPLICABLE LAW, WHICH CANNOT BE WAIVED, EACH OF THE PARTIES HEREBY
+KNOWINGLY, VOLUNTARILY, INTENTIONALLY AND IRREVOCABLY WAIVES ANY AND ALL RIGHT TO A TRIAL BY JURY IN ANY ACTION OR PROCEEDING TO ENFORCE
+OR DEFEND ANY RIGHT, POWER, REMEDY OR DEFENSE ARISING OUT OF OR RELATED TO THIS AGREEMENT, WHETHER SOUNDING IN TORT OR CONTRACT OR OTHERWISE,
+OR WITH RESPECT TO ANY COURSE OR CONDUCT, COURSE OF DEALING, STATEMENTS (WHETHER VERBAL OR WRITTEN) OR ACTIONS OF ANY PARTY RELATING TO
+THIS AGREEMENT; AND AGREES THAT ANY SUCH ACTION OR PROCEEDING SHALL BE TRIED BEFORE A JUDGE AND NOT BEFORE A JURY.
+
+12.9.
+Counterparts, Effect of Facsimile, Emailed and Photocopied Signatures. This Agreement and any signed agreement or instrument
+entered into in connection with this Agreement, and any amendments hereto or thereto, may be executed in one or more counterparts, all
+of which shall constitute one and the same instrument. Any such counterpart, to the extent delivered by means of a facsimile machine or
+by .pdf, .tif, .gif, .jpeg or similar attachment to electronic mail (any such delivery, an “Electronic Delivery”)
+shall be treated in all manner and respects as an original executed counterpart and shall be considered to have the same binding legal
+effect as if it were the original signed version thereof delivered in person. At the request of any Party, each other Party shall re execute
+the original form of this Agreement and deliver such form to all other Parties. No Party shall raise the use of Electronic Delivery to
+deliver a signature or the fact that any signature or agreement or instrument was transmitted or communicated through the use of Electronic
+Delivery as a defense to the formation of a contract, and each such Party forever waives any such defense, except to the extent such defense
+relates to lack of authenticity.
+
+Asset Purchase Agreement 
+ Page 27 of 29
+
+12.10.
+Severability; Entire Agreement. If any provision of this Agreement, or the application of any such provision to any Person
+or set of circumstances, shall be determined to be invalid, unlawful, void or unenforceable to any extent, the remainder of this Agreement,
+and the application of such provision to Persons or circumstances other than those as to which it is determined to be invalid, unlawful,
+void or unenforceable, shall not be impaired or otherwise affected and shall continue to be valid and enforceable to the fullest extent
+permitted by law. This Agreement contains the entire understanding between the parties hereto with respect to the subject matter hereof
+and supersedes all prior and contemporaneous agreements and understandings, inducements or conditions, express or implied, oral or written,
+between the parties. The parties intend that this Agreement be the several, complete and exclusive embodiment of their agreement, and
+that any evidence, oral or written, of a prior or contemporaneous agreement that alters or modifies this Agreement shall not be admissible
+in any proceeding concerning this Agreement. The express terms hereof control and supersede any course of performance and/or usage of
+the trade inconsistent with any of the terms hereof.
+
+12.11.
+Interpretation and Construction. Unless otherwise indicated herein, with respect to any reference made in this Agreement to
+a Section (or Article, Subsection, Paragraph, Subparagraph or Clause), exhibit or Schedule, such reference shall be to a section (or article,
+subsection, paragraph, subparagraph or clause) of, or an exhibit or schedule to, this Agreement. The table of contents and any article,
+section, subsection, paragraph or subparagraph headings contained in this Agreement are for reference purposes only and shall not affect
+in any way the meaning or interpretation of this Agreement. Whenever the words “include,” “includes”
+or “including” are used in this Agreement, they shall be deemed, as the context indicates, to be followed by
+the words “but (is/are) not limited to.” Words used herein, regardless of the number and gender specifically
+used, shall be deemed and construed to include any other number, singular or plural, and any other gender, masculine, feminine or neuter,
+as the context indicates is appropriate. Where specific language is used to clarify or illustrate by example a general statement contained
+herein, such specific language shall not be deemed to modify, limit or restrict the construction of the general statement which is being
+clarified or illustrated. The construction of this Agreement shall not take into consideration the party who drafted or whose representative
+drafted any portion of this Agreement, and no canon of construction shall be applied that resolves ambiguities against the drafter of
+a document. The parties are sophisticated and have been represented by lawyers throughout this transaction who have carefully negotiated
+the provisions hereof. As a consequence, the parties do not believe the presumption relating to the interpretation of contracts against
+the drafter of any particular clause should be applied in this case and therefore waive its effects. All exhibits attached hereto are
+hereby incorporated by reference into, and made a part of, this Agreement.
+
+12.12.
+Expenses of the Parties. Whether or not the Transaction is consummated, all fees and expenses incurred in connection with the
+Transaction including, but not limited to, all legal, accounting, financial, advisory, consulting and all other fees and expenses of third
+parties incurred by a party in connection with the negotiation and effectuation of the terms and conditions of this Agreement and the
+Transaction contemplated hereby, shall be the obligation of the respective party incurring such fees and expenses.
+
+12.13.
+Further Assurances. Each party agrees to furnish upon request to each other party such further information, to execute and
+deliver to each other party such other documents and to do such other acts and things, all as another party may reasonably request for
+the purpose of carrying out the intent of this Agreement and the transactions contemplated by this Agreement.
+
+[SIGNATURES APPEAR ON FOLLOWING PAGE.]
+
+Asset Purchase Agreement 
+ Page 28 of 29
+
+IN WITNESS WHEREOF,
+each of the parties has caused this Agreement to be executed on its behalf by their respective officers thereunto duly authorized all
+as of the date first written above.
+
+  “Purchaser”:
+
+ 180 Life Sciences Corp.
+
+ By:
+
+ /s/ Blair Jordan
+
+ Name:
+
+ Blair Jordan
+
+ Title:
+
+ Interim Chief Executive Officer
+
+ “Seller”:
+
+ Elray Resources, Inc.
+
+ By:
+
+ /s/ Anthony Goodman  
+
+ Name:
+
+  Anthony Goodman
+
+ Title:
+
+ CEO
+
+Asset Purchase Agreement 
+ Page 29 of 29
+
+EXHIBIT A
+
+[See attached Form of Designation of Series
+B Convertible Preferred Stock]
+
+A-1
+
+EXHIBIT B
+
+PURCHASED ASSETS
+
+The Purchased Assets include:
+
+Source code:
+
+1.
+Back-End to support Blockchain casino operations.  A server/cloud server infrastructure, database,
+and blockchain payment processing system specifically for casino game programming, fully secure and scalable.
+
+2.
+Blockchain to FIAT Seamless Exchange Technology: Allows players to deposit and withdraw in
+Crypto or blockchain currency and at the same time maintain the wallets as well as the gaming sessions where the player can only play
+in FIAT. This is proprietary tech and not easily accessible. Games by third parties only operate in FIAT but Blockchain casinos only accept
+Crypto hence the need for this advanced tech.
+
+3.
+Blockchain APIS’ for Payment Gateway Integration. Integrates reliable FIAT to Blockchain
+and Blockchain to FIAT payment gateways to facilitate deposits and withdrawals but to maintain Online Casino system operation blockchain
+only. Support various payment methods, including credit cards, e-wallets, and multiple cryptocurrencies.
+
+4.
+Player Account Management. Creates a system to manage player accounts securely, includes registration,
+login, and player profile management, KYC and AML functionality.
+
+5.
+Loyalty Systems specific to blockchain users: Is a CRM system that communicates with players
+and creates loyalty and higher LTV
+
+6.
+Affiliate Tracking System: This system provides an ability to track incoming traffic and
+ registrations and allows casino to pay referral fees and royalties to agents or affiliates and understand where traffic originates
+ from And all Intellectual Property
+and source code associated therewith.
+
+Purchased Assets will not
+include Front-End Development. 
+
+B-1
+
+EXHIBIT C
+
+BILL OF SALE
+
+For good and valuable consideration,
+the receipt and adequacy of which are hereby acknowledged, Elray Resources, Inc., a Nevada corporation (“Seller”),
+does hereby grant, bargain, transfer, sell, assign, convey and deliver to 180 Life Sciences Corp., a company incorporated in the State
+of Delaware (“Purchaser”), all of its right, title, and interest in and to the Purchased Assets, as such term
+is defined in the Asset Purchase Agreement, dated as of September 27, 2024 (the “Purchase Agreement”), by and
+between Seller and Purchaser, to have and to hold the same unto Purchaser, its successors and assigns, forever.
+
+Seller for itself, its successors
+and assignees, hereby covenants and agrees that, at any time and from time to time upon the written request of Purchaser, Seller will,
+at its own expense do, execute, acknowledge, and deliver or cause to be done, executed, acknowledged, and delivered, all such further
+acts, deeds, assignments, transfers, conveyances, powers of attorney, and assurances as may be reasonably required by Purchaser in order
+to assign, transfer, set over, convey, assure, and confirm unto and vest in Purchaser, its successors and assigns, title to the assets
+sold, conveyed, and transferred by this Bill of Sale.
+
+IN WITNESS WHEREOF, Seller
+has duly executed this Bill of Sale as of September 27, 2024.
+
+ SELLER:
+
+ ELRAY RESOURCES, INC.
+
+ By:
+
+ /s/ Anthony Goodman  
+
+ Name:
+
+ Anthony Goodman
+
+ Title:
+
+ CEO
+
+C-1
+
+EXHIBIT D
+
+[See attached]
+
+Intellectual Property Purchase Agreement
+ D-1
+
+INTELLECTUAL PROPERTY ASSIGNMENT AGREEMENT
+
+This INTELLECTUAL PROPERTY
+ASSIGNMENT AGREEMENT (“IP Assignment”), dated as of September 27, 2024, is made by Elray Resources, Inc., a
+Nevada corporation (“Seller”), in favor of 180 Life Sciences Corp., a Delaware corporation (“Purchaser”),
+the purchaser of certain assets of Seller pursuant to an Asset Purchase Agreement between Purchaser and Seller, dated as of September
+27, 2024 (the “Asset Purchase Agreement”). Certain capitalized terms used herein but not otherwise defined have
+the meanings given to such terms in the Asset Purchase Agreement.
+
+WHEREAS, under the terms of
+the Asset Purchase Agreement, Seller has conveyed, transferred, and assigned to Purchaser, among other assets, certain intellectual property
+of Seller, and has agreed to execute and deliver this IP Assignment, for recording with the United States Patent and Trademark Office,
+the United States Copyright Office, and corresponding entities or agencies in any applicable jurisdictions;
+
+NOW THEREFORE, Seller agrees
+as follows:
+
+1. Assignment.
+For good and valuable consideration, the receipt and sufficiency of which are hereby acknowledged, Seller hereby irrevocably conveys,
+transfers, and assigns to Purchaser all of Seller’s right, title, and interest in and to the following (the “Assigned IP”):
+
+(a) the unregistered trademarks
+owned by the Seller relating to the Purchased Assets (the “Trademarks”), with the use of, and symbolized by,
+the Trademarks, and the copyright owned by the Seller in connection with the Purchased Assets and associated content in the relevant recognized
+assets (the “Copyrights,” and, together with the Trademarks, the “Intellectual Property”)
+as set forth on Exhibit B to the Asset Purchase Agreement;
+
+(b) all rights of any kind whatsoever
+of Seller accruing under any of the foregoing provided by applicable law of any jurisdiction, by international treaties and conventions,
+and otherwise throughout the world;
+
+(c) any and all royalties, fees,
+income, payments, and other proceeds now or hereafter due or payable with respect to any and all of the foregoing; and
+
+(d) any and all claims and causes
+of action with respect to any of the foregoing, whether accruing before, on, or after the date hereof, including all rights to and claims
+for damages, restitution, and injunctive and other legal and equitable relief for past, present, and future infringement, dilution, misappropriation,
+violation, misuse, breach, or default, with the right but no obligation to sue for such legal and equitable relief and to collect, or
+otherwise recover, any such damages.
+
+Intellectual Property Purchase Agreement
+ D-2
+
+2. Recordation
+and Further Actions. Seller hereby authorizes the Commissioner for Patents and the Commissioner for Trademarks in the United States
+Patent and Trademark Office, the Register of Copyrights in the United States Copyright Office, and the officials of corresponding entities
+or agencies in any applicable jurisdictions to record and register this IP Assignment upon request by Purchaser. Following the date hereof,
+Seller shall take such steps and actions, and provide such cooperation and assistance to Purchaser and its successors, assigns, and legal
+representatives, including the execution and delivery of any affidavits, declarations, oaths, exhibits, assignments, powers of attorney,
+or other documents, as may be necessary to effect, evidence, or perfect the assignment of the Assigned IP to Purchaser, or any assignee
+or successor thereto.
+
+3. Terms
+of the Asset Purchase Agreement. The parties hereto acknowledge and agree that this IP Assignment is entered into pursuant to the
+Asset Purchase Agreement, to which reference is made for a further statement of the rights and obligations of Seller and Purchaser with
+respect to the Assigned IP. The representations, warranties, covenants, agreements, and indemnities contained in the Asset Purchase Agreement
+shall not be superseded hereby but shall remain in full force and effect to the full extent provided therein. In the event of any conflict
+or inconsistency between the terms of the Asset Purchase Agreement and the terms hereof, the terms of the Asset Purchase Agreement shall
+govern.
+
+4. Counterparts.
+This IP Assignment may be executed in counterparts, each of which shall be deemed an original, but all of which together shall be deemed
+one and the same agreement. A signed copy of this IP Assignment delivered by facsimile, e-mail, or other means of electronic transmission
+shall be deemed to have the same legal effect as delivery of an original signed copy of this IP Assignment.
+
+5. Successors
+and Assigns. This IP Assignment shall be binding upon and shall inure to the benefit of the parties hereto and their respective successors
+and assigns.
+
+6. Governing
+Law. This IP Assignment and any claim, controversy, dispute, or cause of action (whether in contract, tort, or otherwise) based upon,
+arising out of, or relating to this IP Assignment and the transactions contemplated hereby shall be governed by, and construed in accordance
+with, the laws of the United States and the State of DELAWARE, without giving effect to any choice or conflict of law provision or rule
+(whether of the State of DELAWARE or any other jurisdiction).
+
+Intellectual Property Purchase Agreement
+ D-3
+
+IN
+WITNESS WHEREOF, Seller has duly executed and delivered this IP Assignment as of the date first above written.
+
+ SELLER:
+
+ ELRAY RESOURCES, INC.
+
+ By:
+
+ /s/ Anthony Goodman  
+
+ Name:
+
+ Anthony Goodman
+
+ Title:
+
+ CEO
+
+ Address for Notices:
+
+ ELRAY RESOURCES, INC.
+
+ Attention: Vincent Cai
+
+ E-mail: Legal@elraygaming.com
+
+Intellectual Property Purchase Agreement
+ D-4
+
+EXHIBIT E
+
+[See attached]
+
+Common Stock Purchase Warrant
+
+E-1

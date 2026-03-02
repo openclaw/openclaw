@@ -1,0 +1,2137 @@
+EX-10.4
+5
+ea0200951ex10-4_halloffame.htm
+SECOND AMENDMENT TO LEASE AGREEMENT, DATED FEBRUARY 29, 2024, AMONG HFAKOH001 LLC, AS LANDLORD, HOF VILLAGE WATERPARK, LLC, AS TENANT, HOF VILLAGE NEWCO, LLC, AS GUARANTOR AND HOF VILLAGE STADIUM, LLC, AS MORTGAGOR
+
+Exhibit 10.4
+
+SECOND AMENDMENT TO 
+
+LEASE AGREEMENT
+
+This Second Amendment to Lease
+Agreement (the “Amendment”) is made and entered into as of February 28, 2024 (the “Effective Date”),
+by and between HFAKOH001 LLC, a Delaware limited liability company (“Landlord”), and HOF VILLAGE WATERPARK, LLC, a
+Delaware limited liability company (“Tenant”), and acknowledged and agreed to by HOF VILLAGE NEWCO, LLC, a Delaware
+limited liability company (“Guarantor”), as guarantor under the Guaranty (as hereinafter defined) and pledgor under
+the Stadium Pledge (as hereinafter defined) and pledgor under the Fields Pledge (as hereinafter defined), HOF VILLAGE STADIUM, LLC, a
+Delaware limited liability company (“Stadium Mortgagor”), as mortgagor under the Stadium Mortgage (as hereinafter defined),
+and HALL OF FAME RESORT & ENTERTAINMENT COMPANY, a company incorporated under the laws of the State of Delaware (“HOFRECO”).
+
+RECITALS:
+
+A. Landlord
+and Tenant entered into that certain Lease Agreement dated as of November 7, 2022 (the “Original Lease”), as amended
+by that certain First Amendment to Lease Agreement dated as of February 23, 2024 (the “First Lease Amendment”; the
+Original Lease, as amended by the First Lease Amendment, and as may be further amended from time to time, collectively, the “Lease”),
+with respect to the Premises (as defined in the Lease). All initial capitalized terms not otherwise defined herein have the meanings assigned
+to such terms in the Lease.
+
+B. In
+connection with the Lease, Guarantor delivered to Landlord that certain Limited Recourse Carveout Guaranty dated as of November 7, 2022
+(as amended from time to time, the “Guaranty”), and that certain Pledge and Security Agreement dated as of November
+7, 2022 (as amended from time to time, the “Stadium Pledge”).
+
+C. In
+connection with the Lease and the Stadium Pledge, Stadium Mortgagor delivered to Landlord that certain Open-End Leasehold Mortgage, Assignment
+of Leases and Rents, Security Agreement and Fixture Filing dated as of December 27, 2022, and recorded as of December 29, 2022, as Instrument
+No. 202212290053025 with the Stark County, Ohio Recorder (as amended from time to time, the “Stadium Mortgage”). The
+land, improvements, and other mortgaged property described in the Stadium Mortgage are referred to collectively herein as the “Stadium”.
+
+D. In
+connection with the First Lease Amendment, Guarantor delivered to Landlord (1) that certain Consent & Agreement dated as of February
+23, 2024 (together with all amendments, restatements, amendments and restatements, replacements and other modifications from time to time,
+the “Consent”), (2) that certain Pledge and Security Agreement dated as of February 23, 2024 (together with all amendments,
+restatements, amendments and restatements, replacements and other modifications from time to time, the “Fields Pledge”),
+(3) that certain Series H Common Stock Purchase Warrant dated as of February 23, 2024, relating to Hall of Fame Resort & Entertainment
+Company (together with all amendments, restatements, amendments and restatements, replacements and other modifications from time to time,
+the “Warrants”).
+
+D. Landlord
+and Tenant now desire to amend the Lease upon the terms and conditions contained herein.
+
+AGREEMENT:
+
+NOW, THEREFORE, for Ten and
+No/100 Dollars ($10.00) and other good and valuable consideration, the receipt and sufficiency of which are hereby acknowledged, the parties
+hereto hereby agree as follows:
+
+1. Landlord
+Funding. On the date hereof, Landlord shall fund to Tenant the amount of One Million and No/100 Dollars ($1,000,000.00) (the “$1.0M
+Allowance”), which may be used by (a) Tenant, only for the purpose of the construction of the New Improvements in accordance
+with the Water Park Construction Documents, (b) Stadium Mortgagor, only for the purpose of paying taxes and assessments due from Stadium
+Mortgagor to governmental entities or Stark Port (as defined in the Stadium Mortgage) pursuant to the Project Lease (as defined in the
+Stadium Mortgage), and (c) Guarantor, for the purpose of paying other necessary operating expenses.
+
+2. Base
+Rent. As of the Effective Date, Exhibit A of the Lease is hereby deleted and replaced in its entirety with Exhibit A
+attached hereto, reflecting (a) an increase in the Base Rent to take into account Landlord’s funding to Tenant of the $1.0M Allowance,
+and (b) a forbearance of the Base Rent due for the months of March 2024 and April 2024, which shall be due on May 1, 2024. The foregoing
+is expressly subject to the Tenant Repayment Right (as hereinafter defined) and the Landlord Repayment Option (as hereinafter defined).
+Notwithstanding anything to the contrary set forth herein or in the Lease, there shall be no notice period or cure period for the Rent
+payment due on May 1, 2024, which required Rent payment is indicated in the row labeled “2.6” on Exhibit A attached
+hereto (it being understood and agreed that Tenant’s failure to pay such Rent payment on May 1, 2024, shall be an immediate Event
+of Default).
+
+3. Additional
+Parcels Mortgage; Cooperation.
+
+(a) On
+the Effective Date, Guarantor shall execute and deliver, and cause to be fully and duly executed and delivered, to Landlord, (1) that
+certain Open-End Mortgage, Assignment of Leases and Rents, Security Agreement and Fixture Filing attached hereto as Exhibit C regarding
+Collateral Security (defined below, and subject to subparagraph 3(b) below) (the “Additional Parcels Mortgage”), (2)
+that certain owner’s affidavit attached hereto as Exhibit D (the “Owner’s Affidavit”), and (3) evidence
+of the authority of Guarantor to execute and deliver this Amendment, the Additional Parcels Mortgage, and Owner’s Affidavit, together
+with good standing certificates evidencing Guarantor’s good standing in the States of Delaware and Ohio. “Collateral Security”
+means collateral security for the prompt and complete payment and performance when due (whether at the stated maturity, by acceleration
+or otherwise) of the Obligations (as defined in the Additional Parcels Mortgage). The land, improvements, and other mortgaged property
+described in the Additional Parcels Mortgage are referred to collectively herein as the “Additional Parcels”.
+
+(b) Tenant,
+Guarantor, Stadium Mortgagor, and HOFRECO (the “HOFV Parties”) acknowledge and agree that Landlord intends to obtain
+an extended coverage ALTA loan policy of title insurance relating to the Additional Parcels Mortgage (the “Title Policy”)
+from Chicago Title Insurance Company (“Title Insurer”), but that there was insufficient time prior to the date hereof
+for Title Insurer to deliver a title commitment to Landlord. Accordingly, the HOFV Parties shall cooperate with Landlord after the date
+hereof in order for Landlord to obtain the Title Policy, which shall include, without limitation, the HOFV Parties executing such affidavits
+and indemnities reasonably requested by Title Insurer, and delivering additional evidence of the authority and good standing of the HOFV
+Parties in connection therewith. Landlord acknowledges and agrees that the costs associated with procuring such Title Policy shall be
+incurred and paid by Landlord.
+
+2
+
+(c) Provided
+(i) no event of default exists under the Lease, the Guaranty, the Stadium Pledge, the Stadium Mortgage, the Fields Pledge, the Consent,
+the Warrants, or the Additional Parcels Mortgage (and no fact or circumstance exists that, with the giving of notice, the passage of time,
+or both, could reasonably be expected to result in any such event of default), and (ii) the New Improvements have been fully completed
+in accordance with the Water Park Construction Documents, Tenant shall have the right to pay to Landlord the sum of One Million One Hundred
+Twenty Nine Thousand Thirty Two and 26/100 Dollars ($1,129,032.26) in immediately available funds, upon which (x) Landlord shall deliver
+to Tenant a release of the Additional Parcels Mortgage, executed by Landlord, and (y) from and after the date of such payment, Exhibit
+A of the Lease shall revert to the original rent schedule under the Original Lease as amended by the First Lease Amendment (which
+is attached as Exhibit B hereto) (the foregoing right, the “Tenant Repayment Right”). [It is understood and
+agreed that the Tenant Repayment Right set forth in this Amendment is independent from the “Tenant Repayment Right” set forth
+in the First Lease Amendment, but Tenant must exercise the Tenant Repayment Right set forth in this Amendment before Tenant may exercise
+the “Tenant Repayment Right” set forth in the First Lease Amendment.]
+
+(d) In
+the event that either (1) Title Insurer is unable to issue the Title Policy, or (2) the Title Policy is not in form or substance reasonably
+acceptable to Landlord, then Landlord shall have the right to issue Tenant a notice stating that Tenant must pay to Landlord the sum of
+One Million and No/100 Dollars ($1,000,000.00), in which event Tenant shall pay such sum to Landlord in immediately available funds within
+ninety (90) days after the New Improvements have been substantially completed, and promptly after receipt of such payment after such election,
+(x) Landlord shall deliver to Tenant a release of the Additional Parcels Mortgage, executed by Landlord, and (y) from and after the date
+of such payment, Exhibit A of the Lease shall revert to the original rent schedule under the Original Lease as amended by the First
+Lease Amendment (which is attached as Exhibit B hereto) (the foregoing right, the “Landlord Repayment Option”).
+
+(e) Upon
+the occurrence of any Event of Default and exhaustion of all Leasehold Mortgagee’s Cure Rights (if applicable) in accordance with
+the express terms and conditions of the Lease, Tenant and Guarantor shall cooperate with Landlord, at the sole cost and expense of Guarantor,
+to transfer operation of all or any portion of the Premises, the Stadium, and the Additional Parcels (as determined by Landlord) to a
+replacement operator designated by Landlord.
+
+3
+
+(f) If
+(i) an Event of Default shall occur and be continuing, and (ii) Mortgagee (as defined in the Additional Parcels Mortgage) forecloses on
+the Additional Parcels, then the Base Rent (as defined in the Lease), the Obligations (as defined in the Guaranty), and the Obligations
+(as defined in the Additional Parcels Mortgage), without duplication, shall be reduced, on a dollar-for-dollar basis, by any amounts actually
+received in cash or cash equivalents by Mortgagee upon a sale of the Additional Parcels from and after the date of such receipt.
+
+(g) Notwithstanding
+anything to the contrary herein, the reductions set forth in subparagraphs 3(f) above shall not reduce the Base Rent, the Obligations
+(as defined in the Guaranty), the Obligations (as defined in the Additional Parcels Mortgage), or any other obligations owing to Mortgagee
+or its affiliates by more than One Million and No/100 Dollars ($1,000,000.00).
+
+4. Status
+Conferences. Tenant, Guarantor, and Stadium Mortgagor agree to (a) participate in status calls as requested by Landlord regarding
+the construction of the Premises, the status of the project that the Premises is part of, and the financial condition of Tenant, Guarantor,
+and Stadium Mortgagor, and (b) promptly provide information reasonably requested by Landlord in connection with the foregoing.
+
+5. Representations
+and Warranties of Tenant, Guarantor and Stadium Mortgagor. As of the Effective Date, each of Tenant, Guarantor, HOFRECO, and Stadium
+Mortgagor represents and warrants to Landlord as follows:
+
+(a) Each
+of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor is duly organized, validly existing, and in good standing under the laws of their
+state of organization and are duly qualified as a foreign entities and are currently in good standing in each state in which such qualification
+is required for the conduct of each of Tenant’s, Guarantor’s, HOFRECO’s, and Stadium Mortgagor’s business as it
+is currently being conducted (including the State in which the Premises is located).
+
+(b) Each
+of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor has the full authority and due capacity to execute, deliver, and perform this Amendment,
+all documents, instruments and agreements heretofore delivered to Landlord, and all documents, instruments and agreements executed in
+connection herewith to which they are a party. Such execution, delivery, and performance has been duly authorized as required under the
+organizational documents of each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor, and the individuals and entities executing this
+Amendment and all documents, instruments and agreements executed in connection herewith or heretofore delivered to Landlord on behalf
+of each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor have been duly authorized and empowered to bind each such party by such execution.
+
+4
+
+(c) This
+Amendment and all documents, instruments and agreements executed in connection herewith or heretofore delivered to Landlord have been
+duly executed and delivered to Landlord by each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor, and are valid, binding, and enforceable
+against each of them in accordance with its terms.
+
+(d) Neither
+the execution and delivery of this Amendment, nor the documents, instruments and agreements executed in connection herewith or heretofore
+delivered to Landlord, nor the performance of its terms and compliance with their conditions will conflict with or result in a breach
+of any of the terms, conditions or provisions of or constitute a violation or default under any organizational document of either of Tenant,
+Guarantor HOFRECO, or Stadium Mortgagor, or, to the actual knowledge of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor, applicable
+law, regulation, judgment, writ, order or decree to which either of Tenant, Guarantor, HOFRECO, or Stadium Mortgagor or any property of
+either of Tenant, Guarantor, HOFRECO, or Stadium Mortgagor is subject.
+
+(e) To
+the actual knowledge of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor, each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor is
+in compliance in all material respects with all federal, state and local laws, rules, and regulations applicable to the Premises, the
+property subject to the Stadium Mortgage, the collateral described in the Stadium Pledge, the property subject to the Additional Parcels
+Mortgage, the collateral described in the Fields Pledge, the Warrants, and their operations, their businesses, and their finances.
+
+6. Intentionally
+Omitted.
+
+7. Landlord
+Release. As of the Effective Date, each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor, and their respective past, present
+and future employees, agents, attorneys, representatives, successors and assigns, and all persons or entities claiming by, through or
+under any of them (and their respective successors and assigns, collectively, the “HOF Releasing Parties”), hereby:
+
+(a) acknowledges,
+agrees and affirms that none of them possesses any claims, defenses, offsets, rights of recoupment or counterclaims of any kind or nature
+against or with respect to the enforcement or administration of the Lease, the Stadium Pledge, the Stadium Mortgage, the Fields Pledge,
+the Consent, the Warrant, and/or the Guaranty, or any knowledge of any facts or circumstances that might give rise to or be the basis
+of any such claims, defenses, offsets, rights of recoupment or counterclaims;
+
+(b) remises,
+releases, acquits and forever discharges Landlord, and its predecessors in interest, affiliates, subsidiaries and assigns, and all of
+their respective past, present and future shareholders, members, directors, managers, officers, employees, attorneys, advisers, consultants,
+servicers, representatives or agents (collectively, the “Landlord Released Parties”) from any and all manner of debts,
+accounts, bonds, warranties, representations, controversies, liabilities, obligations, expenses, damages, judgments, executions, actions,
+claims, demands and causes of action of any nature whatsoever, whether at law or in equity, whether known or unknown, that any of the
+HOF Releasing Parties now have or may hereafter have by reason of any act, omission, matter, cause or thing, from the beginning of the
+world to and including the date this Amendment is executed and delivered by all parties hereto, except for those arising from any act
+or omission that constituted actual fraud, willful misconduct or gross negligence by such Landlord Released Party (all of the foregoing
+released claims are referred to as the “HOF Released Claims”);
+
+5
+
+(c) agrees
+that it is the intention of each of the HOF Releasing Parties that the foregoing release shall be effective with respect to all matters,
+past and present, known and unknown, suspected and unsuspected, and each of the HOF Releasing Parties realizes and acknowledges that factual
+matters now unknown to it may have given or may hereafter give rise to losses, damages, liabilities, costs and expenses which are presently
+unknown, unanticipated and unsuspected, and that each of the HOF Releasing Parties further agrees that the waivers and releases in this
+Amendment have been negotiated and agreed upon in light of that realization and that each of the HOF Releasing Parties nevertheless hereby
+intends to release, discharge and acquit the Landlord Released Parties from any such unknown losses, damages, liabilities, costs and expenses;
+
+(d) agrees,
+jointly and severally, to indemnify the Landlord Released Parties for, hold the Landlord Released Parties harmless from and against, and
+undertake the defense of the Landlord Released Parties with respect to, all HOF Released Claims that each of the Releasing Parties may
+assert with respect to any of the HOF Released Claims, despite the existence of the releases granted by the HOF Releasing Parties herein;
+
+(e) acknowledges
+that Landlord is specifically relying upon each of the HOF Releasing Parties’ acknowledgements and agreements in this Section in
+executing this Amendment, and that in the absence of such agreements Landlord would be unwilling to agree to the modifications provided
+for in this Amendment; and
+
+(f) agrees
+that all releases and discharges by each of the HOF Releasing Parties in this Amendment shall have the same effect as if each released
+or discharged matter had been the subject of a legal proceeding, adjudicated to final judgment from which no appeal could be taken and
+therein dismissed with prejudice.
+
+8. Ratification.
+
+(a) Each
+of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor hereby expressly, unconditionally, irrevocably and unequivocally (i) ratifies each
+of their obligations under the Lease, the Guaranty, the Stadium Pledge, the Stadium Mortgage, the Fields Pledge, the Consent, and the
+Warrants (the “Ratifying Parties Obligations”) and confirms that such Ratifying Parties Obligations, and all waivers,
+covenants and agreements by each of Tenant, Guarantor, HOFRECO, and Stadium Mortgagor in the Lease, the Guaranty, the Stadium Pledge,
+the Stadium Mortgage, the Fields Pledge, the Consent, and the Warrants remain in full force and effect for the benefit of Landlord, (ii)
+reaffirms its continuing absolute liability for the payment and performance of all of the Ratifying Parties Obligations, and (iii) confirms
+that such Ratifying Parties Obligations have not been modified or amended and that each of Tenant’s, Guarantor’s, HOFRECO’s
+and Stadium Mortgagor’s liabilities under such Ratifying Parties Obligations have not been limited, impaired or affected in any
+manner by any existing or previous event, fact or circumstance, in each case subject to the terms of this Amendment.
+
+6
+
+(b) Except
+as expressly provided herein, the Lease shall remain unchanged and in full force and effect; provided, that to the extent this Amendment
+conflicts with the Lease, the provisions of this Amendment shall control. From and after the date hereof, the “Lease” shall
+mean and refer to the Lease as amended by this Amendment.
+
+(c) For
+the avoidance of doubt, any default by Tenant, Guarantor, HOFRECO, or Stadium Mortgagor hereunder shall be deemed a default under the
+Lease (subject to the last sentence of Section 2 above).
+
+9. Miscellaneous.
+The provisions of this Amendment shall govern and control in the event of any conflict between this Amendment, on the one hand, and the
+provisions of the Lease, the Guaranty, the Stadium Pledge, the Stadium Mortgage, the Fields Pledge, the Consent, and/or the Warrants,
+on the other hand. The parties hereto, and each of them, agree to execute from time to time, any and all documents reasonably requested
+by the others to carry out the intent of this Amendment. Wherever possible, each provision of this Amendment shall be interpreted in such
+manner as to be effective and valid under applicable law, but if any provision of this Amendment shall be prohibited by or invalid under
+applicable law, such provision shall be ineffective to the extent of such prohibition or invalidity, without invalidating the remainder
+of such provision or the remaining provisions of this Amendment. This Amendment shall be governed by the laws of the State of Ohio. EACH
+OF THE PARTIES HERETO, BY ACCEPTANCE OF THIS AMENDMENT, HEREBY WAIVES, TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, THE RIGHT TO
+TRIAL BY JURY IN ANY ACTION, PROCEEDING OR COUNTERCLAIM, WHETHER IN CONTRACT, TORT OR OTHERWISE, RELATING DIRECTLY OR INDIRECTLY TO THIS
+AMENDMENT. This Amendment shall be binding upon and inure to the benefit of the parties hereto and their respective successors and permitted
+assigns. Time is of the essence with respect to all agreements and obligations of each of Tenant, Guarantor, and Stadium Mortgagor contained
+herein and in the Lease. This Amendment is solely for the benefit of the parties hereto and no persons other than the parties hereto and
+the Landlord Released Parties shall be entitled to claim or receive any benefit by reason of this Amendment.
+
+10. Counterparts.
+This Amendment may be executed in counterparts, each of which shall constitute an original, but all together shall constitute one and
+the same instrument. Signatures to this Amendment delivered electronically via .pdf, .jpeg, .TIF, .TIFF, DocuSign or similar electronic
+format shall be deemed an original signature and fully effective as such for all purposes.
+
+11. Survival.
+The provisions of Sections 1, 3, 7, 8, 9, 10, and 11 of this Amendment shall survive the expiration or earlier termination of the Lease.
+
+[SIGNATURE PAGES ON FOLLOWING PAGE]
+
+7
+
+IN WITNESS WHEREOF, the parties have executed this
+Amendment as of the date first set forth above.
+
+ LANDLORD:
+
+ HFAKOH001 LLC,
+
+ a Delaware limited liability company
+
+ By: 
+
+ /s/ Michael Reiter
+
+ Name:
+
+ Michael Reiter
+
+ Title:
+
+ Authorized Representative
+
+8
+
+ TENANT:
+
+ HOF VILLAGE WATERPARK, LLC,
+
+ a Delaware limited liability company
+
+ By: 
+
+ /s/ Tara Charnes
+
+ Name:  
+
+ Tara Charnes
+
+ Title:
+
+ General Counsel and Corporate Secretary
+
+9
+
+ GUARANTOR:
+
+ HOF VILLAGE NEWCO, LLC,
+
+ a Delaware limited liability company
+
+ By: 
+
+ /s/ Tara Charnes
+
+ Name: 
+
+ Tara Charnes
+
+ Title:
+
+ General Counsel and Corporate Secretary
+
+ STADIUM MORTGAGOR:
+
+ HOF VILLAGE STADIUM, LLC,
+
+ a Delaware limited liability company
+
+ By: 
+
+ /s/ Tara Charnes
+
+ Name: 
+
+ Tara Charnes
+
+ Title:
+
+ General Counsel and Corporate Secretary
+
+ HOFRECO:
+
+ HALL OF FAME RESORT & ENTERTAINMENT COMPANY,
+
+ a company incorporated under the laws of the State of Delaware
+
+ By: 
+
+ /s/ Tara Charnes
+
+ Name: 
+
+ Tara Charnes
+
+ Title:
+
+ General Counsel and Corporate Secretary
+
+10
+
+Exhibit A
+
+EXHIBIT A
+
+TO
+
+LEASE AGREEMENT
+
+Base
+Rent Schedule
+
+Lease Year
+
+ Annual Rent
+
+ Amount
+
+ Monthly
+
+ Rent
+
+1
+
+ $
+4,375,000.00
+
+ $
+364,583.33
+
+2
+
+ $
+4,718,714.05
+
+See below
+
+2.1
+
+ $
+4,718,714.05
+
+ $
+373,697.92
+
+ (i.e., the monthly Base Rent payment due on December 1, 2023)
+
+2.2
+
+ $
+4,718,714.05
+
+ $
+373,697.92
+
+2.3
+
+ $
+4,718,714.05
+
+ $
+378,098.06
+
+2.4
+
+ $
+4,718,714.05
+
+ $
+-
+
+2.5
+
+ $
+4,718,714.05
+
+ $
+-
+
+2.6
+
+ $
+4,718,714.05
+
+ $
+1,197,907.68
+
+ (i.e., the monthly Base Rent payment due on May 1, 2024, with no notice or cure period)
+
+2.7
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+2.8
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+2.9
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+2.10
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+2.11
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+2.12
+
+ $
+4,718,714.05
+
+ $
+399,218.75
+
+3
+
+ $
+4,910,390.58
+
+ $
+409,199.22
+
+4
+
+ $
+5,033,150.35
+
+ $
+419,429.20
+
+5
+
+ $
+5,158,979.11
+
+ $
+429,914.93
+
+6
+
+ $
+5,287,953.58
+
+ $
+440,662.80
+
+7
+
+ $
+5,420,152.42
+
+ $
+451,679.37
+
+8
+
+ $
+5,555,656.24
+
+ $
+462,971.35
+
+9
+
+ $
+5,694,547.64
+
+ $
+474,545.64
+
+10
+
+ $
+5,836,911.33
+
+ $
+486,409.28
+
+11
+
+ $
+5,982,834.12
+
+ $
+498,569.51
+
+12
+
+ $
+6,132,404.97
+
+ $
+511,033.75
+
+13
+
+ $
+6,285,715.09
+
+ $
+523,809.59
+
+14
+
+ $
+6,442,857.97
+
+ $
+536,904.83
+
+15
+
+ $
+6,603,929.42
+
+ $
+550,327.45
+
+16
+
+ $
+6,769,027.65
+
+ $
+564,085.64
+
+17
+
+ $
+6,938,253.35
+
+ $
+578,187.78
+
+18
+
+ $
+7,111,709.68
+
+ $
+592,642.47
+
+19
+
+ $
+7,289,502.42
+
+ $
+607,458.54
+
+20
+
+ $
+7,471,739.98
+
+ $
+622,645.00
+
+21
+
+ $
+7,658,533.48
+
+ $
+638,211.12
+
+22
+
+ $
+7,849,996.82
+
+ $
+654,166.40
+
+23
+
+ $
+8,046,246.74
+
+ $
+670,520.56
+
+24
+
+ $
+8,247,402.91
+
+ $
+687,283.58
+
+25
+
+ $
+8,453,587.98
+
+ $
+704,465.67
+
+26
+
+ $
+8,664,927.68
+
+ $
+722,077.31
+
+27
+
+ $
+8,881,550.87
+
+ $
+740,129.24
+
+28
+
+ $
+9,103,589.64
+
+ $
+758,632.47
+
+29
+
+ $
+9,331,179.38
+
+ $
+777,598.28
+
+30
+
+ $
+9,564,458.87
+
+ $
+797,038.24
+
+31
+
+ $
+9,803,570.34
+
+ $
+816,964.20
+
+32
+
+ $
+10,048,659.60
+
+ $
+837,388.30
+
+33
+
+ $
+10,299,876.09
+
+ $
+858,323.01
+
+34
+
+ $
+10,557,372.99
+
+ $
+879,781.08
+
+35
+
+ $
+10,821,307.32
+
+ $
+901,775.61
+
+36
+
+ $
+11,091,840.00
+
+ $
+924,320.00
+
+37
+
+ $
+11,369,136.00
+
+ $
+947,428.00
+
+38
+
+ $
+11,653,364.40
+
+ $
+971,113.70
+
+39
+
+ $
+11,944,698.51
+
+ $
+995,391.54
+
+40
+
+ $
+12,243,315.97
+
+ $
+1,020,276.33
+
+41
+
+ $
+12,549,398.87
+
+ $
+1,045,783.24
+
+42
+
+ $
+12,863,133.84
+
+ $
+1,071,927.82
+
+11
+
+43
+
+ $
+13,184,712.19
+
+ $
+1,098,726.02
+
+44
+
+ $
+13,514,329.99
+
+ $
+1,126,194.17
+
+45
+
+ $
+13,852,188.24
+
+ $
+1,154,349.02
+
+46
+
+ $
+14,198,492.95
+
+ $
+1,183,207.75
+
+47
+
+ $
+14,553,455.27
+
+ $
+1,212,787.94
+
+48
+
+ $
+14,917,291.66
+
+ $
+1,243,107.64
+
+49
+
+ $
+15,290,223.95
+
+ $
+1,274,185.33
+
+50
+
+ $
+15,672,479.55
+
+ $
+1,306,039.96
+
+51
+
+ $
+16,064,291.53
+
+ $
+1,338,690.96
+
+52
+
+ $
+16,465,898.82
+
+ $
+1,372,158.24
+
+53
+
+ $
+16,877,546.29
+
+ $
+1,406,462.19
+
+54
+
+ $
+17,299,484.95
+
+ $
+1,441,623.75
+
+55
+
+ $
+17,731,972.07
+
+ $
+1,477,664.34
+
+56
+
+ $
+18,175,271.38
+
+ $
+1,514,605.95
+
+57
+
+ $
+18,629,653.16
+
+ $
+1,552,471.10
+
+58
+
+ $
+19,095,394.49
+
+ $
+1,591,282.87
+
+59
+
+ $
+19,572,779.35
+
+ $
+1,631,064.95
+
+60
+
+ $
+20,062,098.84
+
+ $
+1,671,841.57
+
+61
+
+ $
+20,563,651.31
+
+ $
+1,713,637.61
+
+62
+
+ $
+21,077,742.59
+
+ $
+1,756,478.55
+
+63
+
+ $
+21,604,686.15
+
+ $
+1,800,390.51
+
+64
+
+ $
+22,144,803.31
+
+ $
+1,845,400.28
+
+65
+
+ $
+22,698,423.39
+
+ $
+1,891,535.28
+
+66
+
+ $
+23,265,883.98
+
+ $
+1,938,823.66
+
+67
+
+ $
+23,847,531.07
+
+ $
+1,987,294.26
+
+68
+
+ $
+24,443,719.35
+
+ $
+2,036,976.61
+
+69
+
+ $
+25,054,812.34
+
+ $
+2,087,901.03
+
+70
+
+ $
+25,681,182.64
+
+ $
+2,140,098.55
+
+71
+
+ $
+26,323,212.21
+
+ $
+2,193,601.02
+
+72
+
+ $
+26,981,292.52
+
+ $
+2,248,441.04
+
+73
+
+ $
+27,655,824.83
+
+ $
+2,304,652.07
+
+74
+
+ $
+28,347,220.45
+
+ $
+2,362,268.37
+
+75
+
+ $
+29,055,900.96
+
+ $
+2,421,325.08
+
+76
+
+ $
+29,782,298.48
+
+ $
+2,481,858.21
+
+77
+
+ $
+30,526,855.95
+
+ $
+2,543,904.66
+
+78
+
+ $
+31,290,027.34
+
+ $
+2,607,502.28
+
+79
+
+ $
+32,072,278.03
+
+ $
+2,672,689.84
+
+80
+
+ $
+32,874,084.98
+
+ $
+2,739,507.08
+
+81
+
+ $
+33,695,937.10
+
+ $
+2,807,994.76
+
+82
+
+ $
+34,538,335.53
+
+ $
+2,878,194.63
+
+83
+
+ $
+35,401,793.92
+
+ $
+2,950,149.49
+
+84
+
+ $
+36,286,838.77
+
+ $
+3,023,903.23
+
+85
+
+ $
+37,194,009.74
+
+ $
+3,099,500.81
+
+86
+
+ $
+38,123,859.98
+
+ $
+3,176,988.33
+
+87
+
+ $
+39,076,956.48
+
+ $
+3,256,413.04
+
+88
+
+ $
+40,053,880.39
+
+ $
+3,337,823.37
+
+89
+
+ $
+41,055,227.40
+
+ $
+3,421,268.95
+
+90
+
+ $
+42,081,608.09
+
+ $
+3,506,800.67
+
+91
+
+ $
+43,133,648.29
+
+ $
+3,594,470.69
+
+92
+
+ $
+44,211,989.50
+
+ $
+3,684,332.46
+
+93
+
+ $
+45,317,289.23
+
+ $
+3,776,440.77
+
+94
+
+ $
+46,450,221.46
+
+ $
+3,870,851.79
+
+95
+
+ $
+47,611,477.00
+
+ $
+3,967,623.08
+
+96
+
+ $
+48,801,763.93
+
+ $
+4,066,813.66
+
+97
+
+ $
+50,021,808.02
+
+ $
+4,168,484.00
+
+98
+
+ $
+51,272,353.22
+
+ $
+4,272,696.10
+
+99
+
+ $
+52,554,162.05
+
+ $
+4,379,513.50
+
+12
+
+Exhibit B
+
+EXHIBIT A
+
+TO
+
+LEASE AGREEMENT
+
+Base
+Rent Schedule
+
+Lease
+Year
+
+ Annual Base
+
+ Rent Amount
+
+ Monthly
+
+ Base Rent
+
+ Amount
+
+ 1
+
+ $
+4,375,000.00
+
+ $
+364,583.33
+
+ 2
+
+ $
+4,664,152.30
+
+ $
+388,679.36
+
+ 3
+
+ $
+4,820,703.13
+
+ $
+401,725.26
+
+ 4
+
+ $
+4,941,220.71
+
+ $
+411,768.39
+
+ 5
+
+ $
+5,064,751.23
+
+ $
+422,062.60
+
+ 6
+
+ $
+5,191,370.01
+
+ $
+432,614.17
+
+ 7
+
+ $
+5,321,154.26
+
+ $
+443,429.52
+
+ 8
+
+ $
+5,454,183.11
+
+ $
+454,515.26
+
+ 9
+
+ $
+5,590,537.69
+
+ $
+465,878.14
+
+ 10
+
+ $
+5,730,301.13
+
+ $
+477,525.09
+
+ 11
+
+ $
+5,873,558.66
+
+ $
+489,463.22
+
+ 12
+
+ $
+6,020,397.63
+
+ $
+501,699.80
+
+ 13
+
+ $
+6,170,907.57
+
+ $
+514,242.30
+
+ 14
+
+ $
+6,325,180.26
+
+ $
+527,098.35
+
+ 15
+
+ $
+6,483,309.76
+
+ $
+540,275.81
+
+ 16
+
+ $
+6,645,392.51
+
+ $
+553,782.71
+
+ 17
+
+ $
+6,811,527.32
+
+ $
+567,627.28
+
+ 18
+
+ $
+6,981,815.50
+
+ $
+581,817.96
+
+ 19
+
+ $
+7,156,360.89
+
+ $
+596,363.41
+
+ 20
+
+ $
+7,335,269.91
+
+ $
+611,272.49
+
+ 21
+
+ $
+7,518,651.66
+
+ $
+626,554.31
+
+ 22
+
+ $
+7,706,617.95
+
+ $
+642,218.16
+
+ 23
+
+ $
+7,899,283.40
+
+ $
+658,273.62
+
+ 24
+
+ $
+8,096,765.49
+
+ $
+674,730.46
+
+ 25
+
+ $
+8,299,184.62
+
+ $
+691,598.72
+
+ 26
+
+ $
+8,506,664.24
+
+ $
+708,888.69
+
+ 27
+
+ $
+8,719,330.85
+
+ $
+726,610.90
+
+ 28
+
+ $
+8,937,314.12
+
+ $
+744,776.18
+
+ 29
+
+ $
+9,160,746.97
+
+ $
+763,395.58
+
+ 30
+
+ $
+9,389,765.64
+
+ $
+782,480.47
+
+ 31
+
+ $
+9,624,509.79
+
+ $
+802,042.48
+
+ 32
+
+ $
+9,865,122.53
+
+ $
+822,093.54
+
+ 33
+
+ $
+10,111,750.59
+
+ $
+842,645.88
+
+ 34
+
+ $
+10,364,544.36
+
+ $
+863,712.03
+
+ 35
+
+ $
+10,623,657.97
+
+ $
+885,304.83
+
+ 36
+
+ $
+10,889,249.42
+
+ $
+907,437.45
+
+ 37
+
+ $
+11,161,480.65
+
+ $
+930,123.39
+
+ 38
+
+ $
+11,440,517.67
+
+ $
+953,376.47
+
+ 39
+
+ $
+11,726,530.61
+
+ $
+977,210.88
+
+ 40
+
+ $
+12,019,693.88
+
+ $
+1,001,641.16
+
+ 41
+
+ $
+12,320,186.22
+
+ $
+1,026,682.19
+
+ 42
+
+ $
+12,628,190.88
+
+ $
+1,052,349.24
+
+ 43
+
+ $
+12,943,895.65
+
+ $
+1,078,657.97
+
+ 44
+
+ $
+13,267,493.04
+
+ $
+1,105,624.42
+
+ 45
+
+ $
+13,599,180.37
+
+ $
+1,133,265.03
+
+ 46
+
+ $
+13,939,159.88
+
+ $
+1,161,596.66
+
+ 47
+
+ $
+14,287,638.87
+
+ $
+1,190,636.57
+
+ 48
+
+ $
+14,644,829.85
+
+ $
+1,220,402.49
+
+ 49
+
+ $
+15,010,950.59
+
+ $
+1,250,912.55
+
+ 50
+
+ $
+15,386,224.36
+
+ $
+1,282,185.36
+
+13
+
+ 51
+
+ $
+15,770,879.96
+
+ $
+1,314,240.00
+
+ 52
+
+ $
+16,165,151.96
+
+ $
+1,347,096.00
+
+ 53
+
+ $
+16,569,280.76
+
+ $
+1,380,773.40
+
+ 54
+
+ $
+16,983,512.78
+
+ $
+1,415,292.73
+
+ 55
+
+ $
+17,408,100.60
+
+ $
+1,450,675.05
+
+ 56
+
+ $
+17,843,303.12
+
+ $
+1,486,941.93
+
+ 57
+
+ $
+18,289,385.69
+
+ $
+1,524,115.47
+
+ 58
+
+ $
+18,746,620.34
+
+ $
+1,562,218.36
+
+ 59
+
+ $
+19,215,285.85
+
+ $
+1,601,273.82
+
+ 60
+
+ $
+19,695,667.99
+
+ $
+1,641,305.67
+
+ 61
+
+ $
+20,188,059.69
+
+ $
+1,682,338.31
+
+ 62
+
+ $
+20,692,761.18
+
+ $
+1,724,396.77
+
+ 63
+
+ $
+21,210,080.21
+
+ $
+1,767,506.68
+
+ 64
+
+ $
+21,740,332.22
+
+ $
+1,811,694.35
+
+ 65
+
+ $
+22,283,840.52
+
+ $
+1,856,986.71
+
+ 66
+
+ $
+22,840,936.54
+
+ $
+1,903,411.38
+
+ 67
+
+ $
+23,411,959.95
+
+ $
+1,950,996.66
+
+ 68
+
+ $
+23,997,258.95
+
+ $
+1,999,771.58
+
+ 69
+
+ $
+24,597,190.42
+
+ $
+2,049,765.87
+
+ 70
+
+ $
+25,212,120.18
+
+ $
+2,101,010.02
+
+ 71
+
+ $
+25,842,423.19
+
+ $
+2,153,535.27
+
+ 72
+
+ $
+26,488,483.77
+
+ $
+2,207,373.65
+
+ 73
+
+ $
+27,150,695.86
+
+ $
+2,262,557.99
+
+ 74
+
+ $
+27,829,463.26
+
+ $
+2,319,121.94
+
+ 75
+
+ $
+28,525,199.84
+
+ $
+2,377,099.99
+
+ 76
+
+ $
+29,238,329.84
+
+ $
+2,436,527.49
+
+ 77
+
+ $
+29,969,288.08
+
+ $
+2,497,440.67
+
+ 78
+
+ $
+30,718,520.28
+
+ $
+2,559,876.69
+
+ 79
+
+ $
+31,486,483.29
+
+ $
+2,623,873.61
+
+ 80
+
+ $
+32,273,645.37
+
+ $
+2,689,470.45
+
+ 81
+
+ $
+33,080,486.51
+
+ $
+2,756,707.21
+
+ 82
+
+ $
+33,907,498.67
+
+ $
+2,825,624.89
+
+ 83
+
+ $
+34,755,186.14
+
+ $
+2,896,265.51
+
+ 84
+
+ $
+35,624,065.79
+
+ $
+2,968,672.15
+
+ 85
+
+ $
+36,514,667.44
+
+ $
+3,042,888.95
+
+ 86
+
+ $
+37,427,534.12
+
+ $
+3,118,961.18
+
+ 87
+
+ $
+38,363,222.47
+
+ $
+3,196,935.21
+
+ 88
+
+ $
+39,322,303.04
+
+ $
+3,276,858.59
+
+ 89
+
+ $
+40,305,360.61
+
+ $
+3,358,780.05
+
+ 90
+
+ $
+41,312,994.63
+
+ $
+3,442,749.55
+
+ 91
+
+ $
+42,345,819.49
+
+ $
+3,528,818.29
+
+ 92
+
+ $
+43,404,464.98
+
+ $
+3,617,038.75
+
+ 93
+
+ $
+44,489,576.61
+
+ $
+3,707,464.72
+
+ 94
+
+ $
+45,601,816.02
+
+ $
+3,800,151.34
+
+ 95
+
+ $
+46,741,861.42
+
+ $
+3,895,155.12
+
+ 96
+
+ $
+47,910,407.96
+
+ $
+3,992,534.00
+
+ 97
+
+ $
+49,108,168.16
+
+ $
+4,092,347.35
+
+ 98
+
+ $
+50,335,872.36
+
+ $
+4,194,656.03
+
+ 99
+
+ $
+51,594,269.17
+
+ $
+4,299,522.43
+
+14
+
+Exhibit C
+
+Additional Parcels Mortgage
+
+[See Attached]
+
+15
+
+Exhibit D
+
+Owner’s Affidavit
+
+[See Attached]
+
+16

@@ -1,0 +1,574 @@
+EX-10.11
+12
+a2238428zex-10_11.htm
+EX-10.11
+
+Exhibit 10.11
+
+[*] = Certain confidential information contained in this document, marked by brackets, has been omitted because it is not material and would be competitively harmful if publicly disclosed.
+
+EXECUTION VERSION 
+
+CONFIDENTIAL
+
+EXCLUSIVE LICENSE AGREEMENT
+
+This EXCLUSIVE LICENSE AGREEMENT (this, “Agreement”), dated October 26, 2016 (the “Effective Date”), is by and between THE TRUSTEES OF COLUMBIA UNIVERSITY IN THE CITY OF NEW YORK, a New York corporation (“Columbia”), and APPLIED THERAPEUTICS, INC., a Delaware corporation (“Company”).
+
+1.                                      Definitions.
+
+a.                                                  “Affiliate” shall mean any corporation or other entity that directly or indirectly controls, is controlled by, or is under common control with, another corporation or entity. Control means direct or indirect ownership of, or other beneficial interest in, fifty percent (50%) or more of the voting stock, other voting interest, or income of a corporation or other entity.
+
+b.                                              “Commercially Reasonable Efforts” shall mean the level of efforts and expenditure of resources required to carry out such obligation in a manner consistent with the efforts and resources Company typically devotes to a product of similar market potential, at a similar stage in its development or product life, taking into account all relevant factors, including, without limitation, safety and efficacy, product profile, cost to develop, cost and availability of supply, the time required to complete development, the competitiveness of the marketplace (including the proprietary position and anticipated market share of the product), the patent position with respect to such product (including the ability to obtain or enforce, or have obtained or enforced, such patent rights), the third-party patent landscape relevant to the product, the regulatory structure involved, the likelihood of regulatory approval, the anticipated or actual profitability of the applicable product and other technical, commercial, legal, scientific, regulatory and medical consideration.
+
+c.                                                   “Cover” or “Covered By” shall mean with respect to a product and a claim of a patent or patent application, that the making, having made, use, selling, offering for sale or import of the product would, in the country in which such action occurs, (i) in the case of a claim in an issued patent, infringe the claim, or (ii) in the case of a claim in a pending patent application, infringe the claim if it existed in an issued patent; in each case of (i) and (ii) in the absence of the licenses granted under this Agreement.
+
+d.                                                  “[*] Patents” shall mean all Patents with claims Covering [*] Technology.
+
+e.                                               “[*] Technology” shall mean aldose reductase inhibitors and uses of thereof, as described in invention disclosure document [*].
+
+f.                                                    “Designee” shall mean a corporation or other entity that is employed by, under contract to, or in partnership with (i) Company, (ii) a Sublicensee, (iii) an Affiliate of Company or (iv) an Affiliate of a Sublicensee, wherein such corporation or other entity is granted the right to make, use, sell, promote, distribute, market, import, or export Products.
+
+g.                                       “Field” shall mean the diagnosis and treatment of [*].
+
+1
+
+h.                                                  “License Year” shall mean the one year period from the Effective Date of this Agreement or an anniversary thereof to the next anniversary of the Effective Date.
+
+i.                                                  “Net Sales” shall mean the actual consideration paid to Company, its Affiliates or Sublicensees by a Third Party customer for sales of Product, minus [*]. In the event a Product is co-packaged, co-formulated or otherwise sold in a manner that includes one or more active therapeutic ingredients in addition to a Product (such Product, a “Combination Product”), then Net Sales, for purposes of determining royalty payments on such Combination Product, will be calculated by multiplying the Net Sales of the Combination Product by the fraction A over A+B, in which A is the net selling price of the Product portion of the Combination Product when such Product is sold separately during the applicable accounting period in which the sales of the Combination Product were made, and B is the aggregate net selling price of the other active therapeutic ingredient of the Combination Product when such other active therapeutic ingredient are sold separately during the accounting period in question. All net selling prices of the Product portion of the Combination Product and of the other active therapeutic ingredient of such Combination Product will be calculated as the average net selling price of the said ingredients during the applicable accounting period for which the Net Sales are being calculated in the particular country where the Combination Product is sold. In the event that, in any country or countries, no separate sale of either such above designated Products or such above designated other active therapeutic ingredient of the Combination Product are made during the accounting period in which the sale was made or if the net retail selling price for an active therapeutic ingredient cannot be determined for an accounting period, Net Sales allocable to the Product in each such country will be determined by mutual agreement reached in good faith by Columbia and Company prior to the end of the accounting period in question based on an equitable method of determining same that takes into account, on a country by country basis, variations in potency, the relative contribution of the Product and each other active therapeutic ingredient in the combination, and relative value to the end user of the Product and each such other active therapeutic ingredient.
+
+j.                                                 “Net Sublicensing Revenue” shall mean any and all payments received by Company from Sublicensees in consideration for granting such Sublicensees a sublicense of the rights granted to Company under this Agreement, including, without limitation, sublicense issue fees, lump sum payments, option fees, milestone payments (but only to the extent such milestone payments are in excess of the milestone payments required to be paid by Company under this Agreement) or other similar payments, provided, however, that Net Sublicensing Revenue shall exclude (i) payments made to finance research and development of Products, including without limitation, those payments intended to pay for the purchase or use of equipment, supplies, products or services, and/or the use of employees and/or consultants, (ii) payments made by a Sublicensee in consideration of the issuance by Company of equity or debt securities and not in consideration of the sublicense of rights under this Agreement, (iii) and royalties on Net Sales. To the extent Company receives compensation for both a grant of a sublicense of rights granted under this Agreement and the grant of other rights or licenses or undertaking of other obligations, such compensation will be reasonably apportioned between that amount attributable to the sublicense of rights granted hereunder, which shall be deemed Net Sublicensing Revenue, and that amount attributable to the grant of other rights or licenses or undertaking of other obligations, which shall be excluded from Net Sublicensing Revenue, such apportionment to be reasonably agreed upon by the parties. However, if the parties cannot agree upon such apportionment, senior management from each party will meet to discuss such apportionment and if senior management is unable to reach agreement, each party will select an independent expert with experience in valuation on intellectual property licenses in biotechnology, and the experts so chosen will agree upon such apportionment which shall be final and binding on the parties.
+
+2
+
+k.                                                  “Other Product” shall mean any product that (i) is not a Patent Product and (ii) the manufacture, use, sale, offering for sale or importation of which would not have been possible but for the use of the Technical Information.
+
+l.                                                  “Patent” or “Patents” shall mean: (i) the United States and foreign patents and/or patent applications listed in Exhibit A; (ii) any United States and foreign patents and/or patent applications that claim priority to the patents and/or patent applications listed in Exhibit A; (iii) any and all claims of continuation-in-part applications that claim priority to the United States or foreign patents and/or patent applications described in subsections (i) and (ii), but provided only where such claims are directed to inventions disclosed in the manner provided in the first paragraph of 35 U.S.C. Section 112 in the United States and foreign patents and/or patent applications described in subsections (i) and (ii), and such claims in any patents issuing from such continuation-in-part applications; (iv) any and all foreign patent applications, foreign patents or related foreign patent documents that claim priority or are otherwise foreign counterparts of the patents and/or patent applications described in subsections (i), (ii) or (iii); (v) any and all divisionals, continuations, reissues, re-examinations, renewals, substitutions and extensions of any of the foregoing; and (vi) any and all patents issuing from any of the foregoing. For the avoidance of doubt, “Patents” shall not include any patents or patent applications based on research conducted after the Effective Date, except as otherwise agreed in a separate writing.
+
+m.                                          “Patent Product” shall mean any product, the manufacture, use, sale, offering for sale or importation of which is Covered by a Valid Claim of a Patent.
+
+n.                                              “Product” or “Products” shall mean a Patent Product and/or an Other Product.
+
+o.                                              “Royalty Term” shall mean, on a country-by-country and Product-by-Product basis, (a) with respect to a Patent Product, the period commencing on first commercial sale of the Patent Product in such country and ending on the last to expire Valid Claim Covering the Product in such country and (b) with respect to an Other Product, the period commencing on first commercial sale of the Other Product in such country and ending [*] thereafter.
+
+p.                                              “Sublicensee” shall mean any Third Party that Company has granted a sublicense of the rights granted to it pursuant to this Agreement. An Affiliate of Company exercising rights hereunder shall not be considered a Sublicensee.
+
+q.                                              “Technology” means (i) aldose reductase inhibitors and the use thereof, as described in invention disclosure documents [*] and (ii) the [*] Technology.
+
+r.                                                 “Technical Information” shall mean any know-how, technical information and data provided by Columbia related to the Technology that (i) is developed by Columbia under the direction of [*] or an individual working under [*] direction prior to the Effective Date, (ii) has not been disclosed to or is not generally available to the public prior to the Effective Date, and (iii) is described and documented as disclosed to Company in a technology transfer memorandum signed by Columbia and Company.
+
+s.                                                “Territory” shall mean: (i) with respect to all Patents other than the [*] Patents, global except China, Taiwan, Hong Kong and Macao and (ii) with respect to the [*] Patents only, global.
+
+t.                                                 “Third Party” shall mean any entity or person other than Company, Columbia and their respective Affiliates.
+
+u.                                              “Valid Claim” shall mean a claim of an issued and unexpired patent or a pending claim of a pending patent application that has not been (i) abandoned, finally rejected or expired without the
+
+[*] = Certain confidential information contained in this document, marked by brackets, has been omitted and filed separately with the Securities and Exchange Commission pursuant to Rule 406 of the Securities Act of 1933, as amended.
+
+3
+
+possibility of appeal or refiling, (ii) held to be invalid, revoked or unenforceable through a final judgment of a court or other governmental agency of competent jurisdiction from which no appeal can be or is taken, (iii) admitted to be invalid or unenforceable through reissue, disclaimer or otherwise; except that “Valid Claim” shall exclude any claim in a pending patent application that has not been granted within [*] following the earliest claimable priority date, unless and until such claim is granted.
+
+2.                                      License.
+
+a.                                              Columbia grants to the Company and any Affiliate thereof, upon and subject to all the terms and conditions of this Agreement (including Section 3(a) hereof):
+
+i.                                        an exclusive license under the Patents to discover, develop, manufacture, have made, use, sell, offer to sell, have sold, import, export, distribute, rent or lease Products in the Field and throughout the Territory; and
+
+ii.                                     a non-exclusive license to use Technical Information to discover, develop, manufacture, have made, use, sell, offer to sell, have sold, import, export, distribute, rent or lease Products in the Field and throughout the Territory.
+
+b.                                              Columbia grants to Company the right to grant sublicenses of the licenses granted in Section 2(a) without Columbia’s consent, provided that: (i) the Sublicensee agrees to abide by and be subject to all the terms and provisions of this Agreement applicable to the Company; (ii) the Sublicensee shall [*] under this Agreement; (iii) in the event any Sublicensee (or any entity or person acting on its behalf) initiates any proceeding or otherwise asserts any claim challenging the validity or enforceability of any Patent in any court, administrative agency or other forum, Company shall, upon written request by Columbia, terminate forthwith the sublicense agreement with such Sublicensee, and the sublicense agreement shall provide for such right of termination by Company; (iv) the sublicense agreement shall provide that, in the event of any inconsistency between the sublicense agreement and this Agreement, this Agreement shall control; (v) the Sublicensee will submit quarterly reports to Company consistent with the reporting provision of Section 5(a) herein; (vi) Company remains fully liable for the performance of its and its Sublicensee’s obligations hereunder; (vii) Company notifies Columbia of any grant of a sublicense within [*] after execution of such sublicense and upon written request of Columbia, provides a copy of the executed sublicense to Columbia; and (viii) no such sublicense or attempt to obtain a Sublicensee shall relieve Company of its diligence obligations under this Agreement, nor shall it relieve Company of its obligations to pay Columbia any and all license fees, royalties and other payments due under this Agreement.
+
+All rights and licenses granted by Columbia to Company under this Agreement are subject to (i) any limitations imposed by the terms of any government grant, government contract or government cooperative agreement applicable to the technology that is the subject of this Agreement, and (ii) applicable requirements of 35 U.S.C. Sections 200 et seq., as amended, and implementing regulations and policies. Without limitation of the foregoing, Company agrees that, to the extent required under 35 U.S.C. Section 204, any Product used, sold, distributed, rented or leased by Company and its Affiliates and Sublicensees, and their respective Designees (collectively, the “Sellers”) in the United States will be manufactured substantially in the United States. In addition, Company agrees that, to the extent required under 35 U.S.C. Section 202(c)(4), the United States government is granted a nonexclusive, nontransferable, irrevocable, paid-up license to practice or have practiced for or on behalf of the United States any Patent throughout the world.
+
+c.                                              All rights not specifically granted herein are reserved to Columbia. Except as expressly provided under this Section 2, no right or license is granted (expressly or by implication or estoppel) by Columbia to Company or its Affiliates or Sublicensees under any tangible or intellectual
+
+4
+
+property, materials, patent, patent application, trademark, copyright, trade secret, know-how, technical information, data or other proprietary right.
+
+3.                                      Reservation of Rights for Research Purposes; Freedom of Publication.
+
+a.                                             Notwithstanding the exclusive license granted to Company in Section 2(a)(i), Columbia reserves the right to (x) practice the Patents for academic research and educational purposes in the Field and (y) permit other entities (and such entities’ researchers) to practice and use such Patents for academic research and educational purposes in the Field; in each case of (i) and (ii) solely for non- commercial purposes which do not involve (i) [*] or (ii) [*]. Columbia shall obtain from all entities or individuals who are given permission to practice and use such Patents an agreement in writing to limit such use to academic research and educational purposes in accordance with the foregoing sentence. Nothing in this Agreement shall be interpreted to limit in any way the right of Columbia and its faculty or employees to practice and use such Patents for any purpose outside the Field or to license or permit such use outside the Field by third parties.
+
+b.                                             Company acknowledges that Columbia is dedicated to free scholarly exchange and to public dissemination of the results of its scholarly activities. Columbia and its faculty and employees shall have the right to publish, disseminate or otherwise disclose any information relating to its research activities, including Technical Information.
+
+4.                                      Fees, Royalties and Payment.
+
+a.                                             Importance of Technical Information. Company has requested, and Columbia has agreed, to grant Company certain rights to Technical Information as set forth in Section 2(a)(ii). Company desires to exercise these rights in order to develop and commercialize the technology licensed under this Agreement. Because of the importance of Technical Information, Company has agreed to pay certain royalties to Columbia on Other Products, as specified below, even if it is not Covered by a Patent, in order to obtain rights to Technical Information. Company has agreed to these payments because of the commercial value of Technical Information, separate and distinct from the commercial value of the Patents. Company acknowledges that it would not have entered into this Agreement without receiving the rights to the Technical Information specified in Section 2(a)(ii). Company further acknowledges that licenses to Technical Information and each patent and application within the definition of Patents were separately available from a license to the Patents, and that for convenience and because of the preference of Company, the parties executed a combined license to the Patents and Technical Information.
+
+b.                                             In consideration of the licenses granted under Section 2(a) of this Agreement, the Company shall pay to Columbia as follows:
+
+i.                                       License Fee: A nonrefundable, non-recoverable and non-creditable license issue fee in the sum of [*], payable upon execution of this Agreement;
+
+ii.                                    Royalties:
+
+A.                                 During the Royalty Term, with respect to sales of Products by the Sellers in the Territory, a nonrefundable and non-recoverable royalty of:
+
+(1)         [*]% on the first [*] cumulative, global Net Sales of Patent Products;
+
+(2)         [*]% on all Net Sales of Patent Products after the first [*]
+
+5
+
+cumulative, global Net Sales of Patent Products; and
+
+(3)         [*]% on Net Sales of Other Products.
+
+B.                                 If Company enters into any license agreement with a Third Party for patent rights that are necessary or essential for Company to commercialize a Product, Company may offset any royalty payments under such Third Party agreement from royalties payable under the Agreement, provided that (1) no single royalty payment may be reduced by more than [*], and (2) Company uses commercially reasonable efforts to procure from such Third Party similar royalty offset provisions.
+
+C.                                 Notwithstanding the foregoing, beginning on the tenth (10th) anniversary of the Effective Date and continuing on each anniversary of the Effective Date thereafter during the Royalty Term, Company shall pay to Columbia a nonrefundable and non-recoverable minimum royalty payment in the amount of [*]. Each such minimum royalty payment will be credited against earned royalties accrued during the same License Year in which the minimum royalty payment is due and payable. To the extent minimum royalty payments exceed the earned royalties accrued during the same License Year, this excess amount cannot be carried over to any other subsequent License Year, either to decrease the earned royalties due in that License Year or to decrease the minimum royalty payments due in that License Year.
+
+c.                                              In consideration of Company’s right to sublicense third parties granted under Section 2(b) of this Agreement, Company shall pay to Columbia the following nonrefundable, non- recoverable and non-creditable amounts:
+
+i.                                       [*] of Net Sublicensing Revenue received by Company [*];
+
+ii.                                    [*] of Net Sublicensing Revenue received by Company [*]; and
+
+iii.                                 [*] of Net Sublicensing Revenue received by Company [*].
+
+d.                                             Development Milestone Payments: In the event that the Company, Sublicensees, or their Affiliates (collectively “Developer”) develops a Product for potential commercial sale in the Territory, the following nonrefundable, non-recoverable and non-creditable milestone payments shall be made by Company to Columbia with respect to the first Product to achieve the following events (each, a “Milestone Event”):
+
+[*] = Certain confidential information contained in this document, marked by brackets, has been omitted and filed separately with the Securities and Exchange Commission pursuant to Rule 406 of the Securities Act of 1933, as amended.
+
+6
+
+Milestone Event
+
+Milestone Payment
+
+[*]
+
+[*]
+
+For purposes of the foregoing Milestone Events, the following definitions shall apply:
+
+i.                                         “[*]” means [*].
+
+ii.                                      “[*]” means [*].
+
+iii.                                   “[*]” means [*].
+
+iv.                               “[*]” means [*].
+
+v.                                     “[*]” means, [*].
+
+e.                                                Highest Royalty Due. Columbia shall not be entitled to more than [*] on the same Product sale under Section 4b(ii)(A). To the extent a Product was a Patent Product as of the date of first commercial sale but subsequently ceases being a Patent Product but is still an Other Product, Columbia shall be entitled to the Other Product royalty rate on the Product, but only for the remainder of the Royalty Term for the Product as an Other Product, with the Royalty Term being deemed to have commenced as of the date first commercial sale of the Patent Product. By way of example, but not by way of limitation, if the manufacture of a Product is Covered by the claim of a Patent, and the
+
+7
+
+manufacture of that Product would not have been possible but for the use of the Technical Information, the Product is a Patent Product, not an Other Product, and Company must pay the royalty specified in Section 4(b)(ii)(A)(1) or Section 4(b)(ii)(A)(2), as applicable. If, after some period of time (for example, five years) of paying the royalties specified in Section 4b(ii)(A)(1) or Section 4b(ii)(A)(2) on the Product, the Product ceases to be a Patent Product, Company must continue to pay royalties on the Product as an Other Product as specified in Section 4(b)(ii)(A)(3) for the remainder of the Royalty Term, which is measured from the first bona fide commercial sale of the Patent Product on a country-by-country and product-by-product basis.
+
+g.                                               No Non-Monetary Consideration. Without Columbia’s prior written consent, the Sellers shall not solicit or accept any consideration for the sale of any Product other than as will be accurately reflected in Net Sales. Furthermore, Company shall not enter into any transaction with any Affiliate that would circumvent its monetary or other obligations under this Agreement.
+
+h.                                              Sale Below Fair Market Value. In the event that any Seller sells Product to a Third Party to whom it also sells other products, the price for Licensed Product shall not be established such that Net Sales is below fair market value with the intent of increasing market share for other products sold by such Seller to such Third Party or for the purpose of reducing the amount of royalties payable on the Net Sales of Product. If the sale of Product under such circumstances results in Net Sales below the fair market value of Product, then the Net Sales of Product in such transaction shall be deemed to be the fair market value for purposes of calculating payments owed to Columbia under this Agreement.
+
+i.                                                  Rate Adjustment on Challenge; Payment of Costs and Expenses.
+
+(i)                                   In the event Company (or any entity or person acting on its behalf) initiates any proceeding or otherwise asserts any claim challenging the validity or enforceability of any Patent in any court, administrative agency or other forum (“Challenge”), all royalty rates set forth in Sections 4(b)(ii) shall be [*] on and after the date of such Challenge for the remaining term of this Agreement. Notwithstanding the foregoing, a Challenge excludes (A) any bona fide patent infringement defense against a claim of infringement of any Patent brought by Columbia or a Third Party or (B) in response to a claim by Columbia that a royalty payment is due, a claim brought by Company asserting that the Royalty Term for the applicable product has expired because there is no longer a Valid Claim of a Patent Covering such product in the applicable country.
+
+(ii)                                If, after a final decision is rendered on a Challenge, there exists at least one Valid Claim among the claims Challenged by Company, Company shall pay all costs and expenses incurred by Columbia (including actual attorneys’ fees) in connection with defending a Challenge. Company shall make payment within [*] after receiving an invoice from Columbia, which invoice may be sent after a final decision is rendered on the Challenge.
+
+Company acknowledges and agrees that the provisions set forth in this Section 4(i) reasonably reflect the value derived from the Agreement by Company in the event of a Challenge. In addition, Company acknowledges and agrees that any payments made under this Section 4(i) shall be nonrefundable and non- recoverable for any reason whatsoever.
+
+j.                                                 Equity Grant and Related Rights.
+
+i.                                        Upon the achievement of the Funding Milestone, Company shall issue to Columbia the number of shares of the Company that is equal to five percent (5%) of the outstanding common stock of the Company on a fully diluted basis, calculated based on the number of shares of
+
+8
+
+capital stock of the Company issued and outstanding on a fully diluted basis immediately after the closing of the Funding Milestone, including all common stock equivalents and all shares directly or indirectly allocated to any equity plan or pool (and including the shares to be issued to Columbia) (the “Columbia Shares”). Such shares shall be issued pursuant to a Stock Purchase Agreement acceptable to Columbia. As a condition precedent to the issuance of the Columbia Shares, Columbia must either (a) become a party to that certain Voting Agreement by and among the Company and the shareholders named therein (the “Voting Agreement”), as a “Key Holder” and a “Stockholder” and therefore be bound by and subject to all terms and provisions of the Voting Agreement applicable to a “Key Holder” and a “Stockholder”, or (b) enter into an agreement with the Company and the other shareholders party to the Voting Agreement that provides for rights and obligations substantially similar to those rights and obligations applicable to “Key Holders” and “Stockholders” in the Voting Agreement; provided that the Voting Agreement or other agreement described in clause (b) above shall include the provisions set forth in Exhibit C annexed hereto. Notwithstanding the foregoing, if the Funding Milestone is not attained within [*] following the Effective Date or if the Company is involved in any merger, consolidation, share exchange, other business combination, recapitalization, sale of all or substantially all of its assets, liquidation or dissolution prior to the attainment of the Funding Milestone, Company shall issue the Columbia Shares to Columbia upon the [*] of the Effective Date or upon such earlier date that any such transaction is consummated, and shall maintain the percentage of the Columbia Shares at five percent (5%) (calculated as described above) by the issuance of additional shares of Common Stock to Columbia at all times through the time that Company has received [*] in total gross cash financing proceeds from the sale of capital stock,
+
+ii.                                    In connection with the equity grant, Company shall grant to Columbia the right to designate a non-voting board observer (“Board Observer”) who may attend or otherwise participate in all meetings of the Board of Directors of the Company. Columbia will be required to enter into a mutually acceptable form confidentiality agreement prior to the Board Observer’s attending any meeting of the Board of Directors, and the Board of Directors may exclude the Board Observer from discussions of Company information and access to Company materials that the Board of Directors reasonably determines would present a conflict of interest to Columbia or are reasonably necessary to preserve the attorney-client privilege.
+
+iii.                                 If the Company proposes to sell any equity securities or securities that are convertible into equity securities of the Company (“New Securities”), then Columbia and/or its Assignee (as defined below) will have the right to purchase up to [*] of the New Securities on the same terms and conditions as are offered to the other purchasers in each such financing. Company shall provide [*] written notice in advance of the closing of each such financing, including reasonable detail regarding the terms and purchasers in the financing. If all New Securities offered to Columbia are not elected to be purchased or acquired as provided in the immediately preceding sentence, the Company may, during the [*] following the expiration of the [*] provided in the immediately preceding sentence, offer and sell the remaining unsubscribed portion of such New Securities to any purchaser at a price not less than, and upon terms no more favorable to the offeree than, those specified in the notice to Columbia. If the Company does not enter into an agreement for the sale of the New Securities within such [*], or if such agreement is not consummated within [*] of the execution thereof, the right provided hereunder shall be deemed to be revived and such New Securities shall not be offered unless first reoffered to Columbia in accordance with this Section 4(j)(iii). As used herein, the term “Assignee” means (A) any entity to which the University’s participation rights under this section have been assigned either by Columbia or another entity (solely as permitted pursuant to the assignment clause set forth in this Agreement), or (B) any entity that is controlled by Columbia, provided that any such Assignee is not a competitor of the Company (asreasonably determined by the Company’s Board of Directors). A venture or investment fund shall not be deemed to be a competitor of the Company by reason of its ownership of equity of entities that compete with the Company.
+
+9
+
+iv.                                The right to purchase New Securities pursuant to this Section 4(j) shall not be applicable to (A) the Series A Preferred Stock of the Company issued pursuant to that certain Series A Preferred Stock Purchase Agreement, as amended from time to time, by and among the Company and the parties named therein, (B) Exempted Securities (as defined in the Company’s Certificate of Incorporation), and (C) shares of common stock issued in the Company’s first underwritten public offering of its common stock under the Securities Act of 1933, as amended, and the rules and regulations promulgated thereunder (the “IPO”).
+
+v.                                   The covenants set forth in this Section 4(j) shall terminate and be of no further force or effect upon the first to occur of (A) that date immediately preceding the consummation of the IPO, (B) that date upon which the Company first becomes subject to the periodic reporting requirements of Section 12(g) or 15(d) of the Securities Exchange Act of 1934, as amended, and the rules and regulations promulgated thereunder, or (C) except as provided in Section 4.j.i., a Deemed Liquidation Event, as such term is defined in the Company’s Certificate of Incorporation.
+
+k.                                             Lock-Up.
+
+i.                                       Agreement to Lock-Up. Columbia hereby agrees that it will not, without the prior written consent of the managing underwriter, during the period commencing on the date of the final prospectus relating to the Company’s IPO and ending on the date specified by the Company and the managing underwriter, or such other period of one hundred eighty (180) days and up to an additional thirty-four (34) days as may be requested by the Company or an underwriter to accommodate regulatory restrictions on (A) the publication or other distribution of research reports; and (B) analyst recommendations and opinions, including, but not limited to, the restrictions contained in FINRA Rule 2711(f)(4) or NYSE Rule 472(f)(4), or any successor provisions or amendments thereto) (such period, the “Restricted Period”): (I) lend, offer, pledge, sell, contract to sell, sell any option or contract to purchase, purchase any option or contract to sell, grant any option, right or warrant to purchase, or otherwise transfer or dispose of, directly or indirectly, any shares of capital stock held immediately prior to the effectiveness of the registration statement for the IPO or (II) enter into any swap or other arrangement that transfers to another, in whole or in part, any of the economic consequences of ownership of the capital stock, whether any such transaction described in clause (I) or (II) above is to be settled by delivery of capital stock or other securities, in cash or otherwise. The foregoing provisions of this Section 4(k)(i) shall not apply to the sale of any shares to an underwriter pursuant to an underwriting agreement, and shall only be applicable to the Company and any Assignees that acquire equity of the Company if all officers, directors and holders of more than one percent (1%) of the outstanding capital stock (after giving effect to the conversion into common stock of all outstanding capital stock) enter and continue to be bound by into similar agreements. The underwriters in connection with the IPO are intended third party beneficiaries of this Section 4(k)(i) and shall have the right, power and authority to enforce the provisions hereof as though they were a party hereto. The Company further agrees to, and it will cause any Assignees that acquire equity of the Company to agree to, execute such agreements in customary form as may be reasonably requested by the underwriters in the IPO that are consistent with this Section 4(k)(i) or that are necessary to give further effect thereto.
+
+ii.                                    Stop Transfer Instructions. In order to enforce the foregoing covenant, the Company may impose stop-transfer instructions with respect to the shares of capital stock of the Company and any Assignees that acquire equity of the Company (and transferees and assignees thereof) until the end of the Restricted Period.
+
+5.                                      Reports and Payments.
+
+a.                                              Within [*] after the first business day of [*] of each License Year of this
+
+10
+
+Agreement, Company shall submit to Columbia a written report with respect to the preceding calendar quarter (the “Payment Report”) stating:
+
+i.           Gross and Net Sales of Products by the Sellers during such [*], together with detailed information sufficient to permit Columbia to verify the accuracy of reported Net Sales, including Product names, country where manufactured, country where sold, actual selling price and units sold;
+
+ii.            Net Sublicensing Revenue received by Company from its Sublicensees during such [*] together with the respective payment reports received by Company from any Sublicensees; and
+
+iii.           A calculation under Section 4 of the amounts due to Columbia, making reference to the applicable subsection thereof.
+
+b.            Simultaneously with the submission of each Payment Report, Company shall make payments to Columbia of the amounts due for the [*] covered by the Payment Report. Payment shall be by check payable to The Trustees of Columbia University in the City of New York and sent to the following address:
+
+The Trustees of Columbia University in the City of New York 
+
+Columbia Technology Ventures
+
+P.O. Box 1394
+
+New York, NY 10008-1394
+
+or to such other address as Columbia may specify by notice hereunder, or if requested by Columbia, by wire transfer of immediately available funds by Company to:
+
+[*]
+
+or to such other bank and account identified by notice to Company by Columbia. Company is required to send the [*] Payment Report whether or not royalty payments are due.
+
+c.            Within [*] after the date of termination or expiration of this Agreement, Company shall pay Columbia any and all amounts that are due pursuant to this Agreement as of the date of such termination or expiration, together with a Payment Report for such payment in accordance with Section 5(a) hereof, except that such Payment Report shall cover the period from the end of the last [*] prior to termination or expiration to the date of termination or expiration. Nothing in the foregoing shall be deemed to satisfy any of Company’s other obligations under this Agreement upon termination or expiration.
+
+d.            Minimum royalty payments are payable in accordance with Section 4(b)(ii)(C).
+
+e.            With respect to revenues obtained by Company in foreign currency, Company shall make royalty payments to Columbia in the United States in United States Dollars. Royalty payments for transactions outside the United States shall first be determined in the currency of the country in which they are earned, and then converted to United States dollars using the buying rates of exchange quoted by The Wall Street Journal (or its successor) in New York, New York for the last business day of the [*] in which the royalties were earned. Any and all loss of exchange value, taxes, or other expenses incurred in the transfer or conversion of foreign currency into U.S. dollars, and any income, remittance, or other taxes on such royalties required to be withheld at the source shall be the exclusive responsibility of Company, and shall not be used to decrease the amount of royalties due to Columbia. Royalty statements shall show sales both in the local currency and US dollars, with the exchange rate used clearly stated.
+
+11
+
+f.             Company shall maintain at its principal office usual books of account and records showing its actions under this Agreement, and sufficient to determine Company’s compliance with its obligations hereunder. Upon reasonable notice to Company, but not more than [*], Columbia may have an independent certified public accountant or auditor (reasonably acceptable to Company) inspect such books and records during business hours at Company’s principal offices for purposes of verifying the accuracy of the amounts paid under this Agreement. Prior to any such inspection, Company may require the accountant or auditor to sign Company’s form non-disclosure agreement, and the accountant or auditor will be entitled to provide only the results of the audit to Columbia with a copy to Company. The review may cover a period of not more than [*] before the first day of the [*] in which the review is requested. In the event that such review shows that Company has underpaid royalties by [*], Company shall pay, within [*] after demand by Columbia, the costs and expenses of such review (including the fees charged by Columbia’s accountant or auditor involved in the review), in addition to amount of any underpayment and any interest thereon. Company agrees to cooperate fully with the accountant or auditor in connection with any such review. During the review, Company shall provide the accountant or auditor with accurate and complete information as necessary to conduct the inspection, including, without limitation, such information relating to sales, inventory, manufacturing, purchasing, transfer records, customer lists, invoices, purchase orders, sales orders, shipping documentation, third-party royalty reports, cost information, pricing policies, and agreements with third parties (including, and to the extent applicable, such information from the Sellers).
+
+g.            Notwithstanding anything to the contrary in this Agreement (including Section 16(b)), and without limiting any of Columbia’s rights and remedies hereunder, any payment required hereunder that is made late (including unpaid portions of amounts due) shall bear interest, [*], at the rate of [*]. Any interest charged or paid in excess of the maximum rate permitted by applicable New York State Law shall be deemed the result of a mistake and interest paid in excess of the maximum rate shall be credited or refunded (at the Company’s option) to Company.
+
+h.            Company shall reimburse Columbia for any costs and expenses incurred in connection with collecting on any arrears of Company with respect to its payment and reimbursement obligations under this Agreement (such as Section 11(b) of this Agreement), including the costs of engaging any collection agency for such purpose.
+
+6.                                      Diligence.
+
+a.            Company shall use Commercially Reasonable Efforts to research, discover, develop and market Products for commercial sale and distribution in the Territory, and to such end, such efforts will include the following:
+
+i.             Company shall adhere to its executive summary/business plan/development plan, a current version of which is attached as Exhibit B, subject to reasonable adjustments in the ordinary course of business as determined in the discretion of Company’s Board of Directors;
+
+ii.            [*] within [*] of the Effective Date;
+
+iii.           [*] within [*] of the Effective Date;
+
+iv.           Secure [*] in total gross cash financing proceeds from the sale of capital stock within [*] of the Effective Date (the “Funding Milestone”).
+
+b.            Notwithstanding any other provisions of this Agreement, failure to achieve any of
+
+12
+
+Company’s diligence obligations under this Section 6 shall result in Columbia having the option of terminating all of the licenses granted under Section 2 in accordance with Section 16(c) of this Agreement, or converting any or all of such exclusive licenses to nonexclusive licenses with no right to sublicense, and no right by Company to initiate legal proceedings pursuant to Section 11; provided, however, that Columbia may not terminate this Agreement or convert the license to non-exclusive unless (i) Columbia has provided Company at least ninety (90) days’ prior written notice, and (ii) Company has failed to cure the breach within such ninety (90) day period. In addition, Columbia agrees to discuss in good faith any reasonable request for extension of the cure period by Company set forth above.
+
+c.            No less often than every [*] after the Effective Date of this Agreement, Company shall [*].
+
+7.                                      Confidentiality.
+
+a.            “Confidential Information” shall mean means all information disclosed by or on behalf of one party (in such capacity, “Disclosing Party”) to the other party (in such capacity the “Disclosing Party”) or Disclosing Party’s Agents that is marked or identified as “confidential” or “proprietary” (or similar legend) or is of such a nature that would be readily recognized by a reasonable person to be proprietary or confidential to Disclosing Party; provided, however, that “Confidential Information” shall exclude any such information that the Receiving Party is able to demonstrate by written evidence: (i) was rightfully known to Receiving Party without restriction on use or disclosure before receipt from Disclosing Party; (ii) is or becomes generally available to the public through no fault of Receiving Party or its affiliates or any of their representatives; (iii) is obtained by Receiving Party from a Third Party having a lawful right to make such disclosure free from any obligation of confidentiality or non-use to Disclosing Party; or (iv) is independently developed by or for Receiving Party without reference to or use of any Confidential Information of Disclosing Party as evidenced by contemporaneous written records.
+
+b.            Receiving Party agrees that it shall: (1) protect the Confidential Information with the same degree of care as it normally uses to preserve and safeguard its own Confidential Information of like importance, but not less than a reasonable degree of care; (2) use Confidential Information solely for purposes of performing its obligations and exercising its rights under this Agreement; and (3), except as otherwise consented to in writing by Disclosing Party, disclose Confidential Information only to its and its affiliates’ respective employees, directors, officers, advisors, agents and representatives (collectively, “Agents”) who have a need to know the Confidential Information for purposes of performance of Receiving Party’s obligations or exercising its rights under this Agreement undertaken an obligation of confidentiality substantially similar to that contained herein. Receiving Party shall be liable for any breach of its obligations under this Agreement by any of its Agents.
+
+c.            The restrictions set forth in this Section 7 shall not apply to limit disclosure of Confidential Information to the extent that Receiving Party is required to disclose such Confidential Information pursuant to any law, court order or other governmental agency; provided Receiving Party: (i) promptly notifies Disclosing Party in writing of the existence, terms and circumstances of such required disclosure; (ii) consults with Disclosing Party on the advisability of taking legally available steps to resist or narrow such disclosure; and (iii) cooperates with Disclosing Party’s effort to seek a protective order or to otherwise limit disclosure.
+
+d.            Neither party may disclose the terms and conditions of this Agreement to any Third Party, except that either party may provide or otherwise disclose the terms of this Agreement in connection with any financing transaction or due diligence inquiry pursuant to the terms of a confidentiality agreement that is at least as protective as the terms of this Section 7 and subject to the right of Receiving Party to use disclosed information solely for purposes of evaluating the financing or other transaction.
+
+13
+
+e.              Upon the expiration or termination of this Agreement, or at any other time as requested by the Disclosing Party, the Receiving Party will return to Disclosing Party or, at Disclosing Party’s election, destroy, all Disclosing party’s Confidential Information, including any copies thereof or derivative, summaries or abstracts derived therefrom.
+
+8.                                      Disclaimer of Warranty; Limitations of Liability.
+
+COLUMBIA IS LICENSING THE PATENTS AND TECHNICAL INFORMATION ON AN “AS IS” BASIS. COLUMBIA MAKES NO WARRANTIES EITHER EXPRESS OR IMPLIED OF ANY KIND, AND HEREBY EXPRESSLY DISCLAIMS ANY WARRANTIES, REPRESENTATIONS OR GUARANTEES OF ANY KIND AS TO THE PATENTS, TECHNICAL INFORMATION, PRODUCTS AND/OR ANYTHING DISCOVERED, DEVELOPED, MANUFACTURED, USED, SOLD, OFFERED FOR SALE, IMPORTED, EXPORTED, DISTRIBUTED, RENTED, LEASED OR OTHERWISE DISPOSED OF UNDER ANY LICENSE GRANTED HEREUNDER, INCLUDING BUT NOT LIMITED TO: ANY WARRANTIES OF MERCHANTABILITY, TITLE, FITNESS, ADEQUACY OR SUITABILITY FOR A PARTICULAR PURPOSE, USE OR RESULT; ANY WARRANTIES AS TO THE VALIDITY OF ANY PATENT; AND ANY WARRANTIES OF FREEDOM FROM INFRINGEMENT OF ANY DOMESTIC OR FOREIGN PATENTS, COPYRIGHTS, TRADE SECRETS OR OTHER PROPRIETARY RIGHTS OF ANY PARTY.
+
+a.            In no event shall Columbia, or its trustees, officers, faculty members, students, employees and agents, have any liability to Company, its Affiliates or any Third Party arising out of the use, operation or application of the Patents, Technical Information, Products, or anything discovered, developed, manufactured, used, sold, offered for sale, imported, exported, distributed, rented, leased or otherwise disposed of under any license granted hereunder by Company, its Affiliates, or any Third Party for any reason, including but not limited to, the unmerchantability, inadequacy or unsuitability of the Patents Technical Information, Products and/or anything discovered, developed, manufactured, used, sold, offered for sale, imported, exported, distributed, rented, leased or otherwise disposed of under any license granted hereunder for any particular purpose or to produce any particular result, or for any latent defects therein.
+
+b.            In no event will Columbia, or its trustees, officers, faculty members, students, employees and agents, be liable to the Company, its Affiliates or any Third Party, for any consequential, incidental, special or indirect damages (including, but not limited to, from any destruction to property or from any loss of use, revenue, profit, time or good will) based on activity arising out of or related to this Agreement, whether pursuant to a claim of breach of contract or any other claim of any type.
+
+c.            In no event shall Columbia’s liability to Company exceed the payments made to Columbia by Company under this Agreement.
+
+d.            The parties hereto acknowledge that the limitations and exclusions of liability and disclaimers of warranty set forth in this Agreement form an essential basis of the bargain between the parties.
+
+9.                                      Prohibition Against Use of Columbia’s Name.
+
+Company will not use the name, insignia, or symbols of Columbia, its faculties or departments, or any variation or combination thereof, or the name of any trustee, faculty member, other employee, or student of Columbia for any purpose whatsoever without Columbia’s prior written consent.
+
+14
+
+10.                               Compliance with Governmental Obligations.
+
+a.            Notwithstanding any provision in this Agreement, Columbia disclaims any obligation or liability arising under the license provisions of this Agreement if Company or its Affiliates is charged in a governmental action for not complying with or fails to comply with governmental regulations in the course of taking steps to bring any Product to a point of practical application.
+
+b.            Company and its Affiliates shall comply upon reasonable notice from Columbia with all governmental requests directed to either Columbia or Company or its Affiliates and provide all information and assistance necessary to comply with the governmental requests.
+
+c.            Company and its Affiliates shall ensure that research, development, manufacturing and marketing under this Agreement complies with all government regulations in force and effect including, but not limited to, Federal, state, and municipal legislation.
+
+11.                               Patent Prosecution and Maintenance; Enforcement.
+
+a.            Columbia, by counsel it selects to whom Company has no reasonable objection, in consultation with Company and any counsel appointed by the Company, will prepare, file, prosecute and maintain all Patents in Columbia’s name and in countries designated by the Company. Columbia shall instruct its patent counsel (1) to copy Company on all correspondence related to Patents (including copies of each patent application, office action, response to office action, request for terminal disclaimer, and request for reissue or reexamination of any patent or patent application) and (2) as requested by Company, to provide an update as to the current status of all Patents. Columbia shall confer with Company to develop a strategy for the prosecution and maintenance of the Patents in the Territory, and shall give due consideration to Company’s comments and suggestions with respect to filing, prosecution, maintenance of the Patents in the Territory. Except as set forth above, Columbia shall not abandon (and/or fail to appeal a final rejection of) any claim of a Patent without Company’s prior written consent, subject to the provisions of Section 11(b)(iii) and Section 11(b)(iv). The parties agree that consultation between the parties relating to the Patents under this Section 11(a) shall be pursuant to a common interest in the validity, enforceability and scope of the Patents. Each party shall treat such consultation, along with any information disclosed by each party in connection therewith (including any information concerning patent expenses), on a strictly confidential basis, and shall not disclose such consultation or information to any party without the other party’s prior written consent. If Company initiates any Challenge, Columbia’s consultation obligation under this Section 11(a) shall automatically terminate; for the avoidance of doubt, any such termination shall not affect Company’s confidentiality and nondisclosure obligations with respect to consultation or disclosure of information prior to such termination, and shall not affect any other provisions of this Agreement (including Company’s reimbursement obligation under Section 11(b).
+
+b.            Patent Expenses.
+
+i.             Company will reimburse Columbia for all reasonable expenses Columbia has incurred prior to the Effective Date for patents and applications within the Territory, and will pay all reasonable expenses incurred in the future in so preparing, filing, prosecuting and maintaining the Patents. However, expenses incurred prior to Effective Date in connection with the Patents in the Territory that were not previously paid by Columbia’s licensee of such Patents outside the Territory are “Past Patent Expenses,” and Columbia, using reasonable efforts, estimates Past Patent Expenses as of [*] to be [*]. Past Patent Expenses shall be reimbursed by Company on the earliest of the following: (A) commencing on [*], and payable in [*] thereafter, (B) within [*] after the Company completes a financing or a series of related
+
+15
+
+financings in which it has sold and issued shares of its capital stock with aggregate gross cash proceeds to the Company of at least [*], (C) the first day of February following the first full calendar year in which the Company records gross revenues of at least [*], or (D) in the event of a Change of Control. For purposes of the foregoing, “Change of Control” means any transaction or event or multiple transactions or events (including, without limitation, a merger, other business combination, share exchange, spin-off, liquidation or reorganization) as a result of which all or substantially all of the Company’s assets are sold, leased, licensed or otherwise transferred or a change of control shall occur or if there is an initial public offering of any securities of the Company.
+
+ii.            Patent Expenses incurred by Columbia after the Effective Date with respect to the filing, prosecution and maintenance of the Patents in the Territory, including without limitation, attorneys’ fees, the costs of any interference proceedings, oppositions, reexaminations, or any other ex parte or inter partes administrative proceeding before patent offices, taxes, annuities, issue fees, working fees, maintenance fees and renewal charges (collectively “Future Patent Expenses”) shall be reimbursed to Columbia by Company within [*] of receiving Columbia’s invoice.
+
+iii.           Upon failure of Company to pay any Past Patent Expenses or Future Patent Expenses as required by this Section 11(b), Columbia may, in its sole discretion, take either of the following actions: (A) abandon any said Patent(s) in its sole discretion, and in such event, Columbia will provide notice of abandonment to Company or (B) notify Company that Columbia will continue to prosecute such Patents at its expense, and in such event Company will have no further rights to such Patents under the Agreement.
+
+iv.           With respect to non-US and non-PCT Future Patent Expenses, Columbia will send to Company a brief description of anticipated actions by country or region (e.g., conversion to applications in specific countries or regionals such as the EPO), when the action is due, and the associated expense for such actions on a county or regional basis in advance of such action due dates (hereinafter a “Patent Expense Estimate”). Within the later of (A) [*] prior to the action due dates or (B) [*] after Company’s receipt of the Patent Expense Estimate, Company shall ensure that Columbia receives payment of the reasonable Future Patent Expenses for the actions elected from the Patent Expense Estimate. Failure by Company to make the associated payment as described for a particular action will be considered an election not to secure the rights associated with the specific action, and Columbia may, in its sole discretion, abandon the Patents or in the event Columbia notifies Company that Columbia will continue to prosecute such Patents at its expense (“Returned Patents”), and Company will have no further rights to such Returned Patents under this Agreement, effective immediately upon Company receipt of Columbia’s notification to Company. Any over-payment will be applied to Future Patent Expenses. Upon Company’s request, any over-payment not used for Future Patent Expenses within [*] will be returned to the company promptly. Any expenses in excess of the Patent Expense estimate will be invoiced to Company.
+
+c.            Patent Enforcement; Defense.
+
+i.             Enforcement Action.
+
+A.         In the event that Columbia or Company becomes aware of any actual or probable infringement of a patent within the Patents in the Field and Territory by a Third Party (“Third Party Infringer”), such Party shall promptly notify the other party in writing including evidence demonstrating prima facie infringement of specific claims of such Patent (“Infringement Notice”).
+
+B.           Company will have the first right, but not the obligation to enforce the Patents against a Third Party Infringer of the Patent in the Field of Use and Territory at Company’s expense (an “Enforcement Action”). Company’s right to initiate an Enforcement Action shall apply only to claims of Patents that are exclusively licensed to Company under this Agreement and only in the Field and
+
+16
+
+Territory which are exclusively licensed to Company under this Agreement. Company shall notify Columbia in writing of its intention to pursue an Enforcement Action not later than [*] after receipt of an Infringement Notice from Columbia or the delivery of an Infringement Notice to Columbia. In the event that Company does not pursue an Enforcement Action, Columbia shall have the right to initiate an Enforcement Action against the Third-Party Infringer at its own expense, unless Company has caused such infringement to cease. Company shall select counsel for any Company-initiated Enforcement Action that has substantial patent infringement litigation experience relating to pharmaceutical products, subject to Columbia’s approval, not to be unreasonably withheld or delayed. Company shall keep Columbia informed of the status of any Company-initiated Enforcement Action and shall consider any reasonable comments or suggestions made by Columbia in good faith. Columbia shall have the right to be represented by counsel of its own choice and at its own expense in any Company-initiated Enforcement Action, and to review and comment on papers to be filed during such action. Any proposed disposition or settlement of a Company-initiated Enforcement Action against any Third-Party Infringer shall be subject to Columbia’s prior written approval, which approval shall not be unreasonably withheld or delayed.
+
+ii.            Defense Action.
+
+A.         In the event that in the course of an Enforcement Action, the Third-Party Infringer initiates a proceeding seeking to invalidate, narrow or have claims declared unenforceable in the Field and Territory, including but not limited to declaratory judgement action in a United States District Court or inter partes review or interference proceedings in the United States Patent Office or similar proceedings in foreign jurisdictions (a “Defense Action”), the Party receiving notice of such action or proceeding shall promptly notify the other party in writing.
+
+B.           To the extent that Company has control over the Enforcement Action, Company shall diligently defend the Patent in the Defense Action using counsel of its choice, subject to Columbia’s approval, not to be unreasonably withheld or delayed. Columbia shall be permitted to join and participate in such Defense Action at its own expense to the extent legally permitted. If Columbia is not legally permitted to join such Defense Action, Company shall consult with Columbia and Columbia shall have the right to review and comment on papers to be filed during such Defense Action. All comments and suggestions made by Columbia shall be considered in good faith by Company. To the extent that Columbia has control over the Enforcement Action, Company shall be permitted to join and participate in such Defense Action at its own expense to the extent legally permitted. If Company is not legally permitted to join such Defense Action, Columbia shall consult with and consider in good faith the comments and suggestions of Company with regard to such proceedings. Any proposed disposition or settlement of a Defense Action against any Third-Party Infringer shall be subject to prior written approval of both Parties, which approval shall not be unreasonably withheld or delayed.
+
+iii.           Any recovery, whether by way of settlement or judgment, from a Third Party pursuant to a legal proceeding initiated in accordance with this Section 11(c) shall first be used to reimburse the party initiating such legal proceeding for its actual fees, costs and expenses incurred in connection with such proceeding and second to reimburse the other party for reasonable fees, costs and expenses actually incurred in connection with such proceeding, if any. Any remaining amounts from any such settlement or judgment shall be divided as follows: (A) [*], and (B) [*].
+
+iv.           In the event a party initiates or defends a legal proceeding concerning any Patent pursuant to this Section 11, the other party shall cooperate fully with and supply all assistance reasonably requested by the party initiating such proceeding, including without limitation, joining the proceeding as a party if requested at the requesting party’s expense. Neither Party will make any admission or assert any position in any legal or administrative proceeding that is inconsistent with or adverse to any position asserted in an Enforcement Action or Defense Action, without prior written consent of the other
+
+17
+
+party.
+
+v.            Subject only to the rights granted to the Parties in this Section 11, the party that institutes any legal proceeding concerning any Patent pursuant to this Section 11 shall have sole control of that proceeding.
+
+12.                               Indemnity and Insurance.
+
+a.            Indemnity.
+
+i.             Company will indemnify, defend, and hold harmless Columbia, its trustees, officers, faculty, employees, students and agents (“Indemnities”), from and against any and all actions, suits, claims, demands, prosecutions brought by a Third Party (each, a “Claim”), and indemnify the Indemnitees for any liabilities, costs, expenses, damages, deficiencies, losses or obligations (including attorneys’ fees) finally awarded or agreed to in settlement of any such Claim, to the extent any such Claim is based on, arises out of, or relates to this Agreement, including, without limitation, (i) the discovery, development, manufacture, packaging, use, sale, offering for sale, importation, exportation, distribution, rental or lease of Products, even if altered for use for a purpose not intended, (ii) the use of Patents or Technical Information by the Sellers or their customers, (iii) any representation made or warranty given by the Sellers with respect to Products, Patents or Technical Information, (iv) any infringement claims relating to Products, Patents or Technical Information, and (v) any asserted violation of the Export Laws (as defined in Section 15 hereof) by any of the Sellers. Company shall [*].
+
+ii.            In the event Columbia is seeking the benefit of the defense and indemnification obligations set forth in Section 12(a)(i), Columbia must notify Company in writing, promptly after receipt of actual notice of any Claim for which it seeks to recover; provided, however, any delay or failure of notice shall not relieve Company of its obligations hereunder except to the extent that Company is actually prejudiced by such delay or failure to notify. Company shall have sole control and authority with respect to the defense, litigation, compromise or settlement of such Claim, except that any settlement involves any admission of wrongdoing or inequitable conduct by Columbia or any material commitments, responsibilities or obligations on the part of Columbia (other than the payment of money that can be fully satisfied by Company) shall require the prior written consent of Columbia, which consent shall not be unreasonably withheld, conditioned or delayed. Company shall not be responsible for any settlement it does not approve in writing. Columbia shall provide reasonable information, cooperation and assistance as required by Company (at Company’s expense). Columbia reserves the right to participate at its own cost in any proceedings with counsel of its own choosing, however, Columbia shall at all times be subject to Company’s sole control and authority with respect to defending, litigating or settling the Claim.
+
+b.            Insurance.
+
+i.             Company shall maintain, at all times during the term of this Agreement commencing at least [*] prior to [*], commercial general liability insurance (including product liability and contractual liability insurance applicable to Company’s indemnity obligations under Section 12(a)) with reputable and financially secure insurance carriers reasonably acceptable to Columbia to cover the activities of Company, Sublicensees, Designees, and their Affiliates, for minimum limits of [*] combined single limit for bodily injury and property damage per occurrence and in the aggregate. Such insurance shall include Columbia, its trustees, faculty, officers, employees and agents as additional insureds. Company shall furnish a certificate of insurance evidencing such coverage, with thirty days’ written notice to Columbia of cancellation or material change in coverage. The minimum amounts of insurance coverage required herein shall not be construed as creating any limitation on the Company’s indemnity obligation under Section 12(a) of this Agreement.
+
+18
+
+ii.            Company’s insurance shall be primary coverage; any insurance Columbia may purchase shall be excess and noncontributory. The Company’s insurance shall be written to cover claims incurred, discovered, manifested, or made during or after the expiration of this Agreement.
+
+iii.           Company shall at all times comply with all statutory workers’ compensation and employers’ liability requirements covering its employees with respect to activities performed under this Agreement.
+
+13.          Marking. Prior to the issuance of patents falling within the definition of Patents, to the extent reasonably practical or required for the maintenance of Patent rights, Company shall mark all Patent Products made, sold, offered for sale, imported, or otherwise disposed of by Company under the license granted in this Agreement with the words “Patent Pending,” and following the issuance of one or more patents, with the numbers of such patents. The Company shall cause each of the Sellers to comply with the marking requirements of this Section 13.
+
+14.          Global Social Responsibility. Company and Columbia shall take into consideration the principle of “Global Social Responsibility” when executing this Agreement. “Global Social Responsibility” means facilitating the availability of Licensed Products in Developing Countries (i.e., The World Bank’s listing of “Low Income Economies”) at locally affordable prices to improve access to such Products in Developing Countries.
+
+15.                               Export Control Laws.
+
+a.            Company agrees to comply with U.S. export laws and regulations pertaining to the export of technical data, services and commodities, including the International Traffic in Arms Regulations (22 C.F.R. § 120 et seq.), the Export Administration Regulations (15 C.F.R. § 730 et seq.), the regulations administered by the Treasury Department’s Office of Foreign Assets Control (31 C.F.R. § 500, et seq.), and the Anti-Boycott Regulations (15 C.F.R. § 760). The parties shall cooperate with each other to facilitate compliance with these laws and regulations.
+
+b.            Company understands that sharing controlled technical data with non-U.S. persons is an export to that person’s country of citizenship that is subject to U.S. export laws and regulations, even if the transfer occurs in the United States. Company shall obtain any necessary U.S. government license or other authorization required pursuant to the U.S. export control laws and regulations for the export or re-export of any commodity, service or technical data covered by this Agreement, including technical data acquired from Columbia pursuant to this Agreement and products created as a result of that data.
+
+16.                               Breach and Cure.
+
+a.            In addition to applicable legal standards, Company shall be deemed to be in material breach of this Agreement for: (i) failure to pay fully and promptly amounts due pursuant to Section 4 and payable pursuant to Section 5; (ii) failure of Company to meet any of its obligations under Section 6 of this Agreement; (iii) failure to comply with governmental requests directed to Columbia or Company pursuant to Section 10(b); (iv) failure to reimburse Columbia for or pay fully and promptly the costs of prosecuting and maintaining Patents pursuant to Section 11; (v) failure to obtain and maintain insurance in the amount and of the type provided for in Section 12; and (vi) failure to comply with the Export Laws under Section 15.
+
+b.            Either party shall have the right to cure its material breach. The cure shall be effected within a reasonable period of time but in no event later than thirty (30) days after notice of any
+
+19
+
+breach given by the non-breaching party; provided, however, if cure cannot be reasonably effected within such thirty (30) day period and the breaching party is diligently pursuing cure, such cure period shall be extended to ninety (90) days following the breaching party’s notice of the breach from the non-breaching party.
+
+c.            For any breach that is not cured as set forth in subsection (b) above, the non- breaching party shall have the right to termination this Agreement effective immediately upon written notice to the other party.
+
+17.                               Term of Agreement; Effect of Termination.
+
+a.            This Agreement shall be effective as of the Effective Date and shall continue in full force and effect until the last to expire Royalty Term (the “Term”).
+
+b.            In addition, upon any termination of this Agreement pursuant to Section 16(c), (A)         all know-how, technical information and data [*] during the term of this Agreement, and prior to its termination [*], to the extent such know-how, technical information and data [*], including [*], and (B) at Columbia’s expense and for a reasonable fee to be mutually agreed between the parties, Company will provide Columbia (and/or its future licensees) [*]. Company agrees upon request, to enter into good faith negotiations with Columbia or Columbia’s future licensee(s), for the purpose of [*] in a timely fashion and under commercially reasonable terms to be mutually agreed between the parties.
+
+c.            Company may terminate this Agreement for any reason or no reason upon ninety (90)  days prior written notice to Columbia. The licenses granted under this Agreement may be terminated by Columbia or, at Columbia’s option, Columbia has the right to convert any or all of such exclusive licenses granted under this Agreement to nonexclusive licenses, with no right to sublicense, and no right by Company to initiate legal proceedings pursuant to Section 11: (i) upon thirty (30) days written notice to Company if Columbia elects to terminate in accordance with Section 6(b); (ii) upon written notice to Company for Company’s material breach of the Agreement and Company’s failure to cure such material breach in accordance with Section 16(b); (iii) in the event Company becomes judicially declared insolvent or is generally not paying its debts as such debts become due; and (iv) in the event Company ceases to conduct business as a going concern without a successor. Termination under (ii) — (v) shall be effective upon date of notice sent pursuant to Section 18.
+
+d.            Upon any termination of this Agreement pursuant to Section 17(c), all sublicenses granted by the Company under it shall be assigned to Columbia, upon request and at Columbia’s discretion, provided that Columbia’s obligations under such sublicense shall be consistent with and not exceed Columbia’s obligations to Company under this Agreement and provided that such sublicense agrees in a writing sent to Columbia to assume all obligations of this Agreement for the benefit of Columbia, including the obligations to make all payments due under this Agreement, including but not limited to those specified in Section 4(b), 4(c), 4(d) and 11(b).
+
+e.            Sections 4(i)(ii), 5(c), 5(f), 5(g), 5(h), 7, 8, 9, 10, 12, 15, 17(b), 17(d), 17(e), 17(f), 17(g), 17(h), 18, 20, 22, 23, 24, 25, 26 and 27 will survive any termination or expiration of this Agreement.
+
+f.            Any termination of this Agreement shall not adversely affect any rights or obligations that may have accrued to either party prior to the date of termination, including without limitation, Company’s obligation to pay all amounts due and payable under Sections 4, reporting and payment obligations under Section 5 and payment obligations under Section 11 hereof that accrued prior to the effective date of termination.
+
+20
+
+g.                                         Upon any termination of this Agreement for any reason other than the expiration of this Agreement under Section 17(a) or Company’s failure to cure a material breach of this Agreement under Section 17(c)(ii), the Sellers shall have the right, for [*] or such longer period as the parties may reasonably agree, to dispose of Products or substantially completed Products then on hand, and to complete orders for Products then on hand, and royalties shall be paid to Columbia with respect to such Products as though this Agreement had not terminated. If this Agreement expires under Section 17(a), then (A) the licenses granted by Columbia to Company under Section 2(a) shall be fully paid-up, perpetual and irrevocable and (B) the Company shall thereafter be free to use the Technical Information without any further obligation to Columbia.
+
+h.                                        Notwithstanding anything to the contrary in the Agreement, to the extent the manufacture of a Product is Covered By an issued patent within the definition of Patents and occurs prior to the expiration of such issued patent, the sale of that Product after the expiration date of the issued patent shall still constitute a royalty-bearing sale under Section 4.
+
+18.                                      Notices. Any notice required or permitted to be given under this Agreement shall be sufficient if in writing and shall be considered given (i) when mailed by certified mail (return receipt requested), postage prepaid, or (ii) on the date of actual delivery by hand or overnight delivery, with receipt acknowledged,
+
+if to Columbia, to:
+
+Executive Director
+
+Columbia Technology Ventures 
+
+Columbia University
+
+80 Claremont Avenue, #4F, Mail Code 9606 
+
+New York, NY 10027-5712
+
+copy to:
+
+General Counsel
+
+Columbia University
+
+412 Low Memorial Library
+
+535 West 116th Street, Mail Code 4308
+
+New York, New York 10027
+
+if to the Company, to:
+
+Applied Therapeutics, Inc.
+
+340 Madison Avenue 
+
+19th Floor
+
+New York, NY 10173
+
+Attn: Shoshana Shendelman
+
+copy to:
+
+McDermott Will & Emery
+
+28 State Street
+
+Boston, MA 02109
+
+Attn: Sarah T. Hogan
+
+or to such other address as a party may specify by notice hereunder.
+
+19.                                       Assignment. This Agreement and all rights and obligations hereunder may not be assigned by either party without the written consent of the other party. Notwithstanding the foregoing, upon written notice to Columbia, Company may assign this Agreement without consent to any successor to all or substantially all of its business to which this Agreement relates, whether by sale of stock or
+
+21
+
+assets, merger, consolidation or otherwise. Any attempt to assign without compliance with this provision shall be void.
+
+20.                                       Waiver and Election of Remedies. The failure of any party to insist upon strict adherence to any term of this Agreement on any occasion shall not be considered a waiver or deprive that party thereafter of the right to insist upon strict adherence to that term or any other term of this Agreement. All waivers must be in writing and signed by an authorized representative of the party against which such waiver is being sought. The pursuit by either party of any remedy to which it is entitled at any time or continuation of this Agreement despite a breach by the other shall not be deemed an election of remedies or waiver of the right to pursue any other remedies to which it may be entitled.
+
+21.                                       Binding on Successors. This Agreement shall be binding upon and inure to the benefit of the parties and their respective successors and assigns to the extent assignment is permitted under this Agreement.
+
+22.                                       Independent Contractors. It is the express intention of the parties that the relationship of Columbia and the Company shall be that of independent contractors and shall not be that of agents, partners or joint venturers. Nothing in this Agreement is intended or shall be construed to permit or authorize either party to incur, or represent that it has the power to incur, any obligation or liability on behalf of the other party.
+
+23.                                       Entire Agreement; Amendment. This Agreement, together with the Exhibits, sets forth the entire agreement between the parties concerning the subject matter hereof and supersedes all previous agreements, written or oral, concerning such subject matter. This Agreement may be amended only by written agreement duly executed by the parties.
+
+24.                                      Severability. In the event that any provision of this Agreement is held by a court of competent jurisdiction to be unenforceable because it is invalid, illegal or unenforceable, the validity of the remaining provisions shall not be affected, and the rights and obligations of the parties shall be construed and enforced as if this Agreement did not contain the particular provisions held to be unenforceable, unless such construction would materially alter the meaning of this Agreement.
+
+25.                                      No Third-Party Beneficiaries. Except as expressly set forth herein, the parties hereto agree that there are no third-party beneficiaries of any kind to this Agreement.
+
+26.                                      Governing Law. This Agreement shall be governed by and construed in accordance with the internal substantive laws of the State of New York as applicable to agreements made and wholly performed within the State of New York, and without reference to the conflict or choice of laws principles of any jurisdiction. Unless otherwise separately agreed in writing, the parties agree that any and all claims arising under or related to this Agreement shall be heard and determined only in either the United States District Court for the Southern District of New York or in the courts of the State of New York located in the City and County of New York, and the parties irrevocably agree to submit themselves to the exclusive and personal jurisdiction of those courts and irrevocably waive any and all rights any such party may now or hereafter have to object to such jurisdiction or the convenience of the forum.
+
+27.                                      Execution in Counterparts; Facsimile or Electronic Transmission. This Agreement may be executed in counterparts, and by facsimile or electronic transmission. This Agreement is not binding on the parties until it has been signed below on behalf of each party.
+
+22
+
+IN WITNESS WHEREOF, Columbia and the Company have caused this Agreement to be executed by their duly authorized representatives as of the day and year first written above.
+
+THE TRUSTEES OF COLUMBIA
+
+UNIVERSITY IN THE CITY OF NEW YORK
+
+By
+
+/s/ Orin Herskowitz
+
+Name
+
+Orin Herskowitz
+
+Executive Director,
+
+Columbia Technology Ventures
+
+TTS#_49512
+
+APPLIED THERAPEUTICS, INC.
+
+By
+
+/s/ Shoshana Shendelman
+
+Name
+
+Shoshana Shendelman
+
+Chief Executive Officer
+
+23
+
+EXHIBIT A
+
+Licensed Patents
+
+Columbia
+ Case
+
+Country
+
+Serial Number
+
+Filing Date
+
+Type
+
+Filing
+ Status
+
+Patent
+ Number
+
+Issue
+ Date
+
+[*]
+
+[*]
+
+[*]
+
+[*]
+
+[*]
+
+[*]
+
+[*]
+
+[*]
+
+EXHIBIT B
+
+Executive Summary/Business Plan/Development Plan
+
+[*]  (7 pages omitted)
+
+EXHIBIT C
+
+Provisions of Voting or Other Agreement
+
+Note: The provisions set forth below would amend the Voting Agreement. If Columbia, the Company and the other shareholders party to the Voting Agreement enter into another agreement pursuant to Section 4.j.i(b), the provisions would be appropriately revised, without changing the substance thereof, to refer to sections and definitions set forth in such agreement.
+
+Section 3 of the Agreement would be amended to add the following at the end thereof:
+
+[*]
+
+Section 6.8 of the Voting Agreement would be amended to add the following:
+
+[*]
