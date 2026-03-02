@@ -4,6 +4,7 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CANVAS_COMMANDS = [
@@ -114,50 +115,59 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
-function normalizePlatformToken(value?: string): string {
-  if (typeof value !== "string") {
-    return "";
+type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+
+const PLATFORM_PREFIX_RULES: ReadonlyArray<{
+  id: Exclude<PlatformId, "unknown">;
+  prefixes: readonly string[];
+}> = [
+  { id: "ios", prefixes: ["ios"] },
+  { id: "android", prefixes: ["android"] },
+  { id: "macos", prefixes: ["mac", "darwin"] },
+  { id: "windows", prefixes: ["win"] },
+  { id: "linux", prefixes: ["linux"] },
+] as const;
+
+const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
+  id: Exclude<PlatformId, "unknown">;
+  tokens: readonly string[];
+}> = [
+  { id: "ios", tokens: ["iphone", "ipad", "ios"] },
+  { id: "android", tokens: ["android"] },
+  { id: "macos", tokens: ["mac"] },
+  { id: "windows", tokens: ["windows"] },
+  { id: "linux", tokens: ["linux"] },
+] as const;
+
+function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
+  for (const rule of PLATFORM_PREFIX_RULES) {
+    if (rule.prefixes.some((prefix) => value.startsWith(prefix))) {
+      return rule.id;
+    }
   }
-  return value.trim().normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+  return undefined;
 }
 
-function normalizePlatformId(platform?: string, deviceFamily?: string): string {
-  const raw = normalizePlatformToken(platform);
-  if (raw.startsWith("ios")) {
-    return "ios";
+function resolvePlatformIdByDeviceFamily(
+  value: string,
+): Exclude<PlatformId, "unknown"> | undefined {
+  for (const rule of DEVICE_FAMILY_TOKEN_RULES) {
+    if (rule.tokens.some((token) => value.includes(token))) {
+      return rule.id;
+    }
   }
-  if (raw.startsWith("android")) {
-    return "android";
+  return undefined;
+}
+
+function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
+  const raw = normalizeDeviceMetadataForPolicy(platform);
+  const byPlatform = resolvePlatformIdByPrefix(raw);
+  if (byPlatform) {
+    return byPlatform;
   }
-  if (raw.startsWith("mac")) {
-    return "macos";
-  }
-  if (raw.startsWith("darwin")) {
-    return "macos";
-  }
-  if (raw.startsWith("win")) {
-    return "windows";
-  }
-  if (raw.startsWith("linux")) {
-    return "linux";
-  }
-  const family = normalizePlatformToken(deviceFamily);
-  if (family.includes("iphone") || family.includes("ipad") || family.includes("ios")) {
-    return "ios";
-  }
-  if (family.includes("android")) {
-    return "android";
-  }
-  if (family.includes("mac")) {
-    return "macos";
-  }
-  if (family.includes("windows")) {
-    return "windows";
-  }
-  if (family.includes("linux")) {
-    return "linux";
-  }
-  return "unknown";
+  const family = normalizeDeviceMetadataForPolicy(deviceFamily);
+  const byFamily = resolvePlatformIdByDeviceFamily(family);
+  return byFamily ?? "unknown";
 }
 
 export function resolveNodeCommandAllowlist(
