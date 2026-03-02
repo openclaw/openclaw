@@ -111,9 +111,7 @@ Successfully processed 1 files`;
         "\u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c 0 \u0444\u0430\u0439\u043b\u043e\u0432";
       const entries = parseIcaclsOutput(output, "C:\\Users\\karte\\.openclaw");
       expect(entries).toHaveLength(1);
-      expect(entries[0].principal).toBe(
-        "NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410",
-      );
+      expect(entries[0].principal).toBe("NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410");
     });
 
     it("parses SID-format principals", () => {
@@ -123,9 +121,7 @@ Successfully processed 1 files`;
       const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
       expect(entries).toHaveLength(2);
       expect(entries[0].principal).toBe("S-1-5-18");
-      expect(entries[1].principal).toBe(
-        "S-1-5-21-1824257776-4070701511-781240313-1001",
-      );
+      expect(entries[1].principal).toBe("S-1-5-21-1824257776-4070701511-781240313-1001");
     });
 
     it("ignores malformed ACL lines that contain ':' but no rights tokens", () => {
@@ -138,10 +134,7 @@ Successfully processed 1 files`;
 
     it("handles quoted target paths", () => {
       const output = `"C:\\path with spaces\\file.txt" BUILTIN\\Administrators:(F)`;
-      const entries = parseIcaclsOutput(
-        output,
-        "C:\\path with spaces\\file.txt",
-      );
+      const entries = parseIcaclsOutput(output, "C:\\path with spaces\\file.txt");
       expect(entries).toHaveLength(1);
     });
 
@@ -203,9 +196,7 @@ Successfully processed 1 files`;
     });
 
     it("classifies current user as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "WORKGROUP\\TestUser" }),
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "WORKGROUP\\TestUser" })];
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
       const summary = summarizeWindowsAcl(entries, env);
       expect(summary.trusted).toHaveLength(1);
@@ -237,9 +228,7 @@ Successfully processed 1 files`;
     });
 
     it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "S-1-5-32-544" }),
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-32-544" })];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(1);
       expect(summary.untrustedGroup).toHaveLength(0);
@@ -486,27 +475,21 @@ Successfully processed 1 files`;
 
   describe("summarizeWindowsAcl — localized SYSTEM account names", () => {
     it("classifies French SYSTEM (AUTORITE NT\\Système) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "AUTORITE NT\\Système" }),
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "AUTORITE NT\\Système" })];
       const { trusted, untrustedGroup } = summarizeWindowsAcl(entries);
       expect(trusted).toHaveLength(1);
       expect(untrustedGroup).toHaveLength(0);
     });
 
     it("classifies German SYSTEM (NT-AUTORITÄT\\SYSTEM) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "NT-AUTORITÄT\\SYSTEM" }),
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "NT-AUTORITÄT\\SYSTEM" })];
       const { trusted, untrustedGroup } = summarizeWindowsAcl(entries);
       expect(trusted).toHaveLength(1);
       expect(untrustedGroup).toHaveLength(0);
     });
 
     it("classifies Spanish SYSTEM (AUTORIDAD NT\\SYSTEM) as trusted", () => {
-      const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" }),
-      ];
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })];
       const { trusted, untrustedGroup } = summarizeWindowsAcl(entries);
       expect(trusted).toHaveLength(1);
       expect(untrustedGroup).toHaveLength(0);
@@ -518,10 +501,7 @@ Successfully processed 1 files`;
         aclEntry({ principal: "AUTORITE NT\\Système" }),
       ];
       const env = { USERNAME: "Pierre", USERDOMAIN: "MYPC" };
-      const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(
-        entries,
-        env,
-      );
+      const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, env);
       expect(trusted).toHaveLength(2);
       expect(untrustedWorld).toHaveLength(0);
       expect(untrustedGroup).toHaveLength(0);
