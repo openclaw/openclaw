@@ -477,7 +477,10 @@ export async function runPreparedReply(
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
-        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
+        // Prefer Provider over Surface for fallback channel identity.
+        // Surface can carry relayed metadata (for example "webchat") while Provider
+        // still reflects the active channel that should own tool routing.
+        provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
