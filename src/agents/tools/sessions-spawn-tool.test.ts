@@ -53,6 +53,7 @@ describe("sessions_spawn tool", () => {
       thread: true,
       mode: "session",
       cleanup: "keep",
+      sandbox: "require",
     });
 
     expect(result.details).toMatchObject({
@@ -70,12 +71,32 @@ describe("sessions_spawn tool", () => {
         thread: true,
         mode: "session",
         cleanup: "keep",
+        sandbox: "require",
       }),
       expect.objectContaining({
         agentSessionKey: "agent:main:main",
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('defaults sandbox to "inherit" for subagent runtime', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    });
+
+    await tool.execute("call-sandbox-default", {
+      task: "summarize logs",
+      agentId: "main",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandbox: "inherit",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {
