@@ -177,20 +177,7 @@ struct RootCanvas: View {
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
-        }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
+        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private func updateIdleTimer() {
@@ -343,82 +330,18 @@ private struct CanvasContent: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .confirmationDialog(
-            "Gateway",
+        .gatewayActionsDialog(
             isPresented: self.$showGatewayActions,
-            titleVisibility: .visible)
-        {
-            Button("Disconnect", role: .destructive) {
-                self.appModel.disconnectGateway()
-            }
-            Button("Open Settings") {
-                self.openSettings()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Disconnect from the gateway?")
-        }
+            onDisconnect: { self.appModel.disconnectGateway() },
+            onOpenSettings: { self.openSettings() })
     }
 
     private var statusActivity: StatusPill.Activity? {
-        // Status pill owns transient activity state so it doesn't overlap the connection indicator.
-        if self.appModel.isBackgrounded {
-            return StatusPill.Activity(
-                title: "Foreground required",
-                systemImage: "exclamationmark.triangle.fill",
-                tint: .orange)
-        }
-
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let gatewayLower = gatewayStatus.lowercased()
-        if gatewayLower.contains("repair") {
-            return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
-        }
-        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
-            return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
-        }
-        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
-
-        if self.appModel.screenRecordActive {
-            return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)
-        }
-
-        if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
-            let systemImage: String
-            let tint: Color?
-            switch cameraHUDKind {
-            case .photo:
-                systemImage = "camera.fill"
-                tint = nil
-            case .recording:
-                systemImage = "video.fill"
-                tint = .red
-            case .success:
-                systemImage = "checkmark.circle.fill"
-                tint = .green
-            case .error:
-                systemImage = "exclamationmark.triangle.fill"
-                tint = .red
-            }
-            return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
-        }
-
-        if self.voiceWakeEnabled {
-            let voiceStatus = self.appModel.voiceWake.statusText
-            if voiceStatus.localizedCaseInsensitiveContains("microphone permission") {
-                return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
-            }
-            if voiceStatus == "Paused" {
-                // Talk mode intentionally pauses voice wake to release the mic. Don't spam the HUD for that case.
-                if self.appModel.talkMode.isEnabled {
-                    return nil
-                }
-                let suffix = self.appModel.isBackgrounded ? " (background)" : ""
-                return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
-            }
-        }
-
-        return nil
+        StatusActivityBuilder.build(
+            appModel: self.appModel,
+            voiceWakeEnabled: self.voiceWakeEnabled,
+            cameraHUDText: self.cameraHUDText,
+            cameraHUDKind: self.cameraHUDKind)
     }
 }
 
