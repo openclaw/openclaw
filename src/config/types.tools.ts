@@ -269,6 +269,16 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Extra directories allowed for read tool access when workspaceOnly is enabled.
+   * Paths are resolved as real paths and still guarded against traversal/symlink escapes.
+   */
+  readAllowlist?: string[];
+  /**
+   * Extra directories allowed for write/edit tool access when workspaceOnly is enabled.
+   * Paths are resolved as real paths and still guarded against traversal/symlink escapes.
+   */
+  writeAllowlist?: string[];
 };
 
 export type AgentToolsConfig = {

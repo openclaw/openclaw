@@ -244,4 +244,67 @@ describe("FS tools with workspaceOnly=false", () => {
       }),
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
   });
+
+  it("allows writes and reads in allowlisted roots when workspaceOnly=true", async () => {
+    const collabDir = path.join(tmpDir, "collab");
+    await fs.mkdir(collabDir, { recursive: true });
+    const collabFile = path.join(collabDir, "note.txt");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: true,
+            readAllowlist: [collabDir],
+            writeAllowlist: [collabDir],
+          },
+        },
+      },
+    });
+
+    const writeTool = tools.find((t) => t.name === "write");
+    const readTool = tools.find((t) => t.name === "read");
+    expect(writeTool).toBeDefined();
+    expect(readTool).toBeDefined();
+
+    await writeTool!.execute("test-call-5", {
+      path: collabFile,
+      content: "hello allowlist",
+    });
+    const readResult = await readTool!.execute("test-call-6", {
+      path: collabFile,
+    });
+    const readText = readResult.content.find((c) => c.type === "text")?.text ?? "";
+    expect(readText).toContain("hello allowlist");
+  });
+
+  it("blocks symlink escape from an allowlisted root when workspaceOnly=true", async () => {
+    const collabDir = path.join(tmpDir, "collab-symlink");
+    await fs.mkdir(collabDir, { recursive: true });
+    const escapeLink = path.join(collabDir, "escape");
+    await fs.symlink(tmpDir, escapeLink);
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: true,
+            writeAllowlist: [collabDir],
+          },
+        },
+      },
+    });
+
+    const writeTool = tools.find((t) => t.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.execute("test-call-7", {
+        path: path.join(escapeLink, "outside-via-link.txt"),
+        content: "blocked",
+      }),
+    ).rejects.toThrow(/escapes|outside|alias/i);
+  });
 });
