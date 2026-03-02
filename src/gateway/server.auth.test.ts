@@ -121,6 +121,13 @@ const NODE_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.NODE,
 };
 
+const BACKEND_GATEWAY_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  version: "1.0.0",
+  platform: "node",
+  mode: GATEWAY_CLIENT_MODES.BACKEND,
+};
+
 async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
   try {
@@ -1788,6 +1795,39 @@ describe("gateway server auth/connect", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("allows local gateway backend shared-auth connections without device pairing", async () => {
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    try {
+      const localBackend = await connectReq(ws, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(localBackend.ok).toBe(true);
+    } finally {
+      ws.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const wsRemoteLike = await openWs(port, { host: "gateway.example" });
+    try {
+      const remoteLikeBackend = await connectReq(wsRemoteLike, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(remoteLikeBackend.ok).toBe(false);
+      expect(remoteLikeBackend.error?.message ?? "").toContain("pairing required");
+    } finally {
+      wsRemoteLike.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
     }
   });
 

@@ -138,9 +138,9 @@ describe("resolveExtraParams", () => {
 
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
+      calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
       return {} as ReturnType<StreamFn>;
     };
     return {
@@ -544,7 +544,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("does not set transport defaults for non-Codex providers", () => {
+  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -558,7 +558,87 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBeUndefined();
+    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("lets runtime options override OpenAI default transport", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { transport: "sse" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+  });
+
+  it("allows disabling OpenAI websocket warm-up via model params", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
+  });
+
+  it("lets runtime options override configured OpenAI websocket warm-up", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      openaiWsWarmup: true,
+    } as unknown as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
   it("allows forcing Codex transport to SSE", () => {
@@ -746,6 +826,19 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+      temperature: 0.2,
+    });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-opus-4-6",
+      options: { headers: { "X-Custom": "1" } },
+    });
+
+    expect(headers).toEqual({ "X-Custom": "1" });
+  });
+
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -829,7 +922,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
   });
@@ -843,7 +936,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -857,7 +950,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -878,7 +971,7 @@ describe("applyExtraParamsToAgent", () => {
         contextWindow: 128_000,
         maxTokens: 16_384,
         compat: { supportsStore: false },
-      } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -893,7 +986,7 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 200_000,
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.context_management).toEqual([
       {
@@ -912,7 +1005,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload).not.toHaveProperty("context_management");
   });
@@ -940,7 +1033,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.context_management).toEqual([
       {
@@ -959,7 +1052,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: {
         store: false,
         context_management: [{ type: "compaction", compact_threshold: 12_345 }],
@@ -990,7 +1083,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload).not.toHaveProperty("context_management");
   });

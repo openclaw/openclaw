@@ -85,6 +85,66 @@ async function withUnknownUsageStore(run: () => Promise<void>) {
   }
 }
 
+function getRuntimeLogs() {
+  return runtimeLogMock.mock.calls.map((call: unknown[]) => String(call[0]));
+}
+
+function getJoinedRuntimeLogs() {
+  return getRuntimeLogs().join("\n");
+}
+
+async function runStatusAndGetLogs(args: Parameters<typeof statusCommand>[0] = {}) {
+  runtimeLogMock.mockClear();
+  await statusCommand(args, runtime as never);
+  return getRuntimeLogs();
+}
+
+async function runStatusAndGetJoinedLogs(args: Parameters<typeof statusCommand>[0] = {}) {
+  await runStatusAndGetLogs(args);
+  return getJoinedRuntimeLogs();
+}
+
+type ProbeGatewayResult = {
+  ok: boolean;
+  url: string;
+  connectLatencyMs: number | null;
+  error: string | null;
+  close: { code: number; reason: string } | null;
+  health: unknown;
+  status: unknown;
+  presence: unknown;
+  configSnapshot: unknown;
+};
+
+function mockProbeGatewayResult(overrides: Partial<ProbeGatewayResult>) {
+  mocks.probeGateway.mockResolvedValueOnce({
+    ok: false,
+    url: "ws://127.0.0.1:18789",
+    connectLatencyMs: null,
+    error: "timeout",
+    close: null,
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+    ...overrides,
+  });
+}
+
+async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  const prevValue = process.env[key];
+  process.env[key] = value;
+  try {
+    return await run();
+  } finally {
+    if (prevValue === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prevValue;
+    }
+  }
+}
+
 const mocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -367,86 +427,68 @@ describe("statusCommand", () => {
 
   it("prints unknown usage in formatted output when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
-      runtimeLogMock.mockClear();
-      await statusCommand({}, runtime as never);
-      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+      const logs = await runStatusAndGetLogs();
       expect(logs.some((line) => line.includes("unknown/") && line.includes("(?%)"))).toBe(true);
     });
   });
 
   it("prints formatted lines otherwise", async () => {
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(logs.some((l: string) => l.includes("OpenClaw status"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Overview"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Security audit"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Summary:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("CRITICAL"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Dashboard"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("macos 14.0 (arm64)"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Memory"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Channels"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("WhatsApp"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("bootstrap files"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Sessions"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("+1000"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("50%"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("40% cached"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("LaunchAgent"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("FAQ:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Troubleshooting:"))).toBe(true);
-    expect(logs.some((l: string) => l.includes("Next steps:"))).toBe(true);
+    const logs = await runStatusAndGetLogs();
+    for (const token of [
+      "OpenClaw status",
+      "Overview",
+      "Security audit",
+      "Summary:",
+      "CRITICAL",
+      "Dashboard",
+      "macos 14.0 (arm64)",
+      "Memory",
+      "Channels",
+      "WhatsApp",
+      "bootstrap files",
+      "Sessions",
+      "+1000",
+      "50%",
+      "40% cached",
+      "LaunchAgent",
+      "FAQ:",
+      "Troubleshooting:",
+      "Next steps:",
+    ]) {
+      expect(logs.some((line) => line.includes(token))).toBe(true);
+    }
     expect(
       logs.some(
-        (l: string) =>
-          l.includes("openclaw status --all") ||
-          l.includes("openclaw --profile isolated status --all") ||
-          l.includes("openclaw status --all") ||
-          l.includes("openclaw --profile isolated status --all"),
+        (line) =>
+          line.includes("openclaw status --all") ||
+          line.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
   });
 
   it("shows gateway auth when reachable", async () => {
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "abcd1234";
-    try {
-      mocks.probeGateway.mockResolvedValueOnce({
+    await withEnvVar("OPENCLAW_GATEWAY_TOKEN", "abcd1234", async () => {
+      mockProbeGatewayResult({
         ok: true,
-        url: "ws://127.0.0.1:18789",
         connectLatencyMs: 123,
         error: null,
-        close: null,
         health: {},
         status: {},
         presence: [],
-        configSnapshot: null,
       });
-      runtimeLogMock.mockClear();
-      await statusCommand({}, runtime as never);
-      const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+      const logs = await runStatusAndGetLogs();
       expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
-    } finally {
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
-    }
+    });
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
+    mockProbeGatewayResult({
       ok: true,
-      url: "ws://127.0.0.1:18789",
       connectLatencyMs: 10,
       error: null,
-      close: null,
       health: {},
       status: {},
       presence: [],
-      configSnapshot: null,
     });
     mocks.callGateway.mockResolvedValueOnce({
       channelAccounts: {
@@ -471,98 +513,58 @@ describe("statusCommand", () => {
       },
     });
 
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(logs.join("\n")).toMatch(/Signal/i);
-    expect(logs.join("\n")).toMatch(/iMessage/i);
-    expect(logs.join("\n")).toMatch(/gateway:/i);
-    expect(logs.join("\n")).toMatch(/WARN/);
+    const joined = await runStatusAndGetJoinedLogs();
+    expect(joined).toMatch(/Signal/i);
+    expect(joined).toMatch(/iMessage/i);
+    expect(joined).toMatch(/gateway:/i);
+    expect(joined).toMatch(/WARN/);
   });
 
-  it("prints requestId-aware recovery guidance when gateway pairing is required", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
+  it.each([
+    {
+      name: "prints requestId-aware recovery guidance when gateway pairing is required",
       error: "connect failed: pairing required (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required (requestId: req-123)" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-    const joined = logs.join("\n");
-    expect(joined).toContain("Gateway pairing approval required.");
-    expect(joined).toContain("devices approve req-123");
-    expect(joined).toContain("devices approve --latest");
-    expect(joined).toContain("devices list");
-  });
-
-  it("prints fallback recovery guidance when pairing requestId is unavailable", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
+      closeReason: "pairing required (requestId: req-123)",
+      includes: ["devices approve req-123"],
+      excludes: [],
+    },
+    {
+      name: "prints fallback recovery guidance when pairing requestId is unavailable",
       error: "connect failed: pairing required",
-      close: { code: 1008, reason: "connect failed" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
+      closeReason: "connect failed",
+      includes: [],
+      excludes: ["devices approve req-"],
+    },
+    {
+      name: "does not render unsafe requestId content into approval command hints",
+      error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
+      closeReason: "pairing required (requestId: req-123;rm -rf /)",
+      includes: [],
+      excludes: ["devices approve req-123;rm -rf /"],
+    },
+  ])("$name", async ({ error, closeReason, includes, excludes }) => {
+    mockProbeGatewayResult({
+      error,
+      close: { code: 1008, reason: closeReason },
     });
-
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
-    const joined = logs.join("\n");
+    const joined = await runStatusAndGetJoinedLogs();
     expect(joined).toContain("Gateway pairing approval required.");
-    expect(joined).not.toContain("devices approve req-");
     expect(joined).toContain("devices approve --latest");
     expect(joined).toContain("devices list");
-  });
-
-  it("does not render unsafe requestId content into approval command hints", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
-      close: { code: 1008, reason: "pairing required (requestId: req-123;rm -rf /)" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
-    expect(joined).toContain("Gateway pairing approval required.");
-    expect(joined).not.toContain("devices approve req-123;rm -rf /");
-    expect(joined).toContain("devices approve --latest");
+    for (const expected of includes) {
+      expect(joined).toContain(expected);
+    }
+    for (const blocked of excludes) {
+      expect(joined).not.toContain(blocked);
+    }
   });
 
   it("extracts requestId from close reason when error text omits it", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
+    mockProbeGatewayResult({
       error: "connect failed: pairing required",
       close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
     });
-
-    runtimeLogMock.mockClear();
-    await statusCommand({}, runtime as never);
-    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    const joined = await runStatusAndGetJoinedLogs();
     expect(joined).toContain("devices approve req-close-456");
   });
 
