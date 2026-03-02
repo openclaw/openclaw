@@ -13,7 +13,6 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "kimiCodeApiKey"
   | "geminiApiKey"
   | "zaiApiKey"
-  | "qiniuApiKey"
   | "xiaomiApiKey"
   | "minimaxApiKey"
   | "syntheticApiKey"
@@ -26,6 +25,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "qianfanApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
+  | "qiniuApiKey"
 >;
 
 export type OnboardProviderAuthFlag = {
@@ -114,13 +114,6 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--zai-api-key",
     cliOption: "--zai-api-key <key>",
     description: "Z.AI API key",
-  },
-  {
-    optionKey: "qiniuApiKey",
-    authChoice: "qiniu-api-key",
-    cliFlag: "--qiniu-api-key",
-    cliOption: "--qiniu-api-key <key>",
-    description: "Qiniu Cloud API key",
   },
   {
     optionKey: "xiaomiApiKey",
