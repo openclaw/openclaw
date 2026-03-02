@@ -45,6 +45,8 @@ export type CreateFeishuReplyDispatcherParams = {
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
+  /** True when inbound message is already inside a thread/topic context */
+  threadReply?: boolean;
   rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
@@ -62,11 +64,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
+    threadReply,
     rootId,
     mentionTargets,
     accountId,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
+  const threadReplyMode = threadReply === true;
+  const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -125,7 +130,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  // Card streaming may miss thread affinity in topic contexts; use direct replies there.
+  const streamingEnabled =
+    !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -152,7 +159,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       try {
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
-          replyInThread,
+          replyInThread: effectiveReplyInThread,
           rootId,
         });
       } catch (error) {
@@ -235,7 +242,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   mediaUrl,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread,
+                  replyInThread: effectiveReplyInThread,
                   accountId,
                 });
               }
@@ -255,7 +262,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
-                replyInThread,
+                replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -273,7 +280,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
-                replyInThread,
+                replyInThread: effectiveReplyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
               });
@@ -289,7 +296,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               to: chatId,
               mediaUrl,
               replyToMessageId: sendReplyToMessageId,
-              replyInThread,
+              replyInThread: effectiveReplyInThread,
               accountId,
             });
           }
