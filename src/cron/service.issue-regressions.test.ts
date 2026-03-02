@@ -9,7 +9,13 @@ import { CronService } from "./service.js";
 import { createDeferred, createRunningCronServiceState } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
 import { createCronServiceState, type CronEvent } from "./service/state.js";
-import { DEFAULT_JOB_TIMEOUT_MS, executeJobCore, onTimer, runMissedJobs } from "./service/timer.js";
+import {
+  DEFAULT_JOB_TIMEOUT_MS,
+  applyJobResult,
+  executeJobCore,
+  onTimer,
+  runMissedJobs,
+} from "./service/timer.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 const noopLogger = {
@@ -1585,5 +1591,82 @@ describe("Cron issue regressions", () => {
     const job = state.store?.jobs.find((entry) => entry.id === "timeout-fraction-29774");
     expect(job?.state.lastStatus).toBe("error");
     expect(job?.state.lastError).toContain("timed out");
+  });
+
+  it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
+    const startedAt = Date.parse("2026-03-02T12:00:00.000Z");
+    const endedAt = startedAt + 50;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-30905-success.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-success-30905",
+      name: "apply-result-success-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(job.state.lastError).toMatch(/^schedule error:/);
+    expect(job.state.nextRunAtMs).toBe(endedAt + 2_000);
+    expect(job.enabled).toBe(true);
+  });
+
+  it("falls back to backoff schedule when cron next-run computation throws on error path (#30905)", () => {
+    const startedAt = Date.parse("2026-03-02T12:05:00.000Z");
+    const endedAt = startedAt + 25;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-30905-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-error-30905",
+      name: "apply-result-error-30905",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "Invalid/Timezone" },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "error",
+      error: "synthetic failure",
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastRunAtMs).toBe(startedAt);
+    expect(job.state.lastStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.scheduleErrorCount).toBe(1);
+    expect(job.state.lastError).toMatch(/^schedule error:/);
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
   });
 });
