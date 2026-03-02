@@ -108,6 +108,30 @@ describe("normalizeReplyPayload", () => {
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
   });
+
+  it("strips NO_REPLY from mixed-content prefixes and suffixes", () => {
+    const suffix = normalizeReplyPayload({ text: "Looks good NO_REPLY" });
+    expect(suffix).not.toBeNull();
+    expect(suffix?.text).toBe("Looks good");
+
+    const prefix = normalizeReplyPayload({ text: "NO_REPLY ✅ shipped" });
+    expect(prefix).not.toBeNull();
+    expect(prefix?.text).toBe("✅ shipped");
+  });
+
+  it("suppresses payloads when mixed content becomes silent-only after stripping", () => {
+    const reasons: string[] = [];
+    const normalized = normalizeReplyPayload(
+      {
+        text: " NO_REPLY  \n  NO_REPLY ",
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(normalized).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
 });
 
 describe("typing controller", () => {
