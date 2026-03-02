@@ -565,6 +565,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
 
+    // Skip signal-cli system messages that have no user-visible content
+    const isTimerUpdate =
+      !messageText &&
+      !quoteText &&
+      !dataMessage.attachments?.length &&
+      (dataMessage.isExpirationUpdate === true ||
+        (typeof dataMessage.expiresInSeconds === "number" && dataMessage.expiresInSeconds > 0));
+    const isGroupV2Change = Boolean(dataMessage.groupV2Change);
+    if (isTimerUpdate || isGroupV2Change) {
+      logVerbose(
+        `signal: skipping system message (isTimerUpdate=${isTimerUpdate}, isGroupV2Change=${isGroupV2Change})`,
+      );
+      return;
+    }
+
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
         dmPolicy: deps.dmPolicy,
