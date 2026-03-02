@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import { loadModelCatalog, resetModelCatalogCacheForTest } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -214,6 +214,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
+    resetModelCatalogCacheForTest();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
@@ -412,6 +413,7 @@ describe("runCronIsolatedAgentTurn", () => {
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
       vi.mocked(runEmbeddedPiAgent).mockClear();
+      resetModelCatalogCacheForTest();
       vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
       res = (
         await runTurnWithStoredModelOverride(home, {
@@ -424,6 +426,7 @@ describe("runCronIsolatedAgentTurn", () => {
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
       vi.mocked(runEmbeddedPiAgent).mockClear();
+      resetModelCatalogCacheForTest();
       vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
       res = (
         await runTurnWithStoredModelOverride(home, {
