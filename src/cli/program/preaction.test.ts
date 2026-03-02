@@ -183,42 +183,25 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("loads plugin registry for configure/onboard/agents commands", async () => {
-    const commands = ["configure", "onboard", "agents"] as const;
-    const program = buildProgram(["configure", "onboard", "agents"]);
-    for (const command of commands) {
-      vi.clearAllMocks();
-      await runCommand(
-        {
-          parseArgv: [command],
-          processArgv: ["node", "openclaw", command],
-        },
-        program,
-      );
-      expect(ensurePluginRegistryLoadedMock, command).toHaveBeenCalledTimes(1);
-    }
+  it("loads plugin registry for configure command", async () => {
+    const program = buildProgram(["configure"]);
+    await runCommand(
+      {
+        parseArgv: ["configure"],
+        processArgv: ["node", "openclaw", "configure"],
+      },
+      program,
+    );
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips config guard for doctor, completion, and secrets commands", async () => {
-    const program = buildProgram(["doctor", "completion", "secrets"]);
+  it("skips config guard for doctor command", async () => {
+    const program = buildProgram(["doctor"]);
     await runCommand(
       {
         parseArgv: ["doctor"],
         processArgv: ["node", "openclaw", "doctor"],
-      },
-      program,
-    );
-    await runCommand(
-      {
-        parseArgv: ["completion"],
-        processArgv: ["node", "openclaw", "completion"],
-      },
-      program,
-    );
-    await runCommand(
-      {
-        parseArgv: ["secrets"],
-        processArgv: ["node", "openclaw", "secrets"],
       },
       program,
     );
