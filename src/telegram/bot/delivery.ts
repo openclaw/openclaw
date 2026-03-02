@@ -294,7 +294,7 @@ export async function deliverReplies(params: {
                   replyMarkup,
                 });
               }
-              if (replyToMessageIdForPayload && !hasReplied) {
+              if (replyToMessageId && !hasReplied) {
                 hasReplied = true;
               }
               continue;
