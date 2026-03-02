@@ -62,19 +62,44 @@ export type AcpRuntimeDoctorReport = {
   details?: string[];
 };
 
+export type AcpSessionUpdateTag =
+  | "agent_message_chunk"
+  | "tool_call"
+  | "tool_call_update"
+  | "usage_update"
+  | "available_commands_update"
+  | "current_mode_update"
+  | "config_option_update"
+  | "session_info_update"
+  | "plan"
+  | "agent_thought_chunk";
+
 export type AcpRuntimeEvent =
   | {
       type: "text_delta";
       text: string;
       stream?: "output" | "thought";
+      tag?: AcpSessionUpdateTag;
     }
   | {
       type: "status";
       text: string;
+      tag?: AcpSessionUpdateTag;
+      /** Token/resource usage: consumed count. */
+      used?: number;
+      /** Token/resource usage: total budget size. */
+      size?: number;
     }
   | {
       type: "tool_call";
       text: string;
+      tag?: AcpSessionUpdateTag;
+      /** Human-readable tool title. */
+      title?: string;
+      /** Tool execution status (e.g. "in_progress", "completed", "failed"). */
+      status?: string;
+      /** Unique identifier for this tool invocation. */
+      toolCallId?: string;
     }
   | {
       type: "done";

@@ -202,6 +202,8 @@ type DeliverOutboundPayloadsCoreParams = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
+  /** Active agent id for workspace-scoped media roots and hook context. */
+  agentId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;

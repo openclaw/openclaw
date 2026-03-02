@@ -825,7 +825,6 @@ export async function handleFeishuMessage(params: {
         groupPolicy: "allowlist",
         allowFrom: effectiveSenderAllowFrom,
         senderId: ctx.senderOpenId,
-        senderIds: [senderUserId],
         senderName: ctx.senderName,
       });
       if (!senderAllowed) {
@@ -883,7 +882,6 @@ export async function handleFeishuMessage(params: {
     const dmAllowed = resolveFeishuAllowlistMatch({
       allowFrom: effectiveDmAllowFrom,
       senderId: ctx.senderOpenId,
-      senderIds: [senderUserId],
       senderName: ctx.senderName,
     }).allowed;
 
@@ -926,7 +924,6 @@ export async function handleFeishuMessage(params: {
     const senderAllowedForCommands = resolveFeishuAllowlistMatch({
       allowFrom: commandAllowFrom,
       senderId: ctx.senderOpenId,
-      senderIds: [senderUserId],
       senderName: ctx.senderName,
     }).allowed;
     const commandAuthorized = shouldComputeCommandAuthorized

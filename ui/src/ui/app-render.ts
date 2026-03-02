@@ -144,8 +144,7 @@ export function renderApp(state: AppViewState) {
     state.updateAvailable?.currentVersion ||
     t("common.na");
   const availableUpdate =
-    state.updateAvailable &&
-    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
+    state.updateAvailable && state.updateAvailable.version !== state.updateAvailable.currentVersion
       ? state.updateAvailable
       : null;
   const versionStatusClass = availableUpdate ? "warn" : "ok";
@@ -308,7 +307,7 @@ export function renderApp(state: AppViewState) {
         ${
           availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
+              <strong>Update available:</strong> v${availableUpdate.version}
               (running v${availableUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
@@ -337,12 +336,14 @@ export function renderApp(state: AppViewState) {
                 settings: state.settings,
                 password: state.password,
                 lastError: state.lastError,
-                lastErrorCode: state.lastErrorCode,
                 presenceCount,
                 sessionsCount,
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                authMode: state.authMode ?? null,
+                iamUser: state.iamUser ?? null,
+                iamLoggingIn: state.iamLoggingIn ?? false,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -358,6 +359,9 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onIamLogin: () => state.handleIamLogin?.(),
+                onIamSignup: () => state.handleIamSignup?.(),
+                onIamLogout: () => state.handleIamLogout?.(),
               })
             : nothing
         }
@@ -397,6 +401,8 @@ export function renderApp(state: AppViewState) {
                 onNostrProfileSave: () => state.handleNostrProfileSave(),
                 onNostrProfileImport: () => state.handleNostrProfileImport(),
                 onNostrProfileToggleAdvanced: () => state.handleNostrProfileToggleAdvanced(),
+                expandedChannel: state.expandedChannel ?? null,
+                onChannelSelect: (key) => (state.expandedChannel = key),
               })
             : nothing
         }
@@ -991,6 +997,8 @@ export function renderApp(state: AppViewState) {
                       : { kind: "gateway" as const };
                   return saveExecApprovals(state, target);
                 },
+                onNodeBillingSet: (nodeId, billingMode, budgetCents) =>
+                  state.handleNodeBillingSet?.(nodeId, billingMode, budgetCents),
               })
             : nothing
         }
@@ -1023,7 +1031,6 @@ export function renderApp(state: AppViewState) {
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
-                fallbackStatus: state.fallbackStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,

@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
 import {
   browserAct,
@@ -54,7 +55,7 @@ function wrapBrowserExternalJson(params: {
   };
 }
 
-function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
+function _formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { tabs },
@@ -69,7 +70,7 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   };
 }
 
-function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
+function _readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)

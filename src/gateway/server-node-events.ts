@@ -23,6 +23,24 @@ const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 
+function parsePayloadObject(
+  payloadJSON: string | null | undefined,
+): Record<string, unknown> | null {
+  if (!payloadJSON) {
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return null;
+  }
+  if (typeof payload !== "object" || payload === null) {
+    return null;
+  }
+  return payload as Record<string, unknown>;
+}
+
 function normalizeNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -35,7 +53,7 @@ function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
 
-function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
+function _resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
   const eventId =
     normalizeNonEmptyString(obj.eventId) ??
     normalizeNonEmptyString(obj.providerEventId) ??
@@ -65,7 +83,7 @@ function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: s
   return `text:${text}`;
 }
 
-function shouldDropDuplicateVoiceTranscript(params: {
+function _shouldDropDuplicateVoiceTranscript(params: {
   sessionKey: string;
   fingerprint: string;
   now: number;

@@ -344,4 +344,5 @@ export type AppViewState = {
   handleIamLogin: () => void;
   handleIamSignup: () => void;
   handleIamLogout: () => void;
+  handleNodeBillingSet?: (nodeId: string, billingMode: string, budgetCents?: number) => void;
 };

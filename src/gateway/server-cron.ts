@@ -184,7 +184,7 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId } = resolveCronWakeTarget(opts);
       // Merge cron-supplied heartbeat overrides (e.g. target: "last") with the
       // fully resolved agent heartbeat config so cron-triggered heartbeats
       // respect agent-specific overrides (agents.list[].heartbeat) before
@@ -208,19 +208,17 @@ export function buildGatewayCronService(params: {
         cfg: runtimeConfig,
         reason: opts?.reason,
         agentId,
-        sessionKey,
         heartbeat: heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+    runIsolatedAgentJob: async ({ job, message }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
         message,
-        abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
         lane: "cron",
@@ -238,7 +236,7 @@ export function buildGatewayCronService(params: {
       await deliverOutboundPayloads({
         cfg: runtimeConfig,
         channel: target.channel,
-        to: target.to,
+        to: target.to ?? "",
         accountId: target.accountId,
         threadId: target.threadId,
         payloads: [{ text }],

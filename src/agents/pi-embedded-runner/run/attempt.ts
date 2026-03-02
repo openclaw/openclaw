@@ -494,7 +494,6 @@ export async function runEmbeddedAttempt(
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
-      agentId: params.agentId,
     });
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
@@ -706,9 +705,7 @@ export async function runEmbeddedAttempt(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: params.timeoutMs,
-      }),
+      timeoutMs: resolveSessionLockMaxHoldFromTimeout(params.timeoutMs),
     });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
@@ -899,7 +896,6 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
         params.thinkLevel,
-        sessionAgentId,
       );
 
       if (cacheTrace) {

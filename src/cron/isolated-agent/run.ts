@@ -116,7 +116,7 @@ export type RunCronAgentTurnResult = {
   outputText?: string;
   error?: string;
   /** Categorises the error kind for cron delivery diagnostics. */
-  errorKind?: string;
+  errorKind?: "delivery-target";
   sessionId?: string;
   sessionKey?: string;
   /**
@@ -129,7 +129,7 @@ export type RunCronAgentTurnResult = {
   delivered?: boolean;
   /** Whether an outbound delivery attempt was made. */
   deliveryAttempted?: boolean;
-};
+} & CronRunTelemetry;
 
 export async function runCronIsolatedAgentTurn(params: {
   cfg: BotConfig;
@@ -530,7 +530,6 @@ export async function runCronIsolatedAgentTurn(params: {
           // be blocked by a target it cannot satisfy (#27898).
           requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
           disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
-          abortSignal,
         });
       },
     });
@@ -545,6 +544,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const payloads = runResult.payloads ?? [];
 
   // Update token+model fields in the session store.
+  let telemetry: CronRunTelemetry | undefined;
   {
     const usage = runResult.meta.agentMeta?.usage;
     const promptTokens = runResult.meta.agentMeta?.promptTokens;
@@ -553,7 +553,6 @@ export async function runCronIsolatedAgentTurn(params: {
     const contextTokens =
       agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
 
-    let telemetry: CronRunTelemetry | undefined;
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;

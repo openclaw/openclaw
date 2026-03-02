@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { BotConfig } from "../config/config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
@@ -15,6 +16,19 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
+import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  getTrustedSafeBinDirs,
+  isTrustedSafeBinPath,
+  normalizeTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-trust.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
@@ -635,7 +649,7 @@ function hasAllowFromEntries(list?: Array<string | number>) {
   return Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
 }
 
-async function maybeRepairAllowlistPolicyAllowFrom(cfg: BotConfig): Promise<{
+async function _maybeRepairAllowlistPolicyAllowFrom(cfg: BotConfig): Promise<{
   config: BotConfig;
   changes: string[];
 }> {
@@ -734,14 +748,14 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: BotConfig): Promise<{
       return;
     }
     const normalizedAccountId = normalizeAccountId(params.accountId) || DEFAULT_ACCOUNT_ID;
-    const fromStore = await readChannelAllowFromStore(
+    const fromStore: string[] = await readChannelAllowFromStore(
       normalizedChannelId,
       process.env,
       normalizedAccountId,
-    ).catch(() => []);
-    const recovered = Array.from(new Set(fromStore.map((entry) => String(entry).trim()))).filter(
-      Boolean,
-    );
+    ).catch((): string[] => []);
+    const recovered: string[] = Array.from(
+      new Set(fromStore.map((entry: string) => String(entry).trim())),
+    ).filter(Boolean);
     if (recovered.length === 0) {
       return;
     }
@@ -794,7 +808,7 @@ async function maybeRepairAllowlistPolicyAllowFrom(cfg: BotConfig): Promise<{
  * allowlist. Common after upgrades that remove external allowlist
  * file support.
  */
-function detectEmptyAllowlistPolicy(cfg: BotConfig): string[] {
+function _detectEmptyAllowlistPolicy(cfg: BotConfig): string[] {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object") {
     return [];
@@ -1016,7 +1030,7 @@ function collectExecSafeBinScopes(cfg: BotConfig): ExecSafeBinScopeRef[] {
   return scopes;
 }
 
-function scanExecSafeBinCoverage(cfg: BotConfig): ExecSafeBinCoverageHit[] {
+function _scanExecSafeBinCoverage(cfg: BotConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
@@ -1034,7 +1048,7 @@ function scanExecSafeBinCoverage(cfg: BotConfig): ExecSafeBinCoverageHit[] {
   return hits;
 }
 
-function scanExecSafeBinTrustedDirHints(cfg: BotConfig): ExecSafeBinTrustedDirHintHit[] {
+function _scanExecSafeBinTrustedDirHints(cfg: BotConfig): ExecSafeBinTrustedDirHintHit[] {
   const hits: ExecSafeBinTrustedDirHintHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
     for (const bin of scope.safeBins) {
@@ -1060,7 +1074,7 @@ function scanExecSafeBinTrustedDirHints(cfg: BotConfig): ExecSafeBinTrustedDirHi
   return hits;
 }
 
-function maybeRepairExecSafeBinProfiles(cfg: BotConfig): {
+function _maybeRepairExecSafeBinProfiles(cfg: BotConfig): {
   config: BotConfig;
   changes: string[];
   warnings: string[];
@@ -1155,7 +1169,7 @@ function scanLegacyToolsBySenderKeys(cfg: BotConfig): LegacyToolsBySenderKeyHit[
   return hits;
 }
 
-function maybeRepairLegacyToolsBySenderKeys(cfg: BotConfig): {
+function _maybeRepairLegacyToolsBySenderKeys(cfg: BotConfig): {
   config: BotConfig;
   changes: string[];
 } {

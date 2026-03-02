@@ -50,6 +50,12 @@ export type ResolvedQmdSessionConfig = {
   retentionDays?: number;
 };
 
+export type ResolvedQmdMcporterConfig = {
+  enabled: boolean;
+  serverName: string;
+  startDaemon: boolean;
+};
+
 export type ResolvedQmdConfig = {
   command: string;
   searchMode: MemoryQmdSearchMode;
@@ -57,6 +63,7 @@ export type ResolvedQmdConfig = {
   sessions: ResolvedQmdSessionConfig;
   update: ResolvedQmdUpdateConfig;
   limits: ResolvedQmdLimitsConfig;
+  mcporter: ResolvedQmdMcporterConfig;
   includeDefaultMemory: boolean;
   scope?: SessionSendPolicyConfig;
 };
@@ -281,11 +288,19 @@ export function resolveMemoryBackendConfig(params: {
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
   const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const mcporterRaw = qmdCfg?.mcporter;
+  const mcporter: ResolvedQmdMcporterConfig = {
+    enabled: mcporterRaw?.enabled === true,
+    serverName: mcporterRaw?.serverName?.trim() || "qmd",
+    startDaemon: mcporterRaw?.startDaemon !== false,
+  };
+
   const resolved: ResolvedQmdConfig = {
     command,
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
     collections,
     includeDefaultMemory,
+    mcporter,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
     update: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),

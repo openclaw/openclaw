@@ -627,7 +627,7 @@ export class MemoryIndexManager implements MemorySearchManager {
         lastProvider: this.batchFailureLastProvider,
       },
       custom: {
-        searchMode,
+        searchMode: undefined,
         providerUnavailableReason: this.providerUnavailableReason,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,
