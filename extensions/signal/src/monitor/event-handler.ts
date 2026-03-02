@@ -719,9 +719,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
+    // Early body guard: if the message has no text, no attachment, and no quote it will be
+    // dropped at the bodyText check below — don't send a false ACK in that case.
+    const hasEarlyBody = Boolean(
+      messageText || dataMessage.attachments?.length || dataMessage.quote?.text?.trim(),
+    );
+
     // Send ACK reaction immediately — before any awaited I/O (attachment fetch, read receipt)
     // so the user gets instant visual feedback that their message was received.
-    if (typeof envelope.timestamp === "number") {
+    if (hasEarlyBody && typeof envelope.timestamp === "number") {
       maybeSendSignalAckReaction({
         cfg: deps.cfg,
         agentId: route.agentId,
