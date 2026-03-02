@@ -89,42 +89,14 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("rejects missing plugin load paths", async () => {
-    const missingPath = path.join(suiteHome, "missing-plugin");
-    const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [missingPath] } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      const hasIssue = res.issues.some(
-        (issue) =>
-          issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
-      );
-      expect(hasIssue).toBe(true);
-    }
-  });
-
-  it("warns for missing plugin ids in entries instead of failing validation", async () => {
-    const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
-      plugins: { enabled: false, entries: { "missing-plugin": { enabled: true } } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.warnings).toContainEqual({
-        path: "plugins.entries.missing-plugin",
-        message:
-          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
-      });
-    }
-  });
-
-  it("rejects missing plugin ids in allow/deny/slots", async () => {
+  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+    const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
         enabled: false,
+        load: { paths: [missingPath] },
+        entries: { "missing-plugin": { enabled: true } },
         allow: ["missing-allow"],
         deny: ["missing-deny"],
         slots: { memory: "missing-slot" },
@@ -132,6 +104,12 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
+        ),
+      ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
           { path: "plugins.allow", message: "plugin not found: missing-allow" },
@@ -139,6 +117,11 @@ describe("config plugin validation", () => {
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
         ]),
       );
+      expect(res.warnings).toContainEqual({
+        path: "plugins.entries.missing-plugin",
+        message:
+          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+      });
     }
   });
 
@@ -203,17 +186,12 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("accepts known plugin ids", async () => {
+  it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
-      plugins: { enabled: false, entries: { discord: { enabled: true } } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts channels.modelByChannel", async () => {
-    const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: {
+        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+      },
       channels: {
         modelByChannel: {
           openai: {
@@ -221,6 +199,7 @@ describe("config plugin validation", () => {
           },
         },
       },
+      plugins: { enabled: false, entries: { discord: { enabled: true } } },
     });
     expect(res.ok).toBe(true);
   });
@@ -235,7 +214,10 @@ describe("config plugin validation", () => {
 
   it("rejects unknown heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "not-a-channel" } }, list: [{ id: "pi" }] },
+      agents: {
+        defaults: { heartbeat: { target: "not-a-channel" } },
+        list: [{ id: "pi" }],
+      },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -244,16 +226,6 @@ describe("config plugin validation", () => {
         message: "unknown heartbeat target: not-a-channel",
       });
     }
-  });
-
-  it("accepts heartbeat directPolicy enum values", async () => {
-    const res = validateInSuite({
-      agents: {
-        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
-        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
-      },
-    });
-    expect(res.ok).toBe(true);
   });
 
   it("rejects invalid heartbeat directPolicy values", async () => {
@@ -265,10 +237,9 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      const hasIssue = res.issues.some(
-        (issue) => issue.path === "agents.defaults.heartbeat.directPolicy",
-      );
-      expect(hasIssue).toBe(true);
+      expect(
+        res.issues.some((issue) => issue.path === "agents.defaults.heartbeat.directPolicy"),
+      ).toBe(true);
     }
   });
 });
