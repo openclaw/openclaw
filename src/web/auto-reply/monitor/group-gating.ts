@@ -101,6 +101,25 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   );
   const activationCommand = parseActivationCommand(commandBody);
   const owner = isOwnerSender(params.baseMentionConfig, params.msg);
+
+  // Special case: some WhatsApp group setups use a "mention" regex like /^\/cb\b/i
+  // to invoke the agent without a native @mention.
+  // We want to *log everything* in groups, but only allow the owner to invoke the bot via /cb.
+  // So: if the current message looks like a /cb invocation and the sender is not the owner,
+  // skip processing (but still record it for group history/context).
+  const rawTrimmed = (params.msg.body ?? "").trim();
+  const isCbInvoke = /^\/cb(?:\s|$)/i.test(rawTrimmed);
+  if (isCbInvoke && !owner) {
+    params.logVerbose(`Ignoring /cb invoke from non-owner in group ${params.conversationId}`);
+    recordPendingGroupHistoryEntry({
+      msg: params.msg,
+      groupHistories: params.groupHistories,
+      groupHistoryKey: params.groupHistoryKey,
+      groupHistoryLimit: params.groupHistoryLimit,
+    });
+    return { shouldProcess: false };
+  }
+
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {

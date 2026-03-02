@@ -1,5 +1,6 @@
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
+import { resolveCommandsAllowFromList } from "../../../auto-reply/command-auth.js";
 import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
@@ -60,6 +61,15 @@ async function resolveWhatsAppCommandAuthorized(params: {
     return true;
   }
 
+  // Prefer commands.allowFrom when configured. This lets users keep WhatsApp groups "open"
+  // (e.g. groupAllowFrom: ["*"] to allow logging/context) while still restricting who can
+  // run slash/inline commands like /cb, /new, /status, etc.
+  const commandsAllowFromList = resolveCommandsAllowFromList({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+    providerId: "whatsapp",
+  });
+
   const isGroup = params.msg.chatType === "group";
   const senderE164 = normalizeE164(
     isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
@@ -68,6 +78,27 @@ async function resolveWhatsAppCommandAuthorized(params: {
     return false;
   }
 
+  // If commands.allowFrom is configured, use it for command authorization.
+  if (commandsAllowFromList) {
+    const trimmed = commandsAllowFromList.map((v) => String(v).trim()).filter(Boolean);
+    if (trimmed.some((v) => v === "*")) {
+      return true;
+    }
+    const normalized = trimmed
+      .map((v) => {
+        // Accept: "+1555..." or "whatsapp:+1555...". Ignore other channel prefixes.
+        const lower = v.toLowerCase();
+        const remainder = lower.startsWith("whatsapp:") ? v.slice("whatsapp:".length) : v;
+        if (!lower.startsWith("whatsapp:") && v.includes(":")) {
+          return null;
+        }
+        return normalizeE164(remainder);
+      })
+      .filter((v): v is string => Boolean(v));
+    return normalized.includes(senderE164);
+  }
+
+  // Fall back to account-level allowFrom (upstream uses resolveWhatsAppAccount now)
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const dmPolicy = account.dmPolicy ?? "pairing";
   const groupPolicy = account.groupPolicy ?? "allowlist";
