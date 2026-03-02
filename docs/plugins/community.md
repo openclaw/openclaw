@@ -46,9 +46,9 @@ Use this format when adding entries:
 ## Listed plugins
 
 - **Opik** — Native OpenClaw tracing export to Opik for LLM/tool/agent observability.
-  npm: `@opik/openclaw-opik`
+  npm: `@opik/opik-openclaw`
   repo: `https://github.com/comet-ml/opik-openclaw`
-  install: `openclaw plugins install @opik/openclaw-opik`
+  install: `openclaw plugins install @opik/opik-openclaw`
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
