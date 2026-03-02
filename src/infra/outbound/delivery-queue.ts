@@ -344,19 +344,7 @@ export async function recoverPendingDeliveries(opts: {
   for (const entry of pending) {
     const now = Date.now();
     if (now >= deadline) {
-      // Increment retryCount on remaining entries so they eventually hit MAX_RETRIES
-      const remaining = pending.slice(pending.indexOf(entry));
-      for (const r of remaining) {
-        try {
-          await failDelivery(r.id, "Recovery time budget exceeded — deferred", opts.stateDir);
-        } catch {
-          /* best-effort */
-        }
-      }
-      const deferred = remaining.length;
-      opts.log.warn(
-        `Recovery time budget exceeded — ${deferred} entries deferred (retryCount incremented)`,
-      );
+      opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
