@@ -24,9 +24,11 @@ describe("toSanitizedMarkdownHtml", () => {
 
   it("renders fenced code blocks", () => {
     const html = toSanitizedMarkdownHtml(["```ts", "console.log(1)", "```"].join("\n"));
-    expect(html).toContain("<pre>");
+    expect(html).toContain("<pre"); // may have class attribute
     expect(html).toContain("<code");
     expect(html).toContain("console.log(1)");
+    expect(html).toContain("code-block-wrapper"); // wrapper with copy button
+    expect(html).toContain("code-block-copy-btn"); // copy button
   });
 
   it("preserves img tags with src and alt from markdown images (#15437)", () => {

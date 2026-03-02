@@ -2,6 +2,39 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { truncateText } from "./format.ts";
 
+// SVG icons for code block copy button (must be strings for HTML output)
+const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+const CHECK_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+// Replace only unpaired surrogates (preserve valid surrogate pairs like emoji)
+function sanitizeForUriEncoding(text: string): string {
+  // Unpaired high surrogate (not followed by low surrogate)
+  // or unpaired low surrogate (not preceded by high surrogate)
+  return text
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "\uFFFD") // unpaired high
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD"); // unpaired low
+}
+
+// Custom renderer for code blocks with copy button
+const codeBlockRenderer = new marked.Renderer();
+codeBlockRenderer.code = ({ text, lang }: { text: string; lang?: string }): string => {
+  // Only allow safe characters in language class (prevent HTML injection)
+  const safeLang = lang ? lang.replace(/[^a-zA-Z0-9_+-]/g, "") : "";
+  const langClass = safeLang ? ` language-${safeLang}` : "";
+  const escapedCode = escapeHtml(text);
+  // Handle malformed UTF-16 before URI encoding (preserve valid surrogate pairs)
+  let encodedCode: string;
+  try {
+    encodedCode = encodeURIComponent(text);
+  } catch {
+    // Fallback: replace only unpaired surrogates, preserve valid pairs (emoji)
+    encodedCode = encodeURIComponent(sanitizeForUriEncoding(text));
+  }
+  // Use a wrapper div with relative positioning for the copy button
+  // Note: using "fenced-code-block" instead of "code-block" to avoid max-height from global .code-block
+  return `<div class="code-block-wrapper"><pre class="fenced-code-block${langClass}"><code>${escapedCode}</code></pre><button class="code-block-copy-btn" type="button" data-code="${encodedCode}" title="Copy code">${COPY_ICON_SVG}<span class="code-block-copy-btn__check">${CHECK_ICON_SVG}</span></button></div>`;
+};
+
 marked.setOptions({
   gfm: true,
   breaks: true,
@@ -12,8 +45,10 @@ const allowedTags = [
   "b",
   "blockquote",
   "br",
+  "button",
   "code",
   "del",
+  "div",
   "em",
   "h1",
   "h2",
@@ -25,7 +60,15 @@ const allowedTags = [
   "ol",
   "p",
   "pre",
+  "span",
   "strong",
+  "svg",
+  "path",
+  "rect",
+  "circle",
+  "line",
+  "polyline",
+  "polygon",
   "table",
   "tbody",
   "td",
@@ -36,7 +79,39 @@ const allowedTags = [
   "img",
 ];
 
-const allowedAttrs = ["class", "href", "rel", "target", "title", "start", "src", "alt"];
+const allowedAttrs = [
+  "class",
+  "href",
+  "rel",
+  "target",
+  "title",
+  "start",
+  "src",
+  "alt",
+  "data-code",
+  "type",
+  "viewBox",
+  "fill",
+  "stroke",
+  "stroke-width",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "width",
+  "height",
+  "x",
+  "y",
+  "x1",
+  "x2",
+  "y1",
+  "y2",
+  "rx",
+  "ry",
+  "d",
+  "cx",
+  "cy",
+  "r",
+  "points",
+];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
@@ -116,7 +191,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     return sanitized;
   }
   const rendered = marked.parse(`${truncated.text}${suffix}`, {
-    renderer: htmlEscapeRenderer,
+    renderer: combinedRenderer,
   }) as string;
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
@@ -131,6 +206,11 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
 // pages) as formatted output is confusing UX (#13937).
 const htmlEscapeRenderer = new marked.Renderer();
 htmlEscapeRenderer.html = ({ text }: { text: string }) => escapeHtml(text);
+
+// Combined renderer: code blocks with copy button + escaped raw HTML
+const combinedRenderer = new marked.Renderer();
+combinedRenderer.code = codeBlockRenderer.code.bind(codeBlockRenderer);
+combinedRenderer.html = htmlEscapeRenderer.html.bind(htmlEscapeRenderer);
 
 function escapeHtml(value: string): string {
   return value

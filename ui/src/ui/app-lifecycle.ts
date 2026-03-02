@@ -56,6 +56,8 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+  // Global event delegation for code block copy buttons
+  setupCodeBlockCopyHandler();
 }
 
 export function handleFirstUpdated(host: LifecycleHost) {
@@ -106,4 +108,47 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       );
     }
   }
+}
+
+// Global event delegation for code block copy buttons
+let codeBlockCopyHandlerInstalled = false;
+
+function setupCodeBlockCopyHandler() {
+  if (codeBlockCopyHandlerInstalled) {
+    return;
+  }
+  codeBlockCopyHandlerInstalled = true;
+
+  document.addEventListener("click", async (e: Event) => {
+    const target = e.target as HTMLElement | null;
+    const btn = target?.closest(".code-block-copy-btn") as HTMLButtonElement | null;
+    if (!btn || btn.dataset.copying === "1") {
+      return;
+    }
+
+    const code = btn.dataset.code;
+    if (!code) {
+      return;
+    }
+
+    btn.dataset.copying = "1";
+    btn.disabled = true;
+
+    try {
+      const decodedCode = decodeURIComponent(code);
+      await navigator.clipboard.writeText(decodedCode);
+      btn.dataset.copied = "1";
+
+      window.setTimeout(() => {
+        if (btn.isConnected) {
+          delete btn.dataset.copied;
+        }
+      }, 1500);
+    } catch {
+      // Copy failed - could show error state here
+    } finally {
+      delete btn.dataset.copying;
+      btn.disabled = false;
+    }
+  });
 }
