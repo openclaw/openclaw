@@ -22,6 +22,7 @@ export type GatewayReloadPlan = {
   restartBrowserControl: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
+  restartHealthMonitor: boolean;
   restartChannels: Set<ChannelKind>;
   noopPaths: string[];
 };
@@ -38,6 +39,7 @@ type ReloadAction =
   | "restart-browser-control"
   | "restart-cron"
   | "restart-heartbeat"
+  | "restart-health-monitor"
   | `restart-channel:${ChannelId}`;
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
@@ -50,6 +52,11 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  {
+    prefix: "gateway.channelHealthCheckMinutes",
+    kind: "hot",
+    actions: ["restart-health-monitor"],
+  },
   // Stuck-session warning threshold is read by the diagnostics heartbeat loop.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
@@ -199,6 +206,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     restartBrowserControl: false,
     restartCron: false,
     restartHeartbeat: false,
+    restartHealthMonitor: false,
     restartChannels: new Set(),
     noopPaths: [],
   };
@@ -224,6 +232,9 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
         break;
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
+        break;
+      case "restart-health-monitor":
+        plan.restartHealthMonitor = true;
         break;
       default:
         break;
