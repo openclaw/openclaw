@@ -212,12 +212,18 @@ function buildHtmlDocument(params: {
         box-sizing: border-box;
       }
 
+      html,
+      body {
+        min-height: 100%;
+      }
+
       html {
         background: #05070b;
       }
 
       body {
         margin: 0;
+        min-height: 100vh;
         padding: 22px;
         font-family:
           "Fira Code",
