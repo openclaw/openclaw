@@ -1,3 +1,4 @@
+import SHARED_TOOL_DISPLAY_JSON from "../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
   formatToolDetailText,
@@ -7,16 +8,19 @@ import {
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
-import rawConfig from "./tool-display.json" with { type: "json" };
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
 };
 
-type ToolDisplayConfig = {
+type SharedToolDisplaySpec = ToolDisplaySpecBase & {
+  emoji?: string;
+};
+
+type SharedToolDisplayConfig = {
   version?: number;
-  fallback?: ToolDisplaySpec;
-  tools?: Record<string, ToolDisplaySpec>;
+  fallback?: SharedToolDisplaySpec;
+  tools?: Record<string, SharedToolDisplaySpec>;
 };
 
 export type ToolDisplay = {
@@ -28,9 +32,67 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const EMOJI_ICON_MAP: Record<string, IconName> = {
+  "🧩": "puzzle",
+  "🛠️": "wrench",
+  "🧰": "wrench",
+  "📖": "fileText",
+  "✍️": "edit",
+  "📝": "penLine",
+  "📎": "paperclip",
+  "🌐": "globe",
+  "📺": "monitor",
+  "🧾": "fileText",
+  "🔐": "settings",
+  "💻": "monitor",
+  "🔌": "plug",
+  "💬": "messageSquare",
+};
+
+const SLACK_SPEC: ToolDisplaySpec = {
+  icon: "messageSquare",
+  title: "Slack",
+  actions: {
+    react: { label: "react", detailKeys: ["channelId", "messageId", "emoji"] },
+    reactions: { label: "reactions", detailKeys: ["channelId", "messageId"] },
+    sendMessage: { label: "send", detailKeys: ["to", "content"] },
+    editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
+    deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
+    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
+    pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
+    unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
+    listPins: { label: "list pins", detailKeys: ["channelId"] },
+    memberInfo: { label: "member", detailKeys: ["userId"] },
+    emojiList: { label: "emoji list" },
+  },
+};
+
+function iconForEmoji(emoji?: string): IconName {
+  if (!emoji) {
+    return "puzzle";
+  }
+  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
+}
+
+function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
+  return {
+    icon: iconForEmoji(spec?.emoji),
+    title: spec?.title,
+    label: spec?.label,
+    detailKeys: spec?.detailKeys,
+    actions: spec?.actions,
+  };
+}
+
+const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
+const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
+const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
+  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
+    key,
+    convertSpec(spec),
+  ]),
+);
+TOOL_MAP.slack = SLACK_SPEC;
 
 function shortenHomeInString(input: string): string {
   if (!input) {
