@@ -166,6 +166,7 @@ async function sendSystemRunDenied(
       runId: execution.runId,
       host: "node",
       command: execution.cmdText,
+      ...(execution.wakeOnExit ? { wakeOnExit: true } : {}),
       reason: params.reason,
     }),
   );

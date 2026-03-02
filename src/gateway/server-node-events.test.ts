@@ -406,6 +406,31 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     expect(requestSessionEventRunMock).not.toHaveBeenCalled();
   });
+
+  it("allows exec.denied notifications when wakeOnExit is true even if notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-force-denied",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec denied (node=node-3 id=run-force-denied, allowlist-miss): rm -rf /",
+      { sessionKey: "agent:demo:main", contextKey: "exec:run-force-denied" },
+    );
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestSessionEventRunMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("voice transcript events", () => {
