@@ -61,6 +61,27 @@ describe("safety-harness integration (observe mode)", () => {
     expect(result?.block).not.toBe(true);
   });
 
+  it("audit entry tier reflects actual classification, not hardcoded 'allow'", async () => {
+    // contacts.export is classified as "block" by builtin rules
+    await beforeToolCallHandler(
+      { toolName: "contacts.export", params: {} },
+      { toolName: "contacts.export" },
+    );
+    await afterToolCallHandler(
+      { toolName: "contacts.export", params: {}, result: {}, durationMs: 10 },
+      { toolName: "contacts.export" },
+    );
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    const auditPath = path.join(tmpDir, "audit.jsonl");
+    expect(fs.existsSync(auditPath)).toBe(true);
+    const content = fs.readFileSync(auditPath, "utf-8").trim();
+    const entry = JSON.parse(content);
+    expect(entry.tool).toBe("contacts.export");
+    expect(entry.tier).not.toBe("allow"); // must reflect actual "block" classification
+  });
+
   it("writes audit entry on after_tool_call", async () => {
     await afterToolCallHandler(
       { toolName: "email.get", params: {}, result: { ok: true }, durationMs: 50 },
@@ -71,10 +92,9 @@ describe("safety-harness integration (observe mode)", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const auditPath = path.join(tmpDir, "audit.jsonl");
-    if (fs.existsSync(auditPath)) {
-      const content = fs.readFileSync(auditPath, "utf-8").trim();
-      const entry = JSON.parse(content);
-      expect(entry.tool).toBe("email.get");
-    }
+    expect(fs.existsSync(auditPath)).toBe(true);
+    const content = fs.readFileSync(auditPath, "utf-8").trim();
+    const entry = JSON.parse(content);
+    expect(entry.tool).toBe("email.get");
   });
 });

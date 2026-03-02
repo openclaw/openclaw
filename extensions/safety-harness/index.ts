@@ -11,7 +11,7 @@ import { BUILTIN_RULES } from "./builtin-rules.js";
 import { ChainDetector, DEFAULT_CHAIN_RULES } from "./chain-detector.js";
 import { RulesEngine } from "./engine.js";
 import { RateLimiter, DEFAULT_RATE_LIMITS } from "./rate-limiter.js";
-import type { HarnessMode, HarnessClassification } from "./types.js";
+import type { HarnessMode, HarnessTier } from "./types.js";
 import { classifyVerb } from "./verb-classifier.js";
 
 const HARNESS_PRIORITY = 100;
@@ -32,8 +32,9 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
     const rateLimiter = new RateLimiter(DEFAULT_RATE_LIMITS);
     const chainDetector = new ChainDetector(DEFAULT_CHAIN_RULES);
 
-    // Store last classification per tool call for the post-hook
-    const pendingClassifications = new Map<string, HarnessClassification>();
+    // Track the most recent effective tier per toolName so after_tool_call can audit correctly.
+    // Last-call-wins is acceptable for Phase 1 (single-agent, sequential tool calls).
+    const lastTierByTool = new Map<string, HarnessTier>();
 
     api.logger.info(`[safety-harness] initialized in ${mode} mode, audit → ${auditPath}`);
 
@@ -68,9 +69,8 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
           classification.reason = `Chain detected (${chainFlags.join(", ")}): ${classification.reason}`;
         }
 
-        // Store for post-hook audit
-        const callKey = `${ctx.sessionKey || ""}:${toolName}:${Date.now()}`;
-        pendingClassifications.set(callKey, { ...classification, tier: effectiveTier });
+        // Store effective tier for after_tool_call audit
+        lastTierByTool.set(toolName, effectiveTier);
 
         api.logger.info(
           `[safety-harness] ${toolName}: tier=${effectiveTier} reason="${classification.reason}" mode=${mode}`,
@@ -126,13 +126,18 @@ export const safetyHarnessPlugin: OpenClawPluginDefinition = {
           )
           .join(", ");
 
-        // Write audit log
+        // Write audit log — use the tier captured during before_tool_call (or re-classify
+        // if before_tool_call was never called, e.g. in tests that skip the pre-hook).
+        const tier: HarnessTier =
+          lastTierByTool.get(toolName) ?? engine.classify(toolName, params).tier;
+        lastTierByTool.delete(toolName); // consume so stale values don't bleed across calls
+
         const result = event.error ? "error" : "executed";
         await audit
           .log({
             tool: toolName,
             argsSummary,
-            tier: "allow", // Will be improved when we thread classification through
+            tier,
             tainted: false, // Phase 4
             result,
             chainFlags: [],
