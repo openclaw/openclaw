@@ -8,6 +8,7 @@ import type { FeishuToolsConfig } from "./types.js";
 export const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   doc: true,
   chat: true,
+  message: true,
   wiki: true,
   drive: true,
   perm: false,

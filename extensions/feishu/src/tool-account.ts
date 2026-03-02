@@ -52,6 +52,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
     chat: false,
+    message: false,
     wiki: false,
     drive: false,
     perm: false,
