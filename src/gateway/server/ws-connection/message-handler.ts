@@ -90,7 +90,10 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
-let hostHeaderFallbackAcceptedCount = 0;
+
+export type WsOriginCheckMetrics = {
+  hostHeaderFallbackAccepted: number;
+};
 
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -260,6 +263,7 @@ export function attachGatewayWsMessageHandler(params: {
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
+  originCheckMetrics: WsOriginCheckMetrics;
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -292,6 +296,7 @@ export function attachGatewayWsMessageHandler(params: {
     setHandshakeState,
     setCloseCause,
     setLastFrameMeta,
+    originCheckMetrics,
     logGateway,
     logHealth,
     logWsControl,
@@ -514,9 +519,9 @@ export function attachGatewayWsMessageHandler(params: {
             return;
           }
           if (originCheck.matchedBy === "host-header-fallback") {
-            hostHeaderFallbackAcceptedCount += 1;
+            originCheckMetrics.hostHeaderFallbackAccepted += 1;
             logWsControl.warn(
-              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${hostHeaderFallbackAcceptedCount} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
             );
             if (hostHeaderOriginFallbackEnabled) {
               logGateway.warn(

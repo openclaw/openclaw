@@ -152,4 +152,28 @@ describe("gateway auth browser hardening", () => {
       }
     });
   });
+
+  test("rejects forged loopback origin for control-ui when proxy headers make client non-local", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: originForPort(port),
+        "x-forwarded-for": "203.0.113.50",
+      });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            ...TEST_OPERATOR_CLIENT,
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+      } finally {
+        ws.close();
+      }
+    });
+  });
 });
