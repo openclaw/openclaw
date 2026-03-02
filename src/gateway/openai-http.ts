@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromIngress } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -55,6 +55,8 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
+    // HTTP API callers are authenticated operator clients for this gateway context.
+    senderIsOwner: true as const,
   };
 }
 
@@ -247,7 +249,7 @@ export async function handleOpenAiHttpRequest(
 
   if (!stream) {
     try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       const content = resolveAgentResponseText(result);
 
@@ -327,7 +329,7 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       if (closed) {
         return;
