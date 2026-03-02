@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/code-mode",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "OpenClaw code-mode plugin: collapses tools into a single execute_code tool",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

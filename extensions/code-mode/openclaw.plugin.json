@@ -1,0 +1,35 @@
+{
+  "id": "code-mode",
+  "name": "Code Mode",
+  "description": "Collapses tool definitions into a single execute_code tool with TypeScript API bindings, reducing token overhead and enabling multi-step orchestration.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "timeoutMs": {
+        "type": "number",
+        "description": "Maximum execution time for sandbox code in milliseconds."
+      },
+      "allowNetwork": {
+        "type": "boolean",
+        "description": "Whether to allow network access (fetch) from sandbox code."
+      },
+      "agents": {
+        "type": "object",
+        "description": "Per-agent opt-in/opt-out. Omit to enable for all agents.",
+        "properties": {
+          "include": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If set, only these agent IDs will use code-mode."
+          },
+          "exclude": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If set, these agent IDs are excluded (ignored when include is set)."
+          }
+        }
+      }
+    }
+  }
+}
