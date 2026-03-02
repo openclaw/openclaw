@@ -5,18 +5,28 @@ const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(),
 }));
 
+const TEST_WORKSPACE_ROOT = "/tmp/openclaw-test-workspace";
+
+function normalizeChannel(value?: string) {
+  return value?.trim().toLowerCase() ?? undefined;
+}
+
+function passthroughPluginAutoEnable(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
+  normalizeChannelId: normalizeChannel,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveAgentWorkspaceDir: () => TEST_WORKSPACE_ROOT,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({

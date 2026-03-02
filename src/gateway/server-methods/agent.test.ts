@@ -325,20 +325,33 @@ describe("gateway agent handler", () => {
     vi.useRealTimers();
   });
 
-  it("passes senderIsOwner=false for write-scoped gateway callers", async () => {
+  it.each([
+    {
+      name: "passes senderIsOwner=false for write-scoped gateway callers",
+      scopes: ["operator.write"],
+      idempotencyKey: "test-sender-owner-write",
+      senderIsOwner: false,
+    },
+    {
+      name: "passes senderIsOwner=true for admin-scoped gateway callers",
+      scopes: ["operator.admin"],
+      idempotencyKey: "test-sender-owner-admin",
+      senderIsOwner: true,
+    },
+  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
     primeMainAgentRun();
 
     await invokeAgent(
       {
         message: "owner-tools check",
         sessionKey: "agent:main:main",
-        idempotencyKey: "test-sender-owner-write",
+        idempotencyKey,
       },
       {
         client: {
           connect: {
             role: "operator",
-            scopes: ["operator.write"],
+            scopes,
             client: { id: "test-client", mode: "gateway" },
           },
         } as unknown as AgentHandlerArgs["client"],
@@ -349,34 +362,7 @@ describe("gateway agent handler", () => {
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(callArgs?.senderIsOwner).toBe(false);
-  });
-
-  it("passes senderIsOwner=true for admin-scoped gateway callers", async () => {
-    primeMainAgentRun();
-
-    await invokeAgent(
-      {
-        message: "owner-tools check",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-sender-owner-admin",
-      },
-      {
-        client: {
-          connect: {
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "test-client", mode: "gateway" },
-          },
-        } as unknown as AgentHandlerArgs["client"],
-      },
-    );
-
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
-    expect(callArgs?.senderIsOwner).toBe(true);
+    expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
