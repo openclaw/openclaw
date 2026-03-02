@@ -461,6 +461,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const hasFinalReply = queuedFinal || (counts.final ?? 0) > 0;
+
+  // If a stream was started but the final reply was suppressed (e.g. NO_REPLY),
+  // delete the stream message. This covers the case where a sentinel prefix
+  // leaked through as a streamed block (incrementing counts.block) but no real
+  // final reply was produced — the stray streamed text should be cleaned up.
+  if (finalStream && !hasFinalReply) {
+    try {
+      await abandonSlackStream(finalStream);
+    } catch (err) {
+      runtime.error?.(danger(`slack-stream: failed to abandon stream: ${String(err)}`));
+    }
+  }
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
@@ -471,17 +484,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (!anyReplyDelivered) {
-    // If a stream was started but no reply was ultimately delivered (e.g. the
-    // model produced NO_REPLY and the prefix leaked before the full token
-    // arrived), delete the stream message so the user doesn't see a stray
-    // partial like "NO" in the channel.
-    if (finalStream) {
-      try {
-        await abandonSlackStream(finalStream);
-      } catch (err) {
-        runtime.error?.(danger(`slack-stream: failed to abandon stream: ${String(err)}`));
-      }
-    }
     await draftStream.clear();
     if (prepared.isRoomish) {
       clearHistoryEntriesIfEnabled({
