@@ -15,7 +15,7 @@ import {
 } from "../infra/shell-env.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import { cleanupConfigBackups, rotateConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -1263,6 +1263,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           logConfigOverwrite();
           logConfigWriteAnomalies();
           await appendWriteAudit("copy-fallback");
+          // Clean up backup files after successful write to avoid persisting sensitive data.
+          // See: https://github.com/OpenClaw/openclaw/issues/31699
+          await cleanupConfigBackups(configPath, deps.fs.promises);
           return;
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -1273,6 +1276,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit("rename");
+      // Clean up backup files after successful write to avoid persisting sensitive data.
+      // See: https://github.com/OpenClaw/openclaw/issues/31699
+      await cleanupConfigBackups(configPath, deps.fs.promises);
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;

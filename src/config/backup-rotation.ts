@@ -24,3 +24,28 @@ export async function rotateConfigBackups(
     // best-effort
   });
 }
+
+/**
+ * Remove all config backup files after a successful write.
+ * Backup files contain sensitive data (API keys, tokens) and should not persist
+ * beyond the write operation where they serve as crash recovery.
+ * @see https://github.com/OpenClaw/openclaw/issues/31699
+ */
+export async function cleanupConfigBackups(
+  configPath: string,
+  ioFs: {
+    unlink: (path: string) => Promise<void>;
+  },
+): Promise<void> {
+  const backupBase = `${configPath}.bak`;
+  // Remove the primary backup
+  await ioFs.unlink(backupBase).catch(() => {
+    // best-effort: file may not exist
+  });
+  // Remove numbered backups (.bak.1 through .bak.N)
+  for (let index = 1; index < CONFIG_BACKUP_COUNT; index += 1) {
+    await ioFs.unlink(`${backupBase}.${index}`).catch(() => {
+      // best-effort: file may not exist
+    });
+  }
+}
