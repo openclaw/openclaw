@@ -1,48 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
-const XCODE_PLIST_PATH = path.join("Library", "Preferences", "com.apple.dt.Xcode.plist");
-
-const DEFAULTS_WITH_ACCOUNT_SCRIPT = `#!/usr/bin/env bash
-if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
-  exit 0
-fi
-exit 0`;
+let fixtureRoot = "";
+let caseId = 0;
 
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, "utf8");
   chmodSync(filePath, 0o755);
-}
-
-async function setupFixture(params?: {
-  provisioningProfiles?: Record<string, string>;
-}): Promise<{ homeDir: string; binDir: string }> {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
-  const binDir = path.join(homeDir, "bin");
-  await mkdir(binDir, { recursive: true });
-  await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-  await writeFile(path.join(homeDir, XCODE_PLIST_PATH), "");
-
-  const provisioningProfiles = params?.provisioningProfiles;
-  if (provisioningProfiles) {
-    const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
-    await mkdir(profilesDir, { recursive: true });
-    for (const [name, body] of Object.entries(provisioningProfiles)) {
-      await writeFile(path.join(profilesDir, name), body);
-    }
-  }
-
-  return { homeDir, binDir };
-}
-
-async function writeDefaultsWithSignedInAccount(binDir: string): Promise<void> {
-  await writeExecutable(path.join(binDir, "defaults"), DEFAULTS_WITH_ACCOUNT_SCRIPT);
 }
 
 function runScript(
@@ -79,19 +48,51 @@ function runScript(
 }
 
 describe("scripts/ios-team-id.sh", () => {
+  beforeAll(async () => {
+    fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  async function createHomeDir(): Promise<string> {
+    const homeDir = path.join(fixtureRoot, `case-${caseId++}`);
+    await mkdir(homeDir, { recursive: true });
+    return homeDir;
+  }
+
   it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
-    const { homeDir, binDir } = await setupFixture({
-      provisioningProfiles: {
-        "one.mobileprovision": "stub",
-      },
+    const homeDir = await createHomeDir();
+    const binDir = path.join(homeDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
+      recursive: true,
     });
+    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
+    await writeFile(
+      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "one.mobileprovision"),
+      "stub",
+    );
 
     await writeExecutable(
       path.join(binDir, "plutil"),
       `#!/usr/bin/env bash
 echo '{}'`,
     );
-    await writeDefaultsWithSignedInAccount(binDir);
+    await writeExecutable(
+      path.join(binDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+exit 0`,
+    );
     await writeExecutable(
       path.join(binDir, "security"),
       `#!/usr/bin/env bash
@@ -119,7 +120,11 @@ exit 0`,
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
-    const { homeDir, binDir } = await setupFixture();
+    const homeDir = await createHomeDir();
+    const binDir = path.join(homeDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
 
     await writeExecutable(
       path.join(binDir, "plutil"),
@@ -149,19 +154,37 @@ exit 1`,
   });
 
   it("honors IOS_PREFERRED_TEAM_ID when multiple profile teams are available", async () => {
-    const { homeDir, binDir } = await setupFixture({
-      provisioningProfiles: {
-        "one.mobileprovision": "stub1",
-        "two.mobileprovision": "stub2",
-      },
+    const homeDir = await createHomeDir();
+    const binDir = path.join(homeDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
+      recursive: true,
     });
+    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
+    await writeFile(
+      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "one.mobileprovision"),
+      "stub1",
+    );
+    await writeFile(
+      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "two.mobileprovision"),
+      "stub2",
+    );
 
     await writeExecutable(
       path.join(binDir, "plutil"),
       `#!/usr/bin/env bash
 echo '{}'`,
     );
-    await writeDefaultsWithSignedInAccount(binDir);
+    await writeExecutable(
+      path.join(binDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+exit 0`,
+    );
     await writeExecutable(
       path.join(binDir, "security"),
       `#!/usr/bin/env bash
@@ -190,14 +213,26 @@ exit 0`,
   });
 
   it("matches preferred team IDs even when parser output uses CRLF line endings", async () => {
-    const { homeDir, binDir } = await setupFixture();
+    const homeDir = await createHomeDir();
+    const binDir = path.join(homeDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
 
     await writeExecutable(
       path.join(binDir, "plutil"),
       `#!/usr/bin/env bash
 echo '{}'`,
     );
-    await writeDefaultsWithSignedInAccount(binDir);
+    await writeExecutable(
+      path.join(binDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+exit 0`,
+    );
     await writeExecutable(
       path.join(binDir, "fake-python"),
       `#!/usr/bin/env bash
