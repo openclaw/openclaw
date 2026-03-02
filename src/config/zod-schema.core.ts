@@ -721,6 +721,8 @@ export const ProviderCommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional(),
     nativeSkills: NativeCommandsSettingSchema.optional(),
+    include: z.array(z.string()).optional(),
+    exclude: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
