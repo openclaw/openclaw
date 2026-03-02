@@ -653,6 +653,7 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let stallNotifyCount = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -766,6 +767,7 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            onPromptCycleStart: params.onPromptCycleStart,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
@@ -1163,6 +1165,14 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              if (timedOut && params.onBlockReply) {
+                stallNotifyCount++;
+                const msg =
+                  stallNotifyCount === 1
+                    ? "Response stalled \u2014 retrying..."
+                    : `Still waiting for response (retry ${stallNotifyCount})...`;
+                Promise.resolve(params.onBlockReply({ text: msg })).catch(() => {});
+              }
               continue;
             }
 
