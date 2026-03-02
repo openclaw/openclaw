@@ -190,6 +190,23 @@ describe("resolveSessionResetPolicy", () => {
       });
       expect(groupPolicy.mode).toBe("daily");
     });
+
+    it("preserves global daily mode when channel override omits mode", () => {
+      // session.reset.mode: "daily" + resetByChannel.discord: { atHour: 8 }
+      // The channel override provides only atHour; the global mode should
+      // still be honored instead of falling through to the type default.
+      const sessionCfg = {
+        reset: { mode: "daily" as const },
+      } as unknown as SessionConfig;
+
+      const policy = resolveSessionResetPolicy({
+        sessionCfg,
+        resetType: "group",
+        resetOverride: { atHour: 8 },
+      });
+      expect(policy.mode).toBe("daily");
+      expect(policy.atHour).toBe(8);
+    });
   });
 });
 

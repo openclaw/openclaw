@@ -106,9 +106,15 @@ export function resolveSessionResetPolicy(params: {
         : undefined));
   const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
+  // When a channel override is present but omits `mode`, fall through to the
+  // global `session.reset.mode` before using the type-aware default, so that
+  // e.g. `reset.mode: "daily"` + `resetByChannel.discord: { atHour: 8 }`
+  // preserves daily resets instead of silently switching to idle.
+  const globalMode = params.resetOverride ? sessionCfg?.reset?.mode : undefined;
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
+    globalMode ??
     (!hasExplicitReset && legacyIdleMinutes != null
       ? "idle"
       : defaultResetModeForType(params.resetType));
