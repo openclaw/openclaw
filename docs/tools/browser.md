@@ -215,7 +215,7 @@ API key.
 3. **Create a session** using the Browserbase API (or their SDK) and retrieve
    the CDP connect URL.
 
-### Configuration
+### Profile setup
 
 Browserbase sessions expose a WebSocket CDP endpoint. Point a profile at it:
 
