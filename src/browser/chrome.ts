@@ -2,7 +2,9 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Agent, type Dispatcher } from "undici";
 import WebSocket from "ws";
+import { isLoopbackHost } from "../gateway/net.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -24,6 +26,7 @@ import {
 } from "./constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
+const loopbackBypassDispatcher = new Agent();
 
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
@@ -83,10 +86,14 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
+    const hostname = new URL(versionUrl).hostname;
+    const dispatcher = isLoopbackHost(hostname) ? loopbackBypassDispatcher : undefined;
+    const init: RequestInit & { dispatcher?: Dispatcher } = {
       signal: ctrl.signal,
       headers: getHeadersWithAuth(versionUrl),
-    });
+      ...(dispatcher ? { dispatcher } : {}),
+    };
+    const res = await fetch(versionUrl, init);
     if (!res.ok) {
       return null;
     }

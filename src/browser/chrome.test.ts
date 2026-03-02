@@ -243,6 +243,27 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("bypasses proxy dispatcher for loopback CDP probes only", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
+    await expect(isChromeReachable("https://example.com:9222", 50)).resolves.toBe(true);
+
+    const loopbackInit = fetchMock.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    const remoteInit = fetchMock.mock.calls[1]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+
+    expect(loopbackInit?.dispatcher).toBeDefined();
+    expect(remoteInit?.dispatcher).toBeUndefined();
+  });
+
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
     const proc = makeProc({ killed: true });
     await stopOpenClawChrome(
