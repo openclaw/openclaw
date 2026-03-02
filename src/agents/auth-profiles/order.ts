@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
@@ -58,9 +59,12 @@ export function resolveAuthProfileOrder(params: {
       }
     }
     if (cred.type === "api_key") {
-      return Boolean(cred.key?.trim());
+      return Boolean(cred.key?.trim() || coerceSecretRef(cred.keyRef));
     }
     if (cred.type === "token") {
+      if (coerceSecretRef(cred.tokenRef)) {
+        return true;
+      }
       if (!cred.token?.trim()) {
         return false;
       }

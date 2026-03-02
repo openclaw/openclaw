@@ -193,6 +193,61 @@ describe("resolveAuthProfileOrder", () => {
     const order = resolveMinimaxOrderWithProfile(profile);
     expect(order).toEqual([]);
   });
+  it("keeps api_key profiles that only provide keyRef", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["minimax:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "minimax:default": {
+            type: "api_key",
+            provider: "minimax",
+            keyRef: {
+              source: "exec",
+              provider: "keychain",
+              id: "minimax-default",
+            },
+          },
+        },
+      },
+      provider: "minimax",
+    });
+    expect(order).toEqual(["minimax:default"]);
+  });
+  it("keeps token profiles that only provide tokenRef", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["minimax:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "minimax:default": {
+            type: "token",
+            provider: "minimax",
+            token: "",
+            tokenRef: {
+              source: "exec",
+              provider: "keychain",
+              id: "minimax-token",
+            },
+          },
+        },
+      },
+      provider: "minimax",
+    });
+    expect(order).toEqual(["minimax:default"]);
+  });
   it("keeps oauth profiles that can refresh", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
