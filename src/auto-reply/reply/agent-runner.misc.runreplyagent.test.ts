@@ -304,6 +304,91 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
   });
 });
 
+describe("runReplyAgent auth fallback notices", () => {
+  it("announces auth fallback guidance even when verbose mode is off", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("openai", "gpt-4.1"),
+        provider: "openai",
+        model: "gpt-4.1",
+        attempts: [
+          {
+            provider: "openai-codex",
+            model: "gpt-5.3-codex",
+            error: "Token refresh failed: 401 refresh_token_reused",
+            reason: "auth",
+          },
+        ],
+      }),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "openai-codex/gpt-5.3-codex",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const responseText = Array.isArray(result)
+      ? result
+          .map((payload) => payload?.text ?? "")
+          .filter(Boolean)
+          .join("\n")
+      : (result?.text ?? "");
+    expect(responseText).toContain("Model Fallback:");
+    expect(responseText).toContain("Re-authenticate the selected provider");
+  });
+});
+
 describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;

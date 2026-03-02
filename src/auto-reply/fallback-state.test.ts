@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFallbackNotice,
   resolveActiveFallbackState,
   resolveFallbackTransition,
+  shouldForceFallbackNotice,
   type FallbackNoticeState,
 } from "./fallback-state.js";
 
@@ -119,5 +121,38 @@ describe("fallback-state", () => {
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("forces fallback notice for auth-related fallback attempts", () => {
+    const forced = shouldForceFallbackNotice([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        error: "Token refresh failed: 401 refresh_token_reused",
+        reason: "auth",
+      },
+    ]);
+
+    expect(forced).toBe(true);
+  });
+
+  it("appends re-authentication guidance to auth fallback notices", () => {
+    const notice = buildFallbackNotice({
+      selectedProvider: "openai-codex",
+      selectedModel: "gpt-5.3-codex",
+      activeProvider: "openai",
+      activeModel: "gpt-4.1",
+      attempts: [
+        {
+          provider: "openai-codex",
+          model: "gpt-5.3-codex",
+          error: "Token refresh failed: 401 refresh_token_reused",
+          reason: "auth",
+        },
+      ],
+    });
+
+    expect(notice).toContain("Model Fallback:");
+    expect(notice).toContain("Re-authenticate the selected provider");
   });
 });

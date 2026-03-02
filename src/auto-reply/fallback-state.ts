@@ -3,11 +3,47 @@ import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
+const AUTH_REAUTH_HINT =
+  " Re-authenticate the selected provider to restore it as the active model.";
+const AUTH_RELATED_REASON_CODES = new Set(["auth", "auth_permanent", "session_expired"]);
+const AUTH_RELATED_ERROR_HINTS = [
+  "oauth token refresh failed",
+  "token refresh failed",
+  "refresh token",
+  "refresh_token",
+  "invalid token",
+  "token has expired",
+  "unauthorized",
+  "forbidden",
+  "re-authenticate",
+  "no credentials found",
+  "no api key found",
+];
 
 export type FallbackNoticeState = Pick<
   SessionEntry,
   "fallbackNoticeSelectedModel" | "fallbackNoticeActiveModel" | "fallbackNoticeReason"
 >;
+
+function isAuthRelatedFallbackAttempt(attempt: RuntimeFallbackAttempt): boolean {
+  const normalizedReason = String(attempt.reason ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalizedReason && AUTH_RELATED_REASON_CODES.has(normalizedReason)) {
+    return true;
+  }
+  const errorText = String(attempt.error ?? "")
+    .trim()
+    .toLowerCase();
+  if (!errorText) {
+    return false;
+  }
+  return AUTH_RELATED_ERROR_HINTS.some((hint) => errorText.includes(hint));
+}
+
+export function shouldForceFallbackNotice(attempts: RuntimeFallbackAttempt[]): boolean {
+  return attempts.some((attempt) => isAuthRelatedFallbackAttempt(attempt));
+}
 
 export function normalizeFallbackModelRef(value?: string): string | undefined {
   const trimmed = String(value ?? "").trim();
@@ -71,7 +107,8 @@ export function buildFallbackNotice(params: {
     return null;
   }
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
-  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary})`;
+  const authHint = shouldForceFallbackNotice(params.attempts) ? AUTH_REAUTH_HINT : "";
+  return `↪️ Model Fallback: ${active} (selected ${selected}; ${reasonSummary})${authHint}`;
 }
 
 export function buildFallbackClearedNotice(params: {

@@ -25,6 +25,7 @@ import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
   resolveFallbackTransition,
+  shouldForceFallbackNotice,
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
@@ -636,7 +637,9 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      if (verboseEnabled) {
+      const shouldShowFallbackNotice =
+        verboseEnabled || shouldForceFallbackNotice(fallbackAttempts);
+      if (shouldShowFallbackNotice) {
         const fallbackNotice = buildFallbackNotice({
           selectedProvider,
           selectedModel,
