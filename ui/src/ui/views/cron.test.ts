@@ -29,6 +29,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsHasMore: false,
     jobsQuery: "",
     jobsEnabledFilter: "all",
+    jobsScheduleKindFilter: "all",
+    jobsLastStatusFilter: "all",
     jobsSortBy: "nextRunAtMs",
     jobsSortDir: "asc",
     error: null,
@@ -67,6 +69,7 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onLoadRuns: () => undefined,
     onLoadMoreJobs: () => undefined,
     onJobsFiltersChange: () => undefined,
+    onJobsFiltersReset: () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
@@ -244,6 +247,58 @@ describe("cron view", () => {
 
     expect(container.textContent).toContain("Due");
     expect(container.textContent).not.toContain("Next 13");
+  });
+
+  it("calls onJobsFiltersChange when schedule filter changes", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersChange = vi.fn();
+    render(renderCron(createProps({ onJobsFiltersChange })), container);
+
+    const select = container.querySelector('select[data-test-id="cron-jobs-schedule-filter"]');
+    expect(select).not.toBeNull();
+    if (!(select instanceof HTMLSelectElement)) {
+      return;
+    }
+    select.value = "cron";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
+  });
+
+  it("calls onJobsFiltersChange when last-run filter changes", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersChange = vi.fn();
+    render(renderCron(createProps({ onJobsFiltersChange })), container);
+
+    const select = container.querySelector('select[data-test-id="cron-jobs-last-status-filter"]');
+    expect(select).not.toBeNull();
+    if (!(select instanceof HTMLSelectElement)) {
+      return;
+    }
+    select.value = "error";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+  });
+
+  it("calls onJobsFiltersReset when reset button is clicked", () => {
+    const container = document.createElement("div");
+    const onJobsFiltersReset = vi.fn();
+    render(
+      renderCron(
+        createProps({
+          jobsQuery: "digest",
+          onJobsFiltersReset,
+        }),
+      ),
+      container,
+    );
+
+    const reset = container.querySelector('button[data-test-id="cron-jobs-filters-reset"]');
+    expect(reset).not.toBeNull();
+    reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
   });
 
   it("shows webhook delivery option in the form", () => {
@@ -491,9 +546,9 @@ describe("cron view", () => {
             payloadText: "",
           },
           fieldErrors: {
-            name: "Name is required.",
-            cronExpr: "Cron expression is required.",
-            payloadText: "Agent message is required.",
+            name: "cron.errors.nameRequired",
+            cronExpr: "cron.errors.cronExprRequired",
+            payloadText: "cron.errors.agentMessageRequired",
           },
           canSubmit: false,
         }),
@@ -527,9 +582,9 @@ describe("cron view", () => {
             payloadText: "",
           },
           fieldErrors: {
-            name: "Name is required.",
-            everyAmount: "Interval must be greater than 0.",
-            payloadText: "Agent message is required.",
+            name: "cron.errors.nameRequired",
+            everyAmount: "cron.errors.everyAmountInvalid",
+            payloadText: "cron.errors.agentMessageRequired",
           },
           canSubmit: false,
         }),
