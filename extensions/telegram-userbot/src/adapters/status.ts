@@ -11,18 +11,14 @@ import {
   DEFAULT_ACCOUNT_ID,
   type ChannelStatusAdapter,
 } from "openclaw/plugin-sdk";
+import { probeConnection, type ProbeResult } from "../monitor.js";
 import type { ResolvedTelegramUserbotAccount } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Probe result type
 // ---------------------------------------------------------------------------
 
-export type TelegramUserbotProbe = {
-  ok: boolean;
-  username?: string;
-  userId?: number;
-  error?: string;
-};
+export type TelegramUserbotProbe = ProbeResult;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -48,6 +44,13 @@ export const telegramUserbotStatusAdapter: ChannelStatusAdapter<
     probe: snapshot.probe,
     lastProbeAt: snapshot.lastProbeAt ?? null,
   }),
+
+  probeAccount: async ({ account, timeoutMs }) => {
+    if (!account.configured || !account.enabled) {
+      return { ok: false, error: "Account is not configured or disabled" };
+    }
+    return probeConnection(account.accountId, timeoutMs);
+  },
 
   buildAccountSnapshot: ({ account, runtime, probe }) => {
     const probeOk = (probe as TelegramUserbotProbe | undefined)?.ok;

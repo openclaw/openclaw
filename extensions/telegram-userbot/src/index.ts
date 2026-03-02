@@ -74,6 +74,10 @@ export { telegramUserbotDirectoryAdapter } from "./adapters/directory.js";
 export { telegramUserbotThreadingAdapter } from "./adapters/threading.js";
 export { telegramUserbotOnboardingAdapter } from "./onboarding.js";
 
+// Monitor
+export { incrementMetric, getMetrics, resetMetrics, probeConnection } from "./monitor.js";
+export type { UserbotMetrics, ProbeResult } from "./monitor.js";
+
 // Outbound helpers
 export { chunkMessage, sendText, sendMedia, TELEGRAM_TEXT_LIMIT } from "./outbound.js";
 export type {
