@@ -4,7 +4,8 @@
  * Callback data patterns (max 64 bytes for Telegram):
  * - mdl_prov              - show providers list
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
- * - mdl_sel_{provider/id} - select model
+ * - mdl_sel_{provider/id} - select model (standard)
+ * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
  * - mdl_back              - back to providers list
  */
 
@@ -13,7 +14,7 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider: string; model: string }
+  | { type: "select"; provider?: string; model: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -54,6 +55,18 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     const page = Number.parseInt(pageStr ?? "1", 10);
     if (provider && Number.isFinite(page) && page >= 1) {
       return { type: "list", provider, page };
+    }
+  }
+
+  // mdl_sel/{model} (compact fallback)
+  const compactSelMatch = trimmed.match(/^mdl_sel\/(.+)$/);
+  if (compactSelMatch) {
+    const modelRef = compactSelMatch[1];
+    if (modelRef) {
+      return {
+        type: "select",
+        model: modelRef,
+      };
     }
   }
 
@@ -133,8 +146,12 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     : currentModel;
 
   for (const model of pageModels) {
-    const callbackData = `mdl_sel_${provider}/${model}`;
-    // Skip models that would exceed Telegram's callback_data limit
+    const fullCallbackData = `mdl_sel_${provider}/${model}`;
+    const callbackData =
+      Buffer.byteLength(fullCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES
+        ? fullCallbackData
+        : `mdl_sel/${model}`;
+    // Skip models that still exceed Telegram's callback_data limit
     if (Buffer.byteLength(callbackData, "utf8") > MAX_CALLBACK_DATA_BYTES) {
       continue;
     }
