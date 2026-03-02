@@ -25,6 +25,16 @@ function shouldUseCard(text: string): boolean {
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
+const MS_EPOCH_MIN = 1_000_000_000_000;
+
+function normalizeEpochMs(timestamp: number | undefined): number | undefined {
+  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
+    return undefined;
+  }
+  // Defensive normalization: some payloads use seconds, others milliseconds.
+  // Values below 1e12 are treated as epoch-seconds.
+  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
+}
 
 export type CreateFeishuReplyDispatcherParams = {
   cfg: ClawdbotConfig;
@@ -72,9 +82,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       // Skip typing indicator for old messages — likely replays after context
       // compaction that would flood users with stale notifications (#30418).
+      const messageCreateTimeMs = normalizeEpochMs(params.messageCreateTimeMs);
       if (
-        params.messageCreateTimeMs &&
-        Date.now() - params.messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
+        messageCreateTimeMs !== undefined &&
+        Date.now() - messageCreateTimeMs > TYPING_INDICATOR_MAX_AGE_MS
       ) {
         return;
       }
