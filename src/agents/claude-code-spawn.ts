@@ -35,6 +35,8 @@ export type SpawnClaudeCodeParams = {
   task: string;
   label?: string;
   cwd?: string;
+  mode?: string;
+  thread?: boolean;
 };
 
 export type SpawnClaudeCodeContext = {
