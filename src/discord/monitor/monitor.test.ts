@@ -529,20 +529,20 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches only when enabled", () => {
+  it("never matches by name to prevent nickname spoofing", () => {
     const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
     expect(defaultResult).toBeUndefined();
 
+    // Even with allowNameMatching previously enabled, owner matching never uses names (security fix)
     const enabledResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
-      allowNameMatching: true,
     });
 
-    expect(enabledResult).toEqual(["some-user"]);
+    expect(enabledResult).toBeUndefined();
   });
 });
 

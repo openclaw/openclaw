@@ -6,6 +6,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { MsgContext } from "./templating.js";
 
+// Track warned entries to prevent console spam
+const warnedInvalidEntries = new Set<string>();
+
 export type CommandAuthorization = {
   providerId?: ChannelId;
   ownerList: string[];
@@ -118,7 +121,10 @@ function resolveOwnerAllowFromList(params: {
     }
     // Wildcard is explicitly ignored for ownership
     if (trimmed === "*") {
-      console.warn("[security] ownerAllowFrom: wildcard '*' is not allowed for System Owner");
+      if (!warnedInvalidEntries.has("*")) {
+        console.warn("[security] ownerAllowFrom: wildcard '*' is not allowed for System Owner");
+        warnedInvalidEntries.add("*");
+      }
       continue;
     }
     const separatorIndex = trimmed.indexOf(":");
@@ -130,20 +136,32 @@ function resolveOwnerAllowFromList(params: {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
-        // For ownership, only accept numeric IDs (prevent nickname spoofing)
-        if (remainder && /^\d+$/.test(remainder)) {
+        // For Discord/Telegram, only accept numeric IDs to prevent nickname spoofing
+        // For other channels (WhatsApp, Signal, Slack, etc), allow native ID formats
+        const isNumericOnlyChannel = channel === "discord" || channel === "telegram";
+        if (remainder && (isNumericOnlyChannel ? /^\d+$/.test(remainder) : true)) {
           filtered.push(remainder);
-        } else if (remainder) {
-          console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' (use Discord/Telegram user ID)`);
+        } else if (remainder && isNumericOnlyChannel) {
+          const warnKey = `prefix:${channel}:${remainder}`;
+          if (!warnedInvalidEntries.has(warnKey)) {
+            console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${remainder}' for ${channel} (use numeric user ID, not nickname)`);
+            warnedInvalidEntries.add(warnKey);
+          }
         }
         continue;
       }
     }
-    // For unprefixed entries, only accept numeric IDs
-    if (/^\d+$/.test(trimmed)) {
+    // For unprefixed entries in Discord/Telegram context, only accept numeric IDs
+    // For other channels or unknown context, accept as-is (will be validated by channel logic)
+    const isNumericOnlyContext = params.providerId === "discord" || params.providerId === "telegram";
+    if (!isNumericOnlyContext || /^\d+$/.test(trimmed)) {
       filtered.push(trimmed);
     } else {
-      console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' (use user ID, not nickname)`);
+      const warnKey = `bare:${params.providerId}:${trimmed}`;
+      if (!warnedInvalidEntries.has(warnKey)) {
+        console.warn(`[security] ownerAllowFrom: ignoring non-numeric entry '${trimmed}' for ${params.providerId} (use user ID, not nickname)`);
+        warnedInvalidEntries.add(warnKey);
+      }
     }
   }
   return formatAllowFromList({

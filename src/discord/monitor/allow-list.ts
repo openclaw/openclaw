@@ -258,7 +258,6 @@ export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   sender: { id: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
 }): string[] | undefined {
   const rawAllowList = params.channelConfig?.users ?? params.guildInfo?.users;
   if (!Array.isArray(rawAllowList) || rawAllowList.length === 0) {

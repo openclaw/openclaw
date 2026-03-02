@@ -185,10 +185,16 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // SYSTEM OWNER CHECK
   // ===========================================
   // Check if Discord is enabled but System Owner is not configured
-  const hasDiscord = cfg.channels?.discord?.enabled === true;
+  const hasDiscord = cfg.channels?.discord?.enabled !== false;
   const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
   const ownerConfigured = Array.isArray(ownerAllowFrom) && ownerAllowFrom.length > 0;
-  const hasNumericOwner = ownerConfigured && ownerAllowFrom.some(entry => /^\d+$/.test(String(entry)));
+  const hasNumericOwner = ownerConfigured && ownerAllowFrom.some(entry => {
+    const trimmed = String(entry).trim();
+    // Accept bare numeric IDs or discord-prefixed numeric IDs
+    if (/^\d+$/.test(trimmed)) return true;
+    if (/^discord:\d+$/.test(trimmed)) return true;
+    return false;
+  });
 
   if (hasDiscord && !ownerConfigured) {
     warnings.push(

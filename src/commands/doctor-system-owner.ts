@@ -14,7 +14,7 @@ export async function maybePromptForSystemOwner(params: {
 }): Promise<{ cfg: OpenClawConfig; changed: boolean }> {
   const { cfg, prompter, nonInteractive } = params;
 
-  const hasDiscord = cfg.channels?.discord?.enabled === true;
+  const hasDiscord = cfg.channels?.discord?.enabled !== false;
   if (!hasDiscord) {
     return { cfg, changed: false };
   }
@@ -42,7 +42,7 @@ export async function maybePromptForSystemOwner(params: {
   const shouldConfigure = await prompter.confirm({
     message:
       "Discord is enabled but System Owner is not configured. Anyone can run privileged commands. Configure now?",
-    initial: true,
+    initialValue: true,
   });
 
   if (!shouldConfigure) {
@@ -50,47 +50,31 @@ export async function maybePromptForSystemOwner(params: {
       [
         "- Skipped System Owner configuration.",
         `  Configure later: ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+        "  Get your Discord User ID: Enable Developer Mode → Right-click profile → Copy User ID",
       ].join("\n"),
       "System Owner",
     );
     return { cfg, changed: false };
   }
 
-  const discordUserId = await prompter.text({
-    message: "Your Discord User ID (for System Owner privileges)",
-    placeholder: "Right-click your profile → Copy User ID",
-    validate: (value) => {
-      const trimmed = (value ?? "").trim();
-      if (!trimmed) {
-        return "Discord User ID is required";
-      }
-      if (!/^\d{17,20}$/.test(trimmed)) {
-        return "Invalid Discord User ID (should be 17-20 digits)";
-      }
-      return undefined;
-    },
-  });
-
-  if (!discordUserId || discordUserId.trim().length === 0) {
-    note("- Skipped System Owner configuration (no ID provided)", "System Owner");
-    return { cfg, changed: false };
-  }
-
-  const nextCfg: OpenClawConfig = {
-    ...cfg,
-    commands: {
-      ...cfg.commands,
-      ownerAllowFrom: [discordUserId.trim()],
-    },
-  };
-
+  // Guide user to configure System Owner manually via CLI
+  // (DoctorPrompter does not support text input, so we provide instructions instead)
   note(
     [
-      `- System Owner configured: ${discordUserId.trim()}`,
-      "  Only you can run privileged commands now.",
+      "To complete System Owner configuration:",
+      "",
+      "1. Get your Discord User ID:",
+      "   - Enable Developer Mode in Discord (Settings → Advanced → Developer Mode)",
+      "   - Right-click your profile → Copy User ID",
+      "",
+      "2. Configure System Owner:",
+      `   ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["YOUR_DISCORD_ID"]\'')}`,
+      "",
+      "Example:",
+      `   ${formatCliCommand('openclaw config set commands.ownerAllowFrom \'["119510072865980419"]\'')}`,
     ].join("\n"),
-    "System Owner",
+    "System Owner Setup",
   );
 
-  return { cfg: nextCfg, changed: true };
+  return { cfg, changed: false };
 }
