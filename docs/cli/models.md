@@ -65,13 +65,16 @@ openclaw models fallbacks list
 
 ```bash
 openclaw models auth add
+openclaw models auth login
 openclaw models auth login --provider <id>
 openclaw models auth setup-token
 openclaw models auth paste-token
 ```
 
-`models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
-`openclaw plugins list` to see which providers are installed.
+`models auth login` runs the built-in OpenAI Codex OAuth flow.
+
+Use `models auth login --provider <id>` for provider plugin auth flows
+(OAuth/API key). Use `openclaw plugins list` to see installed plugin providers.
 
 Notes:
 

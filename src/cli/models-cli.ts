@@ -305,9 +305,9 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("login")
-    .description("Run a provider plugin auth flow (OAuth/API key)")
-    .option("--provider <id>", "Provider id registered by a plugin")
-    .option("--method <id>", "Provider auth method id")
+    .description("Run a provider auth flow (built-in or plugin)")
+    .option("--provider <id>", "Provider id (e.g. openai-codex or plugin provider id)")
+    .option("--method <id>", "Provider auth method id (openai-codex supports only oauth)")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
