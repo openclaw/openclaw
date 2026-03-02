@@ -1,0 +1,1412 @@
+{
+  "version": 1,
+  "updatedAt": "2026-03-02T17:35:40.245Z",
+  "source": {
+    "dbServer": "192.168.3.250",
+    "dbName": "htjx2021"
+  },
+  "forms": [
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BA",
+      "voucherName": "销售订单",
+      "stopFlag": "N",
+      "usedCount": 5574,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BB",
+      "voucherName": "销售发货单",
+      "stopFlag": "N",
+      "usedCount": 6811,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BC",
+      "voucherName": "销售开票",
+      "stopFlag": "N",
+      "usedCount": 957,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BE",
+      "voucherName": "现款销售",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BF",
+      "voucherName": "销售退货单",
+      "stopFlag": "N",
+      "usedCount": 914,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BG",
+      "voucherName": "销售报价单",
+      "stopFlag": "N",
+      "usedCount": 1,
+      "lastDate": "20210407"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BH",
+      "voucherName": "Pos销售",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BI",
+      "voucherName": "自定义单据BI",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BJ",
+      "voucherName": "发货计划单",
+      "stopFlag": "N",
+      "usedCount": 22,
+      "lastDate": "20230627"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BK",
+      "voucherName": "销售对账单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BL",
+      "voucherName": "销售开票关闭",
+      "stopFlag": "N",
+      "usedCount": 15,
+      "lastDate": "20260224"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BM",
+      "voucherName": "销售关闭单",
+      "stopFlag": "N",
+      "usedCount": 961,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BN",
+      "voucherName": "自定义单据BN",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BO",
+      "voucherName": "自定义单据BO",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BP",
+      "voucherName": "自定义单据BP",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BQ",
+      "voucherName": "自定义单据BQ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BR",
+      "voucherName": "自定义单据BR",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BS",
+      "voucherName": "展期续费单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BT",
+      "voucherName": "自定义单据BT",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BU",
+      "voucherName": "自定义单据BU",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "eba",
+      "voucherType": "BV",
+      "voucherName": "自定义单据BV",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "CA",
+      "voucherName": "预收款单",
+      "stopFlag": "N",
+      "usedCount": 14,
+      "lastDate": "20220305"
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "CB",
+      "voucherName": "收款单",
+      "stopFlag": "N",
+      "usedCount": 111,
+      "lastDate": "20220228"
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "CC",
+      "voucherName": "应收款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "DA",
+      "voucherName": "预付款单",
+      "stopFlag": "N",
+      "usedCount": 44,
+      "lastDate": "20220305"
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "DB",
+      "voucherName": "付款单",
+      "stopFlag": "N",
+      "usedCount": 399,
+      "lastDate": "20220225"
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "DC",
+      "voucherName": "应付款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "EA",
+      "voucherName": "应收核销",
+      "stopFlag": "N",
+      "usedCount": 6,
+      "lastDate": "20250320"
+    },
+    {
+      "voucherGroup": "ebm",
+      "voucherType": "EB",
+      "voucherName": "应付核销",
+      "stopFlag": "N",
+      "usedCount": 5,
+      "lastDate": "20220221"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GA",
+      "voucherName": "其他入库单",
+      "stopFlag": "N",
+      "usedCount": 413,
+      "lastDate": "20260128"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GB",
+      "voucherName": "其他出库单",
+      "stopFlag": "N",
+      "usedCount": 1671,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GC",
+      "voucherName": "盘点单",
+      "stopFlag": "N",
+      "usedCount": 530,
+      "lastDate": "20260206"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GD",
+      "voucherName": "移库单",
+      "stopFlag": "N",
+      "usedCount": 1103,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GE",
+      "voucherName": "组装单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GF",
+      "voucherName": "拆卸单",
+      "stopFlag": "N",
+      "usedCount": 351,
+      "lastDate": "20260209"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GG",
+      "voucherName": "报废出库单",
+      "stopFlag": "N",
+      "usedCount": 733,
+      "lastDate": "20260225"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GH",
+      "voucherName": "自定义单据GH",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GI",
+      "voucherName": "自定义单据GI",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GJ",
+      "voucherName": "自定义单据GJ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GK",
+      "voucherName": "自定义单据GK",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GL",
+      "voucherName": "自定义单据GL",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GM",
+      "voucherName": "自定义单据GM",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GN",
+      "voucherName": "自定义单据GN",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GO",
+      "voucherName": "自定义单据GO",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GP",
+      "voucherName": "派车单",
+      "stopFlag": "N",
+      "usedCount": 454,
+      "lastDate": "20240104"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GQ",
+      "voucherName": "自定义单据GQ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GR",
+      "voucherName": "自定义单据GR",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GS",
+      "voucherName": "补货计划单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GT",
+      "voucherName": "库存调价单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GU",
+      "voucherName": "自定义单据GU",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GV",
+      "voucherName": "自定义单据GV",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GW",
+      "voucherName": "自定义单据GW",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "GZ",
+      "voucherName": "需求计算单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LA",
+      "voucherName": "员工借用",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LB",
+      "voucherName": "员工归还",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LE",
+      "voucherName": "包装物料出厂单",
+      "stopFlag": "N",
+      "usedCount": 1880,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LF",
+      "voucherName": "包装物料入厂单",
+      "stopFlag": "N",
+      "usedCount": 1852,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LG",
+      "voucherName": "需求附加计划",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LR",
+      "voucherName": "自定义单据LR",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LS",
+      "voucherName": "自定义单据LS",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LT",
+      "voucherName": "自定义单据LT",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LU",
+      "voucherName": "自定义单据LU",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LV",
+      "voucherName": "自定义单据LV",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LW",
+      "voucherName": "自定义单据LW",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LX",
+      "voucherName": "入库调价单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "edt",
+      "voucherType": "LY",
+      "voucherName": "成本修正单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HA",
+      "voucherName": "生产计划单",
+      "stopFlag": "N",
+      "usedCount": 48,
+      "lastDate": "20240904"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HB",
+      "voucherName": "加工单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HC",
+      "voucherName": "产成单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HD",
+      "voucherName": "生产领料单",
+      "stopFlag": "N",
+      "usedCount": 7440,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HE",
+      "voucherName": "生产退料单",
+      "stopFlag": "N",
+      "usedCount": 1120,
+      "lastDate": "20260228"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HF",
+      "voucherName": "自定义单据HF",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HG",
+      "voucherName": "自定义单据HG",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HH",
+      "voucherName": "自定义单据HH",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HI",
+      "voucherName": "自定义单据HI",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HJ",
+      "voucherName": "生产领料关闭",
+      "stopFlag": "N",
+      "usedCount": 373,
+      "lastDate": "20260209"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HK",
+      "voucherName": "产成入库单",
+      "stopFlag": "N",
+      "usedCount": 8150,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HL",
+      "voucherName": "产成退库单",
+      "stopFlag": "N",
+      "usedCount": 4,
+      "lastDate": "20220819"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HM",
+      "voucherName": "产成关闭单",
+      "stopFlag": "N",
+      "usedCount": 611,
+      "lastDate": "20260226"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HN",
+      "voucherName": "自定义单据HN",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HO",
+      "voucherName": "外协加工单",
+      "stopFlag": "N",
+      "usedCount": 6776,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HP",
+      "voucherName": "外协产成单",
+      "stopFlag": "N",
+      "usedCount": 7374,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HQ",
+      "voucherName": "外协领料单",
+      "stopFlag": "N",
+      "usedCount": 5901,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HR",
+      "voucherName": "外协退料单",
+      "stopFlag": "N",
+      "usedCount": 299,
+      "lastDate": "20260225"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HS",
+      "voucherName": "外协领料关闭",
+      "stopFlag": "N",
+      "usedCount": 269,
+      "lastDate": "20260120"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HT",
+      "voucherName": "外协产成关闭单",
+      "stopFlag": "N",
+      "usedCount": 753,
+      "lastDate": "20260226"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HU",
+      "voucherName": "自定义单据HU",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HV",
+      "voucherName": "外协产成退库单",
+      "stopFlag": "N",
+      "usedCount": 629,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "HW",
+      "voucherName": "自定义单据HW",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JA",
+      "voucherName": "生产计划关闭单",
+      "stopFlag": "N",
+      "usedCount": 18,
+      "lastDate": "20231225"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JB",
+      "voucherName": "工序外协入库单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JC",
+      "voucherName": "工序外协关闭单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JD",
+      "voucherName": "工序外协出库单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JE",
+      "voucherName": "自定义单据JE",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JF",
+      "voucherName": "自定义单据JF",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JG",
+      "voucherName": "自定义单据JG",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JH",
+      "voucherName": "BOM成本核验单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JI",
+      "voucherName": "自定义单据JI",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "JJ",
+      "voucherName": "自定义单据JJ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "MA",
+      "voucherName": "转制单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "MB",
+      "voucherName": "交接单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "MC",
+      "voucherName": "生产任务单",
+      "stopFlag": "N",
+      "usedCount": 7646,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "emf",
+      "voucherType": "MD",
+      "voucherName": "生产计算单",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "emp",
+      "voucherType": "IB",
+      "voucherName": "保险支付月账",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "evm",
+      "voucherType": "VA",
+      "voucherName": "会计凭证",
+      "stopFlag": "N",
+      "usedCount": 270,
+      "lastDate": "20210630"
+    },
+    {
+      "voucherGroup": "evm",
+      "voucherType": "VB",
+      "voucherName": "调汇凭证",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "evm",
+      "voucherType": "VC",
+      "voucherName": "结转凭证",
+      "stopFlag": "N",
+      "usedCount": 10,
+      "lastDate": "20210531"
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FA",
+      "voucherName": "存取款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FB",
+      "voucherName": "其他收款单",
+      "stopFlag": "N",
+      "usedCount": 23,
+      "lastDate": "20211221"
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FC",
+      "voucherName": "其他付款单",
+      "stopFlag": "N",
+      "usedCount": 193,
+      "lastDate": "20220228"
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FD",
+      "voucherName": "员工借款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FE",
+      "voucherName": "员工还款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FF",
+      "voucherName": "部门预算单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FG",
+      "voucherName": "项目预算单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FH",
+      "voucherName": "换汇单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "mio",
+      "voucherType": "FI",
+      "voucherName": "结汇单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QA",
+      "voucherName": "质量检查",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QB",
+      "voucherName": "自定义质检QB",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QC",
+      "voucherName": "自定义质检QC",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QD",
+      "voucherName": "自定义质检QD",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QE",
+      "voucherName": "自定义质检QE",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QF",
+      "voucherName": "自定义质检QF",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QG",
+      "voucherName": "自定义质检QG",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "qm",
+      "voucherType": "QH",
+      "voucherName": "自定义质检QH",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AA",
+      "voucherName": "采购订单",
+      "stopFlag": "N",
+      "usedCount": 6732,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AB",
+      "voucherName": "采购入库单",
+      "stopFlag": "N",
+      "usedCount": 6619,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AC",
+      "voucherName": "采购开票",
+      "stopFlag": "N",
+      "usedCount": 2143,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AD",
+      "voucherName": "采购计划单",
+      "stopFlag": "N",
+      "usedCount": 1,
+      "lastDate": "20210407"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AE",
+      "voucherName": "现款采购",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AF",
+      "voucherName": "采购退货单",
+      "stopFlag": "N",
+      "usedCount": 1092,
+      "lastDate": "20260302"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AG",
+      "voucherName": "采购询价单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AH",
+      "voucherName": "采购申请单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AI",
+      "voucherName": "采购关闭单",
+      "stopFlag": "N",
+      "usedCount": 687,
+      "lastDate": "20260225"
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AJ",
+      "voucherName": "自定义单据AJ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AK",
+      "voucherName": "自定义单据AK",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AL",
+      "voucherName": "采购预付款单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AN",
+      "voucherName": "自定义单据AN",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AO",
+      "voucherName": "自定义单据AO",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AP",
+      "voucherName": "自定义单据AP",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "sup",
+      "voucherType": "AQ",
+      "voucherName": "自定义单据AQ",
+      "stopFlag": "Y",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "timer",
+      "voucherType": "YA",
+      "voucherName": "考勤月账",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "timer",
+      "voucherType": "YB",
+      "voucherName": "加班申请单据",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "timer",
+      "voucherType": "YC",
+      "voucherName": "补打卡申请单据",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "wage",
+      "voucherType": "IA",
+      "voucherName": "工资单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    },
+    {
+      "voucherGroup": "wage",
+      "voucherType": "IC",
+      "voucherName": "计件工资单",
+      "stopFlag": "N",
+      "usedCount": 0,
+      "lastDate": null
+    }
+  ],
+  "roles": {
+    "sales_manager": {
+      "description": "销售主管：销售单据与客户相关查询",
+      "autoGroups": ["eba"],
+      "allowedVoucherTypes": ["BA", "BB", "BC", "BF", "BG", "BJ", "BL", "BM", "BS"],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "eba", "eba_io", "res"],
+      "requireVoucherTypeFilter": true
+    },
+    "procurement_manager": {
+      "description": "采购主管：采购单据与供应商相关查询",
+      "autoGroups": ["sup"],
+      "allowedVoucherTypes": ["AA", "AB", "AC", "AD", "AF", "AG", "AH", "AI", "AL"],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "sup", "sup_io", "res"],
+      "requireVoucherTypeFilter": true
+    },
+    "production_manager": {
+      "description": "生产主管：生产与库存流转查询",
+      "autoGroups": ["emf", "edt"],
+      "allowedVoucherTypes": [
+        "GA",
+        "GB",
+        "GC",
+        "GD",
+        "GE",
+        "GF",
+        "GG",
+        "GP",
+        "GT",
+        "GZ",
+        "HA",
+        "HD",
+        "HE",
+        "HJ",
+        "HK",
+        "HL",
+        "HM",
+        "HO",
+        "HP",
+        "HQ",
+        "HR",
+        "HS",
+        "HT",
+        "HV",
+        "JA",
+        "JB",
+        "JC",
+        "JD",
+        "JH",
+        "LE",
+        "LF",
+        "LX",
+        "LY",
+        "MC"
+      ],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "res", "edt_res"],
+      "requireVoucherTypeFilter": true
+    },
+    "warehouse_manager": {
+      "description": "仓储主管：库存、移库、盘点、出入库查询",
+      "autoGroups": ["edt"],
+      "allowedVoucherTypes": [
+        "GA",
+        "GB",
+        "GC",
+        "GD",
+        "GE",
+        "GF",
+        "GG",
+        "GP",
+        "GT",
+        "GZ",
+        "LE",
+        "LF",
+        "LX",
+        "LY"
+      ],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "edt_res", "res"],
+      "requireVoucherTypeFilter": true
+    },
+    "finance_manager": {
+      "description": "财务主管：收付款、核销、资金流水查询",
+      "autoGroups": ["ebm", "mio"],
+      "allowedVoucherTypes": [
+        "CA",
+        "CB",
+        "CC",
+        "DA",
+        "DB",
+        "DC",
+        "EA",
+        "EB",
+        "FA",
+        "FB",
+        "FC",
+        "FD",
+        "FE",
+        "FF",
+        "FG",
+        "FH",
+        "FI"
+      ],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "ebm_mio", "ebm_mio_item", "eba", "sup"],
+      "requireVoucherTypeFilter": true
+    },
+    "quality_manager": {
+      "description": "质检主管：质量相关单据查询",
+      "autoGroups": ["qm"],
+      "allowedVoucherTypes": ["QA"],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "res"],
+      "requireVoucherTypeFilter": true
+    },
+    "hr_manager": {
+      "description": "人事主管：考勤/工资相关查询",
+      "autoGroups": ["timer", "wage", "emp"],
+      "allowedVoucherTypes": ["IA", "IB", "IC", "YA", "YB", "YC"],
+      "allowedTables": ["ebs_v", "ebs_vr", "ebs_vr_item", "app_emp"],
+      "requireVoucherTypeFilter": true
+    },
+    "admin_readonly": {
+      "description": "系统管理员：只读全量查询",
+      "autoGroups": ["eba", "sup", "emf", "edt", "ebm", "mio", "qm", "timer", "wage", "emp"],
+      "allowedVoucherTypes": [
+        "AA",
+        "AB",
+        "AC",
+        "AD",
+        "AF",
+        "AG",
+        "AH",
+        "AI",
+        "AL",
+        "BA",
+        "BB",
+        "BC",
+        "BF",
+        "BG",
+        "BJ",
+        "BL",
+        "BM",
+        "BS",
+        "CA",
+        "CB",
+        "CC",
+        "DA",
+        "DB",
+        "DC",
+        "EA",
+        "EB",
+        "FA",
+        "FB",
+        "FC",
+        "FD",
+        "FE",
+        "FF",
+        "FG",
+        "FH",
+        "FI",
+        "GA",
+        "GB",
+        "GC",
+        "GD",
+        "GE",
+        "GF",
+        "GG",
+        "GP",
+        "GT",
+        "GZ",
+        "HA",
+        "HD",
+        "HE",
+        "HJ",
+        "HK",
+        "HL",
+        "HM",
+        "HO",
+        "HP",
+        "HQ",
+        "HR",
+        "HS",
+        "HT",
+        "HV",
+        "IA",
+        "IB",
+        "IC",
+        "JA",
+        "JB",
+        "JC",
+        "JD",
+        "JH",
+        "LE",
+        "LF",
+        "LX",
+        "LY",
+        "MC",
+        "QA",
+        "YA",
+        "YB",
+        "YC"
+      ],
+      "allowedTables": ["*"],
+      "requireVoucherTypeFilter": false
+    }
+  },
+  "users": {
+    "21032565247771": {
+      "displayName": "王冲",
+      "roles": ["hr_manager"],
+      "status": "active",
+      "note": "",
+      "updatedAt": "2026-03-02T17:35:40.245Z"
+    },
+    "21032565285572": {
+      "displayName": "王五兰",
+      "roles": ["production_manager"],
+      "status": "active",
+      "note": "",
+      "updatedAt": "2026-03-02T17:35:40.245Z"
+    },
+    "王鹏程": {
+      "displayName": "",
+      "roles": [],
+      "status": "active",
+      "note": "",
+      "updatedAt": "2026-03-02T17:35:40.245Z"
+    },
+    "wangchong": {
+      "displayName": "王冲",
+      "roles": ["admin_readonly"],
+      "status": "active",
+      "note": "",
+      "updatedAt": "2026-03-02T17:35:40.245Z"
+    },
+    "wangpengcheng": {
+      "displayName": "王鹏程",
+      "roles": ["finance_manager"],
+      "status": "active",
+      "note": "",
+      "updatedAt": "2026-03-02T17:35:40.245Z"
+    }
+  },
+  "aclAdmins": ["wangpengcheng"],
+  "aclMutationSecretHash": "c5416e5d0acab17db6cf78a16692131403b9077f10f8e74ccdcd407ebd78ffab"
+}

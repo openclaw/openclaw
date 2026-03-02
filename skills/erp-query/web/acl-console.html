@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ERP ACL Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./acl-console.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <div class="bg-grid"></div>
+
+    <main class="shell">
+      <header class="hero reveal">
+        <div>
+          <p class="eyebrow">ERP Permission Control</p>
+          <h1>企业微信 ERP 权限操作台</h1>
+          <p class="subtitle">
+            按企业微信 userId 分配角色，限制子代理只访问授权业务表单。
+          </p>
+        </div>
+        <div class="hero-meta">
+          <span id="status-pill" class="pill neutral">未加载</span>
+          <span id="updated-at" class="meta-text">更新时间: -</span>
+        </div>
+      </header>
+
+      <section class="quick-actions reveal delay-1">
+        <button id="btn-refresh" class="btn primary">刷新策略</button>
+        <button id="btn-sync-forms" class="btn">同步表单</button>
+        <button id="btn-sync-users" class="btn">同步用户</button>
+        <button id="btn-init" class="btn danger">重建策略</button>
+        <button id="btn-set-secret" class="btn">设置/轮换变更密钥</button>
+        <input id="mutation-secret-input" class="token-input" type="password" placeholder="ACL 变更密钥（写操作必填）" />
+        <input id="token-input" class="token-input" type="password" placeholder="可选: Bearer Token" />
+      </section>
+
+      <section class="grid">
+        <article class="card reveal delay-2">
+          <div class="card-head">
+            <h2>概览</h2>
+          </div>
+          <div id="stats" class="stats"></div>
+        </article>
+
+        <article class="card reveal delay-3">
+          <div class="card-head">
+            <h2>角色</h2>
+            <span id="role-count" class="tiny">0</span>
+          </div>
+          <div id="roles" class="role-list"></div>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="card reveal delay-2">
+          <div class="card-head">
+            <h2>用户分配</h2>
+            <span id="user-count" class="tiny">0</span>
+          </div>
+          <form id="assign-form" class="inline-form">
+            <input id="assign-user-id" required placeholder="企业微信 userId" />
+            <input id="assign-name" placeholder="姓名(可选)" />
+            <select id="assign-role" required></select>
+            <button class="btn primary" type="submit">分配角色</button>
+          </form>
+          <div id="users" class="user-list"></div>
+        </article>
+
+        <article class="card reveal delay-3">
+          <div class="card-head">
+            <h2>表单清单</h2>
+          </div>
+          <div class="inline-form">
+            <select id="form-group-filter">
+              <option value="">全部分组</option>
+            </select>
+            <label class="switch">
+              <input id="active-only" type="checkbox" checked />
+              <span>仅启用</span>
+            </label>
+          </div>
+          <div id="forms" class="form-list"></div>
+        </article>
+      </section>
+
+      <section class="card reveal delay-3">
+        <div class="card-head">
+          <h2>用户权限详情</h2>
+        </div>
+        <pre id="permission-view" class="permission-view">点击用户后显示详情...</pre>
+      </section>
+
+      <section class="card reveal delay-3">
+        <div class="card-head">
+          <h2>子代理最小放行</h2>
+          <span class="tiny">专属脚本 + Exec 白名单</span>
+        </div>
+        <div class="inline-form hardening-form">
+          <select id="hardening-agent-id"></select>
+          <input id="hardening-wecom-user-id" placeholder="企业微信 userId（如 WangChong）" />
+          <input id="hardening-script-path" readonly placeholder="将自动生成专属脚本路径" />
+        </div>
+        <div class="hardening-row">
+          <label class="switch">
+            <input id="hardening-force-model" type="checkbox" checked />
+            <span>同时切到 openai-codex/gpt-5.3-codex</span>
+          </label>
+          <label class="switch">
+            <input id="hardening-restart" type="checkbox" checked />
+            <span>应用后自动重启网关</span>
+          </label>
+          <button id="btn-hardening-refresh" class="btn">刷新代理列表</button>
+          <button id="btn-hardening-apply" class="btn primary">应用最小放行</button>
+        </div>
+        <pre id="hardening-output" class="permission-view">选择 agent 和 userId 后点击“应用最小放行”。</pre>
+      </section>
+    </main>
+
+    <script src="./acl-console.js"></script>
+  </body>
+</html>
