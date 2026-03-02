@@ -870,7 +870,7 @@ async function dispatchDiscordComponentEvent(params: {
         allowFrom: channelConfig?.users ?? guildInfo?.users,
         normalizeEntry: (entry) => {
           const normalized = normalizeDiscordAllowList([entry], ["discord:", "user:", "pk:"]);
-          const candidate = normalized?.[0];
+          const candidate = normalized?.ids.values().next().value;
           return candidate && /^\d+$/.test(candidate) ? candidate : undefined;
         },
       })
