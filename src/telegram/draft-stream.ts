@@ -34,6 +34,8 @@ export type TelegramDraftStream = {
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
+  /** True when using Bot API 9.3+ native sendMessageDraft (no preview message created). */
+  isNativeDraft: () => boolean;
 };
 
 type TelegramDraftPreview = {
@@ -81,7 +83,9 @@ export function createTelegramDraftStream(params: {
     params.maxChars ?? TELEGRAM_STREAM_MAX_CHARS,
     TELEGRAM_STREAM_MAX_CHARS,
   );
-  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
+  const throttleMs = params.useNativeDraft
+    ? Math.max(100, params.throttleMs ?? 100) // native draft: 100ms floor (fast but safe)
+    : Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS); // legacy edit: 250ms floor
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
@@ -263,5 +267,6 @@ export function createTelegramDraftStream(params: {
     clear,
     stop,
     forceNewMessage,
+    isNativeDraft: () => useNativeDraft,
   };
 }

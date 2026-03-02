@@ -299,7 +299,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           return archivedResult;
         }
       }
-      if (canEditViaPreview && !params.finalizedPreviewByLane[laneName]) {
+      // Native draft mode (Bot API 9.3+): drafts are ephemeral and never create a
+      // preview message, so skip the preview-edit finalization entirely.  Just stop
+      // the draft stream and fall through to sendPayload which sends the permanent
+      // message — the draft auto-clears when the real message arrives.
+      const isNativeDraftStream = lane.stream?.isNativeDraft() === true;
+
+      if (!isNativeDraftStream && canEditViaPreview && !params.finalizedPreviewByLane[laneName]) {
         await params.flushDraftLane(lane);
         if (laneName === "answer") {
           const archivedResultAfterFlush = await consumeArchivedAnswerPreviewForFinal({
@@ -326,7 +332,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           params.finalizedPreviewByLane[laneName] = true;
           return "preview-finalized";
         }
-      } else if (!hasMedia && !payload.isError && text.length > params.draftMaxChars) {
+      } else if (
+        !isNativeDraftStream &&
+        !hasMedia &&
+        !payload.isError &&
+        text.length > params.draftMaxChars
+      ) {
         params.log(
           `telegram: preview final too long for edit (${text.length} > ${params.draftMaxChars}); falling back to standard send`,
         );
