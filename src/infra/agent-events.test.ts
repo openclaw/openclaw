@@ -84,3 +84,77 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBeUndefined();
   });
 });
+
+describe("RFC-A2A-RESPONSE-ROUTING: registerAgentRunContext", () => {
+  test("updates returnTo on existing context", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-a2a-1", { sessionKey: "agent:metis:main" });
+    registerAgentRunContext("run-a2a-1", {
+      returnTo: "agent:main:main",
+      correlationId: "corr-123",
+    });
+
+    const ctx = getAgentRunContext("run-a2a-1");
+    expect(ctx?.sessionKey).toBe("agent:metis:main");
+    expect(ctx?.returnTo).toBe("agent:main:main");
+    expect(ctx?.correlationId).toBe("corr-123");
+  });
+
+  test("updates correlationId on existing context", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-a2a-2", { sessionKey: "agent:clio:main" });
+    registerAgentRunContext("run-a2a-2", { correlationId: "corr-456" });
+
+    const ctx = getAgentRunContext("run-a2a-2");
+    expect(ctx?.correlationId).toBe("corr-456");
+  });
+
+  test("updates timeout on existing context", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-a2a-3", { sessionKey: "agent:deepthought:main" });
+    registerAgentRunContext("run-a2a-3", { timeout: 60 });
+
+    const ctx = getAgentRunContext("run-a2a-3");
+    expect(ctx?.timeout).toBe(60);
+  });
+
+  test("can update all A2A fields after initial registration", () => {
+    resetAgentRunContextForTest();
+    // Initial registration with just sessionKey
+    registerAgentRunContext("run-a2a-4", { sessionKey: "agent:metis:main" });
+
+    // Add A2A routing info
+    registerAgentRunContext("run-a2a-4", {
+      returnTo: "agent:main:main",
+      correlationId: "corr-789",
+      timeout: 120,
+    });
+
+    const ctx = getAgentRunContext("run-a2a-4");
+    expect(ctx).toEqual({
+      sessionKey: "agent:metis:main",
+      returnTo: "agent:main:main",
+      correlationId: "corr-789",
+      timeout: 120,
+    });
+  });
+
+  test("does not overwrite A2A fields with undefined", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-a2a-5", {
+      sessionKey: "agent:metis:main",
+      returnTo: "agent:main:main",
+      correlationId: "corr-abc",
+      timeout: 60,
+    });
+
+    // Update sessionKey without A2A fields
+    registerAgentRunContext("run-a2a-5", { sessionKey: "agent:metis:other" });
+
+    const ctx = getAgentRunContext("run-a2a-5");
+    expect(ctx?.sessionKey).toBe("agent:metis:other");
+    expect(ctx?.returnTo).toBe("agent:main:main"); // Preserved
+    expect(ctx?.correlationId).toBe("corr-abc"); // Preserved
+    expect(ctx?.timeout).toBe(60); // Preserved
+  });
+});

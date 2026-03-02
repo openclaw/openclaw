@@ -2,7 +2,7 @@
 
 ## Summary
 
-Extends `inputProvenance` to support agent-to-agent tool invocations, enabling structured multi-agent workflows with full provenance tracking.
+Extends `inputProvenance` to support agent-to-agent tool invocations, enabling structured multi-agent workflows with full provenance tracking, confidence extraction, and improved A2A response routing.
 
 ## Related Work
 
@@ -48,6 +48,62 @@ Complete the provenance pipeline:
 - `isToolInvocationProvenance(value)` — Check if provenance is a tool invocation
 - `isCrossSessionProvenance(value)` — Check if provenance is any cross-session communication (`inter_session` or `tool_invocation`)
 - `hasInterSessionUserProvenance(message)` — Updated to use `isCrossSessionProvenance()` so tool invocations are filtered correctly
+
+## Improvements (2026-02-28)
+
+### 1. Fix: `registerAgentRunContext` now updates A2A routing fields
+
+**Bug:** The function only updated `sessionKey`, `verboseLevel`, `isHeartbeat` but not `returnTo`, `correlationId`, `timeout`.
+
+**Impact:** If a run already had context, A2A routing info wouldn't be added.
+
+**Fix:** Added updates for all A2A routing fields.
+
+```typescript
+// Now correctly updates all fields
+if (context.returnTo && existing.returnTo !== context.returnTo) {
+  existing.returnTo = context.returnTo;
+}
+if (context.correlationId && existing.correlationId !== context.correlationId) {
+  existing.correlationId = context.correlationId;
+}
+if (context.timeout !== undefined && existing.timeout !== context.timeout) {
+  existing.timeout = context.timeout;
+}
+```
+
+### 2. Feature: Confidence extraction from A2A responses
+
+**Problem:** `skill_response` always had `confidence: 0.5` regardless of actual agent confidence.
+
+**Solution:** Added `extractConfidenceFromResponse()` to parse confidence from response text:
+
+- Parses JSON objects with `confidence`, `certainty`, `probability`, `score` fields
+- Handles nested `output.confidence` structure
+- Converts percentages (e.g., `85` → `0.85`)
+- Extracts confidence from embedded JSON in text
+- Falls back to `0.5` only if not extracted
+
+```typescript
+// Now extracts confidence from structured responses
+const extractedConfidence = extractConfidenceFromResponse(textContent);
+const skillResponse = {
+  confidence: extractedConfidence ?? 0.5,
+  // ...
+};
+```
+
+### 3. Observability: Verbose logging for confidence extraction
+
+Added `logVerbose` for confidence extraction to aid debugging:
+
+```typescript
+if (extractedConfidence !== undefined) {
+  logVerbose?.(
+    `[A2A] Extracted confidence ${extractedConfidence} for correlationId=${skillInvocationCorrelationId}`,
+  );
+}
+```
 
 ## Use Cases
 

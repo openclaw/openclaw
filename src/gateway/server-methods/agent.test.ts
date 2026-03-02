@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
-import { agentHandlers } from "./agent.js";
+import { agentHandlers, extractConfidenceFromResponse } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -596,5 +596,86 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("malformed session key"),
       }),
     );
+  });
+});
+
+describe("extractConfidenceFromResponse", () => {
+  it("extracts confidence from JSON with confidence field", () => {
+    const result = extractConfidenceFromResponse('{"confidence": 0.85}');
+    expect(result).toBe(0.85);
+  });
+
+  it("extracts confidence from JSON with multiple fields", () => {
+    const result = extractConfidenceFromResponse(
+      '{"output": "result", "confidence": 0.72, "status": "completed"}',
+    );
+    expect(result).toBe(0.72);
+  });
+
+  it("extracts confidence from nested output object", () => {
+    const result = extractConfidenceFromResponse(
+      '{"output": {"result": "data", "confidence": 0.91}}',
+    );
+    expect(result).toBe(0.91);
+  });
+
+  it("converts percentage confidence to decimal", () => {
+    const result = extractConfidenceFromResponse('{"confidence": 85}');
+    expect(result).toBe(0.85);
+  });
+
+  it("extracts confidence from alternative field names", () => {
+    expect(extractConfidenceFromResponse('{"certainty": 0.8}')).toBe(0.8);
+    expect(extractConfidenceFromResponse('{"probability": 0.75}')).toBe(0.75);
+    expect(extractConfidenceFromResponse('{"score": 0.9}')).toBe(0.9);
+  });
+
+  it("extracts confidence from text with embedded JSON", () => {
+    const result = extractConfidenceFromResponse(
+      'Here is my analysis. {"confidence": 0.88} I am fairly certain.',
+    );
+    expect(result).toBe(0.88);
+  });
+
+  it("returns undefined for text without confidence", () => {
+    const result = extractConfidenceFromResponse('{"output": "result", "status": "completed"}');
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for non-JSON text without confidence pattern", () => {
+    const result = extractConfidenceFromResponse(
+      "This is a plain text response without confidence.",
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for empty or null input", () => {
+    expect(extractConfidenceFromResponse("")).toBeUndefined();
+    expect(extractConfidenceFromResponse(null as unknown as string)).toBeUndefined();
+    expect(extractConfidenceFromResponse(undefined as unknown as string)).toBeUndefined();
+  });
+
+  it("handles malformed JSON gracefully", () => {
+    const result = extractConfidenceFromResponse('{"confidence": 0.85'); // Missing closing brace
+    // Should still match the pattern
+    expect(result).toBe(0.85);
+  });
+
+  it("clamps confidence to valid range", () => {
+    // Value > 1 but <= 100 should be divided by 100
+    expect(extractConfidenceFromResponse('{"confidence": 50}')).toBe(0.5);
+    expect(extractConfidenceFromResponse('{"confidence": 100}')).toBe(1.0);
+    // Value already in 0-1 range should be returned as-is
+    expect(extractConfidenceFromResponse('{"confidence": 0.0}')).toBe(0.0);
+    expect(extractConfidenceFromResponse('{"confidence": 1.0}')).toBe(1.0);
+  });
+
+  it("ignores invalid confidence values", () => {
+    // Negative value
+    expect(extractConfidenceFromResponse('{"confidence": -0.5}')).toBeUndefined();
+    // Value > 100
+    expect(extractConfidenceFromResponse('{"confidence": 150}')).toBeUndefined();
+    // NaN
+    expect(extractConfidenceFromResponse('{"confidence": "high"}')).toBeUndefined();
   });
 });

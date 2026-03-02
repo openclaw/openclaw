@@ -39,6 +39,7 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
     runContextById.set(runId, { ...context });
     return;
   }
+  // Update session-level fields
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
   }
@@ -50,6 +51,16 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  // RFC-A2A-RESPONSE-ROUTING: Update A2A routing fields
+  if (context.returnTo && existing.returnTo !== context.returnTo) {
+    existing.returnTo = context.returnTo;
+  }
+  if (context.correlationId && existing.correlationId !== context.correlationId) {
+    existing.correlationId = context.correlationId;
+  }
+  if (context.timeout !== undefined && existing.timeout !== context.timeout) {
+    existing.timeout = context.timeout;
   }
 }
 
