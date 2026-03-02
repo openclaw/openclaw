@@ -102,6 +102,16 @@ describe("exec approvals allowlist matching", () => {
     });
     expect(match?.pattern).toBe("/usr/bin/*++");
   });
+
+  it("matches paths containing []() regex tokens literally", () => {
+    const literalPattern = "/opt/builds/tool[1](stable)";
+    const match = matchAllowlist([{ pattern: literalPattern }], {
+      rawExecutable: literalPattern,
+      resolvedPath: literalPattern,
+      executableName: "tool[1](stable)",
+    });
+    expect(match?.pattern).toBe(literalPattern);
+  });
 });
 
 describe("mergeExecApprovalsSocketDefaults", () => {
