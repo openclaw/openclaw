@@ -33,6 +33,20 @@ async function expectLockRemovedOnlyAfterFinalRelease(params: {
   await expect(fs.access(params.lockPath)).rejects.toThrow();
 }
 
+async function expectCurrentPidOwnsLock(params: {
+  sessionFile: string;
+  timeoutMs: number;
+  staleMs?: number;
+}) {
+  const { sessionFile, timeoutMs, staleMs } = params;
+  const lockPath = `${sessionFile}.lock`;
+  const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs, staleMs });
+  const raw = await fs.readFile(lockPath, "utf8");
+  const payload = JSON.parse(raw) as { pid: number };
+  expect(payload.pid).toBe(process.pid);
+  await lock.release();
+}
+
 describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
@@ -90,12 +104,7 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
-      const raw = await fs.readFile(lockPath, "utf8");
-      const payload = JSON.parse(raw) as { pid: number };
-
-      expect(payload.pid).toBe(process.pid);
-      await lock.release();
+      await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -285,12 +294,7 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-      const raw = await fs.readFile(lockPath, "utf8");
-      const payload = JSON.parse(raw) as { pid: number };
-
-      expect(payload.pid).toBe(process.pid);
-      await lock.release();
+      await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500 });
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
