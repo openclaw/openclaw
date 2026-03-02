@@ -162,9 +162,11 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
-# Seed device-identity parent eagerly for Docker Desktop/Windows bind mounts
-# that reject creating new subdirectories from inside the container.
+# Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
+# where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -345,6 +347,22 @@ else
     exit 1
   fi
 fi
+
+# Ensure bind-mounted data directories are writable by the container's `node`
+# user (uid 1000). Host-created dirs inherit the host user's uid which may
+# differ, causing EACCES when the container tries to mkdir/write.
+# Running a brief root container to chown is the portable Docker idiom --
+# it works regardless of the host uid and doesn't require host-side root.
+echo ""
+echo "==> Fixing data-directory permissions"
+# Use -xdev to restrict chown to the config-dir mount only — without it,
+# the recursive chown would cross into the workspace bind mount and rewrite
+# ownership of all user project files on Linux hosts.
+# After fixing the config dir, only the OpenClaw metadata subdirectory
+# (.openclaw/) inside the workspace gets chowned, not the user's project files.
+docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
+  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
 echo "==> Onboarding (interactive)"
