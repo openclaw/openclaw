@@ -174,6 +174,13 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
   };
 }
 
+export function isRevokedProxyError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) {
+    return false;
+  }
+  return /proxy that has been revoked/i.test(err.message);
+}
+
 export function formatMSTeamsSendErrorHint(
   classification: MSTeamsSendErrorClassification,
 ): string | undefined {

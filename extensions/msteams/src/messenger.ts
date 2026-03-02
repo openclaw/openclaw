@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { classifyMSTeamsSendError } from "./errors.js";
+import { classifyMSTeamsSendError, isRevokedProxyError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -432,6 +432,48 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
+  const sendMessagesInContext = async (
+    ctx: SendContext,
+    batch: MSTeamsRenderedMessage[] = messages,
+    offset = 0,
+  ): Promise<string[]> => {
+    const messageIds: string[] = [];
+    for (const [idx, message] of batch.entries()) {
+      const response = await sendWithRetry(
+        async () =>
+          await ctx.sendActivity(
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
+          ),
+        { messageIndex: offset + idx, messageCount: messages.length },
+      );
+      messageIds.push(extractMessageId(response) ?? "unknown");
+    }
+    return messageIds;
+  };
+
+  const sendProactively = async (
+    batch: MSTeamsRenderedMessage[] = messages,
+    offset = 0,
+  ): Promise<string[]> => {
+    const baseRef = buildConversationReference(params.conversationRef);
+    const proactiveRef: MSTeamsConversationReference = {
+      ...baseRef,
+      activityId: undefined,
+    };
+
+    const messageIds: string[] = [];
+    await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
+      messageIds.push(...(await sendMessagesInContext(ctx, batch, offset)));
+    });
+    return messageIds;
+  };
+
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
@@ -439,48 +481,21 @@ export async function sendMSTeamsMessages(params: {
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
+      try {
+        messageIds.push(...(await sendMessagesInContext(ctx, [message], idx)));
+      } catch (err) {
+        if (!isRevokedProxyError(err)) {
+          throw err;
+        }
+        const remaining = messages.slice(idx);
+        if (remaining.length > 0) {
+          messageIds.push(...(await sendProactively(remaining, idx)));
+        }
+        return messageIds;
+      }
     }
     return messageIds;
   }
 
-  const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef: MSTeamsConversationReference = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  const messageIds: string[] = [];
-  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-    for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
-    }
-  });
-  return messageIds;
+  return await sendProactively(messages, 0);
 }

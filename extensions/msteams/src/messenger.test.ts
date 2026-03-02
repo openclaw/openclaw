@@ -33,6 +33,23 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
+const createRecordedSendActivity = (
+  sink: string[],
+  failFirstWithStatusCode?: number,
+): ((activity: unknown) => Promise<{ id: string }>) => {
+  let attempts = 0;
+  return async (activity: unknown) => {
+    const { text } = activity as { text?: string };
+    const content = text ?? "";
+    sink.push(content);
+    attempts += 1;
+    if (failFirstWithStatusCode !== undefined && attempts === 1) {
+      throw Object.assign(new Error("send failed"), { statusCode: failFirstWithStatusCode });
+    }
+    return { id: `id:${content}` };
+  };
+};
+
 describe("msteams messenger", () => {
   beforeEach(() => {
     setMSTeamsRuntime(runtimeStub);
@@ -210,6 +227,79 @@ describe("msteams messenger", () => {
           retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }),
       ).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    it("falls back to proactive messaging when thread context is revoked", async () => {
+      const proactiveSent: string[] = [];
+
+      const ctx = {
+        sendActivity: async () => {
+          throw new TypeError("Cannot perform 'set' on a proxy that has been revoked");
+        },
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, _reference, logic) => {
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+          });
+        },
+        process: async () => {},
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: baseRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      // Should have fallen back to proactive messaging
+      expect(proactiveSent).toEqual(["hello"]);
+      expect(ids).toEqual(["id:hello"]);
+    });
+
+    it("falls back only for remaining thread messages after context revocation", async () => {
+      const threadSent: string[] = [];
+      const proactiveSent: string[] = [];
+      let attempt = 0;
+
+      const ctx = {
+        sendActivity: async (activity: unknown) => {
+          const { text } = activity as { text?: string };
+          const content = text ?? "";
+          attempt += 1;
+          if (attempt === 1) {
+            threadSent.push(content);
+            return { id: `id:${content}` };
+          }
+          throw new TypeError("Cannot perform 'set' on a proxy that has been revoked");
+        },
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, _reference, logic) => {
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+          });
+        },
+        process: async () => {},
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: baseRef,
+        context: ctx,
+        messages: [{ text: "one" }, { text: "two" }, { text: "three" }],
+      });
+
+      expect(threadSent).toEqual(["one"]);
+      expect(proactiveSent).toEqual(["two", "three"]);
+      expect(ids).toEqual(["id:one", "id:two", "id:three"]);
     });
 
     it("retries top-level sends on transient (5xx)", async () => {

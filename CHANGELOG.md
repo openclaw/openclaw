@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- MS Teams: re-land revoked-context proactive fallback — when a thread reply's turn context is revoked (e.g. due to message debouncing), fall back to proactive messaging per-message so remaining replies still reach the user instead of being silently lost. (#27224) Thanks @openperf.
+
 ## 2026.2.9
 
 ### Added
