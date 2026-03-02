@@ -25,11 +25,14 @@ export function findRegisteredPluginHttpRoute(
 // Only checks specific routes registered via registerHttpRoute, not wildcard handlers
 // registered via registerHttpHandler. Wildcard handlers (e.g., webhooks) implement
 // their own signature-based auth and are handled separately in the auth enforcement logic.
+// Routes with skipGatewayAuth are also excluded (e.g., webhook routes that use
+// provider-level signature verification like LINE).
 export function isRegisteredPluginHttpRoutePath(
   registry: PluginRegistry,
   pathname: string,
 ): boolean {
-  return findRegisteredPluginHttpRoute(registry, pathname) !== undefined;
+  const route = findRegisteredPluginHttpRoute(registry, pathname);
+  return route !== undefined && !route.skipGatewayAuth;
 }
 
 export function shouldEnforceGatewayAuthForPluginPath(

@@ -15,6 +15,7 @@ export function registerPluginHttpRoute(params: {
   pluginId?: string;
   source?: string;
   accountId?: string;
+  skipGatewayAuth?: boolean;
   log?: (message: string) => void;
   registry?: PluginRegistry;
 }): () => void {
@@ -41,6 +42,7 @@ export function registerPluginHttpRoute(params: {
     handler: params.handler,
     pluginId: params.pluginId,
     source: params.source,
+    skipGatewayAuth: params.skipGatewayAuth,
   };
   routes.push(entry);
 

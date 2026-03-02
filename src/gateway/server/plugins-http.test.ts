@@ -152,4 +152,17 @@ describe("plugin HTTP registry helpers", () => {
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });
+
+  it("skips gateway auth for routes with skipGatewayAuth", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        { path: "/line/webhook", handler: () => {}, skipGatewayAuth: true },
+        createRoute({ path: "/api/demo" }),
+      ],
+    });
+    expect(isRegisteredPluginHttpRoutePath(registry, "/line/webhook")).toBe(false);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/line/webhook")).toBe(false);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/demo")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/demo")).toBe(true);
+  });
 });

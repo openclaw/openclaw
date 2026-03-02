@@ -60,6 +60,7 @@ export type PluginHttpRouteRegistration = {
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
   source?: string;
+  skipGatewayAuth?: boolean;
 };
 
 export type PluginChannelRegistration = {
