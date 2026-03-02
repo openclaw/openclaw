@@ -6,14 +6,15 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
-  createInboundEnvelopeBuilder,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
   mergeAllowlist,
+  resolveDirectDmAuthorizationOutcome,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveSenderCommandAuthorization,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+  resolveSenderCommandAuthorizationWithRuntime,
   sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -224,68 +225,64 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = content.trim();
-  const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorization({
-    cfg: config,
-    rawBody,
+  const { senderAllowedForCommands, commandAuthorized } =
+    await resolveSenderCommandAuthorizationWithRuntime({
+      cfg: config,
+      rawBody,
+      isGroup,
+      dmPolicy,
+      configuredAllowFrom: configAllowFrom,
+      senderId,
+      isSenderAllowed,
+      readAllowFromStore: pairing.readAllowFromStore,
+      runtime: core.channel.commands,
+    });
+
+  const directDmOutcome = resolveDirectDmAuthorizationOutcome({
     isGroup,
     dmPolicy,
-    configuredAllowFrom: configAllowFrom,
-    senderId,
-    isSenderAllowed,
-    readAllowFromStore: pairing.readAllowFromStore,
-    shouldComputeCommandAuthorized: (body, cfg) =>
-      core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
-    resolveCommandAuthorizedFromAuthorizers: (params) =>
-      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
+    senderAllowedForCommands,
   });
+  if (directDmOutcome === "disabled") {
+    logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
+    return;
+  }
+  if (directDmOutcome === "unauthorized") {
+    if (dmPolicy === "pairing") {
+      const { code, created } = await pairing.upsertPairingRequest({
+        id: senderId,
+        meta: { name: senderName || undefined },
+      });
 
-  if (!isGroup) {
-    if (dmPolicy === "disabled") {
-      logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
-      return;
-    }
-
-    if (dmPolicy !== "open") {
-      const allowed = senderAllowedForCommands;
-
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
-            id: senderId,
-            meta: { name: senderName || undefined },
-          });
-
-          if (created) {
-            logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
-            try {
-              await sendMessageZalouser(
-                chatId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "zalouser",
-                  idLine: `Your Zalo user id: ${senderId}`,
-                  code,
-                }),
-                { profile: account.profile },
-              );
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              logVerbose(
-                core,
-                runtime,
-                `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
-              );
-            }
-          }
-        } else {
+      if (created) {
+        logVerbose(core, runtime, `zalouser pairing request sender=${senderId}`);
+        try {
+          await sendMessageZalouser(
+            chatId,
+            core.channel.pairing.buildPairingReply({
+              channel: "zalouser",
+              idLine: `Your Zalo user id: ${senderId}`,
+              code,
+            }),
+            { profile: account.profile },
+          );
+          statusSink?.({ lastOutboundAt: Date.now() });
+        } catch (err) {
           logVerbose(
             core,
             runtime,
-            `Blocked unauthorized zalouser sender ${senderId} (dmPolicy=${dmPolicy})`,
+            `zalouser pairing reply failed for ${senderId}: ${String(err)}`,
           );
         }
-        return;
       }
+    } else {
+      logVerbose(
+        core,
+        runtime,
+        `Blocked unauthorized zalouser sender ${senderId} (dmPolicy=${dmPolicy})`,
+      );
     }
+    return;
   }
 
   if (
@@ -305,7 +302,7 @@ async function processMessage(
     ? { kind: "group" as const, id: chatId }
     : { kind: "group" as const, id: senderId };
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "zalouser",
     accountId: account.accountId,
@@ -314,15 +311,8 @@ async function processMessage(
       kind: peer.kind,
       id: peer.id,
     },
-  });
-  const buildEnvelope = createInboundEnvelopeBuilder({
-    cfg: config,
-    route,
+    runtime: core.channel,
     sessionStore: config.session?.store,
-    resolveStorePath: core.channel.session.resolveStorePath,
-    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
-    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
-    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
   });
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
