@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,6 +6,8 @@ import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -22,6 +25,7 @@ class FakeProvider implements VoiceCallProvider {
   readonly hangupCalls: HangupCallInput[] = [];
   readonly startListeningCalls: StartListeningInput[] = [];
   readonly stopListeningCalls: StopListeningInput[] = [];
+  getCallStatusResult: GetCallStatusResult = { status: "in-progress", isTerminal: false };
 
   constructor(name: "plivo" | "twilio" = "plivo") {
     this.name = name;
@@ -48,6 +52,9 @@ class FakeProvider implements VoiceCallProvider {
   async stopListening(input: StopListeningInput): Promise<void> {
     this.stopListeningCalls.push(input);
   }
+  async getCallStatus(_input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    return this.getCallStatusResult;
+  }
 }
 
 let storeSeq = 0;
@@ -57,13 +64,13 @@ function createTestStorePath(): string {
   return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
 }
 
-function createManagerHarness(
+async function createManagerHarness(
   configOverrides: Record<string, unknown> = {},
   provider = new FakeProvider(),
-): {
+): Promise<{
   manager: CallManager;
   provider: FakeProvider;
-} {
+}> {
   const config = VoiceCallConfigSchema.parse({
     enabled: true,
     provider: "plivo",
@@ -71,7 +78,7 @@ function createManagerHarness(
     ...configOverrides,
   });
   const manager = new CallManager(config, createTestStorePath());
-  manager.initialize(provider, "https://example.com/voice/webhook");
+  await manager.initialize(provider, "https://example.com/voice/webhook");
   return { manager, provider };
 }
 
@@ -87,7 +94,7 @@ function markCallAnswered(manager: CallManager, callId: string, eventId: string)
 
 describe("CallManager", () => {
   it("upgrades providerCallId mapping when provider ID changes", async () => {
-    const { manager } = createManagerHarness();
+    const { manager } = await createManagerHarness();
 
     const { callId, success, error } = await manager.initiateCall("+15550000001");
     expect(success).toBe(true);
@@ -112,7 +119,7 @@ describe("CallManager", () => {
   });
 
   it("speaks initial message on answered for notify mode (non-Twilio)", async () => {
-    const { manager, provider } = createManagerHarness();
+    const { manager, provider } = await createManagerHarness();
 
     const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
       message: "Hello there",
@@ -134,8 +141,8 @@ describe("CallManager", () => {
     expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
   });
 
-  it("rejects inbound calls with missing caller ID when allowlist enabled", () => {
-    const { manager, provider } = createManagerHarness({
+  it("rejects inbound calls with missing caller ID when allowlist enabled", async () => {
+    const { manager, provider } = await createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
@@ -155,8 +162,8 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-missing");
   });
 
-  it("rejects inbound calls with anonymous caller ID when allowlist enabled", () => {
-    const { manager, provider } = createManagerHarness({
+  it("rejects inbound calls with anonymous caller ID when allowlist enabled", async () => {
+    const { manager, provider } = await createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
@@ -177,8 +184,8 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-anon");
   });
 
-  it("rejects inbound calls that only match allowlist suffixes", () => {
-    const { manager, provider } = createManagerHarness({
+  it("rejects inbound calls that only match allowlist suffixes", async () => {
+    const { manager, provider } = await createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
@@ -199,8 +206,8 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-suffix");
   });
 
-  it("rejects duplicate inbound events with a single hangup call", () => {
-    const { manager, provider } = createManagerHarness({
+  it("rejects duplicate inbound events with a single hangup call", async () => {
+    const { manager, provider } = await createManagerHarness({
       inboundPolicy: "disabled",
     });
 
@@ -231,8 +238,8 @@ describe("CallManager", () => {
     expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-dup");
   });
 
-  it("accepts inbound calls that exactly match the allowlist", () => {
-    const { manager } = createManagerHarness({
+  it("accepts inbound calls that exactly match the allowlist", async () => {
+    const { manager } = await createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
@@ -252,7 +259,7 @@ describe("CallManager", () => {
   });
 
   it("completes a closed-loop turn without live audio", async () => {
-    const { manager, provider } = createManagerHarness({
+    const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
 
@@ -292,7 +299,7 @@ describe("CallManager", () => {
   });
 
   it("rejects overlapping continueCall requests for the same call", async () => {
-    const { manager, provider } = createManagerHarness({
+    const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
 
@@ -324,7 +331,7 @@ describe("CallManager", () => {
   });
 
   it("ignores speech events with mismatched turnToken while waiting for transcript", async () => {
-    const { manager, provider } = createManagerHarness(
+    const { manager, provider } = await createManagerHarness(
       {
         transcriptTimeoutMs: 5000,
       },
@@ -379,7 +386,7 @@ describe("CallManager", () => {
   });
 
   it("tracks latency metadata across multiple closed-loop turns", async () => {
-    const { manager, provider } = createManagerHarness({
+    const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
 
@@ -432,7 +439,7 @@ describe("CallManager", () => {
   });
 
   it("handles repeated closed-loop turns without waiter churn", async () => {
-    const { manager, provider } = createManagerHarness({
+    const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
     });
 
@@ -463,5 +470,154 @@ describe("CallManager", () => {
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Call verification on restore
+// ---------------------------------------------------------------------------
+
+function writeCallsToStore(storePath: string, calls: Record<string, unknown>[]): void {
+  fs.mkdirSync(storePath, { recursive: true });
+  const logPath = path.join(storePath, "calls.jsonl");
+  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
+  fs.writeFileSync(logPath, lines);
+}
+
+function makePersistedCall(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    callId: `call-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    provider: "plivo",
+    direction: "outbound",
+    state: "answered",
+    from: "+15550000000",
+    to: "+15550000001",
+    startedAt: Date.now() - 30_000,
+    answeredAt: Date.now() - 25_000,
+    transcript: [],
+    processedEventIds: [],
+    ...overrides,
+  };
+}
+
+describe("CallManager verification on restore", () => {
+  it("skips stale calls reported terminal by provider", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+    provider.getCallStatusResult = { status: "completed", isTerminal: true };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(0);
+  });
+
+  it("keeps calls reported active by provider", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+    provider.getCallStatusResult = { status: "in-progress", isTerminal: false };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
+    expect(manager.getActiveCalls()[0]?.callId).toBe(call.callId);
+  });
+
+  it("keeps calls when provider returns unknown (transient error)", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+    provider.getCallStatusResult = { status: "error", isTerminal: false, isUnknown: true };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
+  });
+
+  it("skips calls older than maxDurationSeconds", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall({
+      startedAt: Date.now() - 600_000, // 10 minutes ago
+      answeredAt: Date.now() - 590_000,
+    });
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      maxDurationSeconds: 300, // 5 minutes
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(0);
+  });
+
+  it("skips calls without providerCallId", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall({ providerCallId: undefined, state: "initiated" });
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(0);
+  });
+
+  it("keeps call when getCallStatus throws (verification failure)", async () => {
+    const storePath = createTestStorePath();
+    const call = makePersistedCall();
+    writeCallsToStore(storePath, [call]);
+
+    const provider = new FakeProvider();
+    provider.getCallStatus = async () => {
+      throw new Error("network failure");
+    };
+
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
   });
 });
