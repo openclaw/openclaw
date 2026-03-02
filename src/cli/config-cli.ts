@@ -324,11 +324,22 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   }
 }
 
+export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    runtime.log(shortenHomePath(snapshot.path));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset). Run without subcommand for the setup wizard.",
+      "Non-interactive config helpers (get/set/unset/file). Run without subcommand for the setup wizard.",
     )
     .addHelpText(
       "after",
@@ -389,5 +400,12 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("file")
+    .description("Print the active config file path")
+    .action(async () => {
+      await runConfigFile({});
     });
 }
