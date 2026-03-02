@@ -1,11 +1,18 @@
+import "./test-helpers.js";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { setLoggerOverride } from "../logging.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createMockWebListener,
   createWebListenerFactoryCapture,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
+  resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
 import type { WebInboundMessage } from "./inbound.js";
@@ -77,10 +84,9 @@ function makeInboundMessage(params: {
   };
 }
 
-describe("web auto-reply", () => {
+describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
-  // Ensure test-harness `vi.mock(...)` hooks are registered before importing the module under test.
   let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
   beforeAll(async () => {
     ({ monitorWebChannel } = await import("./auto-reply.js"));
@@ -242,8 +248,6 @@ describe("web auto-reply", () => {
       const sendComposing = vi.fn();
       const sendMedia = vi.fn();
 
-      // The watchdog only needs `lastMessageAt` to be set. Don't await full message
-      // processing here since it can schedule timers and become flaky under load.
       void capturedOnMessage?.(
         makeInboundMessage({
           body: "hi",
@@ -277,7 +281,7 @@ describe("web auto-reply", () => {
   it("processes inbound messages without batching and preserves timestamps", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       const originalMax = process.getMaxListeners();
-      process.setMaxListeners?.(1); // force low to confirm bump
+      process.setMaxListeners?.(1);
 
       const store = await makeSessionStore({
         main: { sessionId: "sid", updatedAt: Date.now() },
@@ -304,14 +308,13 @@ describe("web auto-reply", () => {
         const capturedOnMessage = capture.getOnMessage();
         expect(capturedOnMessage).toBeDefined();
 
-        // Two messages from the same sender with fixed timestamps
         await capturedOnMessage?.(
           makeInboundMessage({
             body: "first",
             from: "+1",
             to: "+2",
             id: "m1",
-            timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
+            timestamp: 1735689600000,
             sendComposing,
             reply,
             sendMedia,
@@ -323,7 +326,7 @@ describe("web auto-reply", () => {
             from: "+1",
             to: "+2",
             id: "m2",
-            timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
+            timestamp: 1735693200000,
             sendComposing,
             reply,
             sendMedia,
@@ -345,13 +348,140 @@ describe("web auto-reply", () => {
           new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${secondPattern}\\] \\[openclaw\\] second`),
         );
         expect(secondArgs.Body).not.toContain("first");
-
-        // Max listeners bumped to avoid warnings in multi-instance test runs
         expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
       } finally {
         process.setMaxListeners?.(originalMax);
         await store.cleanup();
+        resetLoadConfigMock();
       }
     });
+  });
+
+  it("emits heartbeat logs with connection metadata", async () => {
+    vi.useFakeTimers();
+    const logPath = `/tmp/openclaw-heartbeat-${crypto.randomUUID()}.log`;
+    setLoggerOverride({ level: "trace", file: logPath });
+
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const controller = new AbortController();
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<void>(() => {
+        // never resolves; abort will short-circuit
+      });
+      return { close: vi.fn(), onClose };
+    });
+
+    const run = monitorWebChannel(
+      false,
+      listenerFactory as never,
+      true,
+      async () => ({ text: "ok" }),
+      runtime as never,
+      controller.signal,
+      {
+        heartbeatSeconds: 1,
+        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 1, factor: 1.1 },
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    controller.abort();
+    await vi.runAllTimersAsync();
+    await run.catch(() => {});
+
+    const content = await fs.readFile(logPath, "utf-8");
+    expect(content).toMatch(/web-heartbeat/);
+    expect(content).toMatch(/connectionId/);
+    expect(content).toMatch(/messagesHandled/);
+  });
+
+  it("logs outbound replies to file", async () => {
+    const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
+    setLoggerOverride({ level: "trace", file: logPath });
+
+    const capture = createWebListenerFactoryCapture();
+
+    const resolver = vi.fn().mockResolvedValue({ text: "auto" });
+    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver as never);
+    const capturedOnMessage = capture.getOnMessage();
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hello",
+      from: "+1",
+      conversationId: "+1",
+      to: "+2",
+      accountId: "default",
+      chatType: "direct",
+      chatId: "+1",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply: vi.fn(),
+      sendMedia: vi.fn(),
+    });
+
+    const content = await fs.readFile(logPath, "utf-8");
+    expect(content).toMatch(/web-auto-reply/);
+    expect(content).toMatch(/auto/);
+  });
+
+  it("marks dispatch idle after replies flush", async () => {
+    const markDispatchIdle = vi.fn();
+    const typingMock = {
+      onReplyStart: vi.fn(async () => {}),
+      startTypingLoop: vi.fn(async () => {}),
+      startTypingOnText: vi.fn(async () => {}),
+      refreshTypingTtl: vi.fn(),
+      isActive: vi.fn(() => false),
+      markRunComplete: vi.fn(),
+      markDispatchIdle,
+      cleanup: vi.fn(),
+    };
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+
+    const replyResolver = vi.fn().mockImplementation(async (_ctx, opts) => {
+      opts?.onTypingController?.(typingMock);
+      return { text: "final reply" };
+    });
+
+    const mockConfig: OpenClawConfig = {
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    };
+
+    setLoadConfigMock(mockConfig);
+
+    await monitorWebChannel(
+      false,
+      async ({ onMessage }) => {
+        await onMessage({
+          id: "m1",
+          from: "+1000",
+          conversationId: "+1000",
+          to: "+2000",
+          body: "hello",
+          timestamp: Date.now(),
+          chatType: "direct",
+          chatId: "direct:+1000",
+          accountId: "default",
+          sendComposing,
+          reply,
+          sendMedia,
+        });
+        return createMockWebListener();
+      },
+      false,
+      replyResolver,
+    );
+
+    resetLoadConfigMock();
+
+    expect(markDispatchIdle).toHaveBeenCalled();
   });
 });

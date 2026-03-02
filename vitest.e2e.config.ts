@@ -24,7 +24,7 @@ export default defineConfig({
     pool: "vmForks",
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
-    include: ["test/**/*.e2e.test.ts"],
+    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
     exclude,
   },
 });
