@@ -47,6 +47,11 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /**
+   * Force local loopback target resolution for internal in-process calls.
+   * Explicit URL overrides still take precedence.
+   */
+  forceLoopback?: boolean;
 };
 
 export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
@@ -107,7 +112,12 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    forceLoopback?: boolean;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -120,25 +130,29 @@ export function buildGatewayConnectionDetails(
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const forceLoopback = options.forceLoopback === true;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
       : undefined;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const url = urlOverride || remoteUrl || localUrl;
+  const remoteMisconfigured = isRemoteMode && !forceLoopback && !urlOverride && !remoteUrl;
+  const url = urlOverride || (forceLoopback ? localUrl : remoteUrl || localUrl);
   const urlSource = urlOverride
     ? "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+    : forceLoopback
+      ? "forced local loopback"
+      : remoteUrl
+        ? "config gateway.remote.url"
+        : remoteMisconfigured
+          ? "missing gateway.remote.url (fallback local)"
+          : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const bindDetail =
+    !urlOverride && (forceLoopback || !remoteUrl) ? `Bind: ${bindMode}` : undefined;
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
@@ -232,8 +246,11 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   return { config, configPath, isRemoteMode, remote, urlOverride, remoteUrl, explicitAuth };
 }
 
-function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): void {
-  if (!context.isRemoteMode || context.urlOverride || context.remoteUrl) {
+function ensureRemoteModeUrlConfigured(
+  context: ResolvedGatewayCallContext,
+  forceLoopback = false,
+): void {
+  if (!context.isRemoteMode || forceLoopback || context.urlOverride || context.remoteUrl) {
     return;
   }
   throw new Error(
@@ -245,7 +262,10 @@ function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): voi
   );
 }
 
-function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
+function resolveGatewayCredentials(
+  context: ResolvedGatewayCallContext,
+  forceLoopback = false,
+): {
   token?: string;
   password?: string;
 } {
@@ -254,6 +274,11 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
     env: process.env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
+    modeOverride: forceLoopback ? "local" : undefined,
+    localTokenFallback: forceLoopback ? "local-only" : undefined,
+    localPasswordFallback: forceLoopback ? "local-only" : undefined,
+    localTokenPrecedence: forceLoopback ? "config-first" : undefined,
+    localPasswordPrecedence: forceLoopback ? "config-first" : undefined,
     remotePasswordPrecedence: "env-first",
   });
 }
@@ -264,17 +289,18 @@ async function resolveGatewayTlsFingerprint(params: {
   url: string;
 }): Promise<string | undefined> {
   const { opts, context, url } = params;
+  const forceLoopback = opts.forceLoopback === true;
   const useLocalTls =
     context.config.gateway?.tls?.enabled === true &&
     !context.urlOverride &&
-    !context.remoteUrl &&
+    (forceLoopback || !context.remoteUrl) &&
     url.startsWith("wss://");
   const tlsRuntime = useLocalTls
     ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
-    context.isRemoteMode && !context.urlOverride && context.remoteUrl
+    !forceLoopback && context.isRemoteMode && !context.urlOverride && context.remoteUrl
       ? trimToUndefined(context.remote?.tlsFingerprint)
       : undefined;
   return (
@@ -394,15 +420,16 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
-  ensureRemoteModeUrlConfigured(context);
+  ensureRemoteModeUrlConfigured(context, opts.forceLoopback === true);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
+    forceLoopback: opts.forceLoopback,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
+  const { token, password } = resolveGatewayCredentials(context, opts.forceLoopback === true);
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,

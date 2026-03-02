@@ -54,6 +54,15 @@ function expectSessionsDeleteWithoutAgentStart() {
   expect(methods).not.toContain("agent");
 }
 
+function getFirstGatewayCallByMethod<T>(method: string): T | undefined {
+  const callGatewayMock = getCallGatewayMock();
+  const found = (callGatewayMock.mock.calls as unknown[][]).find((call: unknown[]) => {
+    const request = call[0] as { method?: string } | undefined;
+    return request?.method === method;
+  });
+  return found?.[0] as T | undefined;
+}
+
 function mockAgentStartFailure() {
   const callGatewayMock = getCallGatewayMock();
   callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -113,6 +122,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
 
     expect(result.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    const agentCall = getFirstGatewayCallByMethod<{ forceLoopback?: boolean }>("agent");
+    expect(agentCall?.forceLoopback).toBe(true);
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledWith(
       {
@@ -242,6 +253,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       key: details.childSessionKey,
       emitLifecycleHooks: false,
     });
+    const deleteCallWithLoopback = getFirstGatewayCallByMethod<{ forceLoopback?: boolean }>(
+      "sessions.delete",
+    );
+    expect(deleteCallWithLoopback?.forceLoopback).toBe(true);
   });
 
   it("returns error when thread binding is not marked ready", async () => {
@@ -353,6 +368,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       deleteTranscript: true,
       emitLifecycleHooks: false,
     });
+    const deleteCallWithLoopback = getFirstGatewayCallByMethod<{ forceLoopback?: boolean }>(
+      "sessions.delete",
+    );
+    expect(deleteCallWithLoopback?.forceLoopback).toBe(true);
   });
 
   it("falls back to sessions.delete cleanup when subagent_ended hook is unavailable", async () => {

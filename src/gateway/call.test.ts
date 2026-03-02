@@ -281,6 +281,39 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBe("Bind: lan");
   });
 
+  it("labels local target as forced loopback when requested", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "tailnet" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails({ forceLoopback: true });
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("forced local loopback");
+    expect(details.bindDetail).toBe("Bind: tailnet");
+  });
+
+  it("forces local loopback even when remote url is configured", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: { url: "wss://remote.example.com/ws" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails({ forceLoopback: true });
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("forced local loopback");
+    expect(details.bindDetail).toBe("Bind: tailnet");
+    expect(details.remoteFallbackNote).toBeUndefined();
+  });
+
   it("prefers remote url when configured", () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -398,6 +431,31 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("Bind: loopback");
   });
 
+  it("reports forced loopback source on timeout when requested", async () => {
+    startMode = "silent";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    vi.useFakeTimers();
+    let errMessage = "";
+    const promise = callGateway({ method: "health", timeoutMs: 5, forceLoopback: true }).catch(
+      (caught) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(5);
+    await promise;
+
+    expect(errMessage).toContain("gateway timeout after 5ms");
+    expect(errMessage).toContain("Source: forced local loopback");
+    expect(errMessage).toContain("Bind: lan");
+  });
+
   it("does not overflow very large timeout values", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -427,6 +485,29 @@ describe("callGateway error details", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow("gateway remote mode misconfigured");
+  });
+
+  it("allows remote mode without remote url when forceLoopback is enabled", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "tailnet", remote: {} },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health", forceLoopback: true });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway closed (1006");
+    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(err?.message).toContain("Source: forced local loopback");
+    expect(err?.message).toContain("Bind: tailnet");
   });
 });
 
@@ -538,6 +619,55 @@ describe("callGateway password resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.password).toBe(expectedPassword);
+  });
+
+  it("prefers local credentials over env when forceLoopback is enabled in remote mode", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-remote-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-remote-password";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: {
+          url: "wss://remote.example:18789",
+          token: "remote-token",
+          password: "remote-password",
+        },
+        auth: {
+          token: "local-token",
+          password: "local-password",
+        },
+      },
+    });
+
+    await callGateway({ method: "health", forceLoopback: true });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("local-token");
+    expect(lastClientOptions?.password).toBe("local-password");
+  });
+
+  it("does not fall back to remote config credentials for forceLoopback local auth", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-local-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-local-password";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: {
+          url: "wss://remote.example:18789",
+          token: "remote-token",
+          password: "remote-password",
+        },
+        auth: {},
+      },
+    });
+
+    await callGateway({ method: "health", forceLoopback: true });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("env-local-token");
+    expect(lastClientOptions?.password).toBe("env-local-password");
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
