@@ -73,6 +73,18 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): string[] {
     candidates.push(localBinDir);
   }
 
+  // Skills installed with --prefix CONFIG_DIR land in CONFIG_DIR/node_modules/.bin.
+  // Always add this dir so hasBinary() finds them even after a restart, without
+  // the user having to configure PATH manually.
+  const configDir =
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.CLAWDBOT_STATE_DIR?.trim() ||
+    path.join(homeDir, ".openclaw");
+  const configNodeBin = path.join(configDir, "node_modules", ".bin");
+  if (isDirectory(configNodeBin)) {
+    candidates.push(configNodeBin);
+  }
+
   const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isDirectory(miseShims)) {

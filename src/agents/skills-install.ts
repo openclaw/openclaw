@@ -108,6 +108,21 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
   }
 }
 
+/**
+ * After a node --prefix install, the package binaries land in
+ * CONFIG_DIR/node_modules/.bin rather than a global bin dir. Ensure that
+ * directory is on PATH so subsequent hasBinary() checks (and the agent's
+ * exec tool) can find them without requiring the user to configure PATH.
+ */
+function ensureNodePrefixBinOnPath(): void {
+  const binDir = path.join(CONFIG_DIR, "node_modules", ".bin");
+  const current = process.env.PATH ?? "";
+  const parts = current.split(path.delimiter).filter(Boolean);
+  if (!parts.includes(binDir)) {
+    process.env.PATH = [binDir, current].filter(Boolean).join(path.delimiter);
+  }
+}
+
 function buildInstallCommand(
   spec: SkillInstallSpec,
   prefs: SkillsInstallPreferences,
@@ -483,6 +498,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   })();
 
   const success = result.code === 0;
+  // For node --prefix installs, make the installed binaries available on PATH
+  // immediately (within this process) so hasBinary() and the exec tool can
+  // find them without a restart.
+  if (success && spec.kind === "node") {
+    ensureNodePrefixBinOnPath();
+  }
   return {
     ok: success,
     message: success ? "Installed" : formatInstallFailureMessage(result),
