@@ -5,9 +5,20 @@ import { spawnClaudeCodeDirect } from "../claude-code-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp", "claude-code"] as const;
+const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
+  "target",
+  "transport",
+  "channel",
+  "to",
+  "threadId",
+  "thread_id",
+  "replyTo",
+  "reply_to",
+] as const;
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -23,6 +34,7 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -46,6 +58,14 @@ export function createSessionsSpawnTool(opts?: {
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
+        Object.hasOwn(params, key),
+      );
+      if (unsupportedParam) {
+        throw new ToolInputError(
+          `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+        );
+      }
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime =
@@ -61,6 +81,7 @@ export function createSessionsSpawnTool(opts?: {
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+      const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -81,6 +102,8 @@ export function createSessionsSpawnTool(opts?: {
                 task,
                 label: label || undefined,
                 cwd,
+                mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+                thread,
               },
               {
                 agentSessionKey: opts?.agentSessionKey,
@@ -122,6 +145,7 @@ export function createSessionsSpawnTool(opts?: {
                   thread,
                   mode,
                   cleanup,
+                  sandbox,
                   expectsCompletionMessage: true,
                 },
                 {

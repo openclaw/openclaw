@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
-import { openVerifiedFileSync, type SafeOpenSyncFailureReason } from "./safe-open-sync.js";
+import {
+  openVerifiedFileSync,
+  type SafeOpenSyncAllowedType,
+  type SafeOpenSyncFailureReason,
+} from "./safe-open-sync.js";
 
 type BoundaryReadFs = Pick<
   typeof fs,
@@ -28,6 +32,7 @@ export type OpenBoundaryFileSyncParams = {
   rootRealPath?: string;
   maxBytes?: number;
   rejectHardlinks?: boolean;
+  allowedType?: SafeOpenSyncAllowedType;
   skipLexicalRootCheck?: boolean;
   ioFs?: BoundaryReadFs;
 };
@@ -69,12 +74,33 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     return { ok: false, reason: "validation", error };
   }
 
-  const opened = openVerifiedFileSync({
-    filePath: absolutePath,
+  return openBoundaryFileResolved({
+    absolutePath,
     resolvedPath,
+    rootRealPath,
+    maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
+    allowedType: params.allowedType,
+    ioFs,
+  });
+}
+
+function openBoundaryFileResolved(params: {
+  absolutePath: string;
+  resolvedPath: string;
+  rootRealPath: string;
+  maxBytes?: number;
+  rejectHardlinks?: boolean;
+  allowedType?: SafeOpenSyncAllowedType;
+  ioFs: BoundaryReadFs;
+}): BoundaryFileOpenResult {
+  const opened = openVerifiedFileSync({
+    filePath: params.absolutePath,
+    resolvedPath: params.resolvedPath,
     rejectHardlinks: params.rejectHardlinks ?? true,
     maxBytes: params.maxBytes,
-    ioFs,
+    allowedType: params.allowedType,
+    ioFs: params.ioFs,
   });
   if (!opened.ok) {
     return opened;
@@ -84,24 +110,38 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     path: opened.path,
     fd: opened.fd,
     stat: opened.stat,
-    rootRealPath,
+    rootRealPath: params.rootRealPath,
   };
 }
 
 export async function openBoundaryFile(
   params: OpenBoundaryFileParams,
 ): Promise<BoundaryFileOpenResult> {
+  const ioFs = params.ioFs ?? fs;
+  const absolutePath = path.resolve(params.absolutePath);
+  let resolvedPath: string;
+  let rootRealPath: string;
   try {
-    await resolveBoundaryPath({
-      absolutePath: params.absolutePath,
+    const resolved = await resolveBoundaryPath({
+      absolutePath,
       rootPath: params.rootPath,
       rootCanonicalPath: params.rootRealPath,
       boundaryLabel: params.boundaryLabel,
       policy: params.aliasPolicy,
       skipLexicalRootCheck: params.skipLexicalRootCheck,
     });
+    resolvedPath = resolved.canonicalPath;
+    rootRealPath = resolved.rootCanonicalPath;
   } catch (error) {
     return { ok: false, reason: "validation", error };
   }
-  return openBoundaryFileSync(params);
+  return openBoundaryFileResolved({
+    absolutePath,
+    resolvedPath,
+    rootRealPath,
+    maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
+    allowedType: params.allowedType,
+    ioFs,
+  });
 }

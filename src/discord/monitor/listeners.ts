@@ -54,6 +54,7 @@ type DiscordReactionListenerParams = {
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  onEvent?: () => void;
 };
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
@@ -118,23 +119,37 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
+  private messageQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
+    private onEvent?: () => void,
   ) {
     super();
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
-    await runDiscordListenerWithSlowLog({
-      logger: this.logger,
-      listener: this.constructor.name,
-      event: this.type,
-      run: () => this.handler(data, client),
-      onError: (err) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      },
+    this.onEvent?.();
+    // Release Carbon's dispatch lane immediately, but keep our message handler
+    // serialized to avoid unbounded parallel model/IO work on traffic bursts.
+    this.messageQueue = this.messageQueue
+      .catch(() => {})
+      .then(() =>
+        runDiscordListenerWithSlowLog({
+          logger: this.logger,
+          listener: this.constructor.name,
+          event: this.type,
+          run: () => this.handler(data, client),
+          onError: (err) => {
+            const logger = this.logger ?? discordEventQueueLog;
+            logger.error(danger(`discord handler failed: ${String(err)}`));
+          },
+        }),
+      );
+    void this.messageQueue.catch((err) => {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord handler failed: ${String(err)}`));
     });
   }
 }
@@ -145,6 +160,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,
@@ -162,6 +178,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
+    this.params.onEvent?.();
     await runDiscordReactionHandler({
       data,
       client,

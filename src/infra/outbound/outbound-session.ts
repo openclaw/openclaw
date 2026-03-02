@@ -20,6 +20,7 @@ import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
+import { parseTelegramThreadId } from "../../telegram/outbound-params.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
@@ -161,9 +162,7 @@ async function resolveSlackChannelType(params: {
     return "channel";
   }
 
-  const token =
-    account.botToken?.trim() ||
-    (typeof account.config.userToken === "string" ? account.config.userToken.trim() : "");
+  const token = account.botToken?.trim() || account.userToken || "";
   if (!token) {
     SLACK_CHANNEL_TYPE_CACHE.set(`${account.accountId}:${channelId}`, "unknown");
     return "unknown";
@@ -285,8 +284,7 @@ function resolveTelegramSession(
   }
   const parsedThreadId = parsed.messageThreadId;
   const fallbackThreadId = normalizeThreadId(params.threadId);
-  const resolvedThreadId =
-    parsedThreadId ?? (fallbackThreadId ? Number.parseInt(fallbackThreadId, 10) : undefined);
+  const resolvedThreadId = parsedThreadId ?? parseTelegramThreadId(fallbackThreadId);
   // Telegram topics are encoded in the peer id (chatId:topic:<id>).
   const chatType = resolveTelegramTargetChatType(params.target);
   // If the target is a username and we lack a resolvedTarget, default to DM to avoid group keys.

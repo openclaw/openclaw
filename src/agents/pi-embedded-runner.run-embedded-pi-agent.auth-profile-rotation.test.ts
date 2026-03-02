@@ -8,9 +8,15 @@ import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const resolveCopilotApiTokenMock = vi.fn();
 
 vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+}));
+
+vi.mock("../providers/github-copilot-token.js", () => ({
+  DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
+  resolveCopilotApiToken: (...args: unknown[]) => resolveCopilotApiTokenMock(...args),
 }));
 
 vi.mock("./pi-embedded-runner/compact.js", () => ({
@@ -36,6 +42,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
+  resolveCopilotApiTokenMock.mockReset();
 });
 
 const baseUsage = {
@@ -148,6 +155,31 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
     },
   }) satisfies OpenClawConfig;
 
+const copilotModelId = "gpt-4o";
+
+const makeCopilotConfig = (): OpenClawConfig =>
+  ({
+    models: {
+      providers: {
+        "github-copilot": {
+          api: "openai-responses",
+          baseUrl: "https://api.copilot.example",
+          models: [
+            {
+              id: copilotModelId,
+              name: "Copilot GPT-4o",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16_000,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const writeAuthStore = async (
   agentDir: string,
   opts?: {
@@ -183,6 +215,20 @@ const writeAuthStore = async (
   };
   await fs.writeFile(authPath, JSON.stringify(payload));
 };
+
+const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  const payload = {
+    version: 1,
+    profiles: {
+      "github-copilot:github": { type: "token", provider: "github-copilot", token },
+    },
+  };
+  await fs.writeFile(authPath, JSON.stringify(payload));
+};
+
+const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
+  buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
 
 const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
   runEmbeddedAttemptMock
@@ -375,6 +421,215 @@ async function runTurnWithCooldownSeed(params: {
 }
 
 describe("runEmbeddedPiAgent auth profile rotation", () => {
+  it("refreshes copilot token after auth error and retries once", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    vi.useFakeTimers();
+    try {
+      await writeCopilotAuthStore(agentDir);
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      resolveCopilotApiTokenMock
+        .mockResolvedValueOnce({
+          token: "copilot-initial",
+          expiresAt: now + 2 * 60 * 1000,
+          source: "mock",
+          baseUrl: "https://api.copilot.example",
+        })
+        .mockResolvedValueOnce({
+          token: "copilot-refresh",
+          expiresAt: now + 60 * 60 * 1000,
+          source: "mock",
+          baseUrl: "https://api.copilot.example",
+        });
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildCopilotAssistant({
+              stopReason: "error",
+              errorMessage: "unauthorized",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildCopilotAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:copilot-auth-error",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCopilotConfig(),
+        prompt: "hello",
+        provider: "github-copilot",
+        model: copilotModelId,
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:copilot-auth-error",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows another auth refresh after a successful retry", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    vi.useFakeTimers();
+    try {
+      await writeCopilotAuthStore(agentDir);
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      resolveCopilotApiTokenMock
+        .mockResolvedValueOnce({
+          token: "copilot-initial",
+          expiresAt: now + 2 * 60 * 1000,
+          source: "mock",
+          baseUrl: "https://api.copilot.example",
+        })
+        .mockResolvedValueOnce({
+          token: "copilot-refresh-1",
+          expiresAt: now + 4 * 60 * 1000,
+          source: "mock",
+          baseUrl: "https://api.copilot.example",
+        })
+        .mockResolvedValueOnce({
+          token: "copilot-refresh-2",
+          expiresAt: now + 40 * 60 * 1000,
+          source: "mock",
+          baseUrl: "https://api.copilot.example",
+        });
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildCopilotAssistant({
+              stopReason: "error",
+              errorMessage: "401 unauthorized",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            promptError: new Error("supported values are: low, medium"),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildCopilotAssistant({
+              stopReason: "error",
+              errorMessage: "token has expired",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildCopilotAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:copilot-auth-repeat",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCopilotConfig(),
+        prompt: "hello",
+        provider: "github-copilot",
+        model: copilotModelId,
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:copilot-auth-repeat",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(4);
+      expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reschedule copilot refresh after shutdown", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    vi.useFakeTimers();
+    try {
+      await writeCopilotAuthStore(agentDir);
+      const now = Date.now();
+      vi.setSystemTime(now);
+
+      resolveCopilotApiTokenMock.mockResolvedValue({
+        token: "copilot-initial",
+        expiresAt: now + 60 * 60 * 1000,
+        source: "mock",
+        baseUrl: "https://api.copilot.example",
+      });
+
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildCopilotAssistant({
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          }),
+        }),
+      );
+
+      const runPromise = runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:copilot-shutdown",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCopilotConfig(),
+        prompt: "hello",
+        provider: "github-copilot",
+        model: copilotModelId,
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:copilot-shutdown",
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      await runPromise;
+      const refreshCalls = resolveCopilotApiTokenMock.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+      expect(resolveCopilotApiTokenMock.mock.calls.length).toBe(refreshCalls);
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("rotates for auto-pinned profiles across retryable stream failures", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: "rate limit",

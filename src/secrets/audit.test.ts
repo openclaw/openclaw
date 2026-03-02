@@ -127,7 +127,7 @@ describe("secrets audit", () => {
     await fs.writeFile(
       execScriptPath,
       [
-        "#!/usr/bin/env node",
+        `#!${process.execPath}`,
         "import fs from 'node:fs';",
         "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
         `fs.appendFileSync(${JSON.stringify(execLogPath)}, 'x\\n');`,
@@ -147,7 +147,8 @@ describe("secrets audit", () => {
                 source: "exec",
                 command: execScriptPath,
                 jsonOnly: true,
-                passEnv: ["PATH"],
+                timeoutMs: 20_000,
+                noOutputTimeoutMs: 10_000,
               },
             },
           },
