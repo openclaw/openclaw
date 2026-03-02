@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
@@ -293,6 +294,36 @@ describe("loadOpenClawPlugins", () => {
     const loaded = registry.plugins.find((entry) => entry.id === "allowed");
     expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
+  });
+
+  it("re-initializes global hook runner when serving registry from cache", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "cache-hook-runner",
+      body: `export default { id: "cache-hook-runner", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-hook-runner"],
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
+    expect(getGlobalHookRunner()).toBeNull();
+
+    const second = loadOpenClawPlugins(options);
+    expect(second).toBe(first);
+    expect(getGlobalHookRunner()).not.toBeNull();
+
+    resetGlobalHookRunner();
   });
 
   it("loads plugins when source and root differ only by realpath alias", () => {
