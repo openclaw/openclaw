@@ -4,7 +4,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
-type ToolCallBlock = {
+type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
   name?: unknown;
@@ -12,7 +12,7 @@ type ToolCallBlock = {
   arguments?: unknown;
 };
 
-function isToolCallBlock(block: unknown): block is ToolCallBlock {
+function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
     return false;
   }
@@ -23,7 +23,7 @@ function isToolCallBlock(block: unknown): block is ToolCallBlock {
   );
 }
 
-function hasToolCallInput(block: ToolCallBlock): boolean {
+function hasToolCallInput(block: RawToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -34,7 +34,7 @@ function hasNonEmptyStringField(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasToolCallId(block: ToolCallBlock): boolean {
+function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
@@ -55,7 +55,7 @@ function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<str
   return normalized.size > 0 ? normalized : null;
 }
 
-function hasToolCallName(block: ToolCallBlock, allowedToolNames: Set<string> | null): boolean {
+function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> | null): boolean {
   if (typeof block.name !== "string") {
     return false;
   }
@@ -70,6 +70,66 @@ function hasToolCallName(block: ToolCallBlock, allowedToolNames: Set<string> | n
     return true;
   }
   return allowedToolNames.has(trimmed.toLowerCase());
+}
+
+function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const rec = value as Record<string, unknown>;
+  const raw = rec.attachments;
+  if (!Array.isArray(raw)) {
+    return value;
+  }
+  const next = raw.map((item) => {
+    if (!item || typeof item !== "object") {
+      return item;
+    }
+    const a = item as Record<string, unknown>;
+    if (!Object.hasOwn(a, "content")) {
+      return item;
+    }
+    const { content: _content, ...rest } = a;
+    return { ...rest, content: "__OPENCLAW_REDACTED__" };
+  });
+  return { ...rec, attachments: next };
+}
+
+function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
+  const rawName = typeof block.name === "string" ? block.name : undefined;
+  const trimmedName = rawName?.trim();
+  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
+  const normalizedName = hasTrimmedName ? trimmedName : undefined;
+  const nameChanged = hasTrimmedName && rawName !== trimmedName;
+
+  const isSessionsSpawn = normalizedName?.toLowerCase() === "sessions_spawn";
+
+  if (!isSessionsSpawn) {
+    if (!nameChanged) {
+      return block;
+    }
+    return { ...(block as Record<string, unknown>), name: normalizedName } as RawToolCallBlock;
+  }
+
+  // Redact large/sensitive inline attachment content from persisted transcripts.
+  // Apply redaction to both `.arguments` and `.input` properties since block structures can vary
+  const nextArgs = redactSessionsSpawnAttachmentsArgs(block.arguments);
+  const nextInput = redactSessionsSpawnAttachmentsArgs(block.input);
+  if (nextArgs === block.arguments && nextInput === block.input && !nameChanged) {
+    return block;
+  }
+
+  const next = { ...(block as Record<string, unknown>) };
+  if (nameChanged && normalizedName) {
+    next.name = normalizedName;
+  }
+  if (nextArgs !== block.arguments || Object.hasOwn(block, "arguments")) {
+    next.arguments = nextArgs;
+  }
+  if (nextInput !== block.input || Object.hasOwn(block, "input")) {
+    next.input = nextInput;
+  }
+  return next as RawToolCallBlock;
 }
 
 function makeMissingToolResult(params: {
@@ -147,9 +207,10 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
       out.push(msg);
       continue;
     }
-    const { details: _details, ...rest } = msg as unknown as Record<string, unknown>;
+    const sanitized = { ...(msg as object) } as { details?: unknown };
+    delete sanitized.details;
     touched = true;
-    out.push(rest as unknown as AgentMessage);
+    out.push(sanitized as unknown as AgentMessage);
   }
   return touched ? out : messages;
 }
@@ -177,11 +238,11 @@ export function repairToolCallInputs(
 
     const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
-    let trimmedInMessage = 0;
+    let messageChanged = false;
 
     for (const block of msg.content) {
       if (
-        isToolCallBlock(block) &&
+        isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
           !hasToolCallId(block) ||
           !hasToolCallName(block, allowedToolNames))
@@ -189,22 +250,49 @@ export function repairToolCallInputs(
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;
+        messageChanged = true;
         continue;
       }
-      // Normalize tool call names by trimming whitespace so that downstream
-      // lookup (toolsByName map) matches correctly even when the model emits
-      // names with leading/trailing spaces (e.g. " read" → "read").
-      if (isToolCallBlock(block) && typeof (block as ToolCallBlock).name === "string") {
-        const rawName = (block as ToolCallBlock).name as string;
-        if (rawName !== rawName.trim()) {
-          const normalized = { ...block, name: rawName.trim() } as typeof block;
-          nextContent.push(normalized);
-          trimmedInMessage += 1;
-          changed = true;
+      if (isRawToolCallBlock(block)) {
+        if (
+          (block as { type?: unknown }).type === "toolCall" ||
+          (block as { type?: unknown }).type === "toolUse" ||
+          (block as { type?: unknown }).type === "functionCall"
+        ) {
+          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
+          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          const blockName =
+            typeof (block as { name?: unknown }).name === "string"
+              ? (block as { name: string }).name.trim()
+              : undefined;
+          if (blockName?.toLowerCase() === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(block);
+            if (sanitized !== block) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+          } else {
+            if (typeof (block as { name?: unknown }).name === "string") {
+              const rawName = (block as { name: string }).name;
+              const trimmedName = rawName.trim();
+              if (rawName !== trimmedName && trimmedName) {
+                const renamed = { ...(block as object), name: trimmedName } as typeof block;
+                nextContent.push(renamed);
+                changed = true;
+                messageChanged = true;
+              } else {
+                nextContent.push(block);
+              }
+            } else {
+              nextContent.push(block);
+            }
+          }
           continue;
         }
+      } else {
+        nextContent.push(block);
       }
-      nextContent.push(block);
     }
 
     if (droppedInMessage > 0) {
@@ -217,9 +305,7 @@ export function repairToolCallInputs(
       continue;
     }
 
-    // When tool names were trimmed but nothing was dropped,
-    // we still need to emit the message with the normalized content.
-    if (trimmedInMessage > 0) {
+    if (messageChanged) {
       out.push({ ...msg, content: nextContent });
       continue;
     }

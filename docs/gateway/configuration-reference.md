@@ -1816,6 +1816,35 @@ Notes:
 - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
+### `tools.sessions_spawn`
+
+Controls inline attachment support for `sessions_spawn`.
+
+```json5
+{
+  tools: {
+    sessions_spawn: {
+      attachments: {
+        enabled: false, // opt-in: set true to allow inline file attachments
+        maxTotalBytes: 5242880, // 5 MB total across all files
+        maxFiles: 50,
+        maxFileBytes: 1048576, // 1 MB per file
+        retainOnSessionKeep: false, // keep attachments when cleanup="keep"
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Attachments are only supported for `runtime: "subagent"`. ACP runtime rejects them.
+- Files are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+- Attachment content is automatically redacted from transcript persistence.
+- Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
+- File permissions are `0700` for directories and `0600` for files.
+- Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+
 ### `tools.subagents`
 
 ```json5
