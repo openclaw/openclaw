@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createBoundedCounter, createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
+import {
+  createBoundedCounter,
+  createFixedWindowRateLimiter,
+  createWebhookAnomalyTracker,
+  WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "./webhook-memory-guards.js";
 
 describe("createFixedWindowRateLimiter", () => {
   it("enforces a fixed-window request limit", () => {
@@ -91,5 +97,57 @@ describe("createBoundedCounter", () => {
 
     counter.increment("fresh", 120);
     expect(counter.size()).toBe(1);
+  });
+});
+
+describe("defaults", () => {
+  it("exports shared webhook limit profiles", () => {
+    expect(WEBHOOK_RATE_LIMIT_DEFAULTS).toEqual({
+      windowMs: 60_000,
+      maxRequests: 120,
+      maxTrackedKeys: 4_096,
+    });
+    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys).toBe(4_096);
+    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs).toBe(21_600_000);
+    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery).toBe(25);
+  });
+});
+
+describe("createWebhookAnomalyTracker", () => {
+  it("increments only tracked status codes and logs at configured cadence", () => {
+    const logs: string[] = [];
+    const tracker = createWebhookAnomalyTracker({
+      trackedStatusCodes: [401],
+      logEvery: 2,
+    });
+
+    expect(
+      tracker.record({
+        key: "k",
+        statusCode: 415,
+        message: (count) => `ignored:${count}`,
+        log: (msg) => logs.push(msg),
+      }),
+    ).toBe(0);
+
+    expect(
+      tracker.record({
+        key: "k",
+        statusCode: 401,
+        message: (count) => `hit:${count}`,
+        log: (msg) => logs.push(msg),
+      }),
+    ).toBe(1);
+
+    expect(
+      tracker.record({
+        key: "k",
+        statusCode: 401,
+        message: (count) => `hit:${count}`,
+        log: (msg) => logs.push(msg),
+      }),
+    ).toBe(2);
+
+    expect(logs).toEqual(["hit:1", "hit:2"]);
   });
 });
