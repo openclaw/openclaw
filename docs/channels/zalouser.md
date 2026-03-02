@@ -1,5 +1,5 @@
 ---
-summary: "Zalo personal account support via zca-cli (QR login), capabilities, and configuration"
+summary: "Zalo personal account support via native zca-js (QR login), capabilities, and configuration"
 read_when:
   - Setting up Zalo Personal for OpenClaw
   - Debugging Zalo Personal login or message flow
@@ -8,7 +8,7 @@ title: "Zalo Personal"
 
 # Zalo Personal (unofficial)
 
-Status: experimental. This integration automates a **personal Zalo account** via `zca-cli`.
+Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
 
 > **Warning:** This is an unofficial integration and may result in account suspension/ban. Use at your own risk.
 
@@ -20,19 +20,14 @@ Zalo Personal ships as a plugin and is not bundled with the core install.
 - Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
 - Details: [Plugins](/tools/plugin)
 
-## Prerequisite: zca-cli
-
-The Gateway machine must have the `zca` binary available in `PATH`.
-
-- Verify: `zca --version`
-- If missing, install zca-cli (see `extensions/zalouser/README.md` or the upstream zca-cli docs).
+No external `zca`/`openzca` CLI binary is required.
 
 ## Quick setup (beginner)
 
 1. Install the plugin (see above).
 2. Login (QR, on the Gateway machine):
    - `openclaw channels login --channel zalouser`
-   - Scan the QR code in the terminal with the Zalo mobile app.
+   - Scan the QR code with the Zalo mobile app.
 3. Enable the channel:
 
 ```json5
@@ -51,8 +46,9 @@ The Gateway machine must have the `zca` binary available in `PATH`.
 
 ## What it is
 
-- Uses `zca listen` to receive inbound messages.
-- Uses `zca msg ...` to send replies (text/media/link).
+- Runs entirely in-process via `zca-js`.
+- Uses native event listeners to receive inbound messages.
+- Sends replies directly through the JS API (text/media/link).
 - Designed for “personal account” use cases where Zalo Bot API is not available.
 
 ## Naming
@@ -77,7 +73,8 @@ openclaw directory groups list --channel zalouser --query "work"
 ## Access control (DMs)
 
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
-`channels.zalouser.allowFrom` accepts user IDs or names. The wizard resolves names to IDs via `zca friend find` when available.
+
+`channels.zalouser.allowFrom` accepts user IDs or names. During onboarding, names are resolved to IDs using the plugin's in-process contact lookup.
 
 Approve via:
 
@@ -112,7 +109,7 @@ Example:
 
 ## Multi-account
 
-Accounts map to zca profiles. Example:
+Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 ```json5
 {
@@ -130,11 +127,16 @@ Accounts map to zca profiles. Example:
 
 ## Troubleshooting
 
-**`zca` not found:**
-
-- Install zca-cli and ensure it’s on `PATH` for the Gateway process.
-
-**Login doesn’t stick:**
+**Login doesn't stick:**
 
 - `openclaw channels status --probe`
 - Re-login: `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`
+
+**Allowlist/group name didn't resolve:**
+
+- Use numeric IDs in `allowFrom`/`groups`, or exact friend/group names.
+
+**Upgraded from old CLI-based setup:**
+
+- Remove any old external `zca` process assumptions.
+- The channel now runs fully in OpenClaw without external CLI binaries.
