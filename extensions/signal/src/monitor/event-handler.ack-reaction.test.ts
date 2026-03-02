@@ -173,13 +173,32 @@ describe("Signal ACK reactions", () => {
     expect(sendReactionSignal).not.toHaveBeenCalled();
   });
 
-  it("does NOT send ack when timestamp is missing", async () => {
+  it("sends ack using dataMessage.timestamp when envelope.timestamp is missing", async () => {
     const deps = makeDeps();
     const handler = createSignalEventHandler(deps);
     await handler(
       makeEvent({
         timestamp: undefined,
-        dataMessage: { message: "hello", timestamp: 1700000000000 },
+        dataMessage: { message: "hello", timestamp: 1700000001234 },
+      }),
+    );
+
+    expect(sendReactionSignal).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignal).toHaveBeenCalledWith(
+      expect.any(String),
+      1700000001234,
+      expect.any(String),
+      expect.any(Object),
+    );
+  });
+
+  it("does NOT send ack when both envelope and dataMessage timestamps are missing", async () => {
+    const deps = makeDeps();
+    const handler = createSignalEventHandler(deps);
+    await handler(
+      makeEvent({
+        timestamp: undefined,
+        dataMessage: { message: "hello", timestamp: undefined },
       }),
     );
 
