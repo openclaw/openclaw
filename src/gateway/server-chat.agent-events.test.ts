@@ -220,6 +220,52 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("suppresses NO_REPLY lead fragments and does not leak NO in final chat message", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_100,
+    });
+    chatRunState.registry.add("run-3", { sessionKey: "session-3", clientRunId: "client-3" });
+
+    for (const text of ["NO", "NO_", "NO_RE", "NO_REPLY"]) {
+      handler({
+        runId: "run-3",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text },
+      });
+    }
+    emitLifecycleEnd(handler, "run-3");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    expect(payload.message).toBeUndefined();
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("keeps final short replies like 'No' even when lead-fragment deltas are suppressed", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 2_200,
+    });
+    chatRunState.registry.add("run-4", { sessionKey: "session-4", clientRunId: "client-4" });
+
+    handler({
+      runId: "run-4",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "No" },
+    });
+    emitLifecycleEnd(handler, "run-4");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("No");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("cleans up agent run sequence tracking when lifecycle completes", () => {
     const { agentRunSeq, chatRunState, handler, nowSpy } = createHarness({ now: 2_500 });
     chatRunState.registry.add("run-cleanup", {
