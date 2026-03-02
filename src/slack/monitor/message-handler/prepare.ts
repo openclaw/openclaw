@@ -51,6 +51,9 @@ import {
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
+export const SLACK_NO_MENTION_HINT =
+  'Set channels.slack.requireMention=false or channels.slack.channels["*"].requireMention=false to handle channel messages without @mentions.';
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -311,7 +314,14 @@ export async function prepareSlackMessage(params: {
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        reason: "no-mention",
+        hint: SLACK_NO_MENTION_HINT,
+      },
+      "skipping channel message",
+    );
     const pendingText = (message.text ?? "").trim();
     const fallbackFile = message.files?.[0]?.name
       ? `[Slack file: ${message.files[0].name}]`

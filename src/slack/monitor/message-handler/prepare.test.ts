@@ -12,7 +12,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import { createSlackMonitorContext } from "../context.js";
-import { prepareSlackMessage } from "./prepare.js";
+import { prepareSlackMessage, SLACK_NO_MENTION_HINT } from "./prepare.js";
 
 describe("slack prepareSlackMessage inbound contract", () => {
   let fixtureRoot = "";
@@ -255,6 +255,36 @@ describe("slack prepareSlackMessage inbound contract", () => {
     }
     return slackCtx;
   }
+
+  it("logs an actionable hint when channel messages are skipped for missing @mention", async () => {
+    const slackCtx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: true,
+      asChannel: true,
+    });
+    const infoMock = vi.fn();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    (slackCtx as any).logger = { info: infoMock };
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount(),
+      createThreadReplyMessage({
+        thread_ts: undefined,
+        text: "hello channel",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(infoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        reason: "no-mention",
+        hint: SLACK_NO_MENTION_HINT,
+      }),
+      "skipping channel message",
+    );
+  });
 
   it("produces a finalized MsgContext", async () => {
     const message: SlackMessageEvent = {

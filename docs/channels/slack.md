@@ -516,6 +516,28 @@ Legacy keys:
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
+## Troubleshooting channel events
+
+If `app_mention` events work but regular channel messages do not trigger replies:
+
+1. Confirm your Slack app has `message.channels` / `message.groups` event subscriptions and `channels:history` / `groups:history` scopes.
+2. Check mention gating. By default, channel replies often require a bot mention.
+3. To allow non-mention channel messages, configure:
+
+```json
+{
+  "channels": {
+    "slack": {
+      "groupPolicy": "open",
+      "requireMention": false,
+      "channels": {
+        "*": { "requireMention": false }
+      }
+    }
+  }
+}
+```
+
 ## Configuration reference pointers
 
 Primary reference:
