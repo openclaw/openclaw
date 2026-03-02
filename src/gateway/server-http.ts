@@ -48,13 +48,17 @@ import {
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
-import { hasSecurityPathCanonicalizationAnomaly } from "./security-path.js";
-import { isProtectedPluginRoutePath } from "./security-path.js";
 import {
   authorizeCanvasRequest,
   enforcePluginRouteGatewayAuth,
   isCanvasPath,
 } from "./server/http-auth.js";
+import {
+  isProtectedPluginRoutePathFromContext,
+  resolvePluginRoutePathContext,
+  type PluginHttpRequestHandler,
+  type PluginRoutePathContext,
+} from "./server/plugins-http.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -81,8 +85,12 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/readyz", "ready"],
 ]);
 
-function shouldEnforceDefaultPluginGatewayAuth(pathname: string): boolean {
-  return hasSecurityPathCanonicalizationAnomaly(pathname) || isProtectedPluginRoutePath(pathname);
+function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
+  return (
+    pathContext.malformedEncoding ||
+    pathContext.decodePassLimitReached ||
+    isProtectedPluginRoutePathFromContext(pathContext)
+  );
 }
 
 function handleGatewayProbeRequest(
@@ -391,8 +399,8 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
-  handlePluginRequest?: HooksRequestHandler;
-  shouldEnforcePluginGatewayAuth?: (requestPath: string) => boolean;
+  handlePluginRequest?: PluginHttpRequestHandler;
+  shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -445,7 +453,9 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
-
+      const pluginPathContext = handlePluginRequest
+        ? resolvePluginRoutePathContext(requestPath)
+        : null;
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "hooks",
@@ -466,7 +476,6 @@ export function createGatewayHttpServer(opts: {
           run: () => handleSlackHttpRequest(req, res),
         },
       ];
-
       if (openResponsesEnabled) {
         requestStages.push({
           name: "openresponses",
@@ -550,9 +559,10 @@ export function createGatewayHttpServer(opts: {
         requestStages.push({
           name: "plugin-auth",
           run: async () => {
+            const pathContext = pluginPathContext ?? resolvePluginRoutePathContext(requestPath);
             if (
               !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
-                requestPath,
+                pathContext,
               )
             ) {
               return false;
@@ -573,7 +583,10 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "plugin-http",
-          run: () => handlePluginRequest(req, res),
+          run: () => {
+            const pathContext = pluginPathContext ?? resolvePluginRoutePathContext(requestPath);
+            return handlePluginRequest(req, res, pathContext);
+          },
         });
       }
 

@@ -518,13 +518,18 @@ describe("loadOpenClawPlugins", () => {
     expect(channel).toBeDefined();
   });
 
-  it("registers http handlers", () => {
+  it("registers http routes with auth and match options", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "http-demo",
       filename: "http-demo.cjs",
       body: `module.exports = { id: "http-demo", register(api) {
-  api.registerHttpHandler(async () => false);
+  api.registerHttpRoute({
+    path: "/webhook",
+    auth: "plugin",
+    match: "prefix",
+    handler: async () => false
+  });
 } };`,
     });
 
@@ -535,10 +540,13 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    const handler = registry.httpHandlers.find((entry) => entry.pluginId === "http-demo");
-    expect(handler).toBeDefined();
+    const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-demo");
+    expect(route).toBeDefined();
+    expect(route?.path).toBe("/webhook");
+    expect(route?.auth).toBe("plugin");
+    expect(route?.match).toBe("prefix");
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-demo");
-    expect(httpPlugin?.httpHandlers).toBe(1);
+    expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
   it("registers http routes", () => {
@@ -561,8 +569,10 @@ describe("loadOpenClawPlugins", () => {
     const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-route-demo");
     expect(route).toBeDefined();
     expect(route?.path).toBe("/demo");
+    expect(route?.auth).toBe("gateway");
+    expect(route?.match).toBe("exact");
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-route-demo");
-    expect(httpPlugin?.httpHandlers).toBe(1);
+    expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
   it("respects explicit disable in config", () => {

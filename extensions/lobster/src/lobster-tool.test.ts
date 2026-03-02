@@ -38,7 +38,6 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     runtime: { version: "test" } as any,
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
-    registerHttpHandler() {},
     registerChannel() {},
     registerGatewayMethod() {},
     registerCli() {},

@@ -7,6 +7,7 @@ import {
   readJsonBodyWithLimit,
   registerPluginHttpRoute,
   registerWebhookTarget,
+  registerPluginHttpRoute,
   rejectNonPostWebhookRequest,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -969,7 +970,7 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
   const audience = options.account.config.audience?.trim();
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
 
-  const unregister = registerGoogleChatWebhookTarget({
+  const unregisterTarget = registerGoogleChatWebhookTarget({
     account: options.account,
     config: options.config,
     runtime: options.runtime,
@@ -980,8 +981,20 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
     statusSink: options.statusSink,
     mediaMaxMb,
   });
+  const unregisterRoute = registerPluginHttpRoute({
+    path: webhookPath,
+    auth: "plugin",
+    match: "exact",
+    pluginId: "googlechat",
+    accountId: options.account.accountId,
+    log: (message) => logVerbose(core, options.runtime, message),
+    handler: handleGoogleChatWebhookRequest,
+  });
 
-  return unregister;
+  return () => {
+    unregisterTarget();
+    unregisterRoute();
+  };
 }
 
 export async function startGoogleChatMonitor(
