@@ -28,6 +28,7 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
 
@@ -46,7 +47,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     baseUrl.includes("moonshot.ai") ||
     baseUrl.includes("moonshot.cn");
   const isDashScope = model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
-  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(model)) {
+  const isVectortara = model.provider === "vectortara" || baseUrl.includes("vectortara.com");
+
+  if (
+    (!isZai && !isMoonshot && !isDashScope && !isVectortara) ||
+    !isOpenAiCompletionsModel(model)
+  ) {
     return model;
   }
 

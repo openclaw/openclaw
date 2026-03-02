@@ -7,6 +7,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import {
   isCompactionFailureError,
   isContextOverflowError,
+  isDeveloperRoleUnsupportedErrorMessage,
   isLikelyContextOverflowError,
   isTransientHttpError,
   sanitizeUserFacingText,
@@ -477,6 +478,7 @@ export async function runAgentTurnWithFallback(params: {
       const isContextOverflow = isLikelyContextOverflowError(message);
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
+      const isDeveloperRoleUnsupported = isDeveloperRoleUnsupportedErrorMessage(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
@@ -572,9 +574,11 @@ export async function runAgentTurnWithFallback(params: {
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow
         ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-        : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+        : isDeveloperRoleUnsupported
+          ? `⚠️ Provider rejected the "developer" role (only supports "user"/"assistant"). (provider=${params.followupRun.run.provider} model=${params.followupRun.run.model}) Set compat.supportsDeveloperRole=false for this model (or switch to a compatible API) and try again.`
+          : isRoleOrderingError
+            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",

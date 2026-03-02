@@ -26,6 +26,7 @@ export {
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
   isContextOverflowError,
+  isDeveloperRoleUnsupportedErrorMessage,
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
