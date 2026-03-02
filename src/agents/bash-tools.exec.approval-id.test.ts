@@ -201,16 +201,10 @@ describe("exec approvals", () => {
 
   it("requires approval for elevated ask when allowlist misses", async () => {
     const calls: string[] = [];
-    let resolveApproval: (() => void) | undefined;
-    const approvalSeen = new Promise<void>((resolve) => {
-      resolveApproval = resolve;
-    });
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
-        resolveApproval?.();
-        // Return registration confirmation
         return { status: "accepted", id: (params as { id?: string })?.id };
       }
       if (method === "exec.approval.waitDecision") {
@@ -227,10 +221,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call4", { command: "echo ok", elevated: true });
-    expect(result.details.status).toBe("approval-pending");
-    await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+    // No inline decision: tool returns approval-pending; deny is handled asynchronously.
+    expect(result.details.status).toBe("approval-pending");
   });
 
   it("waits for approval registration before returning approval-pending", async () => {
@@ -293,6 +287,27 @@ describe("exec approvals", () => {
     await expect(tool.execute("call-registration-fail", { command: "echo fail" })).rejects.toThrow(
       "Exec approval registration failed",
     );
+  });
+
+  it("returns exec output when gateway approval is allow-always (Always Allow)", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        return { decision: "allow-always" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-allow-always", { command: "echo test" });
+    expect(result.details.status).toBe("completed");
+    const text = result.content?.[0]?.type === "text" ? result.content[0].text : "";
+    expect(text.trim()).toBe("test");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

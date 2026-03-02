@@ -171,23 +171,27 @@ export async function processGatewayAllowlist(
     expiresAtMs = registration.expiresAtMs;
     preResolvedDecision = registration.finalDecision;
 
-    void (async () => {
+    const runAfterRegistration = async (): Promise<AgentToolResult<ExecToolDetails>> => {
       let decision: string | null = preResolvedDecision ?? null;
       try {
-        // Some gateways may return a final decision inline during registration.
-        // Only call waitDecision when registration did not already carry one.
         if (preResolvedDecision === undefined) {
           decision = await waitForExecApprovalDecision(approvalId);
         }
       } catch {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
+          { sessionKey: params.notifySessionKey, contextKey },
         );
-        return;
+        return {
+          content: [{ type: "text", text: `${warningText}Exec denied (approval-request-failed).` }],
+          details: {
+            status: "failed",
+            exitCode: null,
+            durationMs: 0,
+            aggregated: "",
+            cwd: params.workdir,
+          },
+        };
       }
 
       let approvedByAsk = false;
@@ -235,17 +239,23 @@ export async function processGatewayAllowlist(
       if (deniedReason) {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
+          { sessionKey: params.notifySessionKey, contextKey },
         );
-        return;
+        return {
+          content: [{ type: "text", text: `${warningText}Exec denied (${deniedReason}).` }],
+          details: {
+            status: "failed",
+            exitCode: null,
+            durationMs: 0,
+            aggregated: "",
+            cwd: params.workdir,
+          },
+        };
       }
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
-      let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
+      let run: Awaited<ReturnType<typeof runExecProcess>>;
       try {
         run = await runExecProcess({
           command: params.command,
@@ -267,12 +277,18 @@ export async function processGatewayAllowlist(
       } catch {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
-          {
-            sessionKey: params.notifySessionKey,
-            contextKey,
-          },
+          { sessionKey: params.notifySessionKey, contextKey },
         );
-        return;
+        return {
+          content: [{ type: "text", text: `${warningText}Exec denied (spawn-failed).` }],
+          details: {
+            status: "failed",
+            exitCode: null,
+            durationMs: 0,
+            aggregated: "",
+            cwd: params.workdir,
+          },
+        };
       }
 
       markBackgrounded(run.session);
@@ -281,7 +297,7 @@ export async function processGatewayAllowlist(
       if (params.approvalRunningNoticeMs > 0) {
         runningTimer = setTimeout(() => {
           emitExecSystemEvent(
-            `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
+            `Exec running (gateway id=${approvalId}, session=${run.session.id}, >${noticeSeconds}s): ${params.command}`,
             { sessionKey: params.notifySessionKey, contextKey },
           );
         }, params.approvalRunningNoticeMs);
@@ -299,8 +315,49 @@ export async function processGatewayAllowlist(
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
         : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
       emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
-    })();
 
+      if (outcome.status === "failed") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${warningText}${outcome.aggregated || outcome.reason || "Command failed."}`,
+            },
+          ],
+          details: {
+            status: "failed",
+            exitCode: outcome.exitCode ?? null,
+            durationMs: outcome.durationMs,
+            aggregated: outcome.aggregated ?? "",
+            cwd: run.session.cwd,
+          },
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${warningText}${outcome.aggregated || "(no output)"}`,
+          },
+        ],
+        details: {
+          status: "completed",
+          exitCode: outcome.exitCode ?? 0,
+          durationMs: outcome.durationMs,
+          aggregated: outcome.aggregated ?? "",
+          cwd: run.session.cwd,
+        },
+      };
+    };
+
+    const hasInlineDecision =
+      preResolvedDecision === "allow-once" || preResolvedDecision === "allow-always";
+    if (hasInlineDecision) {
+      const result = await runAfterRegistration();
+      return { pendingResult: result };
+    }
+
+    void runAfterRegistration();
     return {
       pendingResult: {
         content: [
