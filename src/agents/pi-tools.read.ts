@@ -342,6 +342,56 @@ type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
+/**
+ * Known valid single-character file extensions.
+ * Any single-char extension NOT in this set is likely a truncation artifact
+ * from partial JSON streaming (e.g. `.t` from `.ts`, `.j` from `.js`).
+ */
+export const VALID_SINGLE_CHAR_EXTENSIONS = new Set([
+  ".c", // C
+  ".h", // C/C++ header
+  ".r", // R script
+  ".R", // R script (case-sensitive)
+  ".d", // D language / dtrace
+  ".v", // Verilog / Coq
+  ".o", // object file
+  ".a", // archive / static lib
+  ".s", // assembly
+  ".S", // assembly (preprocessed)
+  ".m", // Objective-C / MATLAB
+  ".j", // J language (rare but valid)
+  ".e", // Eiffel
+]);
+
+/**
+ * Detect file paths that appear truncated by the partial-json streaming parser.
+ * Returns a descriptive message if truncation is suspected, or undefined if the path looks fine.
+ *
+ * Catches two patterns:
+ * 1. Single-character extensions that aren't in the known-valid set
+ *    (e.g. `.t` from `.ts`, `.p` from `.py`)
+ * 2. Leaked JSON structure — trailing commas/spaces from partial parsing
+ *    (e.g. `README.md, ` or `src/foo.ts,`)
+ */
+export function detectTruncatedPath(filePath: string): string | undefined {
+  if (!filePath || !filePath.trim()) {
+    return undefined;
+  }
+
+  // Pattern 2: leaked JSON structure (trailing comma, with optional whitespace)
+  if (/,\s*$/.test(filePath)) {
+    return `Path "${filePath}" contains trailing comma (likely leaked JSON from partial streaming). Retry with the complete file path.`;
+  }
+
+  // Pattern 1: suspicious single-char extension
+  const ext = path.extname(filePath);
+  if (ext.length === 2 && !VALID_SINGLE_CHAR_EXTENSIONS.has(ext)) {
+    return `Path "${filePath}" has a single-character extension "${ext}" that appears truncated. Retry with the complete file path.`;
+  }
+
+  return undefined;
+}
+
 function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
@@ -553,6 +603,14 @@ export function wrapToolParamNormalization(
       if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
+      // Guard against truncated paths from partial JSON streaming
+      const pathVal = record?.path ?? record?.file_path;
+      if (typeof pathVal === "string") {
+        const truncationMsg = detectTruncatedPath(pathVal);
+        if (truncationMsg) {
+          throw parameterValidationError(truncationMsg);
+        }
+      }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },
   };
@@ -630,6 +688,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
+        // Guard against truncated paths from partial JSON streaming
+        const truncationMsg = detectTruncatedPath(filePath);
+        if (truncationMsg) {
+          throw parameterValidationError(truncationMsg);
+        }
         const sandboxPath = mapContainerPathToWorkspaceRoot({
           filePath,
           root,
