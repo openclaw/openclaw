@@ -164,6 +164,31 @@ describe("resolveSpawnCommand", () => {
     ).toThrow(/without shell execution/);
   });
 
+  it("fails closed for wrapper fallback when args include a malicious cwd payload", async () => {
+    const dir = await createTempDir();
+    const wrapperPath = path.join(dir, "strict-wrapper.cmd");
+    await writeFile(wrapperPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+    const payload = "C:\\safe & calc.exe";
+    const events: Array<{ resolution: string }> = [];
+
+    expect(() =>
+      resolveSpawnCommand(
+        {
+          command: wrapperPath,
+          args: ["--cwd", payload, "agent", "status"],
+        },
+        {
+          strictWindowsCmdWrapper: true,
+          onResolved: (event) => {
+            events.push({ resolution: event.resolution });
+          },
+        },
+        winRuntime({}),
+      ),
+    ).toThrow(/without shell execution/);
+    expect(events).toEqual([{ resolution: "unresolved-wrapper" }]);
+  });
+
   it("reuses resolved command when cache is provided", async () => {
     const dir = await createTempDir();
     const wrapperPath = path.join(dir, "acpx.cmd");
