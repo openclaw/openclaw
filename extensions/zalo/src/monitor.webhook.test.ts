@@ -1,8 +1,14 @@
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
-import { handleZaloWebhookRequest, registerZaloWebhookTarget } from "./monitor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearZaloWebhookSecurityStateForTest,
+  getZaloWebhookRateLimitStateSizeForTest,
+  getZaloWebhookStatusCounterSizeForTest,
+  handleZaloWebhookRequest,
+  registerZaloWebhookTarget,
+} from "./monitor.js";
 import type { ResolvedZaloAccount } from "./types.js";
 
 async function withServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
@@ -56,6 +62,10 @@ function registerTarget(params: {
 }
 
 describe("handleZaloWebhookRequest", () => {
+  afterEach(() => {
+    clearZaloWebhookSecurityStateForTest();
+  });
+
   it("returns 400 for non-object payloads", async () => {
     const unregister = registerTarget({ path: "/hook" });
 
@@ -191,6 +201,59 @@ describe("handleZaloWebhookRequest", () => {
         }
 
         expect(saw429).toBe(true);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not grow status counters when query strings churn on unauthorized requests", async () => {
+    const unregister = registerTarget({ path: "/hook-query-status" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        for (let i = 0; i < 200; i += 1) {
+          const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "invalid-token",
+              "content-type": "application/json",
+            },
+            body: "{}",
+          });
+          expect(response.status).toBe(401);
+        }
+
+        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(1);
+      });
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rate limits authenticated requests even when query strings churn", async () => {
+    const unregister = registerTarget({ path: "/hook-query-rate" });
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        let saw429 = false;
+        for (let i = 0; i < 130; i += 1) {
+          const response = await fetch(`${baseUrl}/hook-query-rate?nonce=${i}`, {
+            method: "POST",
+            headers: {
+              "x-bot-api-secret-token": "secret",
+              "content-type": "application/json",
+            },
+            body: "{}",
+          });
+          if (response.status === 429) {
+            saw429 = true;
+            break;
+          }
+        }
+
+        expect(saw429).toBe(true);
+        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
       });
     } finally {
       unregister();

@@ -47,12 +47,12 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     return () => childSessionKey;
   }
 
-  async function executeSpawn(callId: string, agentId: string) {
+  async function executeSpawn(callId: string, agentId: string, sandbox?: "inherit" | "require") {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     });
-    return tool.execute(callId, { task: "do thing", agentId });
+    return tool.execute(callId, { task: "do thing", agentId, sandbox });
   }
 
   async function expectAllowedSpawn(params: {
@@ -153,5 +153,74 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call10",
       acceptedAt: 5200,
     });
+  });
+
+  it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await executeSpawn("call11", "research");
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("forbidden");
+    expect(details.error).toContain("Sandboxed sessions cannot spawn unsandboxed subagents.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it('forbids sandbox="require" when target runtime is unsandboxed', async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await executeSpawn("call12", "research", "require");
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("forbidden");
+    expect(details.error).toContain('sandbox="require"');
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

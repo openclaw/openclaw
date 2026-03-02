@@ -1391,7 +1391,7 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     expect(String(payload?.text ?? "")).toContain("Usage:");
-    expect(String(payload?.text ?? "")).toContain(`· session ${sessionKey}`);
+    expect(String(payload?.text ?? "")).toContain(`· session \`${sessionKey}\``);
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
