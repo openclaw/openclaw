@@ -576,6 +576,55 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("denies approval-based execution when cwd identity drifts before execution", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-drift-"));
+    const fallback = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-drift-alt-"));
+    const script = path.join(tmp, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(script, 0o755);
+    const canonicalCwd = fs.realpathSync(tmp);
+    const realStatSync = fs.statSync.bind(fs);
+    let targetStatCalls = 0;
+    const driftStat = realStatSync(fallback);
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const [target] = args;
+      const resolvedTarget =
+        typeof target === "string"
+          ? path.resolve(target)
+          : Buffer.isBuffer(target)
+            ? path.resolve(target.toString())
+            : target instanceof URL
+              ? path.resolve(target.pathname)
+              : path.resolve(String(target));
+      if (resolvedTarget === canonicalCwd) {
+        targetStatCalls += 1;
+        if (targetStatCalls >= 3) {
+          return driftStat;
+        }
+      }
+      return realStatSync(...args);
+    });
+    try {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["./run.sh"],
+        cwd: tmp,
+        approved: true,
+        security: "full",
+        ask: "off",
+      });
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+        exact: true,
+      });
+    } finally {
+      statSpy.mockRestore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(fallback, { recursive: true, force: true });
+    }
+  });
+
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
     const runCommand = vi.fn(async () => {
