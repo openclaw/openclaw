@@ -17,9 +17,7 @@ final class DevicePairingApprovalPrompter {
     private var queue: [PendingRequest] = []
     var pendingCount: Int = 0
     var pendingRepairCount: Int = 0
-    private var activeAlert: NSAlert?
-    private var activeRequestId: String?
-    private var alertHostWindow: NSWindow?
+    private let alertState = PairingAlertState()
     private var resolvedByRequestId: Set<String> = []
 
     private struct PairingList: Codable {
@@ -78,12 +76,10 @@ final class DevicePairingApprovalPrompter {
     private func stopPushTask() {
         PairingAlertSupport.stopPairingPrompter(
             isStopping: &self.isStopping,
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
             task: &self.task,
             queue: &self.queue,
             isPresenting: &self.isPresenting,
-            alertHostWindow: &self.alertHostWindow)
+            state: self.alertState)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -121,18 +117,8 @@ final class DevicePairingApprovalPrompter {
             requestId: req.requestId,
             messageText: "Allow device to connect?",
             informativeText: Self.describe(req),
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
-            alertHostWindow: &self.alertHostWindow,
-            clearActive: self.clearActiveAlert(hostWindow:),
+            state: self.alertState,
             onResponse: self.handleAlertResponse)
-    }
-
-    private func clearActiveAlert(hostWindow: NSWindow) {
-        PairingAlertSupport.clearActivePairingAlert(
-            activeAlert: &self.activeAlert,
-            activeRequestId: &self.activeRequestId,
-            hostWindow: hostWindow)
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
@@ -194,7 +180,7 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func endActiveAlert() {
-        PairingAlertSupport.endActiveAlert(activeAlert: &self.activeAlert, activeRequestId: &self.activeRequestId)
+        PairingAlertSupport.endActiveAlert(state: self.alertState)
     }
 
     private func handle(push: GatewayPush) {
@@ -234,7 +220,7 @@ final class DevicePairingApprovalPrompter {
         let resolution = resolved.decision == PairingAlertSupport.PairingResolution.approved.rawValue
             ? PairingAlertSupport.PairingResolution.approved
             : PairingAlertSupport.PairingResolution.rejected
-        if let activeRequestId, activeRequestId == resolved.requestId {
+        if let activeRequestId = self.alertState.activeRequestId, activeRequestId == resolved.requestId {
             self.resolvedByRequestId.insert(resolved.requestId)
             self.endActiveAlert()
             let decision = resolution.rawValue
