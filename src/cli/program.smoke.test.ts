@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureCommand,
   ensureConfigReady,
@@ -26,14 +26,19 @@ vi.mock("./config-cli.js", () => ({
 const { buildProgram } = await import("./program.js");
 
 describe("cli program (smoke)", () => {
+  let program = createProgram();
+
   function createProgram() {
     return buildProgram();
   }
 
   async function runProgram(argv: string[]) {
-    const program = createProgram();
     await program.parseAsync(argv, { from: "user" });
   }
+
+  beforeAll(() => {
+    program = createProgram();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,7 +47,6 @@ describe("cli program (smoke)", () => {
   });
 
   it("registers memory + status commands", () => {
-    const program = createProgram();
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("message");
     expect(names).toContain("memory");
