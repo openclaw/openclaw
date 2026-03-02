@@ -261,9 +261,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       if (action !== "react") {
         throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
       }
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
+      const messageId =
+        readStringParam(params, "messageId") ??
+        readStringParam(params, "MessageSidFull") ??
+        readStringParam(params, "MessageSid") ??
+        readStringParam(params, "MessageSidFirst") ??
+        readStringParam(params, "MessageSidLast") ??
+        readStringParam(params, "messageId", {
+          required: true,
+        });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = typeof params.remove === "boolean" ? params.remove : undefined;
       return await getWhatsAppRuntime().channel.whatsapp.handleWhatsAppAction(

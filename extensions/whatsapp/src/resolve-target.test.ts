@@ -1,5 +1,31 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
+
+const { handleWhatsAppActionMock, readStringParamMock } = vi.hoisted(() => ({
+  handleWhatsAppActionMock: vi.fn(async () => ({ ok: true })),
+  readStringParamMock: vi.fn(
+    (
+      params: Record<string, unknown>,
+      key: string,
+      options?: { required?: boolean; allowEmpty?: boolean },
+    ) => {
+      const raw = params[key];
+      if (typeof raw !== "string") {
+        if (options?.required) {
+          throw new Error(`${key} required`);
+        }
+        return undefined;
+      }
+      if (!options?.allowEmpty && raw.length === 0) {
+        if (options?.required) {
+          throw new Error(`${key} required`);
+        }
+        return undefined;
+      }
+      return raw;
+    },
+  ),
+}));
 
 vi.mock("openclaw/plugin-sdk", () => ({
   getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
@@ -68,7 +94,7 @@ vi.mock("openclaw/plugin-sdk", () => ({
   normalizeAccountId: vi.fn(),
   normalizeE164: vi.fn(),
   normalizeWhatsAppMessagingTarget: vi.fn(),
-  readStringParam: vi.fn(),
+  readStringParam: readStringParamMock,
   resolveDefaultWhatsAppAccountId: vi.fn(),
   resolveWhatsAppAccount: vi.fn(),
   resolveWhatsAppGroupIntroHint: vi.fn(),
@@ -85,6 +111,7 @@ vi.mock("./runtime.js", () => ({
       whatsapp: {
         sendMessageWhatsApp: vi.fn(),
         createLoginTool: vi.fn(),
+        handleWhatsAppAction: handleWhatsAppActionMock,
       },
     },
   })),
@@ -93,6 +120,13 @@ vi.mock("./runtime.js", () => ({
 import { whatsappPlugin } from "./channel.js";
 
 const resolveTarget = whatsappPlugin.outbound!.resolveTarget!;
+type WhatsAppHandleAction = NonNullable<NonNullable<typeof whatsappPlugin.actions>["handleAction"]>;
+type WhatsAppHandleActionParams = Parameters<WhatsAppHandleAction>[0];
+
+beforeEach(() => {
+  handleWhatsAppActionMock.mockClear();
+  readStringParamMock.mockClear();
+});
 
 describe("whatsapp resolveTarget", () => {
   it("should resolve valid target in explicit mode", () => {
@@ -168,5 +202,56 @@ describe("whatsapp resolveTarget", () => {
   installCommonResolveTargetErrorCases({
     resolveTarget,
     implicitAllowFrom: ["5511999999999"],
+  });
+});
+
+describe("whatsapp action dispatch", () => {
+  it("falls back to inbound MessageSid when messageId is omitted", async () => {
+    await whatsappPlugin.actions?.handleAction?.({
+      action: "react",
+      params: {
+        to: "123@s.whatsapp.net",
+        MessageSid: "ctx-msg-1",
+        emoji: "👍",
+      },
+      cfg: {},
+      accountId: "default",
+    } as WhatsAppHandleActionParams);
+
+    expect(handleWhatsAppActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "ctx-msg-1",
+        emoji: "👍",
+        accountId: "default",
+      }),
+      {},
+    );
+  });
+
+  it("prefers explicit messageId over MessageSid fallback", async () => {
+    await whatsappPlugin.actions?.handleAction?.({
+      action: "react",
+      params: {
+        to: "123@s.whatsapp.net",
+        messageId: "explicit-msg",
+        MessageSid: "ctx-msg-2",
+        emoji: "🔥",
+      },
+      cfg: {},
+      accountId: "default",
+    } as WhatsAppHandleActionParams);
+
+    expect(handleWhatsAppActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "explicit-msg",
+        emoji: "🔥",
+        accountId: "default",
+      }),
+      {},
+    );
   });
 });
