@@ -41,6 +41,16 @@ export const FeishuDriveSchema = Type.Union([
     file_token: Type.String({ description: "File token to delete" }),
     type: FileType,
   }),
+  Type.Object({
+    action: Type.Literal("upload"),
+    file_path: Type.String({ description: "Local file path to upload" }),
+    folder_token: Type.Optional(
+      Type.String({ description: "Target folder token (optional, omit for root)" }),
+    ),
+    file_name: Type.Optional(
+      Type.String({ description: "Override file name in Drive (defaults to local file name)" }),
+    ),
+  }),
 ]);
 
 export type FeishuDriveParams = Static<typeof FeishuDriveSchema>;

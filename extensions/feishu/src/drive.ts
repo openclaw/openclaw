@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -139,6 +141,60 @@ async function moveFile(client: Lark.Client, fileToken: string, type: string, fo
   };
 }
 
+const UPLOAD_MAX_BYTES = 20 * 1024 * 1024; // Feishu direct upload limit
+
+async function uploadFile(
+  client: Lark.Client,
+  filePath: string,
+  folderToken?: string,
+  fileName?: string,
+) {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`Not a file: ${filePath}`);
+  }
+  if (stat.size > UPLOAD_MAX_BYTES) {
+    throw new Error(
+      `File too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). ` +
+        `Direct upload limit is 20MB.`,
+    );
+  }
+
+  let effectiveFolder = folderToken && folderToken !== "0" ? folderToken : undefined;
+  if (!effectiveFolder) {
+    effectiveFolder = await getRootFolderToken(client);
+  }
+
+  const name = fileName ?? path.basename(filePath);
+  const buffer = fs.readFileSync(filePath);
+
+  const res = await client.drive.media.uploadAll({
+    data: {
+      file_name: name,
+      parent_type: "explorer",
+      parent_node: effectiveFolder,
+      size: buffer.length,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK file type
+      file: buffer as any,
+    },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response shape
+  const resAny = res as any;
+  if (resAny.code !== undefined && resAny.code !== 0) {
+    throw new Error(resAny.msg ?? `Upload failed with code ${resAny.code}`);
+  }
+
+  return {
+    file_token: res?.file_token ?? resAny?.data?.file_token,
+    name,
+    size: buffer.length,
+  };
+}
+
 async function deleteFile(client: Lark.Client, fileToken: string, type: string) {
   const res = await client.drive.file.delete({
     path: { file_token: fileToken },
@@ -194,7 +250,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
         name: "feishu_drive",
         label: "Feishu Drive",
         description:
-          "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
+          "Feishu cloud storage operations. Actions: list, info, create_folder, upload, move, delete",
         parameters: FeishuDriveSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDriveExecuteParams;
@@ -215,6 +271,8 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return json(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
                 return json(await deleteFile(client, p.file_token, p.type));
+              case "upload":
+                return json(await uploadFile(client, p.file_path, p.folder_token, p.file_name));
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return json({ error: `Unknown action: ${(p as any).action}` });

@@ -56,6 +56,31 @@ In parent folder:
 { "action": "move", "file_token": "ABC123", "type": "docx", "folder_token": "fldcnXXX" }
 ```
 
+### Upload File
+
+```json
+{ "action": "upload", "file_path": "/path/to/local/file.pdf" }
+```
+
+To a specific folder:
+
+```json
+{ "action": "upload", "file_path": "/path/to/local/file.pdf", "folder_token": "fldcnXXX" }
+```
+
+With a custom name:
+
+```json
+{
+  "action": "upload",
+  "file_path": "/path/to/local/file.pdf",
+  "folder_token": "fldcnXXX",
+  "file_name": "report-2026.pdf"
+}
+```
+
+Direct upload limit: 20MB per file.
+
 ### Delete File
 
 ```json
@@ -86,7 +111,7 @@ channels:
 
 ## Permissions
 
-- `drive:drive` - Full access (create, move, delete)
+- `drive:drive` - Full access (create, upload, move, delete)
 - `drive:drive:readonly` - Read only (list, info)
 
 ## Known Limitations
