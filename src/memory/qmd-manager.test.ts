@@ -1405,13 +1405,20 @@ describe("QmdMemoryManager", () => {
       const { manager } = await createManager();
       await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
-      const mcporterCall = spawnMock.mock.calls.find(
-        (call: unknown[]) => (call[1] as string[] | undefined)?.[0] === "call",
+      const mcporterCall = spawnMock.mock.calls.find((call: unknown[]) =>
+        (call[1] as string[] | undefined)?.includes("call"),
       );
       expect(mcporterCall).toBeDefined();
-      expect(mcporterCall?.[0]).toBe("mcporter.cmd");
+      const callCommand = mcporterCall?.[0];
+      expect(typeof callCommand).toBe("string");
       const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
-      expect(options?.shell).toBe(true);
+      if (isMcporterCommand(callCommand)) {
+        expect(callCommand).toBe("mcporter.cmd");
+        expect(options?.shell).toBe(true);
+      } else {
+        // If wrapper entrypoint resolution succeeded, spawn may invoke node/exe directly.
+        expect(options?.shell).not.toBe(true);
+      }
 
       await manager.close();
     } finally {
