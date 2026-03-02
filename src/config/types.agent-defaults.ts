@@ -236,6 +236,11 @@ export type AgentDefaultsConfig = {
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
     /**
+     * If true, run heartbeat turns with lightweight bootstrap context.
+     * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
+     */
+    lightContext?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -295,6 +300,11 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
+  /**
+   * Force a memory flush when transcript size reaches this threshold
+   * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
+   */
+  forceFlushTranscriptBytes?: number | string;
   /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
   prompt?: string;
   /** System prompt appended for the memory flush turn. */

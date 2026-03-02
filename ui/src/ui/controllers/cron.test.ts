@@ -119,6 +119,91 @@ describe("cron controller", () => {
     });
   });
 
+  it('sends delivery: { mode: "none" } explicitly in cron.add payload', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-none-add" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: {
+        request,
+      } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "none delivery job",
+        scheduleKind: "every",
+        everyAmount: "1",
+        everyUnit: "minutes",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        deliveryMode: "none",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    expect(addCall).toBeDefined();
+    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+      mode: "none",
+    });
+  });
+
+  it('sends delivery: { mode: "none" } explicitly in cron.update patch', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-none-update" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-none-update" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: {
+        request,
+      } as unknown as CronState["client"],
+      cronEditingJobId: "job-none-update",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "switch to none",
+        scheduleKind: "every",
+        everyAmount: "30",
+        everyUnit: "minutes",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "do work",
+        deliveryMode: "none",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(
+      (updateCall?.[1] as { patch?: { delivery?: unknown } } | undefined)?.patch?.delivery,
+    ).toEqual({
+      mode: "none",
+    });
+  });
+
   it("does not submit stale announce delivery when unsupported", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -159,8 +244,13 @@ describe("cron controller", () => {
     expect(addCall?.[1]).toMatchObject({
       name: "main job",
     });
-    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
-    expect(state.cronForm.deliveryMode).toBe("none");
+    // Delivery is explicitly sent as { mode: "none" } to clear the announce delivery on the backend.
+    // Previously this was sent as undefined, which left announce in place (bug #31075).
+    expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toEqual({
+      mode: "none",
+    });
+    // After submit, form is reset to defaults (deliveryMode = "announce" from DEFAULT_CRON_FORM).
+    expect(state.cronForm.deliveryMode).toBe("announce");
   });
 
   it("submits cron.update when editing an existing job", async () => {
@@ -210,6 +300,7 @@ describe("cron controller", () => {
         deleteAfterRun: false,
         schedule: { kind: "cron", expr: "0 8 * * *", staggerMs: 0 },
         payload: { kind: "systemEvent", text: "updated" },
+        delivery: { mode: "none" },
       },
     });
     expect(state.cronEditingJobId).toBeNull();
@@ -344,6 +435,55 @@ describe("cron controller", () => {
         },
       },
     });
+  });
+
+  it("omits failureAlert.cooldownMs when custom cooldown is left blank", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-alert-no-cooldown" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-alert-no-cooldown" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-alert-no-cooldown",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "alert job no cooldown",
+        payloadKind: "agentTurn",
+        payloadText: "run it",
+        failureAlertMode: "custom",
+        failureAlertAfter: "3",
+        failureAlertCooldownSeconds: "",
+        failureAlertChannel: "telegram",
+        failureAlertTo: "123456",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-alert-no-cooldown",
+      patch: {
+        failureAlert: {
+          after: 3,
+          channel: "telegram",
+          to: "123456",
+        },
+      },
+    });
+    expect(
+      (updateCall?.[1] as { patch?: { failureAlert?: { cooldownMs?: number } } })?.patch
+        ?.failureAlert,
+    ).not.toHaveProperty("cooldownMs");
   });
 
   it("includes failureAlert=false when disabled per job", async () => {
