@@ -22,6 +22,7 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import { parseISO8601ToEpochMs } from "./time-utils.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -233,6 +234,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      after?: string;
+      before?: string;
     },
   ): Promise<MemorySearchResult[]> {
     void this.warmSession(opts?.sessionKey);
@@ -253,6 +256,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
+    // Parse time range filters
+    const afterMs = opts?.after ? parseISO8601ToEpochMs(opts.after) : undefined;
+    const beforeMs = opts?.before ? parseISO8601ToEpochMs(opts.before) : undefined;
+
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
       if (!this.fts.enabled || !this.fts.available) {
@@ -267,7 +274,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       // Search with each keyword and merge results
       const resultSets = await Promise.all(
-        searchTerms.map((term) => this.searchKeyword(term, candidates).catch(() => [])),
+        searchTerms.map((term) =>
+          this.searchKeyword(term, candidates, afterMs, beforeMs).catch(() => []),
+        ),
       );
 
       // Merge and deduplicate results, keeping highest score for each chunk
@@ -290,13 +299,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     const keywordResults = hybrid.enabled
-      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+      ? await this.searchKeyword(cleaned, candidates, afterMs, beforeMs).catch(() => [])
       : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates).catch(() => [])
+      ? await this.searchVector(queryVec, candidates, afterMs, beforeMs).catch(() => [])
       : [];
 
     if (!hybrid.enabled) {
@@ -338,6 +347,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchVector(
     queryVec: number[],
     limit: number,
+    after?: number,
+    before?: number,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
     // This method should never be called without a provider
     if (!this.provider) {
@@ -353,6 +364,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c"),
       sourceFilterChunks: this.buildSourceFilter(),
+      after,
+      before,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
@@ -364,11 +377,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchKeyword(
     query: string,
     limit: number,
+    after?: number,
+    before?: number,
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter();
+    const sourceFilter = this.buildSourceFilter("c");
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
@@ -381,6 +396,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
+      after,
+      before,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
