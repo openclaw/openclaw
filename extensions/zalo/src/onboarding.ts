@@ -214,7 +214,11 @@ export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
   dmPolicy,
   getStatus: async ({ cfg }) => {
     const configured = listZaloAccountIds(cfg).some((accountId) => {
-      const account = resolveZaloAccount({ cfg: cfg, accountId });
+      const account = resolveZaloAccount({
+        cfg: cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
       return (
         Boolean(account.token) ||
         hasConfiguredSecretInput(account.config.botToken) ||
@@ -251,7 +255,11 @@ export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     let next = cfg;
-    const resolvedAccount = resolveZaloAccount({ cfg: next, accountId: zaloAccountId });
+    const resolvedAccount = resolveZaloAccount({
+      cfg: next,
+      accountId: zaloAccountId,
+      allowUnresolvedSecretRef: true,
+    });
     const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = zaloAccountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv = allowEnv && Boolean(process.env.ZALO_BOT_TOKEN?.trim());

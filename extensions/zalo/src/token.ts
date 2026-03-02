@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { type BaseTokenResolution, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
 
 export type ZaloTokenResolution = BaseTokenResolution & {
@@ -10,6 +10,7 @@ export type ZaloTokenResolution = BaseTokenResolution & {
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
   accountId?: string | null,
+  options?: { allowUnresolvedSecretRef?: boolean },
 ): ZaloTokenResolution {
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
@@ -20,10 +21,12 @@ export function resolveZaloToken(
       : undefined;
 
   if (accountConfig) {
-    const token = normalizeResolvedSecretInputString({
-      value: accountConfig.botToken,
-      path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
-    });
+    const token = options?.allowUnresolvedSecretRef
+      ? normalizeSecretInputString(accountConfig.botToken)
+      : normalizeResolvedSecretInputString({
+          value: accountConfig.botToken,
+          path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
+        });
     if (token) {
       return { token, source: "config" };
     }
@@ -41,10 +44,12 @@ export function resolveZaloToken(
   }
 
   if (isDefaultAccount) {
-    const token = normalizeResolvedSecretInputString({
-      value: baseConfig?.botToken,
-      path: "channels.zalo.botToken",
-    });
+    const token = options?.allowUnresolvedSecretRef
+      ? normalizeSecretInputString(baseConfig?.botToken)
+      : normalizeResolvedSecretInputString({
+          value: baseConfig?.botToken,
+          path: "channels.zalo.botToken",
+        });
     if (token) {
       return { token, source: "config" };
     }

@@ -108,12 +108,34 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
   encryptKey?: string;
   verificationToken?: string;
   domain: FeishuDomain;
+} | null;
+export function resolveFeishuCredentials(
+  cfg: FeishuConfig | undefined,
+  options: { allowUnresolvedSecretRef?: boolean },
+): {
+  appId: string;
+  appSecret: string;
+  encryptKey?: string;
+  verificationToken?: string;
+  domain: FeishuDomain;
+} | null;
+export function resolveFeishuCredentials(
+  cfg?: FeishuConfig,
+  options?: { allowUnresolvedSecretRef?: boolean },
+): {
+  appId: string;
+  appSecret: string;
+  encryptKey?: string;
+  verificationToken?: string;
+  domain: FeishuDomain;
 } | null {
   const appId = cfg?.appId?.trim();
-  const appSecret = normalizeResolvedSecretInputString({
-    value: cfg?.appSecret,
-    path: "channels.feishu.appSecret",
-  });
+  const appSecret = options?.allowUnresolvedSecretRef
+    ? normalizeSecretInputString(cfg?.appSecret)
+    : normalizeResolvedSecretInputString({
+        value: cfg?.appSecret,
+        path: "channels.feishu.appSecret",
+      });
   if (!appId || !appSecret) {
     return null;
   }
@@ -122,10 +144,12 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
     appSecret,
     encryptKey: cfg?.encryptKey?.trim() || undefined,
     verificationToken:
-      normalizeResolvedSecretInputString({
-        value: cfg?.verificationToken,
-        path: "channels.feishu.verificationToken",
-      }) || undefined,
+      (options?.allowUnresolvedSecretRef
+        ? normalizeSecretInputString(cfg?.verificationToken)
+        : normalizeResolvedSecretInputString({
+            value: cfg?.verificationToken,
+            path: "channels.feishu.verificationToken",
+          })) || undefined,
     domain: cfg?.domain ?? "feishu",
   };
 }

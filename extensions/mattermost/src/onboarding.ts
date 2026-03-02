@@ -47,7 +47,11 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
     const configured = listMattermostAccountIds(cfg).some((accountId) => {
-      const account = resolveMattermostAccount({ cfg, accountId });
+      const account = resolveMattermostAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
       const tokenConfigured =
         Boolean(account.botToken) || hasConfiguredSecretInput(account.config.botToken);
       return tokenConfigured && Boolean(account.baseUrl);
@@ -79,6 +83,7 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
     const resolvedAccount = resolveMattermostAccount({
       cfg: next,
       accountId,
+      allowUnresolvedSecretRef: true,
     });
     const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.baseUrl);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;

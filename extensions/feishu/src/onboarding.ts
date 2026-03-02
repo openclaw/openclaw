@@ -184,7 +184,9 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
       return Boolean(accountAppId && accountSecretConfigured);
     });
     const configured = topLevelConfigured || accountConfigured;
-    const resolvedCredentials = resolveFeishuCredentials(feishuCfg);
+    const resolvedCredentials = resolveFeishuCredentials(feishuCfg, {
+      allowUnresolvedSecretRef: true,
+    });
 
     // Try to probe if configured
     let probeResult = null;
@@ -218,7 +220,9 @@ export const feishuOnboardingAdapter: ChannelOnboardingAdapter = {
 
   configure: async ({ cfg, prompter }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-    const resolved = resolveFeishuCredentials(feishuCfg);
+    const resolved = resolveFeishuCredentials(feishuCfg, {
+      allowUnresolvedSecretRef: true,
+    });
     const hasConfigSecret = hasConfiguredSecretInput(feishuCfg?.appSecret);
     const hasConfigCreds = Boolean(feishuCfg?.appId?.trim() && hasConfigSecret);
     const canUseEnv = Boolean(
