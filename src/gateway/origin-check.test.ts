@@ -79,7 +79,7 @@ describe("checkBrowserOrigin", () => {
     expect(result.ok).toBe(true);
   });
 
-  it('accepts wildcard entries with surrounding whitespace', () => {
+  it("accepts wildcard entries with surrounding whitespace", () => {
     const result = checkBrowserOrigin({
       requestHost: "100.86.79.37:18789",
       origin: "https://100.86.79.37:18789",
