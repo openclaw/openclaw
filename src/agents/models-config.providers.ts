@@ -108,7 +108,7 @@ const XIAOMI_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
-const QINIU_BASE_URL = "https://api.qnaigc.com";
+const QINIU_BASE_URL = "https://api.qnaigc.com/v1";
 export const QINIU_DEFAULT_MODEL_ID = "deepseek-r1";
 const QINIU_DEFAULT_CONTEXT_WINDOW = 131072;
 const QINIU_DEFAULT_MAX_TOKENS = 8192;
