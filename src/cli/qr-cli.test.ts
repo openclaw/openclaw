@@ -51,6 +51,18 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
   };
 }
 
+function createTailscaleRemoteRefConfig() {
+  return {
+    gateway: {
+      tailscale: { mode: "serve" },
+      remote: {
+        token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+      },
+      auth: {},
+    },
+  };
+}
+
 describe("registerQrCli", () => {
   function createProgram() {
     const program = new Command();
@@ -350,5 +362,37 @@ describe("registerQrCli", () => {
     await expectQrExit(["--remote"]);
     const output = runtime.error.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
     expect(output).toContain("qr --remote requires");
+  });
+
+  it("supports --remote with tailscale serve when remote token ref resolves", async () => {
+    loadConfig.mockReturnValue(createTailscaleRemoteRefConfig());
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig: {
+        gateway: {
+          tailscale: { mode: "serve" },
+          remote: {
+            token: "tailscale-remote-token",
+          },
+          auth: {},
+        },
+      },
+      diagnostics: [],
+    });
+    runCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
+      stderr: "",
+    });
+
+    await runQr(["--json", "--remote"]);
+
+    const payload = JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0] ?? "{}")) as {
+      gatewayUrl?: string;
+      auth?: string;
+      urlSource?: string;
+    };
+    expect(payload.gatewayUrl).toBe("wss://ts-host.tailnet.ts.net");
+    expect(payload.auth).toBe("token");
+    expect(payload.urlSource).toBe("gateway.tailscale.mode=serve");
   });
 });
