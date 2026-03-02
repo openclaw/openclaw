@@ -85,6 +85,48 @@ function normalizeSegments(value: unknown): OneBotSegment[] {
     }));
 }
 
+function decodeCqValue(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&#44;/g, ",")
+    .replace(/&#91;/g, "[")
+    .replace(/&#93;/g, "]");
+}
+
+function extractCqImageUrls(value: string): string[] {
+  const mediaUrls: string[] = [];
+  const tagRegex = /\[CQ:image,([^\]]*)\]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = tagRegex.exec(value)) !== null) {
+    const payload = match[1] ?? "";
+    const params = payload.split(",");
+    let urlFromTag = "";
+    let fileFromTag = "";
+    for (const param of params) {
+      const separatorIndex = param.indexOf("=");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const key = param.slice(0, separatorIndex).trim().toLowerCase();
+      const rawValue = param.slice(separatorIndex + 1).trim();
+      const decodedValue = decodeCqValue(rawValue).trim();
+      if (!decodedValue) {
+        continue;
+      }
+      if (key === "url" && !urlFromTag) {
+        urlFromTag = decodedValue;
+      } else if (key === "file" && !fileFromTag) {
+        fileFromTag = decodedValue;
+      }
+    }
+    const resolvedUrl = urlFromTag || fileFromTag;
+    if (resolvedUrl) {
+      mediaUrls.push(resolvedUrl);
+    }
+  }
+  return mediaUrls;
+}
+
 function extractTextAndMedia(params: {
   rawMessage?: string;
   message?: OneBotSegment[] | string;
@@ -111,6 +153,13 @@ function extractTextAndMedia(params: {
         mediaUrls.push(url.trim());
       }
     }
+  }
+
+  if (typeof params.message === "string") {
+    mediaUrls.push(...extractCqImageUrls(params.message));
+  }
+  if (typeof params.rawMessage === "string") {
+    mediaUrls.push(...extractCqImageUrls(params.rawMessage));
   }
 
   const fromSegments = textParts.join("").trim();
@@ -317,6 +366,9 @@ export async function processNapCatEvent(params: {
   if (!inbound) {
     return;
   }
+
+  params.statusSink?.({ lastEventAt: Date.now() });
+
   if (isDuplicateInbound(inbound)) {
     return;
   }

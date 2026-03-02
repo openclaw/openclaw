@@ -1,13 +1,15 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractNapCatInboundMessage,
   isNapCatGroupMessageAllowed,
   isNapCatEventMentioningSelf,
   normalizeNapCatAllowFrom,
+  processNapCatEvent,
   resolveNapCatCommandAuthorized,
   resolveNapCatGroupConfig,
 } from "./inbound.js";
+import type { ResolvedNapCatAccount } from "./types.js";
 
 describe("extractNapCatInboundMessage", () => {
   it("extracts text and image urls from segments", () => {
@@ -41,6 +43,41 @@ describe("extractNapCatInboundMessage", () => {
       message_type: "group",
     });
     expect(result).toBeNull();
+  });
+
+  it("extracts CQ image urls when inbound message is a CQ string", () => {
+    const result = extractNapCatInboundMessage({
+      post_type: "message",
+      message_type: "private",
+      message_id: 101,
+      user_id: 123,
+      self_id: 789,
+      time: 1_700_000_001,
+      message:
+        "[CQ:image,file=placeholder.image,url=https://example.com/a.png][CQ:image,file=https://example.com/b.png]",
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.rawBody).toBe(
+      "[CQ:image,file=placeholder.image,url=https://example.com/a.png][CQ:image,file=https://example.com/b.png]",
+    );
+    expect(result?.mediaUrls).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
+  });
+
+  it("extracts CQ image urls from raw_message fallback", () => {
+    const result = extractNapCatInboundMessage({
+      post_type: "message",
+      message_type: "private",
+      message_id: 102,
+      user_id: 123,
+      self_id: 789,
+      time: 1_700_000_002,
+      raw_message: "[CQ:image,url=https://example.com/from-raw.png]",
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.rawBody).toBe("[CQ:image,url=https://example.com/from-raw.png]");
+    expect(result?.mediaUrls).toEqual(["https://example.com/from-raw.png"]);
   });
 });
 
@@ -241,5 +278,55 @@ describe("resolveNapCatCommandAuthorized", () => {
         { configured: false, allowed: false },
       ],
     });
+  });
+});
+
+describe("processNapCatEvent", () => {
+  it("updates lastEventAt before runtime processing", async () => {
+    const patches: Array<Partial<ChannelAccountSnapshot>> = [];
+    const account: ResolvedNapCatAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      token: "token",
+      tokenSource: "config",
+      apiBaseUrl: "http://127.0.0.1:3000",
+      apiBaseUrlSource: "config",
+      config: {},
+      transport: {
+        http: {
+          enabled: false,
+          host: "127.0.0.1",
+          port: 5715,
+          path: "/onebot",
+          bodyMaxBytes: 1024 * 1024,
+        },
+        ws: {
+          enabled: true,
+          url: "ws://127.0.0.1:3001",
+          reconnectMs: 3000,
+        },
+      },
+    };
+
+    await expect(
+      processNapCatEvent({
+        event: {
+          post_type: "message",
+          message_type: "private",
+          message_id: "status-event",
+          user_id: "123",
+          self_id: "789",
+          time: 1_700_000_003,
+          message: "hello",
+        },
+        account,
+        config: {} as OpenClawConfig,
+        runtime: {} as RuntimeEnv,
+        statusSink: (patch) => patches.push(patch),
+      }),
+    ).rejects.toThrow("NapCat runtime not initialized");
+
+    expect(patches.some((patch) => typeof patch.lastEventAt === "number")).toBe(true);
   });
 });
