@@ -16,7 +16,13 @@ export async function handleWhatsAppAction(
       throw new Error("WhatsApp reactions are disabled.");
     }
     const chatJid = readStringParam(params, "chatJid", { required: true });
-    const messageId = readStringParam(params, "messageId", { required: true });
+    const messageId =
+      readStringParam(params, "messageId") ??
+      readStringParam(params, "MessageSidFull") ??
+      readStringParam(params, "MessageSid") ??
+      readStringParam(params, "MessageSidFirst") ??
+      readStringParam(params, "MessageSidLast") ??
+      readStringParam(params, "messageId", { required: true });
     const { emoji, remove, isEmpty } = readReactionParams(params, {
       removeErrorMessage: "Emoji is required to remove a WhatsApp reaction.",
     });

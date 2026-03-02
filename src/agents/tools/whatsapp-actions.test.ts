@@ -40,6 +40,43 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
+  it("falls back to inbound MessageSid when messageId is omitted", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        MessageSid: "ctx-msg-1",
+        emoji: "👍",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "ctx-msg-1", "👍", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
+  it("prefers explicit messageId over inbound MessageSid fallback", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "123@s.whatsapp.net",
+        messageId: "explicit-msg",
+        MessageSid: "ctx-msg-2",
+        emoji: "🔥",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("+123", "explicit-msg", "🔥", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleWhatsAppAction(
       {

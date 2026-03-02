@@ -242,14 +242,14 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "Target message id for reaction. For Telegram, if omitted, defaults to the current inbound message id when available. For WhatsApp, MessageSid/MessageSidFull from inbound context can be used as fallback.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
         description:
-          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available.",
+          "snake_case alias of messageId. For Telegram, if omitted, defaults to the current inbound message id when available. For WhatsApp, MessageSid/MessageSidFull from inbound context can be used as fallback.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
