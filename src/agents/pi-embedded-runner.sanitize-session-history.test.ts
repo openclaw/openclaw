@@ -556,7 +556,7 @@ describe("sanitizeSessionHistory", () => {
     expect(types).not.toContain("thinking");
   });
 
-  it("does not drop thinking blocks for non-copilot providers", async () => {
+  it("drops thinking blocks for Anthropic providers", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
@@ -571,7 +571,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     const types = getAssistantContentTypes(result);
-    expect(types).toContain("thinking");
+    expect(types).toContain("text");
+    expect(types).not.toContain("thinking");
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {
