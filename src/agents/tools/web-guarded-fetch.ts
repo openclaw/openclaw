@@ -7,6 +7,7 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
+  allowRfc2544BenchmarkRange: true,
 };
 
 type WebToolGuardedFetchOptions = Omit<GuardedFetchOptions, "proxy"> & {
