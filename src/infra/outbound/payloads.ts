@@ -1,8 +1,10 @@
+import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 
 export type NormalizedOutboundPayload = {
@@ -56,9 +58,30 @@ export function normalizeReplyPayloadsForDelivery(
     );
     const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+    const hasMedia = mergedMedia.length > 0;
+    const hasChannelData = Boolean(
+      payload.channelData && Object.keys(payload.channelData).length > 0,
+    );
+    let text = parsed.text ?? "";
+
+    if (text && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      if (!hasMedia && !hasChannelData) {
+        return [];
+      }
+      text = "";
+    }
+
+    if (text.includes(HEARTBEAT_TOKEN)) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.shouldSkip && !hasMedia && !hasChannelData) {
+        return [];
+      }
+      text = stripped.text;
+    }
+
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text,
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
