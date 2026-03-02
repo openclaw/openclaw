@@ -113,11 +113,8 @@ exit 1`,
     return { homeDir, binDir };
   }
 
-  it("resolves fallback and preferred team IDs from provisioning profiles", async () => {
+  it("resolves fallback and preferred team IDs from Xcode team listings", async () => {
     const { homeDir, binDir } = await createHomeDir();
-    const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
-    await mkdir(profilesDir, { recursive: true });
-    await writeFile(path.join(profilesDir, "one.mobileprovision"), "stub1");
     await writeExecutable(
       path.join(binDir, "fake-python"),
       `#!/usr/bin/env bash
