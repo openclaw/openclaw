@@ -1923,7 +1923,10 @@
   margin-top: 0.75em;
   border-collapse: collapse;
   width: 100%;
+  max-width: 100%;
   font-size: 13px;
+  display: block;
+  overflow-x: auto;
 }
 
 .chat-text :where(th, td) {
