@@ -194,6 +194,7 @@ export function createExecTool(
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  const defaultSkillEnv = defaults?.skillEnv ?? {};
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
@@ -369,7 +370,10 @@ export function createExecTool(
         validateHostEnv(params.env);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      // Merge skill env vars into the environment (injected from skills.entries.<skill>.env)
+      const mergedEnv = params.env
+        ? { ...baseEnv, ...defaultSkillEnv, ...params.env }
+        : { ...baseEnv, ...defaultSkillEnv };
 
       const env = sandbox
         ? buildSandboxEnv({

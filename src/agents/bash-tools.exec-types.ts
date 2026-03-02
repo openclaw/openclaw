@@ -27,6 +27,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /** Skill environment variables to inject into exec subprocesses. */
+  skillEnv?: Record<string, string>;
 };
 
 export type ExecElevatedDefaults = {

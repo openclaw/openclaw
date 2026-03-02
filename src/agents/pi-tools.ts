@@ -4,6 +4,7 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { resolveSkillConfig } from "./skills/config.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -115,11 +116,34 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
+/**
+ * Extracts all environment variables from skills.entries.<skill>.env in the config.
+ * These env vars will be injected into exec subprocesses.
+ */
+function resolveSkillEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+  const skillEnv: Record<string, string> = {};
+  const skillEntries = cfg?.skills?.entries;
+  if (!skillEntries || typeof skillEntries !== "object") {
+    return skillEnv;
+  }
+  for (const [skillKey, skillConfig] of Object.entries(skillEntries)) {
+    if (skillConfig?.env && typeof skillConfig.env === "object") {
+      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+        if (typeof envValue === "string") {
+          skillEnv[envKey] = envValue;
+        }
+      }
+    }
+  }
+  return skillEnv;
+}
+
 function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+  const skillEnv = resolveSkillEnvVars(cfg);
   return {
     host: agentExec?.host ?? globalExec?.host,
     security: agentExec?.security ?? globalExec?.security,
@@ -141,6 +165,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     notifyOnExitEmptySuccess:
       agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
     applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+    skillEnv,
   };
 }
 
@@ -406,6 +431,7 @@ export function createOpenClawCodingTools(options?: {
           env: sandbox.docker.env,
         }
       : undefined,
+    skillEnv: execConfig.skillEnv,
   });
   const processTool = createProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
