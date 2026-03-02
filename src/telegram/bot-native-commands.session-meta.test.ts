@@ -64,6 +64,19 @@ function buildStatusCommandContext() {
   };
 }
 
+function buildStatusChannelPostContext() {
+  return {
+    match: "",
+    channelPost: {
+      message_id: 2,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: -10099, type: "channel" as const, title: "Ops" },
+      sender_chat: { id: -10099, type: "channel" as const, title: "Ops" },
+      text: "/status",
+    },
+  };
+}
+
 function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHandler {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   registerTelegramNativeCommands({
@@ -126,6 +139,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     deferred.resolve();
     await runPromise;
 
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles /status command from channel_post updates", async () => {
+    const cfg: OpenClawConfig = {};
+    const handler = registerAndResolveStatusHandler(cfg);
+
+    await handler(buildStatusChannelPostContext());
+
+    expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 });

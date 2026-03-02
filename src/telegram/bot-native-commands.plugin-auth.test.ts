@@ -154,4 +154,76 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     );
     expect(bot.api.sendMessage).not.toHaveBeenCalled();
   });
+
+  it("accepts channel_post plugin commands via ctx.channelPost when auth is required", async () => {
+    const command = {
+      name: "plugin",
+      description: "Plugin command",
+      handler: vi.fn(),
+    } as const;
+
+    getPluginCommandSpecs.mockReturnValue([{ name: "plugin", description: "Plugin command" }]);
+    matchPluginCommand.mockReturnValue({ command, args: undefined });
+    executePluginCommand.mockResolvedValue({ text: "ok" });
+
+    const handlers: Record<string, (ctx: unknown) => Promise<void>> = {};
+    const bot = {
+      api: {
+        setMyCommands: vi.fn().mockResolvedValue(undefined),
+        sendMessage: vi.fn(),
+      },
+      command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
+        handlers[name] = handler;
+      },
+    } as const;
+
+    registerTelegramNativeCommands({
+      bot: bot as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      cfg: {} as OpenClawConfig,
+      runtime: {} as unknown as RuntimeEnv,
+      accountId: "default",
+      telegramCfg: {} as TelegramAccountConfig,
+      allowFrom: ["999"],
+      groupAllowFrom: [],
+      replyToMode: "off",
+      textLimit: 4000,
+      useAccessGroups: false,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () =>
+        ({
+          allowlistEnabled: false,
+          allowed: true,
+        }) as ChannelGroupPolicy,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
+    });
+
+    await handlers.plugin?.({
+      channelPost: {
+        chat: { id: -100123, type: "channel" },
+        sender_chat: { id: -100123, type: "channel", title: "Ops" },
+        message_id: 42,
+        date: 123456,
+        text: "/plugin",
+      },
+      match: "",
+    });
+
+    expect(matchPluginCommand).toHaveBeenCalled();
+    expect(executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isAuthorizedSender: true,
+      }),
+    );
+    expect(bot.api.sendMessage).not.toHaveBeenCalledWith(
+      -100123,
+      "You are not authorized to use this command.",
+    );
+  });
 });
