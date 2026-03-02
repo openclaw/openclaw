@@ -127,7 +127,7 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
   const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
   if (!REACTION_TYPES.has(mapped)) {
-    throw new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
+    return remove ? "-like" : "like";
   }
   return remove ? `-${mapped}` : mapped;
 }
