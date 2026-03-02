@@ -196,6 +196,87 @@ Notes:
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
+## Browserbase (hosted remote CDP)
+
+[Browserbase](https://www.browserbase.com) is a cloud platform for running
+headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
+solving, anti-bot stealth mode, and residential proxies. You can point an
+OpenClaw browser profile at a Browserbase session and authenticate with your
+API key.
+
+### Getting started
+
+1. **Sign up** at [browserbase.com/sign-up](https://www.browserbase.com/sign-up).
+   The free tier includes one concurrent browser session and 60 minutes of
+   monthly usage.
+2. **Find your credentials** on the
+   [Overview dashboard](https://www.browserbase.com/overview) — copy your
+   **API Key** and **Project ID** from the right-hand panel.
+3. **Create a session** using the Browserbase API (or their SDK) and retrieve
+   the CDP connect URL.
+
+### Configuration
+
+Browserbase sessions expose a WebSocket CDP endpoint. Point a profile at it:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browserbase",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      browserbase: {
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+If you create sessions through the Browserbase Sessions API, each session
+returns its own `connectUrl`. You can use that directly:
+
+```json5
+{
+  browser: {
+    profiles: {
+      browserbase: {
+        cdpUrl: "<SESSION_CONNECT_URL>",
+        color: "#F97316",
+      },
+    },
+  },
+}
+```
+
+### Environment variables
+
+Store your credentials in environment variables instead of committing them to
+config:
+
+```bash
+export BROWSERBASE_API_KEY="bb_live_..."
+export BROWSERBASE_PROJECT_ID="your-project-id"
+```
+
+Then reference them in your profile or create sessions programmatically.
+
+### Notes
+
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key (starts
+  with `bb_live_`).
+- The free tier allows one concurrent session and 60 minutes per month. Paid
+  plans offer higher concurrency and usage limits.
+- Browserbase sessions include automatic CAPTCHA solving and anti-bot stealth
+  by default — no extra configuration needed.
+- Sessions can be monitored live at
+  `https://www.browserbase.com/sessions/<SESSION_ID>`.
+- See the [Browserbase docs](https://docs.browserbase.com) for full API
+  reference, SDK guides, and integration examples.
+
 ## Security
 
 Key ideas:
