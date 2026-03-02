@@ -128,7 +128,7 @@ export {
   resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
-export type { WebhookTargetMatchResult } from "./webhook-targets.js";
+export type { RegisterWebhookTargetOptions, WebhookTargetMatchResult } from "./webhook-targets.js";
 export {
   applyBasicWebhookRequestGuards,
   isJsonContentType,
