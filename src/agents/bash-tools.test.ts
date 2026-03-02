@@ -1,5 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatWakeHandler,
+} from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -507,6 +511,14 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  beforeEach(() => {
+    resetHeartbeatWakeStateForTests();
+  });
+
+  afterEach(() => {
+    resetHeartbeatWakeStateForTests();
+  });
+
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
 
@@ -516,6 +528,26 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+  });
+
+  it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
+    const tool = createNotifyOnExitExecTool();
+    const wakeHandler = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" });
+    const dispose = setHeartbeatWakeHandler(
+      wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
+    );
+    try {
+      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+      await expect
+        .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
+        .toMatchObject({
+          reason: `exec:${sessionId}:exit`,
+          sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+        });
+    } finally {
+      dispose();
+    }
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
