@@ -428,13 +428,24 @@ describe("tts", () => {
       expect(result.overrides.minimax?.model).toBeUndefined();
     });
 
-    it("later invalid generic model does not erase earlier valid one", () => {
+    it("last generic model wins and invalid value produces warning", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=openai model=tts-1 model=bad]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("openai");
-      expect(result.overrides.openai?.model).toBe("tts-1");
+      expect(result.overrides.openai?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI model "bad"');
+    });
+
+    it("later elevenlabs model overwrites earlier deferred value", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:model=tts-1 model=eleven_turbo_v2_5 provider=elevenlabs]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.overrides.elevenlabs?.modelId).toBe("eleven_turbo_v2_5");
+      expect(result.overrides.openai?.model).toBeUndefined();
     });
 
     it("rejects provider override by default while keeping voice overrides enabled", () => {
