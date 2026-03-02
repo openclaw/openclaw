@@ -139,6 +139,8 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
+  /** Warning: DM has topics enabled but this message is not in a topic. */
+  TopicRequiredButMissing?: boolean;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

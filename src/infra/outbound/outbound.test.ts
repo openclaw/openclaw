@@ -926,6 +926,19 @@ describe("resolveOutboundSessionRoute", () => {
         },
       },
       {
+        name: "Telegram DM with topic",
+        cfg: perChannelPeerCfg,
+        channel: "telegram",
+        target: "123456789:topic:99",
+        expected: {
+          sessionKey: "agent:main:telegram:direct:123456789:thread:99",
+          from: "telegram:123456789:topic:99",
+          to: "telegram:123456789",
+          threadId: 99,
+          chatType: "direct",
+        },
+      },
+      {
         name: "Telegram unresolved username DM",
         cfg: perChannelPeerCfg,
         channel: "telegram",
