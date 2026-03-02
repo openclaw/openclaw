@@ -922,6 +922,58 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 
+  it("allows bundled plugin entry files that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "hardlinked-bundled");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.cjs");
+    fs.writeFileSync(
+      outsideEntry,
+      'module.exports = { id: "hardlinked-bundled", register() {} };',
+      "utf-8",
+    );
+    const plugin = writePlugin({
+      id: "hardlinked-bundled",
+      body: 'module.exports = { id: "hardlinked-bundled", register() {} };',
+      dir: pluginDir,
+      filename: "index.cjs",
+    });
+    fs.rmSync(plugin.file);
+    try {
+      fs.linkSync(outsideEntry, plugin.file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          entries: {
+            "hardlinked-bundled": { enabled: true },
+          },
+          allow: ["hardlinked-bundled"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
+    expect(record?.status).toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("unsafe plugin path"))).toBe(
+      false,
+    );
+  });
+
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
     const { root, distFile } = createPluginSdkAliasFixture();
 

@@ -62,6 +62,10 @@ type ActiveZaloListener = {
 const activeListeners = new Map<string, ActiveZaloListener>();
 const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
 
+type ApiTypingCapability = {
+  sendTypingEvent: (threadId: string, type?: ThreadType) => Promise<unknown>;
+};
+
 type StoredZaloCredentials = {
   imei: string;
   cookie: Credentials["cookie"];
@@ -883,7 +887,15 @@ export async function sendZaloTypingEvent(
   }
   const api = await ensureApi(profile);
   const type = options.isGroup ? ThreadType.Group : ThreadType.User;
-  await api.sendTypingEvent(trimmedThreadId, type);
+  if ("sendTypingEvent" in api && typeof api.sendTypingEvent === "function") {
+    await (api as API & ApiTypingCapability).sendTypingEvent(trimmedThreadId, type);
+  }
+}
+
+async function resolveOwnUserId(api: API): Promise<string> {
+  const info = await api.fetchAccountInfo();
+  const profile = "profile" in info ? info.profile : info;
+  return toNumberId(profile.userId);
 }
 
 export async function sendZaloReaction(params: {
@@ -1229,7 +1241,7 @@ export async function startZaloListener(params: {
   }
 
   const api = await ensureApi(profile);
-  const ownUserId = toNumberId(api.getOwnId());
+  const ownUserId = await resolveOwnUserId(api);
   let stopped = false;
 
   const cleanup = () => {
