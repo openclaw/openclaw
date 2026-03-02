@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffsPluginDefaults } from "./config.js";
+import {
+  DEFAULT_DIFFS_PLUGIN_SECURITY,
+  DEFAULT_DIFFS_TOOL_DEFAULTS,
+  resolveDiffsPluginDefaults,
+  resolveDiffsPluginSecurity,
+} from "./config.js";
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
@@ -67,6 +72,18 @@ describe("resolveDiffsPluginDefaults", () => {
       }),
     ).toMatchObject({
       lineSpacing: DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing,
+    });
+  });
+});
+
+describe("resolveDiffsPluginSecurity", () => {
+  it("defaults to local-only viewer access", () => {
+    expect(resolveDiffsPluginSecurity(undefined)).toEqual(DEFAULT_DIFFS_PLUGIN_SECURITY);
+  });
+
+  it("allows opt-in remote viewer access", () => {
+    expect(resolveDiffsPluginSecurity({ security: { allowRemoteViewer: true } })).toEqual({
+      allowRemoteViewer: true,
     });
   });
 });
