@@ -3,11 +3,15 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { installFromValidatedNpmSpecArchive } from "../infra/install-from-npm-spec.js";
 import {
   resolveInstallModeOptions,
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
+import {
+  installPackageDir,
+  installPackageDirWithManifestDeps,
+} from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
@@ -15,10 +19,9 @@ import {
   resolveArchiveSourcePath,
 } from "../infra/install-source-utils.js";
 import {
-  finalizeNpmSpecArchiveInstall,
-  installFromNpmSpecArchiveWithInstaller,
-} from "../infra/npm-pack-install.js";
-import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+  ensureInstallTargetAvailable,
+  resolveCanonicalInstallTarget,
+} from "../infra/install-target.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
@@ -102,17 +105,12 @@ async function resolveInstallTargetDir(
   hooksDir?: string,
 ): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
   const baseHooksDir = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
-  await fs.mkdir(baseHooksDir, { recursive: true });
-
-  const targetDirResult = resolveSafeInstallDir({
+  return await resolveCanonicalInstallTarget({
     baseDir: baseHooksDir,
     id,
     invalidNameMessage: "invalid hook name: path traversal detected",
+    boundaryLabel: "hooks directory",
   });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  return { ok: true, targetDir: targetDirResult.path };
 }
 
 async function resolveHookNameFromDir(hookDir: string): Promise<string> {
@@ -189,8 +187,13 @@ async function installHookPackageFromDir(params: {
     return { ok: false, error: targetDirResult.error };
   }
   const targetDir = targetDirResult.targetDir;
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return { ok: false, error: `hook pack already exists: ${targetDir} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `hook pack already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   const resolvedHooks = [] as string[];
@@ -227,17 +230,15 @@ async function installHookPackageFromDir(params: {
     };
   }
 
-  const deps = manifest.dependencies ?? {};
-  const hasDeps = Object.keys(deps).length > 0;
-  const installRes = await installPackageDir({
+  const installRes = await installPackageDirWithManifestDeps({
     sourceDir: params.packageDir,
     targetDir,
     mode,
     timeoutMs,
     logger,
     copyErrorPrefix: "failed to copy hook pack",
-    hasDeps,
     depsLogMessage: "Installing hook pack dependencies…",
+    manifestDependencies: manifest.dependencies,
   });
   if (!installRes.ok) {
     return installRes;
@@ -281,33 +282,31 @@ async function installHookFromDir(params: {
     return { ok: false, error: targetDirResult.error };
   }
   const targetDir = targetDirResult.targetDir;
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return { ok: false, error: `hook already exists: ${targetDir} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `hook already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {
     return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
   }
 
-  logger.info?.(`Installing to ${targetDir}…`);
-  let backupDir: string | null = null;
-  if (mode === "update" && (await fileExists(targetDir))) {
-    backupDir = `${targetDir}.backup-${Date.now()}`;
-    await fs.rename(targetDir, backupDir);
-  }
-
-  try {
-    await fs.cp(params.hookDir, targetDir, { recursive: true });
-  } catch (err) {
-    if (backupDir) {
-      await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.rename(backupDir, targetDir).catch(() => undefined);
-    }
-    return { ok: false, error: `failed to copy hook: ${String(err)}` };
-  }
-
-  if (backupDir) {
-    await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+  const installRes = await installPackageDir({
+    sourceDir: params.hookDir,
+    targetDir,
+    mode,
+    timeoutMs: 120_000,
+    logger,
+    copyErrorPrefix: "failed to copy hook",
+    hasDeps: false,
+    depsLogMessage: "Installing hook dependencies…",
+  });
+  if (!installRes.ok) {
+    return installRes;
   }
 
   return { ok: true, hookPackId: hookName, hooks: [hookName], targetDir };
@@ -374,14 +373,10 @@ export async function installHooksFromNpmSpec(params: {
 }): Promise<InstallHooksResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
   const expectedHookPackId = params.expectedHookPackId;
-  const spec = params.spec.trim();
-  const specError = validateRegistryNpmSpec(spec);
-  if (specError) {
-    return { ok: false, error: specError };
-  }
+  const spec = params.spec;
 
-  logger.info?.(`Downloading ${spec}…`);
-  const flowResult = await installFromNpmSpecArchiveWithInstaller({
+  logger.info?.(`Downloading ${spec.trim()}…`);
+  return await installFromValidatedNpmSpecArchive({
     tempDirPrefix: "openclaw-hook-pack-",
     spec,
     timeoutMs,
@@ -400,7 +395,6 @@ export async function installHooksFromNpmSpec(params: {
       expectedHookPackId,
     },
   });
-  return finalizeNpmSpecArchiveInstall(flowResult);
 }
 
 export async function installHooksFromPath(params: {

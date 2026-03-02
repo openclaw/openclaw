@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   collectProviderApiKeysForExecution,
@@ -14,6 +13,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -400,33 +400,21 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-    const result = provider?.describeImage
-      ? await provider.describeImage({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        })
-      : await describeImageWithModel({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        });
+    const imageInput = {
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      model: modelId,
+      provider: providerId,
+      prompt,
+      timeoutMs,
+      profile: entry.profile,
+      preferredProfile: entry.preferredProfile,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+    };
+    const describeImage = provider?.describeImage ?? describeImageWithModel;
+    const result = await describeImage(imageInput);
     return {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
@@ -566,7 +554,9 @@ export async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cli-"));
+  const outputDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
+  );
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 

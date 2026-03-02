@@ -71,6 +71,21 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   );
 }
 
+export function resolveBinaryVersion(params: {
+  moduleUrl: string;
+  injectedVersion?: string;
+  bundledVersion?: string;
+  fallback?: string;
+}): string {
+  return (
+    firstNonEmpty(params.injectedVersion) ||
+    resolveVersionFromModuleUrl(params.moduleUrl) ||
+    firstNonEmpty(params.bundledVersion) ||
+    params.fallback ||
+    "0.0.0"
+  );
+}
+
 export type RuntimeVersionEnv = {
   [key: string]: string | undefined;
 };
@@ -91,8 +106,8 @@ export function resolveRuntimeServiceVersion(
 // Single source of truth for the current OpenClaw version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
-export const VERSION =
-  (typeof __OPENCLAW_VERSION__ === "string" && __OPENCLAW_VERSION__) ||
-  process.env.OPENCLAW_BUNDLED_VERSION ||
-  resolveVersionFromModuleUrl(import.meta.url) ||
-  "0.0.0";
+export const VERSION = resolveBinaryVersion({
+  moduleUrl: import.meta.url,
+  injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
+  bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
+});

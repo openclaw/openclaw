@@ -38,6 +38,12 @@ const subagentLifecycleHookState = vi.hoisted(() => ({
 const threadBindingMocks = vi.hoisted(() => ({
   unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
 }));
+const acpRuntimeMocks = vi.hoisted(() => ({
+  cancel: vi.fn(async () => {}),
+  close: vi.fn(async () => {}),
+  getAcpRuntimeBackend: vi.fn(),
+  requireAcpRuntimeBackend: vi.fn(),
+}));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
@@ -87,6 +93,21 @@ vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
     ...actual,
     unbindThreadBindingsBySessionKey: (params: unknown) =>
       threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+  };
+});
+
+vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+  return {
+    ...actual,
+    getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
+    requireAcpRuntimeBackend: (backendId?: string) => {
+      const backend = acpRuntimeMocks.requireAcpRuntimeBackend(backendId);
+      if (!backend) {
+        throw new Error("missing mocked ACP backend");
+      }
+      return backend;
+    },
   };
 });
 
@@ -176,6 +197,14 @@ describe("gateway server sessions", () => {
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
+    acpRuntimeMocks.cancel.mockClear();
+    acpRuntimeMocks.close.mockClear();
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReset();
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue(null);
+    acpRuntimeMocks.requireAcpRuntimeBackend.mockReset();
+    acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
+      acpRuntimeMocks.getAcpRuntimeBackend(backendId),
+    );
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -202,6 +231,8 @@ describe("gateway server sessions", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: recent,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -416,7 +447,13 @@ describe("gateway server sessions", () => {
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
     const modelPatched = await rpcReq<{
       ok: true;
-      entry: { modelOverride?: string; providerOverride?: string };
+      entry: {
+        modelOverride?: string;
+        providerOverride?: string;
+        model?: string;
+        modelProvider?: string;
+      };
+      resolved?: { model?: string; modelProvider?: string };
     }>(ws, "sessions.patch", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
@@ -424,6 +461,20 @@ describe("gateway server sessions", () => {
     expect(modelPatched.ok).toBe(true);
     expect(modelPatched.payload?.entry.modelOverride).toBe("gpt-test-a");
     expect(modelPatched.payload?.entry.providerOverride).toBe("openai");
+    expect(modelPatched.payload?.entry.model).toBeUndefined();
+    expect(modelPatched.payload?.entry.modelProvider).toBeUndefined();
+    expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
+    expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
+
+    const listAfterModelPatch = await rpcReq<{
+      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+    }>(ws, "sessions.list", {});
+    expect(listAfterModelPatch.ok).toBe(true);
+    const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
+      (session) => session.key === "agent:main:main",
+    );
+    expect(mainAfterModelPatch?.modelProvider).toBe("openai");
+    expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
 
     const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
       key: "agent:main:main",
@@ -456,11 +507,13 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: { sessionId: string; modelProvider?: string; model?: string };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-a");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -665,6 +718,68 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSingleLineSession(dir, "sess-acp", "acp");
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:dev": {
+          sessionId: "sess-acp",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:delete",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+      },
+    });
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:main:discord:group:dev",
+          backend: "acpx",
+          runtimeSessionName: "runtime:delete",
+        })),
+        runTurn: vi.fn(async function* () {}),
+        cancel: acpRuntimeMocks.cancel,
+        close: acpRuntimeMocks.close,
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:dev",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:discord:group:dev",
+        backend: "acpx",
+        runtimeSessionName: "runtime:delete",
+      },
+      reason: "session-delete",
+    });
+    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:discord:group:dev",
+        backend: "acpx",
+        runtimeSessionName: "runtime:delete",
+      },
+      reason: "session-delete",
+    });
+
+    ws.close();
+  });
+
   test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -829,6 +944,57 @@ describe("gateway server sessions", () => {
       targetKind: "acp",
       reason: "session-reset",
       sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:reset",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+      },
+    });
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:main:main",
+          backend: "acpx",
+          runtimeSessionName: "runtime:reset",
+        })),
+        runTurn: vi.fn(async function* () {}),
+        cancel: vi.fn(async () => {}),
+        close: acpRuntimeMocks.close,
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+    });
+    expect(reset.ok).toBe(true);
+    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:main",
+        backend: "acpx",
+        runtimeSessionName: "runtime:reset",
+      },
+      reason: "session-reset",
     });
 
     ws.close();
@@ -1085,6 +1251,54 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    ws.close();
+  });
+
+  test("control-ui client can delete sessions even in webchat mode", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        "discord:group:dev": {
+          sessionId: "sess-group",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "agent:main:discord:group:dev",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { sessionId?: string }
+    >;
+    expect(store["agent:main:discord:group:dev"]).toBeUndefined();
 
     ws.close();
   });

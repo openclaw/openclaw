@@ -1,4 +1,7 @@
-import type { AllowlistMatch } from "../../channels/allowlist-match.js";
+import {
+  resolveAllowlistMatchByCandidates,
+  type AllowlistMatch,
+} from "../../channels/allowlist-match.js";
 import {
   normalizeHyphenSlug,
   normalizeStringEntries,
@@ -17,9 +20,19 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeStringEntriesLower(list);
 }
 
+export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined {
+  const trimmed = entry.trim().toLowerCase();
+  if (!trimmed || trimmed === "*") {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.replace(/^(slack:|user:)/, "");
+  return /^u[a-z0-9]+$/.test(withoutPrefix) ? withoutPrefix : undefined;
+}
+
 export type SlackAllowListMatch = AllowlistMatch<
   "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
 >;
+type SlackAllowListSource = Exclude<SlackAllowListMatch["matchSource"], undefined>;
 
 export function resolveSlackAllowListMatch(params: {
   allowList: string[];
@@ -37,7 +50,7 @@ export function resolveSlackAllowListMatch(params: {
   const id = params.id?.toLowerCase();
   const name = params.name?.toLowerCase();
   const slug = normalizeSlackSlug(name);
-  const candidates: Array<{ value?: string; source: SlackAllowListMatch["matchSource"] }> = [
+  const candidates: Array<{ value?: string; source: SlackAllowListSource }> = [
     { value: id, source: "id" },
     { value: id ? `slack:${id}` : undefined, source: "prefixed-id" },
     { value: id ? `user:${id}` : undefined, source: "prefixed-user" },
@@ -46,22 +59,10 @@ export function resolveSlackAllowListMatch(params: {
           { value: name, source: "name" as const },
           { value: name ? `slack:${name}` : undefined, source: "prefixed-name" as const },
           { value: slug, source: "slug" as const },
-        ] satisfies Array<{ value?: string; source: SlackAllowListMatch["matchSource"] }>)
+        ] satisfies Array<{ value?: string; source: SlackAllowListSource }>)
       : []),
   ];
-  for (const candidate of candidates) {
-    if (!candidate.value) {
-      continue;
-    }
-    if (allowList.includes(candidate.value)) {
-      return {
-        allowed: true,
-        matchKey: candidate.value,
-        matchSource: candidate.source,
-      };
-    }
-  }
-  return { allowed: false };
+  return resolveAllowlistMatchByCandidates({ allowList, candidates });
 }
 
 export function allowListMatches(params: {

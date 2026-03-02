@@ -172,6 +172,7 @@ export async function resolveCommandsSystemPromptBundle(
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,
+    acpEnabled: params.cfg?.acp?.enabled !== false,
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

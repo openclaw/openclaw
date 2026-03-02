@@ -378,6 +378,49 @@ describe("monitorSignalProvider tool results", () => {
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
+  it.each([
+    {
+      name: "blocks reaction notifications from unauthorized senders when dmPolicy is allowlist",
+      mode: "all" as const,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550007777"] } as Record<string, unknown>,
+      targetAuthor: "+15550002222",
+      shouldEnqueue: false,
+    },
+    {
+      name: "blocks reaction notifications from unauthorized senders when dmPolicy is pairing",
+      mode: "own" as const,
+      extra: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+        account: "+15550009999",
+      } as Record<string, unknown>,
+      targetAuthor: "+15550009999",
+      shouldEnqueue: false,
+    },
+    {
+      name: "allows reaction notifications for allowlisted senders when dmPolicy is allowlist",
+      mode: "all" as const,
+      extra: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } as Record<string, unknown>,
+      targetAuthor: "+15550002222",
+      shouldEnqueue: true,
+    },
+  ])("$name", async ({ mode, extra, targetAuthor, shouldEnqueue }) => {
+    setReactionNotificationConfig(mode, extra);
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor,
+        targetSentTimestamp: 2,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(shouldEnqueue);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
   it("notifies on own reactions when target includes uuid + phone", async () => {
     setReactionNotificationConfig("own", { account: "+15550002222" });
     await receiveSingleEnvelope({

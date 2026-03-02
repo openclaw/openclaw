@@ -10,6 +10,7 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const { mapSensitivePaths } = __test__;
+const mainSchemaHints = mapSensitivePaths(OpenClawSchema, "", {});
 
 type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
   parsed: TConfig;
@@ -95,7 +96,6 @@ describe("redactConfigSnapshot", () => {
       },
       shortSecret: { token: "short" },
     });
-
     const result = redactConfigSnapshot(snapshot);
     const cfg = result.config as typeof snapshot.config;
 
@@ -110,6 +110,46 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
     expect(cfg.models.providers.openai.baseUrl).toBe("https://api.openai.com");
     expect(cfg.shortSecret.token).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts googlechat serviceAccount object payloads", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            type: "service_account",
+            client_email: "bot@example.iam.gserviceaccount.com",
+            private_key: "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.googlechat.serviceAccount).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts object-valued apiKey refs in model providers", () => {
+    const snapshot = makeSnapshot({
+      models: {
+        providers: {
+          openai: {
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            baseUrl: "https://api.openai.com",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot);
+    const models = result.config.models as Record<string, Record<string, Record<string, unknown>>>;
+    expect(models.providers.openai.apiKey).toEqual({
+      source: REDACTED_SENTINEL,
+      provider: REDACTED_SENTINEL,
+      id: REDACTED_SENTINEL,
+    });
+    expect(models.providers.openai.baseUrl).toBe("https://api.openai.com");
   });
 
   it("preserves non-sensitive fields", () => {
@@ -718,7 +758,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("contract-covers dynamic catchall/record paths for redact+restore", () => {
-    const hints = mapSensitivePaths(OpenClawSchema, "", {});
+    const hints = mainSchemaHints;
     const snapshot = makeSnapshot({
       env: {
         GROQ_API_KEY: "gsk-contract-123",
@@ -996,7 +1036,7 @@ describe("realredactConfigSnapshot_real", () => {
       unrepresentable: "any",
     });
     schema.title = "OpenClawConfig";
-    const hints = mapSensitivePaths(OpenClawSchema, "", {});
+    const hints = mainSchemaHints;
 
     const snapshot = makeSnapshot({
       agents: {

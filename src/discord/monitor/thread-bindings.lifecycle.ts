@@ -1,3 +1,5 @@
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
@@ -11,7 +13,6 @@ import {
   MANAGERS_BY_ACCOUNT_ID,
   ensureBindingsLoaded,
   getThreadBindingToken,
-  normalizeThreadBindingTtlMs,
   normalizeThreadId,
   rememberRecentUnboundWebhookEcho,
   removeBindingRecord,
@@ -21,6 +22,19 @@ import {
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
+
+export type AcpThreadBindingReconciliationResult = {
+  checked: number;
+  removed: number;
+  staleSessionKeys: string[];
+};
+
+function normalizeNonNegativeMs(raw: number): number {
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(raw));
+}
 
 function resolveBindingIdsForTargetSession(params: {
   targetSessionKey: string;
@@ -131,7 +145,8 @@ export async function autoBindSpawnedDiscordSubagent(params: {
     introText: resolveThreadBindingIntroText({
       agentId: params.agentId,
       label: params.label,
-      sessionTtlMs: manager.getSessionTtlMs(),
+      idleTimeoutMs: manager.getIdleTimeoutMs(),
+      maxAgeMs: manager.getMaxAgeMs(),
     }),
   });
 }
@@ -181,18 +196,17 @@ export function unbindThreadBindingsBySessionKey(params: {
   return removed;
 }
 
-export function setThreadBindingTtlBySessionKey(params: {
+export function setThreadBindingIdleTimeoutBySessionKey(params: {
   targetSessionKey: string;
   accountId?: string;
-  ttlMs: number;
+  idleTimeoutMs: number;
 }): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
   if (ids.length === 0) {
     return [];
   }
-  const ttlMs = normalizeThreadBindingTtlMs(params.ttlMs);
+  const idleTimeoutMs = normalizeNonNegativeMs(params.idleTimeoutMs);
   const now = Date.now();
-  const expiresAt = ttlMs > 0 ? now + ttlMs : 0;
   const updated: ThreadBindingRecord[] = [];
   for (const bindingKey of ids) {
     const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
@@ -201,8 +215,8 @@ export function setThreadBindingTtlBySessionKey(params: {
     }
     const nextRecord: ThreadBindingRecord = {
       ...existing,
-      boundAt: now,
-      expiresAt,
+      idleTimeoutMs,
+      lastActivityAt: now,
     };
     setBindingRecord(nextRecord);
     updated.push(nextRecord);
@@ -211,4 +225,95 @@ export function setThreadBindingTtlBySessionKey(params: {
     saveBindingsToDisk({ force: true });
   }
   return updated;
+}
+
+export function setThreadBindingMaxAgeBySessionKey(params: {
+  targetSessionKey: string;
+  accountId?: string;
+  maxAgeMs: number;
+}): ThreadBindingRecord[] {
+  const ids = resolveBindingIdsForTargetSession(params);
+  if (ids.length === 0) {
+    return [];
+  }
+  const maxAgeMs = normalizeNonNegativeMs(params.maxAgeMs);
+  const now = Date.now();
+  const updated: ThreadBindingRecord[] = [];
+  for (const bindingKey of ids) {
+    const existing = BINDINGS_BY_THREAD_ID.get(bindingKey);
+    if (!existing) {
+      continue;
+    }
+    const nextRecord: ThreadBindingRecord = {
+      ...existing,
+      maxAgeMs,
+      boundAt: now,
+      lastActivityAt: now,
+    };
+    setBindingRecord(nextRecord);
+    updated.push(nextRecord);
+  }
+  if (updated.length > 0 && shouldPersistBindingMutations()) {
+    saveBindingsToDisk({ force: true });
+  }
+  return updated;
+}
+
+export function reconcileAcpThreadBindingsOnStartup(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  sendFarewell?: boolean;
+}): AcpThreadBindingReconciliationResult {
+  const manager = getThreadBindingManager(params.accountId);
+  if (!manager) {
+    return {
+      checked: 0,
+      removed: 0,
+      staleSessionKeys: [],
+    };
+  }
+
+  const acpBindings = manager.listBindings().filter((binding) => binding.targetKind === "acp");
+  const staleBindings = acpBindings.filter((binding) => {
+    const sessionKey = binding.targetSessionKey.trim();
+    if (!sessionKey) {
+      return true;
+    }
+    const session = readAcpSessionEntry({
+      cfg: params.cfg,
+      sessionKey,
+    });
+    // Session store read failures are transient; never auto-unbind on uncertain reads.
+    if (session?.storeReadFailed) {
+      return false;
+    }
+    return !session?.acp;
+  });
+  if (staleBindings.length === 0) {
+    return {
+      checked: acpBindings.length,
+      removed: 0,
+      staleSessionKeys: [],
+    };
+  }
+
+  const staleSessionKeys: string[] = [];
+  let removed = 0;
+  for (const binding of staleBindings) {
+    staleSessionKeys.push(binding.targetSessionKey);
+    const unbound = manager.unbindThread({
+      threadId: binding.threadId,
+      reason: "stale-session",
+      sendFarewell: params.sendFarewell ?? false,
+    });
+    if (unbound) {
+      removed += 1;
+    }
+  }
+
+  return {
+    checked: acpBindings.length,
+    removed,
+    staleSessionKeys: [...new Set(staleSessionKeys)],
+  };
 }
