@@ -43,7 +43,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "maps outside-workspace safe-open failures to EACCES",
+    "silently passes access for outside-workspace paths so readFile reports the real error",
     async () => {
       tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
       const workspaceDir = path.join(tmpDir, "workspace");
@@ -58,9 +58,13 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
       expect(mocks.operations).toBeDefined();
 
+      // access must NOT throw for outside-workspace paths; the upstream
+      // library replaces any access error with a misleading "File not found".
+      // By resolving silently the subsequent readFile call surfaces the real
+      // "Path escapes workspace root" / "outside-workspace" error instead.
       await expect(
         mocks.operations!.access(path.join(workspaceDir, "escape", "secret.txt")),
-      ).rejects.toMatchObject({ code: "EACCES" });
+      ).resolves.toBeUndefined();
     },
   );
 });
