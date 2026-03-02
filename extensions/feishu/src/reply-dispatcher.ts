@@ -192,36 +192,42 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
-        const mediaList =
-          payload.mediaUrls && payload.mediaUrls.length > 0
-            ? payload.mediaUrls
-            : payload.mediaUrl
-              ? [payload.mediaUrl]
-              : [];
-        const hasText = Boolean(text.trim());
-        const hasMedia = mediaList.length > 0;
-
-        if (!hasText && !hasMedia) {
-          return;
-        }
-
-        if (hasText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-
-          if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
+            // FIX: Filter out internal 'block' reasoning chunks immediately to prevent
+            // data leak and race conditions with streaming state initialization.
+            if (info?.kind === 'block') {
+              return;
             }
-          }
 
-          if (streaming?.isActive()) {
-            if (info?.kind === "final") {
-              streamText = text;
-              await closeStreaming();
+            const text = payload.text ?? "";
+            const mediaList =
+              payload.mediaUrls && payload.mediaUrls.length > 0
+                ? payload.mediaUrls
+                : payload.mediaUrl
+                  ? [payload.mediaUrl]
+                  : [];
+            const hasText = Boolean(text.trim());
+            const hasMedia = mediaList.length > 0;
+
+            if (!hasText && !hasMedia) {
+              return;
             }
-            // Send media even when streaming handled the text
+
+            if (hasText) {
+              const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+
+              if (info?.kind === "final" && streamingEnabled && useCard) {
+                startStreaming();
+                if (streamingStartPromise) {
+                  await streamingStartPromise;
+                }
+              }
+
+              if (streaming?.isActive()) {
+                if (info?.kind === "final") {
+                  streamText = text;
+                  await closeStreaming();
+                }
+                // Send media even when streaming handled the text
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
                 await sendMediaFeishu({
