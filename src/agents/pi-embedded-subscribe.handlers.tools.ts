@@ -171,6 +171,10 @@ export async function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
+  // Mark message as containing tool calls BEFORE flushing so that
+  // emitBlockChunk suppresses channel delivery for the flushed text.
+  ctx.state.currentMessageHadToolCalls = true;
+
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
@@ -239,6 +243,7 @@ export async function handleToolExecutionStart(
     const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
+      ctx.state.currentMessageUsedMessagingTool = true;
       const sendTarget = extractMessagingToolSend(toolName, argsRecord);
       if (sendTarget) {
         ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);

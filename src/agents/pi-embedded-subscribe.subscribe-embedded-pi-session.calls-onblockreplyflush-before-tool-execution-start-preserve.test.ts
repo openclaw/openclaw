@@ -81,11 +81,7 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { command: "echo flush" },
     });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Short chunk.");
+    expect(onBlockReply).not.toHaveBeenCalled();
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
-      onBlockReplyFlush.mock.invocationCallOrder[0],
-    );
   });
 });

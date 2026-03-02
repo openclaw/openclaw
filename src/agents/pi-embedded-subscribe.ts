@@ -78,6 +78,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
+    currentMessageHadToolCalls: false,
+    currentMessageUsedMessagingTool: false,
   };
   const usageTotals = {
     input: 0,
@@ -121,6 +123,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
+    state.currentMessageHadToolCalls = false;
+    state.currentMessageUsedMessagingTool = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
@@ -491,7 +495,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
     rememberAssistantText(chunk);
-    if (!params.onBlockReply) {
+    // Suppress channel delivery for intermediate messages (those containing tool calls).
+    if (!params.onBlockReply || state.currentMessageHadToolCalls) {
       return;
     }
     const splitResult = replyDirectiveAccumulator.consume(chunk);
@@ -586,6 +591,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
+    state.currentMessageHadToolCalls = false;
+    state.currentMessageUsedMessagingTool = false;
     resetAssistantMessageState(0);
   };
 

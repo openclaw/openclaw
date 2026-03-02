@@ -77,6 +77,14 @@ export type EmbeddedPiSubscribeState = {
   successfulCronAdds: number;
   pendingMessagingMediaUrls: Map<string, string[]>;
   lastAssistant?: AgentMessage;
+
+  /** Set when the current assistant message includes tool calls.
+   *  Used to suppress block replies for intermediate (non-final) messages. */
+  currentMessageHadToolCalls: boolean;
+  /** Set when a messaging tool send action starts in the current message.
+   *  When true, message_end block reply suppression defers to the existing
+   *  messaging-tool dedup logic instead of blanket-suppressing. */
+  currentMessageUsedMessagingTool: boolean;
 };
 
 export type EmbeddedPiSubscribeContext = {
@@ -149,6 +157,8 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "successfulCronAdds"
+  | "currentMessageHadToolCalls"
+  | "currentMessageUsedMessagingTool"
 >;
 
 export type ToolHandlerContext = {

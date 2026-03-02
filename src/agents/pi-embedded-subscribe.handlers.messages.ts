@@ -231,7 +231,11 @@ export function handleMessageUpdate(
         },
       });
       ctx.state.emittedAssistantUpdate = true;
-      if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
+      if (
+        ctx.params.onPartialReply &&
+        ctx.state.shouldEmitPartialReplies &&
+        !ctx.state.currentMessageHadToolCalls
+      ) {
         void ctx.params.onPartialReply({
           text: cleanedText,
           mediaUrls: hasMedia ? mediaUrls : undefined,
@@ -326,10 +330,15 @@ export function handleMessageEnd(
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
 
   const onBlockReply = ctx.params.onBlockReply;
+  // Suppress channel delivery for intermediate messages (tool calls present),
+  // but defer to messaging-tool dedup when the message used a messaging tool.
+  const suppressBlockReplies =
+    ctx.state.currentMessageHadToolCalls && !ctx.state.currentMessageUsedMessagingTool;
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
     formattedReasoning &&
     onBlockReply &&
+    !suppressBlockReplies &&
     formattedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
@@ -369,26 +378,28 @@ export function handleMessageEnd(
         );
       } else {
         ctx.state.lastBlockReplyText = text;
-        const splitResult = ctx.consumeReplyDirectives(text, { final: true });
-        if (splitResult) {
-          const {
-            text: cleanedText,
-            mediaUrls,
-            audioAsVoice,
-            replyToId,
-            replyToTag,
-            replyToCurrent,
-          } = splitResult;
-          // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-          if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-            void onBlockReply({
+        if (!suppressBlockReplies) {
+          const splitResult = ctx.consumeReplyDirectives(text, { final: true });
+          if (splitResult) {
+            const {
               text: cleanedText,
-              mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+              mediaUrls,
               audioAsVoice,
               replyToId,
               replyToTag,
               replyToCurrent,
-            });
+            } = splitResult;
+            // Emit if there's content OR audioAsVoice flag (to propagate the flag).
+            if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
+              void onBlockReply({
+                text: cleanedText,
+                mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                audioAsVoice,
+                replyToId,
+                replyToTag,
+                replyToCurrent,
+              });
+            }
           }
         }
       }
@@ -402,7 +413,7 @@ export function handleMessageEnd(
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (ctx.state.blockReplyBreak === "text_end" && onBlockReply && !suppressBlockReplies) {
     const tailResult = ctx.consumeReplyDirectives("", { final: true });
     if (tailResult) {
       const {
