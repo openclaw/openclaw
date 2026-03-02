@@ -67,9 +67,9 @@ function withPdfModel(primary: string): OpenClawConfig {
 async function stubPdfToolInfra(
   agentDir: string,
   params?: {
-  provider?: string;
-  input?: string[];
-  modelFound?: boolean;
+    provider?: string;
+    input?: string[];
+    modelFound?: boolean;
   },
 ) {
   const webMedia = await import("../../web/media.js");
