@@ -40,6 +40,7 @@ import type {
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  SkillSecurityVerdict,
   SkillStatusReport,
   ToolsCatalogResult,
   StatusSummary,
@@ -243,6 +244,10 @@ export type AppViewState = {
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
+  skillVerdicts: Record<string, SkillSecurityVerdict>;
+  skillVerdictErrors: Record<string, string>;
+  skillVerdictExpanded: Record<string, boolean>;
+  skillVerdictLoadingKey: string | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
   debugHealth: HealthSnapshot | null;

@@ -61,6 +61,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.list",
     "agent.identity.get",
     "skills.status",
+    "skills.verdict",
     "voicewake.get",
     "sessions.list",
     "sessions.preview",

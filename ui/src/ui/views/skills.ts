@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { SkillMessageMap } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { SkillSecurityVerdict, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
   computeSkillMissing,
@@ -17,12 +17,18 @@ export type SkillsProps = {
   edits: Record<string, string>;
   busyKey: string | null;
   messages: SkillMessageMap;
+  verdicts: Record<string, SkillSecurityVerdict>;
+  verdictErrors: Record<string, string>;
+  verdictExpanded: Record<string, boolean>;
+  verdictLoadingKey: string | null;
   onFilterChange: (next: string) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
   onInstall: (skillKey: string, name: string, installId: string) => void;
+  onToggleVerdict: (skillKey: string) => void;
+  onRefreshVerdict: (skillKey: string) => void;
 };
 
 export function renderSkills(props: SkillsProps) {
@@ -97,6 +103,10 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
   const busy = props.busyKey === skill.skillKey;
   const apiKey = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
+  const verdict = props.verdicts[skill.skillKey] ?? null;
+  const verdictError = props.verdictErrors[skill.skillKey] ?? null;
+  const verdictExpanded = Boolean(props.verdictExpanded[skill.skillKey]);
+  const verdictLoading = props.verdictLoadingKey === skill.skillKey;
   const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
@@ -130,6 +140,9 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       </div>
       <div class="list-meta">
         <div class="row" style="justify-content: flex-end; flex-wrap: wrap;">
+          <button class="btn" ?disabled=${verdictLoading} @click=${() => props.onToggleVerdict(skill.skillKey)}>
+            ${verdictExpanded ? "Hide verdict" : verdictLoading ? "Loading verdict..." : "Explain verdict"}
+          </button>
           <button
             class="btn"
             ?disabled=${busy}
@@ -187,6 +200,93 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             : nothing
         }
       </div>
+      ${
+        verdictExpanded
+          ? html`<div class="skill-verdict-panel">
+              <div class="skill-verdict-header">
+                <div class="skill-verdict-title">ClawHub security verdict</div>
+                ${
+                  verdict
+                    ? html`<span class="chip ${
+                        verdict.verdict === "block"
+                          ? "chip-danger"
+                          : verdict.verdict === "review"
+                            ? "chip-warn"
+                            : "chip-ok"
+                      }">${verdict.verdict}</span>`
+                    : nothing
+                }
+              </div>
+              ${
+                verdictLoading
+                  ? html`
+                      <div class="muted">Scanning skill source...</div>
+                    `
+                  : verdictError
+                    ? html`<div class="callout danger">${verdictError}</div>`
+                    : verdict
+                      ? renderSkillVerdictPanel(verdict, props, skill)
+                      : html`
+                          <div class="muted">No verdict available yet.</div>
+                        `
+              }
+            </div>`
+          : nothing
+      }
     </div>
+  `;
+}
+
+function formatVerdictConfidence(confidence: number): string {
+  if (!Number.isFinite(confidence)) {
+    return "n/a";
+  }
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function renderSkillVerdictPanel(
+  verdict: SkillSecurityVerdict,
+  props: SkillsProps,
+  skill: SkillStatusEntry,
+) {
+  return html`
+    <div class="muted">Confidence: ${formatVerdictConfidence(verdict.confidence)}</div>
+    <div class="muted" style="margin-top: 4px;">
+      Rule IDs:
+      ${verdict.summary.ruleIds.length > 0 ? verdict.summary.ruleIds.join(", ") : "none"}
+    </div>
+    <div class="muted" style="margin-top: 4px;">
+      Scan limits: ${verdict.summary.scannedFiles}/${verdict.antiAbuse.maxFiles} files ·
+      ${Math.round(verdict.antiAbuse.maxFileBytes / 1024)} KiB max file size
+      ${verdict.antiAbuse.cappedAtMaxFiles ? " (max files reached)" : ""}
+    </div>
+    ${
+      verdict.remediationHints.length > 0
+        ? html`<div class="muted" style="margin-top: 8px;">
+            Remediation hints:
+            ${verdict.remediationHints.slice(0, 3).map((hint) => html`<div>- ${hint}</div>`)}
+          </div>`
+        : nothing
+    }
+    ${
+      verdict.findings.length > 0
+        ? html`<div style="margin-top: 8px;">
+            ${verdict.findings.slice(0, 4).map(
+              (finding) => html`<div class="muted">
+                [${finding.ruleId}] ${finding.message} (${finding.file}:${finding.line}) ·
+                ${formatVerdictConfidence(finding.confidence)}
+              </div>`,
+            )}
+          </div>`
+        : nothing
+    }
+    <button
+      class="btn btn--sm"
+      style="margin-top: 8px;"
+      ?disabled=${props.verdictLoadingKey === skill.skillKey}
+      @click=${() => props.onRefreshVerdict(skill.skillKey)}
+    >
+      Refresh verdict
+    </button>
   `;
 }

@@ -31,6 +31,7 @@ import type {
   SkillsBinsResultSchema,
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
+  SkillsVerdictParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
   ToolCatalogGroupSchema,
@@ -218,6 +219,7 @@ export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
+export type SkillsVerdictParams = Static<typeof SkillsVerdictParamsSchema>;
 export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
 export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
 export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;

@@ -77,6 +77,7 @@ import type {
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionsListResult,
+  SkillSecurityVerdict,
   SkillStatusReport,
   ToolsCatalogResult,
   StatusSummary,
@@ -347,6 +348,10 @@ export class OpenClawApp extends LitElement {
   @state() skillEdits: Record<string, string> = {};
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
+  @state() skillVerdicts: Record<string, SkillSecurityVerdict> = {};
+  @state() skillVerdictErrors: Record<string, string> = {};
+  @state() skillVerdictExpanded: Record<string, boolean> = {};
+  @state() skillVerdictLoadingKey: string | null = null;
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;

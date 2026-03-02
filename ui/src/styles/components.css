@@ -2580,6 +2580,27 @@
   grid-template-columns: 1fr;
 }
 
+.skill-verdict-panel {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.skill-verdict-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.skill-verdict-title {
+  font-weight: 600;
+}
+
 @container (min-width: 900px) {
   .skills-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

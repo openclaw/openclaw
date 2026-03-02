@@ -2182,6 +2182,24 @@ public struct SkillsStatusParams: Codable, Sendable {
     }
 }
 
+public struct SkillsVerdictParams: Codable, Sendable {
+    public let skillkey: String
+    public let agentid: String?
+
+    public init(
+        skillkey: String,
+        agentid: String?)
+    {
+        self.skillkey = skillkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skillkey = "skillKey"
+        case agentid = "agentId"
+    }
+}
+
 public struct ToolsCatalogParams: Codable, Sendable {
     public let agentid: String?
     public let includeplugins: Bool?

@@ -633,6 +633,38 @@ export type SkillStatusReport = {
   skills: SkillStatusEntry[];
 };
 
+export type SkillSecurityVerdictFinding = {
+  ruleId: string;
+  severity: "critical" | "warn" | "info";
+  confidence: number;
+  remediationHint: string;
+  message: string;
+  file: string;
+  line: number;
+};
+
+export type SkillSecurityVerdict = {
+  skillKey: string;
+  skillName: string;
+  verdict: "pass" | "review" | "block";
+  confidence: number;
+  generatedAtMs: number;
+  summary: {
+    scannedFiles: number;
+    critical: number;
+    warn: number;
+    info: number;
+    ruleIds: string[];
+  };
+  antiAbuse: {
+    maxFiles: number;
+    maxFileBytes: number;
+    cappedAtMaxFiles: boolean;
+  };
+  remediationHints: string[];
+  findings: SkillSecurityVerdictFinding[];
+};
+
 export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;

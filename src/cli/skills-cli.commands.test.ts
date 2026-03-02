@@ -5,6 +5,7 @@ const loadConfigMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const resolveDefaultAgentIdMock = vi.fn();
 const buildWorkspaceSkillStatusMock = vi.fn();
+const buildSkillSecurityVerdictExplainabilityMock = vi.fn();
 const formatSkillsListMock = vi.fn();
 const formatSkillInfoMock = vi.fn();
 const formatSkillsCheckMock = vi.fn();
@@ -26,6 +27,10 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: buildWorkspaceSkillStatusMock,
+}));
+
+vi.mock("../security/skill-verdict.js", () => ({
+  buildSkillSecurityVerdictExplainability: buildSkillSecurityVerdictExplainabilityMock,
 }));
 
 vi.mock("./skills-cli.format.js", () => ({
@@ -63,6 +68,14 @@ describe("registerSkillsCli", () => {
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(report);
+    buildSkillSecurityVerdictExplainabilityMock.mockResolvedValue({
+      verdict: "pass",
+      confidence: 0.7,
+      summary: { ruleIds: [] },
+      findings: [],
+      remediationHints: [],
+      antiAbuse: { maxFiles: 500, maxFileBytes: 1024 * 1024, cappedAtMaxFiles: false },
+    });
     formatSkillsListMock.mockReturnValue("skills-list-output");
     formatSkillInfoMock.mockReturnValue("skills-info-output");
     formatSkillsCheckMock.mockReturnValue("skills-check-output");
@@ -92,8 +105,63 @@ describe("registerSkillsCli", () => {
       report,
       "peekaboo",
       expect.objectContaining({ json: true }),
+      undefined,
+      undefined,
     );
     expect(runtime.log).toHaveBeenCalledWith("skills-info-output");
+  });
+
+  it("supports inspect alias for info command", async () => {
+    await runCli(["skills", "inspect", "peekaboo"]);
+
+    expect(formatSkillInfoMock).toHaveBeenCalledWith(
+      report,
+      "peekaboo",
+      expect.any(Object),
+      undefined,
+      undefined,
+    );
+    expect(runtime.log).toHaveBeenCalledWith("skills-info-output");
+  });
+
+  it("loads and forwards security verdict data when inspecting an existing skill", async () => {
+    const existingReport = {
+      ...report,
+      skills: [
+        {
+          name: "peekaboo",
+          skillKey: "peekaboo",
+          baseDir: "/tmp/workspace/skills/peekaboo",
+        },
+      ],
+    };
+    buildWorkspaceSkillStatusMock.mockReturnValue(existingReport);
+    buildSkillSecurityVerdictExplainabilityMock.mockResolvedValue({
+      skillKey: "peekaboo",
+      skillName: "peekaboo",
+      verdict: "review",
+      confidence: 0.77,
+      generatedAtMs: Date.now(),
+      summary: { scannedFiles: 1, critical: 0, warn: 1, info: 0, ruleIds: ["suspicious-network"] },
+      antiAbuse: { maxFiles: 500, maxFileBytes: 1024 * 1024, cappedAtMaxFiles: false },
+      remediationHints: ["Restrict outbound endpoints."],
+      findings: [],
+    });
+
+    await runCli(["skills", "inspect", "peekaboo"]);
+
+    expect(buildSkillSecurityVerdictExplainabilityMock).toHaveBeenCalledWith({
+      skillKey: "peekaboo",
+      skillName: "peekaboo",
+      skillDir: "/tmp/workspace/skills/peekaboo",
+    });
+    expect(formatSkillInfoMock).toHaveBeenCalledWith(
+      existingReport,
+      "peekaboo",
+      expect.any(Object),
+      expect.objectContaining({ verdict: "review" }),
+      undefined,
+    );
   });
 
   it("runs check command and writes formatter output", async () => {

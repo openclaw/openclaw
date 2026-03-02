@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillSecurityVerdictExplainability } from "../security/skill-verdict.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -61,6 +62,23 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
     missing.push(`os: ${skill.missing.os.join(", ")}`);
   }
   return missing.join("; ");
+}
+
+function formatConfidence(confidence: number): string {
+  if (!Number.isFinite(confidence)) {
+    return "n/a";
+  }
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function formatVerdictLabel(verdict: SkillSecurityVerdictExplainability["verdict"]): string {
+  if (verdict === "block") {
+    return theme.error("block");
+  }
+  if (verdict === "review") {
+    return theme.warn("review");
+  }
+  return theme.success("pass");
 }
 
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
@@ -136,6 +154,8 @@ export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
   opts: SkillInfoOptions,
+  securityVerdict?: SkillSecurityVerdictExplainability,
+  securityVerdictError?: string,
 ): string {
   const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
 
@@ -150,7 +170,15 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(skill, null, 2);
+    return JSON.stringify(
+      {
+        ...skill,
+        securityVerdict: securityVerdict ?? null,
+        securityVerdictError: securityVerdictError ?? null,
+      },
+      null,
+      2,
+    );
   }
 
   const lines: string[] = [];
@@ -224,6 +252,34 @@ export function formatSkillInfo(
       });
       lines.push(`${theme.muted("  OS:")} ${osStatus.join(", ")}`);
     }
+  }
+
+  if (securityVerdict) {
+    lines.push("");
+    lines.push(theme.heading("Security verdict:"));
+    lines.push(
+      `${theme.muted("  Verdict:")} ${formatVerdictLabel(securityVerdict.verdict)} ${theme.muted(`(${formatConfidence(securityVerdict.confidence)} confidence)`)}`,
+    );
+    lines.push(
+      `${theme.muted("  Rule IDs:")} ${
+        securityVerdict.summary.ruleIds.length > 0
+          ? securityVerdict.summary.ruleIds.join(", ")
+          : theme.muted("none")
+      }`,
+    );
+    lines.push(
+      `${theme.muted("  Scan:")} ${securityVerdict.summary.scannedFiles} file(s) scanned` +
+        (securityVerdict.antiAbuse.cappedAtMaxFiles ? theme.warn(" (scan limit reached)") : ""),
+    );
+    if (securityVerdict.remediationHints.length > 0) {
+      lines.push(theme.muted("  Remediation hints:"));
+      for (const hint of securityVerdict.remediationHints.slice(0, 3)) {
+        lines.push(`    - ${hint}`);
+      }
+    }
+  } else if (securityVerdictError) {
+    lines.push("");
+    lines.push(`${theme.warn("Security verdict unavailable:")} ${securityVerdictError}`);
   }
 
   if (skill.install.length > 0 && !skill.eligible) {
