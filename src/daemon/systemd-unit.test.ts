@@ -157,4 +157,20 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("extracts executable token when env option value is single-quoted with spaces", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env -C '/home/user/My Data' /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
+
+  it("extracts executable token when clustered env option value is single-quoted with spaces", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env -iC '/home/user/My Data' /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });

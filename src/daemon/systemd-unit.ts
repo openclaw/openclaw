@@ -284,10 +284,9 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
     }
 
     if (envOptionConsumesNextValue(envToken)) {
-      const optionValue = pending.shift();
+      const optionValue = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
       if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
-        const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
-        const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+        const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
         if (expanded.length > 0) {
           pending.unshift(...expanded);
         }
@@ -299,10 +298,9 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
     const cluster = parseEnvShortOptionCluster(envToken);
     if (cluster) {
       if (cluster.consumesNext) {
-        const optionValue = pending.shift();
+        const optionValue = consumePossiblyQuotedValue(pending.shift() ?? "", pending);
         if (cluster.isSplitString && optionValue) {
-          const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
-          const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+          const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
           if (expanded.length > 0) {
             pending.unshift(...expanded);
           }
