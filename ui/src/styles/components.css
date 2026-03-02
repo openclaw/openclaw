@@ -606,7 +606,17 @@
 }
 
 .cron-workspace-form {
-  /* Scroll with left column; no sticky positioning or own scroller. */
+  /* Default: scroll with page. Sticky only when viewport is wide and tall enough
+     to avoid overlap (width 1100–1320) and sticking (height < 1420). */
+}
+
+@media (min-width: 1321px) and (min-height: 1420px) {
+  .cron-workspace-form {
+    position: sticky;
+    top: 74px;
+    max-height: calc(100vh - 74px - 32px);
+    overflow-y: auto;
+  }
 }
 
 .cron-form {
