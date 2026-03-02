@@ -220,12 +220,12 @@ describe("Session Store Cache", () => {
       "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Original" }),
       "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Added" }),
     };
+    const preWriteStat = fs.statSync(storePath);
     const json2 = JSON.stringify(store2, null, 2);
     fs.writeFileSync(storePath, json2);
 
     // Force mtime to match the cached value so only size differs
-    const stat = fs.statSync(storePath);
-    fs.utimesSync(storePath, stat.atime, stat.mtime);
+    fs.utimesSync(storePath, preWriteStat.atime, preWriteStat.mtime);
 
     // The cache should detect the size change and reload from disk
     const loaded2 = loadSessionStore(storePath);
