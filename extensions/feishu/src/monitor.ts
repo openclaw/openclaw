@@ -199,8 +199,8 @@ async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | 
 
 /**
  * Register common event handlers on an EventDispatcher.
- * When fireAndForget is true (webhook mode), message handling is not awaited
- * to avoid blocking the HTTP response (Lark requires <3s response).
+ * When fireAndForget is true, message handling is not awaited to avoid blocking
+ * event processing (Lark webhooks require <3s response).
  */
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
@@ -361,7 +361,7 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
     accountId,
     runtime,
     chatHistories,
-    fireAndForget: connectionMode === "webhook",
+    fireAndForget: true,
   });
 
   if (connectionMode === "webhook") {

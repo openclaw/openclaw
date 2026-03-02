@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/Components wildcard handlers: use distinct internal registration sentinel IDs and parse those sentinels as wildcard keys so select/user/role/channel/mentionable/modal interactions are not dropped by raw customId dedupe paths. Landed from contributor PR #29459 by @Sid-Qin. Thanks @Sid-Qin.
 - Model directives/Auth profiles: split `/model` profile suffixes at the first `@` after the last slash so email-based auth profile IDs (for example OAuth profile IDs) resolve correctly. Landed from contributor PR #30932 by @haosenwang1018. Thanks @haosenwang1018.
 - Windows/Plugin install: avoid `spawn EINVAL` on Windows npm/npx invocations by resolving to `node` + npm CLI scripts instead of spawning `.cmd` directly. Landed from contributor PR #31147 by @codertony. Thanks @codertony.
 - LINE/Voice transcription: classify M4A voice media as `audio/mp4` (not `video/mp4`) by checking the MPEG-4 `ftyp` major brand (`M4A ` / `M4B `), restoring voice transcription for LINE voice messages. Landed from contributor PR #31151 by @scoootscooob. Thanks @scoootscooob.
@@ -111,6 +112,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Google Chat/Thread replies: set `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` on threaded sends so replies attach to existing threads instead of silently failing thread placement. Landed from contributor PR #30965 by @novan. Thanks @novan.
+- Mattermost/Private channel policy routing: map Mattermost private channel type `P` to group chat type so `groupPolicy`/`groupAllowFrom` gates apply correctly instead of being treated as open public channels. Landed from contributor PR #30891 by @BlueBirdBack. Thanks @BlueBirdBack.
+- Models/Custom provider keys: trim custom provider map keys during normalization so image-capable models remain discoverable when provider keys are configured with leading/trailing whitespace. Landed from contributor PR #31202 by @stakeswky. Thanks @stakeswky.
+- Discord/Agent component interactions: accept Components v2 `cid` payloads alongside legacy `componentId`, and safely decode percent-encoded IDs without throwing on malformed `%` sequences. Landed from contributor PR #29013 by @Jacky1n7. Thanks @Jacky1n7.
+- Matrix/Directory room IDs: preserve original room-ID casing for direct `!roomId` group lookups (without `:server`) so allowlist checks do not fail on case-sensitive IDs. Landed from contributor PR #31201 by @williamos-dev. Thanks @williamos-dev.
 - Discord/Inbound media fallback: preserve attachment and sticker metadata when Discord CDN fetch/save fails by keeping URL-based media entries in context, with regression coverage for save failures and mixed success/failure ordering. Landed from contributor PR #28906 by @Sid-Qin. Thanks @Sid-Qin.
 - Docs/Docker images: clarify the official GHCR image source and tag guidance (`main`, `latest`, `<version>`), and document that `OPENCLAW_IMAGE` skips local image builds but still uses the repo-local compose/setup flow. (#27214, #31180) Fixes #15655. Thanks @ipl31.
 - Agents/Model fallback: classify additional network transport errors (`ECONNREFUSED`, `ENETUNREACH`, `EHOSTUNREACH`, `ENETRESET`, `EAI_AGAIN`) as failover-worthy so fallback chains advance when primary providers are unreachable. Landed from contributor PR #19077 by @ayanesakura. Thanks @ayanesakura.
@@ -123,6 +129,7 @@ Docs: https://docs.openclaw.ai
 - Discord/Application ID fallback: parse bot application IDs from token prefixes without numeric precision loss and use token fallback only on transport/timeout failures when probing `/oauth2/applications/@me`. Landed from contributor PR #29695 by @dhananjai1729. Thanks @dhananjai1729.
 - Discord/EventQueue timeout config: expose per-account `channels.discord.accounts.<id>.eventQueue.listenerTimeout` (and related queue options) so long-running handlers can avoid Carbon listener timeout drops. Landed from contributor PR #28945 by @Glucksberg. Thanks @Glucksberg.
 - CLI/Cron run exit code: return exit code `0` only when `cron run` reports `{ ok: true, ran: true }`, and `1` for non-run/error outcomes so scripting/debugging reflects actual execution status. Landed from contributor PR #31121 by @Sid-Qin. Thanks @Sid-Qin.
+- CLI/JSON preflight output: keep `--json` command stdout machine-readable by suppressing doctor preflight note output while still running legacy migration/config doctor flow. (#24368) Thanks @altaywtf.
 - Nodes/Screen recording guardrails: cap `nodes` tool `screen_record` `durationMs` to 5 minutes at both schema-validation and runtime invocation layers to prevent long-running blocking captures from unbounded durations. Landed from contributor PR #31106 by @BlueBirdBack. Thanks @BlueBirdBack.
 - Telegram/Empty final replies: skip outbound send for null/undefined final text payloads without media so Telegram typing indicators do not linger on `text must be non-empty` errors, with added regression coverage for undefined final payload dispatch. Landed from contributor PRs #30969 by @haosenwang1018 and #30746 by @rylena. Thanks @haosenwang1018 and @rylena.
 - Telegram/Proxy dispatcher preservation: preserve proxy-aware global undici dispatcher behavior in Telegram network workarounds so proxy-backed Telegram + model traffic is not broken by dispatcher replacement. Landed from contributor PR #30367 by @Phineas1500. Thanks @Phineas1500.
