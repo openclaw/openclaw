@@ -156,6 +156,24 @@ export async function enqueueDelivery(
   return id;
 }
 
+/**
+ * Mark a delivery as "attempt started" before the actual send.
+ * This ensures the row passes startup-cutoff filtering even if the
+ * subsequent ack/fail bookkeeping write is swallowed.
+ */
+export async function markAttemptStarted(id: string, stateDir?: string): Promise<void> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    db.prepare(
+      `UPDATE message_outbox
+         SET last_attempt_at = ?
+       WHERE id = ? AND last_attempt_at IS NULL`,
+    ).run(Date.now(), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: markAttemptStarted failed: ${String(err)}`);
+  }
+}
+
 // ackDelivery is best-effort bookkeeping after a successful send.
 // If the UPDATE fails, the entry stays queued and the recovery worker
 // will re-send it. This is safe because channel sends are idempotent

@@ -36,7 +36,12 @@ import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  markAttemptStarted,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -504,6 +509,12 @@ export async function deliverOutboundPayloads(
           },
         }
       : params;
+
+  // Mark attempt started before sending so the row passes startup-cutoff
+  // filtering even if the subsequent ack/fail write is swallowed.
+  if (queueId) {
+    await markAttemptStarted(queueId).catch(() => {});
+  }
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);
