@@ -50,6 +50,59 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts metaso provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "metaso",
+        providerConfig: {
+          apiKey: "mk-test-key",
+          baseUrl: "https://metaso.cn",
+          includeSummary: true,
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts metaso provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "metaso",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts qwen provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "qwen",
+        providerConfig: {
+          apiKey: "sk-test-key",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          model: "qwen-plus",
+          enableThinking: false,
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts qwen provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "qwen",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -65,6 +118,8 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.METASO_API_KEY;
+    delete process.env.DASHSCOPE_API_KEY;
   });
 
   afterEach(() => {
@@ -122,6 +177,34 @@ describe("web search provider auto-detection", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key";
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects metaso when only METASO_API_KEY is set", () => {
+    process.env.METASO_API_KEY = "test-metaso-key";
+    expect(resolveSearchProvider({})).toBe("metaso");
+  });
+
+  it("auto-detects qwen when only DASHSCOPE_API_KEY is set", () => {
+    process.env.DASHSCOPE_API_KEY = "test-dashscope-key";
+    expect(resolveSearchProvider({})).toBe("qwen");
+  });
+
+  it("explicit metaso provider always wins regardless of keys", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    expect(
+      resolveSearchProvider({ provider: "metaso" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("metaso");
+  });
+
+  it("explicit qwen provider always wins regardless of keys", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    expect(
+      resolveSearchProvider({ provider: "qwen" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("qwen");
   });
 
   it("explicit provider always wins regardless of keys", () => {

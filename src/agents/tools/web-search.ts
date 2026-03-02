@@ -20,7 +20,15 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = [
+  "brave",
+  "perplexity",
+  "grok",
+  "gemini",
+  "kimi",
+  "metaso",
+  "qwen",
+] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -35,6 +43,9 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_METASO_BASE_URL = "https://metaso.cn";
+const DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const DEFAULT_QWEN_MODEL = "qwen-plus";
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -118,6 +129,19 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type MetasoConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  includeSummary?: boolean;
+};
+
+type QwenConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  enableThinking?: boolean;
 };
 
 type GrokSearchResponse = {
@@ -324,6 +348,22 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "metaso") {
+    return {
+      error: "missing_metaso_api_key",
+      message:
+        "web_search (metaso) needs a Metaso API key. Set METASO_API_KEY in the Gateway environment, or configure tools.web.search.metaso.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+  if (provider === "qwen") {
+    return {
+      error: "missing_dashscope_api_key",
+      message:
+        "web_search (qwen) needs a DashScope API key. Set DASHSCOPE_API_KEY in the Gateway environment, or configure tools.web.search.qwen.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -347,6 +387,12 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "metaso") {
+    return "metaso";
+  }
+  if (raw === "qwen") {
+    return "qwen";
   }
   if (raw === "brave") {
     return "brave";
@@ -376,6 +422,22 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "kimi" from available API keys',
       );
       return "kimi";
+    }
+    // 3b. Metaso
+    const metasoConfig = resolveMetasoConfig(search);
+    if (resolveMetasoApiKey(metasoConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "metaso" from available API keys',
+      );
+      return "metaso";
+    }
+    // 3c. Qwen
+    const qwenConfig = resolveQwenConfig(search);
+    if (resolveQwenApiKey(qwenConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "qwen" from available API keys',
+      );
+      return "qwen";
     }
     // 4. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
@@ -597,6 +659,74 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveMetasoConfig(search?: WebSearchConfig): MetasoConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const metaso = "metaso" in search ? search.metaso : undefined;
+  if (!metaso || typeof metaso !== "object") {
+    return {};
+  }
+  return metaso as MetasoConfig;
+}
+
+function resolveMetasoApiKey(metaso?: MetasoConfig): string | undefined {
+  const fromConfig = normalizeApiKey(metaso?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.METASO_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveMetasoBaseUrl(metaso?: MetasoConfig): string {
+  const fromConfig =
+    metaso && "baseUrl" in metaso && typeof metaso.baseUrl === "string"
+      ? metaso.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_METASO_BASE_URL;
+}
+
+function resolveMetasoIncludeSummary(metaso?: MetasoConfig): boolean {
+  return metaso?.includeSummary !== false;
+}
+
+function resolveQwenConfig(search?: WebSearchConfig): QwenConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const qwen = "qwen" in search ? search.qwen : undefined;
+  if (!qwen || typeof qwen !== "object") {
+    return {};
+  }
+  return qwen as QwenConfig;
+}
+
+function resolveQwenApiKey(qwen?: QwenConfig): string | undefined {
+  const fromConfig = normalizeApiKey(qwen?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.DASHSCOPE_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveQwenBaseUrl(qwen?: QwenConfig): string {
+  const fromConfig =
+    qwen && "baseUrl" in qwen && typeof qwen.baseUrl === "string" ? qwen.baseUrl.trim() : "";
+  return fromConfig || DEFAULT_QWEN_BASE_URL;
+}
+
+function resolveQwenModel(qwen?: QwenConfig): string {
+  const fromConfig =
+    qwen && "model" in qwen && typeof qwen.model === "string" ? qwen.model.trim() : "";
+  return fromConfig || DEFAULT_QWEN_MODEL;
+}
+
+function resolveQwenEnableThinking(qwen?: QwenConfig): boolean {
+  return qwen?.enableThinking === true;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1110,6 +1240,157 @@ async function runKimiSearch(params: {
   };
 }
 
+type MetasoSearchResponse = {
+  data?: {
+    items?: Array<{
+      title?: string;
+      url?: string;
+      snippet?: string;
+      content?: string;
+    }>;
+    summary?: string;
+  };
+  // Flat variant returned by some Metaso API endpoints
+  items?: Array<{
+    title?: string;
+    url?: string;
+    snippet?: string;
+    content?: string;
+  }>;
+  summary?: string;
+};
+
+async function runMetasoSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  includeSummary: boolean;
+  timeoutSeconds: number;
+  count: number;
+}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/api/search`;
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          q: params.query,
+          num: params.count,
+          include_summary: params.includeSummary,
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Metaso");
+      }
+
+      const data = (await res.json()) as MetasoSearchResponse;
+      const items = data.data?.items ?? data.items ?? [];
+      const summary = data.data?.summary ?? data.summary;
+
+      const citations = items
+        .filter((item) => item.url)
+        .map((item) => ({
+          url: item.url!,
+          title: item.title || undefined,
+        }));
+
+      const parts: string[] = [];
+      if (summary && params.includeSummary) {
+        parts.push(summary);
+      }
+      if (items.length > 0) {
+        for (const item of items) {
+          const snippet = item.snippet || item.content || "";
+          if (snippet) {
+            parts.push(`[${item.title || item.url || ""}](${item.url || ""})\n${snippet}`);
+          }
+        }
+      }
+
+      const content = parts.length > 0 ? parts.join("\n\n") : "No results";
+      return { content, citations };
+    },
+  );
+}
+
+type QwenSearchResponse = {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: {
+      role?: string;
+      content?: string;
+      reasoning_content?: string;
+    };
+  }>;
+};
+
+async function runQwenSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  enableThinking: boolean;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: string[] }> {
+  const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
+  const endpoint = `${baseUrl}/chat/completions`;
+
+  const body: Record<string, unknown> = {
+    model: params.model,
+    messages: [
+      {
+        role: "user",
+        content: params.query,
+      },
+    ],
+    enable_search: true,
+  };
+  if (params.enableThinking) {
+    body.enable_thinking = true;
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Qwen");
+      }
+
+      const data = (await res.json()) as QwenSearchResponse;
+      const content = data.choices?.[0]?.message?.content ?? "No response";
+      // Qwen's search-enabled completions embed citations as markdown links
+      const urlRegex = /https?:\/\/[^\s)[\]{}]+/g;
+      const urls = (content.match(urlRegex) ?? []).map((u) =>
+        u.replace(/[.,;:!?。，；：！？]+$/, ""),
+      );
+      const citations = [...new Set(urls)];
+
+      return { content, citations };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1128,6 +1409,11 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  metasoBaseUrl?: string;
+  metasoIncludeSummary?: boolean;
+  qwenBaseUrl?: string;
+  qwenModel?: string;
+  qwenEnableThinking?: boolean;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -1138,7 +1424,11 @@ async function runWebSearch(params: {
           ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "gemini"
             ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
-            : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+            : params.provider === "metaso"
+              ? `${params.provider}:${params.query}:${params.count}:${params.metasoBaseUrl ?? DEFAULT_METASO_BASE_URL}:${String(params.metasoIncludeSummary ?? true)}`
+              : params.provider === "qwen"
+                ? `${params.provider}:${params.query}:${params.qwenBaseUrl ?? DEFAULT_QWEN_BASE_URL}:${params.qwenModel ?? DEFAULT_QWEN_MODEL}:${String(params.qwenEnableThinking ?? false)}`
+                : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1256,6 +1546,61 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "metaso") {
+    const metasoResult = await runMetasoSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.metasoBaseUrl ?? DEFAULT_METASO_BASE_URL,
+      includeSummary: params.metasoIncludeSummary ?? true,
+      timeoutSeconds: params.timeoutSeconds,
+      count: params.count,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(metasoResult.content),
+      citations: metasoResult.citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "qwen") {
+    const { content, citations } = await runQwenSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.qwenBaseUrl ?? DEFAULT_QWEN_BASE_URL,
+      model: params.qwenModel ?? DEFAULT_QWEN_MODEL,
+      enableThinking: params.qwenEnableThinking ?? false,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.qwenModel ?? DEFAULT_QWEN_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1344,6 +1689,8 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const metasoConfig = resolveMetasoConfig(search);
+  const qwenConfig = resolveQwenConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1354,7 +1701,11 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "metaso"
+              ? "Search the web using Metaso (秘塔搜索). Returns AI-synthesized answers with citations, optimized for Chinese content."
+              : provider === "qwen"
+                ? "Search the web using Qwen (通义千问) with built-in search. Returns AI-synthesized answers with citations from DashScope."
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1373,7 +1724,11 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "metaso"
+                  ? resolveMetasoApiKey(metasoConfig)
+                  : provider === "qwen"
+                    ? resolveQwenApiKey(qwenConfig)
+                    : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1445,6 +1800,11 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        metasoBaseUrl: resolveMetasoBaseUrl(metasoConfig),
+        metasoIncludeSummary: resolveMetasoIncludeSummary(metasoConfig),
+        qwenBaseUrl: resolveQwenBaseUrl(qwenConfig),
+        qwenModel: resolveQwenModel(qwenConfig),
+        qwenEnableThinking: resolveQwenEnableThinking(qwenConfig),
       });
       return jsonResult(result);
     },
@@ -1469,4 +1829,11 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveMetasoApiKey,
+  resolveMetasoBaseUrl,
+  resolveMetasoIncludeSummary,
+  resolveQwenApiKey,
+  resolveQwenBaseUrl,
+  resolveQwenModel,
+  resolveQwenEnableThinking,
 } as const;

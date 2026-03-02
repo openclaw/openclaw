@@ -265,6 +265,8 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("metaso"),
+        z.literal("qwen"),
       ])
       .optional(),
     apiKey: z.string().optional().register(sensitive),
@@ -299,6 +301,23 @@ export const ToolsWebSearchSchema = z
         apiKey: z.string().optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    metaso: z
+      .object({
+        apiKey: z.string().optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        includeSummary: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    qwen: z
+      .object({
+        apiKey: z.string().optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        enableThinking: z.boolean().optional(),
       })
       .strict()
       .optional(),

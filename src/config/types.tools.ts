@@ -430,8 +430,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", "metaso", or "qwen"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "metaso" | "qwen";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -473,6 +473,26 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** Metaso-specific configuration (used when provider="metaso"). */
+      metaso?: {
+        /** Metaso API key (defaults to METASO_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for Metaso API (defaults to "https://metaso.cn"). */
+        baseUrl?: string;
+        /** Include AI-generated summary in results (default: true). */
+        includeSummary?: boolean;
+      };
+      /** Qwen-specific configuration (used when provider="qwen"). */
+      qwen?: {
+        /** DashScope API key (defaults to DASHSCOPE_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for DashScope API. */
+        baseUrl?: string;
+        /** Model to use (defaults to "qwen-plus"). */
+        model?: string;
+        /** Enable deeper reasoning/thinking mode (default: false). */
+        enableThinking?: boolean;
       };
     };
     fetch?: {
