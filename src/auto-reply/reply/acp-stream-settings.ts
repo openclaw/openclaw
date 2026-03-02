@@ -1,6 +1,6 @@
 import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
@@ -35,24 +35,6 @@ export type AcpProjectionSettings = {
   maxSessionUpdateChars: number;
   tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
 };
-
-function clampPositiveInteger(
-  value: unknown,
-  fallback: number,
-  bounds: { min: number; max: number },
-): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const rounded = Math.round(value);
-  if (rounded < bounds.min) {
-    return bounds.min;
-  }
-  if (rounded > bounds.max) {
-    return bounds.max;
-  }
-  return rounded;
-}
 
 function clampBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
