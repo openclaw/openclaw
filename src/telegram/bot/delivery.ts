@@ -123,11 +123,11 @@ export async function deliverReplies(params: {
         if (!chunk) {
           continue;
         }
-        // Only attach buttons to the first chunk.
-        const shouldAttachButtons = i === 0 && replyMarkup;
+        const isFirstChunk = i === 0;
+        const shouldAttachButtons = isFirstChunk && replyMarkup;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId: replyToMessageIdForPayload,
-          replyQuoteText,
+          replyToMessageId: isFirstChunk ? replyToMessageIdForPayload : undefined,
+          replyQuoteText: isFirstChunk ? replyQuoteText : undefined,
           thread,
           textMode: "html",
           plainText: chunk.text,
