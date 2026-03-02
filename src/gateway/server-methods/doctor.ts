@@ -1,7 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
-import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export type DoctorMemoryStatusPayload = {
@@ -51,7 +50,7 @@ export const doctorHandlers: GatewayRequestHandlers = {
         agentId,
         embedding: {
           ok: false,
-          error: `gateway memory probe failed: ${formatError(err)}`,
+          error: `gateway memory probe failed: ${err instanceof Error ? err.message : String(err)}`,
         },
       };
       respond(true, payload, undefined);

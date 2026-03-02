@@ -30,18 +30,14 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSessionsUsageParams,
-} from "../protocol/index.js";
+import { ErrorCodes, errorShape, validateSessionsUsageParams } from "../protocol/index.js";
 import {
   listAgentsForGateway,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
 } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -365,15 +361,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
-    if (!validateSessionsUsageParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid sessions.usage params: ${formatValidationErrors(validateSessionsUsageParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
 

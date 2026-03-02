@@ -4,11 +4,11 @@ import { buildTalkConfigResponse } from "../../config/talk.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateTalkConfigParams,
   validateTalkModeParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
@@ -20,15 +20,7 @@ function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null):
 
 export const talkHandlers: GatewayRequestHandlers = {
   "talk.config": async ({ params, respond, client }) => {
-    if (!validateTalkConfigParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.config params: ${formatValidationErrors(validateTalkConfigParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkConfigParams, "talk.config", respond)) {
       return;
     }
 
@@ -74,15 +66,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!validateTalkModeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.mode params: ${formatValidationErrors(validateTalkModeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkModeParams, "talk.mode", respond)) {
       return;
     }
     const payload = {

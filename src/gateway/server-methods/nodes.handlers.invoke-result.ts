@@ -1,6 +1,6 @@
 import { ErrorCodes, errorShape, validateNodeInvokeResultParams } from "../protocol/index.js";
-import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function normalizeNodeInvokeResultParams(params: unknown): unknown {
   if (!params || typeof params !== "object") {
@@ -29,12 +29,14 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   client,
 }) => {
   const normalizedParams = normalizeNodeInvokeResultParams(params);
-  if (!validateNodeInvokeResultParams(normalizedParams)) {
-    respondInvalidParams({
+  if (
+    !assertValidParams(
+      normalizedParams,
+      validateNodeInvokeResultParams,
+      "node.invoke.result",
       respond,
-      method: "node.invoke.result",
-      validator: validateNodeInvokeResultParams,
-    });
+    )
+  ) {
     return;
   }
   const p = normalizedParams as {

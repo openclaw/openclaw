@@ -15,13 +15,13 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateSkillsBinsParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
@@ -56,15 +56,7 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
 
 export const skillsHandlers: GatewayRequestHandlers = {
   "skills.status": ({ params, respond }) => {
-    if (!validateSkillsStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.status params: ${formatValidationErrors(validateSkillsStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
       return;
     }
     const cfg = loadConfig();
@@ -89,15 +81,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(true, report, undefined);
   },
   "skills.bins": ({ params, respond }) => {
-    if (!validateSkillsBinsParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.bins params: ${formatValidationErrors(validateSkillsBinsParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsBinsParams, "skills.bins", respond)) {
       return;
     }
     const cfg = loadConfig();
@@ -112,15 +96,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
   "skills.install": async ({ params, respond }) => {
-    if (!validateSkillsInstallParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.install params: ${formatValidationErrors(validateSkillsInstallParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
       return;
     }
     const p = params as {
@@ -144,15 +120,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     );
   },
   "skills.update": async ({ params, respond }) => {
-    if (!validateSkillsUpdateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.update params: ${formatValidationErrors(validateSkillsUpdateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
     const p = params as {

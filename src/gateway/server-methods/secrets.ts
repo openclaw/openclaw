@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export function createSecretsHandlers(params: {
@@ -10,7 +11,7 @@ export function createSecretsHandlers(params: {
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       }
     },
   };
