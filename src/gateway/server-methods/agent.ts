@@ -413,9 +413,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         // in that case — it's just the transport, not the session's actual channel identity.
         // Without this guard, a sessions_send call overwrites the target session's channel
         // from e.g. "telegram" to "webchat", breaking subsequent message delivery (#31671).
-        channel:
-          entry?.channel ??
-          (isInterSessionInputProvenance(inputProvenance) ? undefined : request.channel?.trim()),
+        // When inter-session and no existing channel, omit the key entirely so
+        // mergeSessionEntry ({...existing, ...patch}) does not clobber a
+        // concurrently written channel with undefined.
+        ...(isInterSessionInputProvenance(inputProvenance)
+          ? entry?.channel
+            ? { channel: entry.channel }
+            : {}
+          : { channel: entry?.channel ?? request.channel?.trim() }),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
