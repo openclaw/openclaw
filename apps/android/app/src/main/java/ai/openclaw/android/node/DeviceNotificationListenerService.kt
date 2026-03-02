@@ -6,9 +6,9 @@ import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -33,6 +33,21 @@ data class DeviceNotificationEntry(
   val isOngoing: Boolean,
   val isClearable: Boolean,
 )
+
+internal fun DeviceNotificationEntry.toJsonObject(): JsonObject {
+  return buildJsonObject {
+    put("key", JsonPrimitive(key))
+    put("packageName", JsonPrimitive(packageName))
+    put("postTimeMs", JsonPrimitive(postTimeMs))
+    put("isOngoing", JsonPrimitive(isOngoing))
+    put("isClearable", JsonPrimitive(isClearable))
+    title?.let { put("title", JsonPrimitive(it)) }
+    text?.let { put("text", JsonPrimitive(it)) }
+    subText?.let { put("subText", JsonPrimitive(it)) }
+    category?.let { put("category", JsonPrimitive(it)) }
+    channelId?.let { put("channelId", JsonPrimitive(it)) }
+  }
+}
 
 data class DeviceNotificationSnapshot(
   val enabled: Boolean,
@@ -234,9 +249,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }
 
     fun requestServiceRebind(context: Context) {
-      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-        return
-      }
       runCatching {
         NotificationListenerService.requestRebind(serviceComponent(context))
       }

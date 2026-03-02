@@ -325,6 +325,46 @@ describe("gateway agent handler", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    {
+      name: "passes senderIsOwner=false for write-scoped gateway callers",
+      scopes: ["operator.write"],
+      idempotencyKey: "test-sender-owner-write",
+      senderIsOwner: false,
+    },
+    {
+      name: "passes senderIsOwner=true for admin-scoped gateway callers",
+      scopes: ["operator.admin"],
+      idempotencyKey: "test-sender-owner-admin",
+      senderIsOwner: true,
+    },
+  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "owner-tools check",
+        sessionKey: "agent:main:main",
+        idempotencyKey,
+      },
+      {
+        client: {
+          connect: {
+            role: "operator",
+            scopes,
+            client: { id: "test-client", mode: "gateway" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
+  });
+
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();

@@ -149,6 +149,8 @@ OpenClaw's security model is "personal assistant" (one trusted operator, potenti
 - The model/agent is **not** a trusted principal. Assume prompt/content injection can manipulate behavior.
 - Security boundaries come from host/config trust, auth, tool policy, sandboxing, and exec approvals.
 - Prompt injection by itself is not a vulnerability report unless it crosses one of those boundaries.
+- Hook/webhook-driven payloads should be treated as untrusted content; keep unsafe bypass flags disabled unless doing tightly scoped debugging (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`).
+- Weak model tiers are generally easier to prompt-inject. For tool-enabled or hook-driven agents, prefer strong modern model tiers and strict tool policy (for example `tools.profile: "messaging"` or stricter), plus sandboxing where possible.
 
 ## Gateway and Node trust concept
 
@@ -205,6 +207,14 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 - `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory.
 - Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
+
+### Sub-agent delegation hardening
+
+- Keep `sessions_spawn` denied unless you explicitly need delegated runs.
+- Keep `agents.list[].subagents.allowAgents` narrow, and only include agents with sandbox settings you trust.
+- When delegation must stay sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+  - `sandbox: "require"` rejects the spawn unless the target child runtime is sandboxed.
+  - This prevents a less-restricted session from delegating work into an unsandboxed child by mistake.
 
 ### Web Interface Safety
 

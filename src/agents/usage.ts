@@ -90,9 +90,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  const input = asFiniteNumber(
+  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
+  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
+  // negative, which is nonsensical.  Clamp to 0.
+  const rawInput = asFiniteNumber(
     raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
   );
+  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
   const output = asFiniteNumber(
     raw.output ??
       raw.outputTokens ??

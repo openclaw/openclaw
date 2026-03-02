@@ -24,6 +24,10 @@ vi.mock("@vector-im/matrix-bot-sdk", () => ({
   RustSdkCryptoStorageProvider: vi.fn(),
 }));
 
+vi.mock("./send-queue.js", () => ({
+  enqueueSend: async <T>(_roomId: string, fn: () => Promise<T>) => await fn(),
+}));
+
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
   fileName: "photo.png",

@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { findBundledPluginByNpmSpec } from "../plugins/bundled-sources.js";
+import {
+  type BundledPluginSource,
+  findBundledPluginByNpmSpec,
+  findBundledPluginByPluginId,
+} from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -22,6 +26,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
 import { promptYesNo } from "./prompt.js";
@@ -158,6 +163,53 @@ function isPackageNotFoundInstallError(message: string): boolean {
   );
 }
 
+function isBareNpmPackageName(spec: string): boolean {
+  const trimmed = spec.trim();
+  return /^[a-z0-9][a-z0-9-._~]*$/.test(trimmed);
+}
+
+async function installBundledPluginSource(params: {
+  config: OpenClawConfig;
+  rawSpec: string;
+  bundledSource: BundledPluginSource;
+  warning: string;
+}) {
+  const existing = params.config.plugins?.load?.paths ?? [];
+  const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
+  let next: OpenClawConfig = {
+    ...params.config,
+    plugins: {
+      ...params.config.plugins,
+      load: {
+        ...params.config.plugins?.load,
+        paths: mergedPaths,
+      },
+      entries: {
+        ...params.config.plugins?.entries,
+        [params.bundledSource.pluginId]: {
+          ...(params.config.plugins?.entries?.[params.bundledSource.pluginId] as
+            | object
+            | undefined),
+          enabled: true,
+        },
+      },
+    },
+  };
+  next = recordPluginInstall(next, {
+    pluginId: params.bundledSource.pluginId,
+    source: "path",
+    spec: params.rawSpec,
+    sourcePath: params.bundledSource.localPath,
+    installPath: params.bundledSource.localPath,
+  });
+  const slotResult = applySlotSelectionForPlugin(next, params.bundledSource.pluginId);
+  next = slotResult.config;
+  await writeConfigFile(next);
+  logSlotWarnings(slotResult.warnings);
+  defaultRuntime.log(theme.warn(params.warning));
+  defaultRuntime.log(`Installed plugin: ${params.bundledSource.pluginId}`);
+  defaultRuntime.log(`Restart the gateway to load plugins.`);
+}
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -603,21 +655,33 @@ export function registerPluginsCli(program: Command) {
         process.exit(1);
       }
 
-      const looksLikePath =
-        raw.startsWith(".") ||
-        raw.startsWith("~") ||
-        path.isAbsolute(raw) ||
-        raw.endsWith(".ts") ||
-        raw.endsWith(".js") ||
-        raw.endsWith(".mjs") ||
-        raw.endsWith(".cjs") ||
-        raw.endsWith(".tgz") ||
-        raw.endsWith(".tar.gz") ||
-        raw.endsWith(".tar") ||
-        raw.endsWith(".zip");
-      if (looksLikePath) {
+      if (
+        looksLikeLocalInstallSpec(raw, [
+          ".ts",
+          ".js",
+          ".mjs",
+          ".cjs",
+          ".tgz",
+          ".tar.gz",
+          ".tar",
+          ".zip",
+        ])
+      ) {
         defaultRuntime.error(`Path not found: ${resolved}`);
         process.exit(1);
+      }
+
+      const bundledByPluginId = isBareNpmPackageName(raw)
+        ? findBundledPluginByPluginId({ pluginId: raw })
+        : undefined;
+      if (bundledByPluginId) {
+        await installBundledPluginSource({
+          config: cfg,
+          rawSpec: raw,
+          bundledSource: bundledByPluginId,
+          warning: `Using bundled plugin "${bundledByPluginId.pluginId}" from ${shortenHomePath(bundledByPluginId.localPath)} for bare install spec "${raw}". To install an npm package with the same name, use a scoped package name (for example @scope/${raw}).`,
+        });
+        return;
       }
 
       const result = await installPluginFromNpmSpec({
@@ -633,43 +697,12 @@ export function registerPluginsCli(program: Command) {
           process.exit(1);
         }
 
-        const existing = cfg.plugins?.load?.paths ?? [];
-        const mergedPaths = Array.from(new Set([...existing, bundledFallback.localPath]));
-        let next: OpenClawConfig = {
-          ...cfg,
-          plugins: {
-            ...cfg.plugins,
-            load: {
-              ...cfg.plugins?.load,
-              paths: mergedPaths,
-            },
-            entries: {
-              ...cfg.plugins?.entries,
-              [bundledFallback.pluginId]: {
-                ...(cfg.plugins?.entries?.[bundledFallback.pluginId] as object | undefined),
-                enabled: true,
-              },
-            },
-          },
-        };
-        next = recordPluginInstall(next, {
-          pluginId: bundledFallback.pluginId,
-          source: "path",
-          spec: raw,
-          sourcePath: bundledFallback.localPath,
-          installPath: bundledFallback.localPath,
+        await installBundledPluginSource({
+          config: cfg,
+          rawSpec: raw,
+          bundledSource: bundledFallback,
+          warning: `npm package unavailable for ${raw}; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`,
         });
-        const slotResult = applySlotSelectionForPlugin(next, bundledFallback.pluginId);
-        next = slotResult.config;
-        await writeConfigFile(next);
-        logSlotWarnings(slotResult.warnings);
-        defaultRuntime.log(
-          theme.warn(
-            `npm package unavailable for ${raw}; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`,
-          ),
-        );
-        defaultRuntime.log(`Installed plugin: ${bundledFallback.pluginId}`);
-        defaultRuntime.log(`Restart the gateway to load plugins.`);
         return;
       }
       // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.

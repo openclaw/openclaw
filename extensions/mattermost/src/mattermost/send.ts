@@ -1,3 +1,4 @@
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -16,6 +17,7 @@ export type MattermostSendOpts = {
   baseUrl?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   replyToId?: string;
 };
 
@@ -176,7 +178,9 @@ export async function sendMessageMattermost(
   const mediaUrl = opts.mediaUrl?.trim();
   if (mediaUrl) {
     try {
-      const media = await core.media.loadWebMedia(mediaUrl);
+      const media = await loadOutboundMediaFromUrl(mediaUrl, {
+        mediaLocalRoots: opts.mediaLocalRoots,
+      });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
         buffer: media.buffer,

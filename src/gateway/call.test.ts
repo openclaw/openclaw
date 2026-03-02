@@ -11,6 +11,7 @@ let lastClientOptions: {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   scopes?: string[];
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
@@ -90,8 +91,20 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
+  const envSnapshot = captureEnv([
+    "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+    "OPENCLAW_GATEWAY_URL",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "CLAWDBOT_GATEWAY_TOKEN",
+  ]);
+
   beforeEach(() => {
+    envSnapshot.restore();
     resetGatewayCallMocks();
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it.each([
@@ -175,6 +188,68 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "loopback", remote: {} },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+    });
+
+    expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
+    expect(lastClientOptions?.token).toBe("env-token");
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("uses remote tlsFingerprint with env URL override", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example:9443/ws",
+          tlsFingerprint: "remote-fingerprint",
+        },
+      },
+    });
+    setGatewayNetworkDefaults(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+    });
+
+    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+  });
+
+  it("does not apply remote tlsFingerprint for CLI url override", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example:9443/ws",
+          tlsFingerprint: "remote-fingerprint",
+        },
+      },
+    });
+    setGatewayNetworkDefaults(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({
+      method: "health",
+      url: "wss://override.example:9443/ws",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.tlsFingerprint).toBeUndefined();
   });
 
   it.each([
@@ -293,6 +368,28 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
   });
 
+  it("uses env OPENCLAW_GATEWAY_URL when set", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+
+      const details = buildGatewayConnectionDetails();
+
+      expect(details.url).toBe("wss://browser-gateway.local:9443/ws");
+      expect(details.urlSource).toBe("env OPENCLAW_GATEWAY_URL");
+      expect(details.bindDetail).toBeUndefined();
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+    }
+  });
+
   it("throws for insecure ws:// remote URLs (CWE-319)", () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -316,6 +413,23 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
+  });
+
+  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://10.0.0.8:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://10.0.0.8:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {
@@ -410,7 +524,12 @@ describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_URL",
+      "CLAWDBOT_GATEWAY_URL",
+    ]);
     resetGatewayCallMocks();
     setGatewayNetworkDefaults(18789);
   });
@@ -432,6 +551,18 @@ describe("callGateway url override auth requirements", () => {
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
     ).rejects.toThrow("explicit credentials");
+  });
+
+  it("throws when env URL override is set without env credentials", async () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://override.example/ws";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "local-token", password: "local-password" },
+      },
+    });
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
   });
 });
 

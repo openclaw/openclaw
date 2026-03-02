@@ -317,6 +317,38 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).toEqual({ reasoning: { max_tokens: 256 } });
   });
 
+  it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openrouter",
+      "x-ai/grok-4.1-fast",
+      undefined,
+      "medium",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "x-ai/grok-4.1-fast",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -922,7 +954,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
   });
@@ -936,7 +968,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -950,7 +982,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -971,7 +1003,7 @@ describe("applyExtraParamsToAgent", () => {
         contextWindow: 128_000,
         maxTokens: 16_384,
         compat: { supportsStore: false },
-      } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -986,7 +1018,7 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 200_000,
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.context_management).toEqual([
       {
@@ -1005,7 +1037,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload).not.toHaveProperty("context_management");
   });
@@ -1033,7 +1065,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "azure-openai-responses",
         id: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.context_management).toEqual([
       {
@@ -1052,7 +1084,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: {
         store: false,
         context_management: [{ type: "compaction", compact_threshold: 12_345 }],
@@ -1083,7 +1115,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload).not.toHaveProperty("context_management");
   });

@@ -353,16 +353,57 @@ Notes:
 
 See [Plugins](/tools/plugin).
 
+## Permission configuration
+
+ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:
+
+### `permissionMode`
+
+Controls which operations the harness agent can perform without prompting.
+
+| Value           | Behavior                                                  |
+| --------------- | --------------------------------------------------------- |
+| `approve-all`   | Auto-approve all file writes and shell commands.          |
+| `approve-reads` | Auto-approve reads only; writes and exec require prompts. |
+| `deny-all`      | Deny all permission prompts.                              |
+
+### `nonInteractivePermissions`
+
+Controls what happens when a permission prompt would be shown but no interactive TTY is available (which is always the case for ACP sessions).
+
+| Value  | Behavior                                                          |
+| ------ | ----------------------------------------------------------------- |
+| `fail` | Abort the session with `AcpRuntimeError`. **(default)**           |
+| `deny` | Silently deny the permission and continue (graceful degradation). |
+
+### Configuration
+
+Set via plugin config:
+
+```bash
+openclaw config set plugins.entries.acpx.config.permissionMode approve-all
+openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
+```
+
+Restart the gateway after changing these values.
+
+> **Important:** OpenClaw currently defaults to `permissionMode=approve-reads` and `nonInteractivePermissions=fail`. In non-interactive ACP sessions, any write or exec that triggers a permission prompt can fail with `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`.
+>
+> If you need to restrict permissions, set `nonInteractivePermissions` to `deny` so sessions degrade gracefully instead of crashing.
+
 ## Troubleshooting
 
-| Symptom                                                                 | Likely cause                                   | Fix                                                        |
-| ----------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| `ACP runtime backend is not configured`                                 | Backend plugin missing or disabled.            | Install and enable backend plugin, then run `/acp doctor`. |
-| `ACP is disabled by policy (acp.enabled=false)`                         | ACP globally disabled.                         | Set `acp.enabled=true`.                                    |
-| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`       | Dispatch from normal thread messages disabled. | Set `acp.dispatch.enabled=true`.                           |
-| `ACP agent "<id>" is not allowed by policy`                             | Agent not in allowlist.                        | Use allowed `agentId` or update `acp.allowedAgents`.       |
-| `Unable to resolve session target: ...`                                 | Bad key/id/label token.                        | Run `/acp sessions`, copy exact key/label, retry.          |
-| `--thread here requires running /acp spawn inside an active ... thread` | `--thread here` used outside a thread context. | Move to target thread or use `--thread auto`/`off`.        |
-| `Only <user-id> can rebind this thread.`                                | Another user owns thread binding.              | Rebind as owner or use a different thread.                 |
-| `Thread bindings are unavailable for <channel>.`                        | Adapter lacks thread binding capability.       | Use `--thread off` or move to supported adapter/channel.   |
-| Missing ACP metadata for bound session                                  | Stale/deleted ACP session metadata.            | Recreate with `/acp spawn`, then rebind/focus thread.      |
+| Symptom                                                                  | Likely cause                                                                    | Fix                                                                                                                                                               |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ACP runtime backend is not configured`                                  | Backend plugin missing or disabled.                                             | Install and enable backend plugin, then run `/acp doctor`.                                                                                                        |
+| `ACP is disabled by policy (acp.enabled=false)`                          | ACP globally disabled.                                                          | Set `acp.enabled=true`.                                                                                                                                           |
+| `ACP dispatch is disabled by policy (acp.dispatch.enabled=false)`        | Dispatch from normal thread messages disabled.                                  | Set `acp.dispatch.enabled=true`.                                                                                                                                  |
+| `ACP agent "<id>" is not allowed by policy`                              | Agent not in allowlist.                                                         | Use allowed `agentId` or update `acp.allowedAgents`.                                                                                                              |
+| `Unable to resolve session target: ...`                                  | Bad key/id/label token.                                                         | Run `/acp sessions`, copy exact key/label, retry.                                                                                                                 |
+| `--thread here requires running /acp spawn inside an active ... thread`  | `--thread here` used outside a thread context.                                  | Move to target thread or use `--thread auto`/`off`.                                                                                                               |
+| `Only <user-id> can rebind this thread.`                                 | Another user owns thread binding.                                               | Rebind as owner or use a different thread.                                                                                                                        |
+| `Thread bindings are unavailable for <channel>.`                         | Adapter lacks thread binding capability.                                        | Use `--thread off` or move to supported adapter/channel.                                                                                                          |
+| Missing ACP metadata for bound session                                   | Stale/deleted ACP session metadata.                                             | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                             |
+| `AcpRuntimeError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).                 |
+| ACP session fails early with little output                               | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`. |
+| ACP session stalls indefinitely after completing work                    | Harness process finished but ACP session did not report completion.             | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                |

@@ -304,6 +304,24 @@ export function createAuthChoiceDefaultModelApplier(
   };
 }
 
+export function createAuthChoiceDefaultModelApplierForMutableState(
+  params: ApplyAuthChoiceParams,
+  getConfig: () => ApplyAuthChoiceParams["config"],
+  setConfig: (config: ApplyAuthChoiceParams["config"]) => void,
+  getAgentModelOverride: () => string | undefined,
+  setAgentModelOverride: (model: string | undefined) => void,
+): ReturnType<typeof createAuthChoiceDefaultModelApplier> {
+  return createAuthChoiceDefaultModelApplier(
+    params,
+    createAuthChoiceModelStateBridge({
+      getConfig,
+      setConfig,
+      getAgentModelOverride,
+      setAgentModelOverride,
+    }),
+  );
+}
+
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {

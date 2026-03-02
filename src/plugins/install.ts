@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
+import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
 import {
   resolveInstallModeOptions,
@@ -19,6 +19,10 @@ import {
   resolveArchiveSourcePath,
 } from "../infra/install-source-utils.js";
 import {
+  ensureInstallTargetAvailable,
+  resolveCanonicalInstallTarget,
+} from "../infra/install-target.js";
+import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
 } from "../infra/npm-pack-install.js";
@@ -26,18 +30,23 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { loadPluginManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  resolvePackageExtensionEntries,
+  type PackageManifest as PluginPackageManifest,
+} from "./manifest.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
-type PackageManifest = {
-  name?: string;
-  version?: string;
+type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
-} & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
+};
+
+const MISSING_EXTENSIONS_ERROR =
+  'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
 
 export type InstallPluginResult =
   | {
@@ -77,16 +86,15 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-async function ensureOpenClawExtensions(manifest: PackageManifest) {
-  const extensions = manifest[MANIFEST_KEY]?.extensions;
-  if (!Array.isArray(extensions)) {
-    throw new Error("package.json missing openclaw.extensions");
+function ensureOpenClawExtensions(params: { manifest: PackageManifest }): string[] {
+  const resolved = resolvePackageExtensionEntries(params.manifest);
+  if (resolved.status === "missing") {
+    throw new Error(MISSING_EXTENSIONS_ERROR);
   }
-  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
-  if (list.length === 0) {
+  if (resolved.status === "empty") {
     throw new Error("package.json openclaw.extensions is empty");
   }
-  return list;
+  return resolved.entries;
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -144,7 +152,9 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureOpenClawExtensions(manifest);
+    extensions = ensureOpenClawExtensions({
+      manifest,
+    });
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -223,23 +233,23 @@ async function installPluginFromPackageDir(params: {
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-
-  const targetDirResult = resolveSafeInstallDir({
+  const targetDirResult = await resolveCanonicalInstallTarget({
     baseDir: extensionsDir,
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
   }
-  const targetDir = targetDirResult.path;
-
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return {
-      ok: false,
-      error: `plugin already exists: ${targetDir} (delete it first)`,
-    };
+  const targetDir = targetDirResult.targetDir;
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {
@@ -383,8 +393,13 @@ export async function installPluginFromFile(params: {
   }
   const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
 
-  if (mode === "install" && (await fileExists(targetFile))) {
-    return { ok: false, error: `plugin already exists: ${targetFile} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir: targetFile,
+    alreadyExistsError: `plugin already exists: ${targetFile} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {
@@ -392,7 +407,15 @@ export async function installPluginFromFile(params: {
   }
 
   logger.info?.(`Installing to ${targetFile}…`);
-  await fs.copyFile(filePath, targetFile);
+  try {
+    await writeFileFromPathWithinRoot({
+      rootDir: extensionsDir,
+      relativePath: path.basename(targetFile),
+      sourcePath: filePath,
+    });
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 
   return buildFileInstallResult(pluginId, targetFile);
 }
