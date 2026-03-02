@@ -28,6 +28,6 @@ jobs:
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
             console.log("Set name + postinstall");
           '
-      - run: npm publish --access public
+      - run: npm publish --access public --tag latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

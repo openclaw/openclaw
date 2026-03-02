@@ -60,6 +60,45 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   });
 }
 
+const COPILOT_PROVIDER = "github-copilot";
+
+/** Copilot models that should appear in the configure wizard but may not be in
+ *  the upstream pi-ai built-in catalog yet.  We inject them if they are missing
+ *  so `openclaw configure` can list them. */
+const COPILOT_FORWARD_COMPAT_MODELS: Array<{
+  id: string;
+  contextWindow: number;
+  reasoning: boolean;
+}> = [
+  { id: "claude-opus-4.6-1m", contextWindow: 936_000, reasoning: true },
+  { id: "claude-opus-4.6-fast", contextWindow: 128_000, reasoning: true },
+  { id: "gpt-5.3-codex", contextWindow: 128_000, reasoning: false },
+];
+
+function applyCopilotForwardCompatModels(models: ModelCatalogEntry[]): void {
+  const seen = new Set(
+    models
+      .filter((m) => m.provider === COPILOT_PROVIDER)
+      .map((m) => m.id.toLowerCase().replace(/\./g, "-")),
+  );
+
+  for (const entry of COPILOT_FORWARD_COMPAT_MODELS) {
+    const normalized = entry.id.toLowerCase().replace(/\./g, "-");
+    if (seen.has(normalized)) {
+      continue;
+    }
+    models.push({
+      id: entry.id,
+      name: entry.id,
+      provider: COPILOT_PROVIDER,
+      contextWindow: entry.contextWindow,
+      reasoning: entry.reasoning,
+      input: ["text", "image"],
+    });
+    seen.add(normalized);
+  }
+}
+
 function normalizeConfiguredModelInput(input: unknown): Array<"text" | "image"> | undefined {
   if (!Array.isArray(input)) {
     return undefined;
@@ -217,6 +256,7 @@ export async function loadModelCatalog(params?: {
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
       applyOpenAICodexSparkFallback(models);
+      applyCopilotForwardCompatModels(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
