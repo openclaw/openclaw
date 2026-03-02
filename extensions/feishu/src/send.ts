@@ -85,42 +85,64 @@ export type FeishuMessageInfo = {
   createTime?: number;
 };
 
-function extractCardTextElements(elements: unknown[]): string[] {
-  const texts: string[] = [];
-  for (const element of elements) {
-    if (!element || typeof element !== "object") continue;
-    const el = element as Record<string, unknown>;
-    const tag = el.tag;
+const CARD_MAX_NODES = 500;
+const CARD_MAX_OUTPUT_CHARS = 8000;
 
-    if (tag === "div" && el.text && typeof el.text === "object") {
-      const c = (el.text as Record<string, unknown>).content;
-      if (typeof c === "string" && c) texts.push(c);
-    } else if (
-      (tag === "markdown" || tag === "plain_text" || tag === "lark_md") &&
-      typeof el.content === "string" &&
-      el.content
-    ) {
-      texts.push(el.content);
-    } else if (tag === "header" && el.title && typeof el.title === "object") {
-      const c = (el.title as Record<string, unknown>).content;
-      if (typeof c === "string" && c) texts.push(c);
-    } else if (tag === "note" && Array.isArray(el.elements)) {
-      texts.push(...extractCardTextElements(el.elements as unknown[]));
-    } else if (tag === "column_set" && Array.isArray(el.columns)) {
-      for (const col of el.columns as unknown[]) {
-        if (
-          col &&
-          typeof col === "object" &&
-          Array.isArray((col as Record<string, unknown>).elements)
-        ) {
-          texts.push(
-            ...extractCardTextElements((col as Record<string, unknown>).elements as unknown[]),
-          );
+/**
+ * Iterative BFS extraction of visible text from a Feishu interactive card.
+ * Bounded by CARD_MAX_NODES and CARD_MAX_OUTPUT_CHARS to guard against
+ * deeply-nested or oversized attacker-influenced card payloads (DoS).
+ */
+function extractCardTextElements(root: unknown[]): string[] {
+  const out: string[] = [];
+  const queue: Array<unknown[]> = [root];
+  let seenNodes = 0;
+  let outChars = 0;
+
+  while (queue.length > 0 && seenNodes < CARD_MAX_NODES && outChars < CARD_MAX_OUTPUT_CHARS) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const nodes = queue.shift()!;
+    for (const element of nodes) {
+      if (++seenNodes > CARD_MAX_NODES) break;
+      if (!element || typeof element !== "object") continue;
+      const el = element as Record<string, unknown>;
+      const tag = el.tag;
+
+      const pushText = (s: string) => {
+        if (!s || outChars >= CARD_MAX_OUTPUT_CHARS) return;
+        const clipped = s.slice(0, CARD_MAX_OUTPUT_CHARS - outChars);
+        out.push(clipped);
+        outChars += clipped.length;
+      };
+
+      if (tag === "div" && el.text && typeof el.text === "object") {
+        const c = (el.text as Record<string, unknown>).content;
+        if (typeof c === "string") pushText(c);
+      } else if (
+        (tag === "markdown" || tag === "plain_text" || tag === "lark_md") &&
+        typeof el.content === "string"
+      ) {
+        pushText(el.content);
+      } else if (tag === "header" && el.title && typeof el.title === "object") {
+        const c = (el.title as Record<string, unknown>).content;
+        if (typeof c === "string") pushText(c);
+      } else if (tag === "note" && Array.isArray(el.elements)) {
+        queue.push(el.elements as unknown[]);
+      } else if (tag === "column_set" && Array.isArray(el.columns)) {
+        for (const col of el.columns as unknown[]) {
+          if (
+            col &&
+            typeof col === "object" &&
+            Array.isArray((col as Record<string, unknown>).elements)
+          ) {
+            queue.push((col as Record<string, unknown>).elements as unknown[]);
+          }
         }
       }
     }
   }
-  return texts;
+
+  return out;
 }
 
 function parseInteractiveCardContent(parsed: unknown): string {
@@ -131,7 +153,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   const card = parsed as Record<string, unknown>;
   const texts: string[] = [];
 
-  // Extract header title if present
+  // Extract header title if present (sits outside the elements array)
   if (card.header && typeof card.header === "object") {
     texts.push(
       ...extractCardTextElements([
@@ -145,10 +167,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
     texts.push(...extractCardTextElements(card.elements as unknown[]));
   }
 
-  const joined = texts.join("\n").trim();
-  // Fall back to raw JSON so the agent can work with the full card structure
-  // instead of a useless "[Interactive Card]" placeholder.
-  return joined || JSON.stringify(parsed);
+  return texts.join("\n").trim() || "[Interactive Card]";
 }
 
 function parseQuotedMessageContent(rawContent: string, msgType: string): string {
