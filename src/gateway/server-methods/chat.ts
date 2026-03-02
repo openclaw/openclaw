@@ -15,11 +15,7 @@ import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -807,7 +803,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
       const hasDeliverableRoute =
         routeChannelCandidate &&
-        isDeliverableMessageChannel(routeChannelCandidate) &&
+        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
         typeof routeToCandidate === "string" &&
         routeToCandidate.trim().length > 0;
       const originatingChannel = hasDeliverableRoute

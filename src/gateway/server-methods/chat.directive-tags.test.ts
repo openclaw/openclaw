@@ -379,4 +379,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
+
+  it("chat.send inherits Feishu routing metadata from session delivery context", async () => {
+    createTranscriptFixture("openclaw-chat-send-feishu-origin-routing-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "feishu",
+        to: "ou_feishu_direct_123",
+        accountId: "default",
+      },
+      lastChannel: "feishu",
+      lastTo: "ou_feishu_direct_123",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-feishu-origin-routing",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "feishu",
+        OriginatingTo: "ou_feishu_direct_123",
+        AccountId: "default",
+      }),
+    );
+  });
 });
