@@ -441,9 +441,7 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("telegram native draft failed"),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("telegram native draft failed"));
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
     });
 
@@ -502,6 +500,36 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes parse_mode when renderText returns HTML", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api, {
+        renderText: (text) => ({ text: `<b>${text}</b>`, parseMode: "HTML" }),
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "<b>Hello</b>", {
+        parse_mode: "HTML",
+      });
+    });
+
+    it("passes both parse_mode and message_thread_id when both present", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api, {
+        thread: { id: 99, scope: "forum" },
+        renderText: (text) => ({ text: `<b>${text}</b>`, parseMode: "HTML" }),
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "<b>Hello</b>", {
+        message_thread_id: 99,
+        parse_mode: "HTML",
+      });
     });
 
     it("clear() is a no-op in native draft mode (no message to delete)", async () => {

@@ -195,15 +195,15 @@ export const dispatchTelegramMessage = async ({
   const useNativeDraft = telegramCfg.nativeDraftStreaming === true;
 
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    // Derive a stable non-zero draft_id for this streaming session.
-    // Use chatId XOR msg.message_id (when available) so retried updates reuse
-    // the same draft slot.  Falls back to timestamp within int32 range.
+    // Derive a stable non-zero draft_id for this streaming session, unique per
+    // lane so that answer and reasoning drafts don't overwrite each other.
+    const laneOffset = laneName === "answer" ? 0 : laneName === "reasoning" ? 1 : 2;
     const nativeDraftId = useNativeDraft
       ? Math.max(
           1,
-          (typeof msg.message_id === "number"
-            ? (chatId ^ msg.message_id) >>> 0
-            : Date.now()) % 2147483647,
+          ((typeof msg.message_id === "number" ? (chatId ^ msg.message_id) >>> 0 : Date.now()) +
+            laneOffset) %
+            2147483647,
         )
       : undefined;
     const stream = enabled

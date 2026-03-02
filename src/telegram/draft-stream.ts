@@ -149,11 +149,18 @@ export function createTelegramDraftStream(params: {
     // --- Native draft path (Bot API 9.3+) ---
     if (useNativeDraft) {
       try {
+        const draftOptions: Record<string, unknown> = {};
+        if (messageThreadId != null) {
+          draftOptions.message_thread_id = messageThreadId;
+        }
+        if (renderedParseMode) {
+          draftOptions.parse_mode = renderedParseMode;
+        }
         await params.api.sendMessageDraft(
           chatId,
           draftId,
           renderedText,
-          messageThreadId != null ? { message_thread_id: messageThreadId } : undefined,
+          Object.keys(draftOptions).length > 0 ? draftOptions : undefined,
         );
         return true;
       } catch (err) {
