@@ -31,6 +31,8 @@ type StandaloneFileMeta = {
   filePath: string;
 };
 
+type ArtifactMetaFileName = "meta.json" | "file-meta.json";
+
 export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly logger?: PluginLogger;
@@ -123,11 +125,6 @@ export class DiffArtifactStore {
     return path.join(this.artifactDir(id), `preview.${format}`);
   }
 
-  allocateStandaloneFilePath(format: DiffOutputFormat = "png"): string {
-    const id = crypto.randomBytes(10).toString("hex");
-    return path.join(this.artifactDir(id), `preview.${format}`);
-  }
-
   async createStandaloneFileArtifact(
     params: CreateStandaloneFileArtifactParams = {},
   ): Promise<{ id: string; filePath: string; expiresAt: string }> {
@@ -160,10 +157,6 @@ export class DiffArtifactStore {
 
   allocateImagePath(id: string, format: DiffOutputFormat = "png"): string {
     return this.allocateFilePath(id, format);
-  }
-
-  allocateStandaloneImagePath(format: DiffOutputFormat = "png"): string {
-    return this.allocateStandaloneFilePath(format);
   }
 
   scheduleCleanup(): void {
@@ -237,60 +230,76 @@ export class DiffArtifactStore {
     return this.resolveWithinRoot(id);
   }
 
-  private metaPath(id: string): string {
-    return path.join(this.artifactDir(id), "meta.json");
-  }
-
-  private standaloneMetaPath(id: string): string {
-    return path.join(this.artifactDir(id), "file-meta.json");
-  }
-
   private async writeMeta(meta: DiffArtifactMeta): Promise<void> {
-    await fs.writeFile(this.metaPath(meta.id), JSON.stringify(meta, null, 2), "utf8");
+    await this.writeJsonMeta(meta.id, "meta.json", meta);
   }
 
   private async readMeta(id: string): Promise<DiffArtifactMeta | null> {
-    try {
-      const raw = await fs.readFile(this.metaPath(id), "utf8");
-      return JSON.parse(raw) as DiffArtifactMeta;
-    } catch (error) {
-      if (isFileNotFound(error)) {
-        return null;
-      }
-      this.logger?.warn(`Failed to read diff artifact metadata for ${id}: ${String(error)}`);
+    const parsed = await this.readJsonMeta(id, "meta.json", "diff artifact");
+    if (!parsed) {
       return null;
     }
+    return parsed as DiffArtifactMeta;
   }
 
   private async writeStandaloneMeta(meta: StandaloneFileMeta): Promise<void> {
-    await fs.writeFile(this.standaloneMetaPath(meta.id), JSON.stringify(meta, null, 2), "utf8");
+    await this.writeJsonMeta(meta.id, "file-meta.json", meta);
   }
 
   private async readStandaloneMeta(id: string): Promise<StandaloneFileMeta | null> {
+    const parsed = await this.readJsonMeta(id, "file-meta.json", "standalone diff");
+    if (!parsed) {
+      return null;
+    }
     try {
-      const raw = await fs.readFile(this.standaloneMetaPath(id), "utf8");
-      const parsed = JSON.parse(raw) as Partial<StandaloneFileMeta>;
+      const value = parsed as Partial<StandaloneFileMeta>;
       if (
-        parsed.kind !== "standalone_file" ||
-        typeof parsed.id !== "string" ||
-        typeof parsed.createdAt !== "string" ||
-        typeof parsed.expiresAt !== "string" ||
-        typeof parsed.filePath !== "string"
+        value.kind !== "standalone_file" ||
+        typeof value.id !== "string" ||
+        typeof value.createdAt !== "string" ||
+        typeof value.expiresAt !== "string" ||
+        typeof value.filePath !== "string"
       ) {
         return null;
       }
       return {
-        kind: parsed.kind,
-        id: parsed.id,
-        createdAt: parsed.createdAt,
-        expiresAt: parsed.expiresAt,
-        filePath: this.normalizeStoredPath(parsed.filePath, "filePath"),
+        kind: value.kind,
+        id: value.id,
+        createdAt: value.createdAt,
+        expiresAt: value.expiresAt,
+        filePath: this.normalizeStoredPath(value.filePath, "filePath"),
       };
+    } catch (error) {
+      this.logger?.warn(`Failed to normalize standalone diff metadata for ${id}: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private metaFilePath(id: string, fileName: ArtifactMetaFileName): string {
+    return path.join(this.artifactDir(id), fileName);
+  }
+
+  private async writeJsonMeta(
+    id: string,
+    fileName: ArtifactMetaFileName,
+    data: unknown,
+  ): Promise<void> {
+    await fs.writeFile(this.metaFilePath(id, fileName), JSON.stringify(data, null, 2), "utf8");
+  }
+
+  private async readJsonMeta(
+    id: string,
+    fileName: ArtifactMetaFileName,
+    context: string,
+  ): Promise<unknown | null> {
+    try {
+      const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
+      return JSON.parse(raw) as unknown;
     } catch (error) {
       if (isFileNotFound(error)) {
         return null;
       }
-      this.logger?.warn(`Failed to read standalone diff metadata for ${id}: ${String(error)}`);
+      this.logger?.warn(`Failed to read ${context} metadata for ${id}: ${String(error)}`);
       return null;
     }
   }

@@ -92,10 +92,11 @@ describe("DiffArtifactStore", () => {
     await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
   });
 
-  it("allocates standalone file paths outside artifact metadata", async () => {
-    const filePath = store.allocateStandaloneFilePath();
-    expect(filePath).toMatch(/preview\.png$/);
-    expect(filePath).toContain(rootDir);
+  it("creates standalone file artifacts with managed metadata", async () => {
+    const standalone = await store.createStandaloneFileArtifact();
+    expect(standalone.filePath).toMatch(/preview\.png$/);
+    expect(standalone.filePath).toContain(rootDir);
+    expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {
@@ -127,8 +128,8 @@ describe("DiffArtifactStore", () => {
 
     const imagePath = store.allocateImagePath(artifact.id, "pdf");
     expect(imagePath).toMatch(/preview\.pdf$/);
-    const standaloneImagePath = store.allocateStandaloneImagePath();
-    expect(standaloneImagePath).toMatch(/preview\.png$/);
+    const standalone = await store.createStandaloneFileArtifact();
+    expect(standalone.filePath).toMatch(/preview\.png$/);
 
     const updated = await store.updateImagePath(artifact.id, imagePath);
     expect(updated.filePath).toBe(imagePath);
@@ -144,9 +145,9 @@ describe("DiffArtifactStore", () => {
     });
 
     const artifactPdf = store.allocateFilePath(artifact.id, "pdf");
-    const standalonePdf = store.allocateStandaloneFilePath("pdf");
+    const standalonePdf = await store.createStandaloneFileArtifact({ format: "pdf" });
     expect(artifactPdf).toMatch(/preview\.pdf$/);
-    expect(standalonePdf).toMatch(/preview\.pdf$/);
+    expect(standalonePdf.filePath).toMatch(/preview\.pdf$/);
   });
 
   it("throttles cleanup sweeps across repeated artifact creation", async () => {
