@@ -1,7 +1,8 @@
 import type { ChunkMode } from "../auto-reply/chunk.js";
-import type { DiscordSendResult } from "./send.types.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { loadWebMedia } from "../web/media.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
+import type { DiscordSendResult } from "./send.types.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 
@@ -171,14 +172,32 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookMessageOpts,
 ): Promise<DiscordSendResult> {
-  const { webhookId, webhookToken, threadId, replyTo, username, avatarUrl, maxLinesPerMessage, chunkMode } = opts;
+  const {
+    webhookId,
+    webhookToken,
+    accountId,
+    threadId,
+    replyTo,
+    username,
+    avatarUrl,
+    maxLinesPerMessage,
+    chunkMode,
+  } = opts;
   const baseUrl = `https://discord.com/api/webhooks/${webhookId}/${webhookToken}`;
   const webhookUrl = threadId ? `${baseUrl}?thread_id=${threadId}` : baseUrl;
-  return sendDiscordWebhook(webhookUrl, text, {
+  const result = await sendDiscordWebhook(webhookUrl, text, {
     username,
     avatarUrl,
     replyTo,
     maxLinesPerMessage,
     chunkMode,
   });
+  if (accountId) {
+    recordChannelActivity({
+      channel: "discord",
+      accountId,
+      direction: "outbound",
+    });
+  }
+  return result;
 }

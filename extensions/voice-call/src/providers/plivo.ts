@@ -14,9 +14,9 @@ import type {
   WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
-import type { VoiceCallProvider } from "./base.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
+import type { VoiceCallProvider } from "./base.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -174,7 +174,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
     // Normal events.
     const callIdFromQuery = this.getCallIdFromQuery(ctx);
-    const event = this.normalizeEvent(parsed, callIdFromQuery);
+    const event = this.normalizeEvent(parsed, callIdFromQuery, options?.verifiedRequestKey);
 
     return {
       events: event ? [event] : [],
@@ -187,7 +187,11 @@ export class PlivoProvider implements VoiceCallProvider {
     };
   }
 
-  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
+  private normalizeEvent(
+    params: URLSearchParams,
+    callIdOverride?: string,
+    dedupeKey?: string,
+  ): NormalizedEvent | null {
     const callUuid = params.get("CallUUID") || "";
     const requestUuid = params.get("RequestUUID") || "";
 
@@ -213,6 +217,7 @@ export class PlivoProvider implements VoiceCallProvider {
             : undefined,
       from,
       to,
+      ...(dedupeKey && { dedupeKey }),
     };
 
     const digits = params.get("Digits");

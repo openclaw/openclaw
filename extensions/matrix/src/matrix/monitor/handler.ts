@@ -13,7 +13,6 @@ import {
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
@@ -39,6 +38,7 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
 
 export type MatrixMonitorHandlerParams = {
@@ -227,10 +227,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const storeAllowFrom = await core.channel.pairing
-        .readAllowFromStore("matrix")
-        .catch(() => []);
-      const effectiveAllowFrom = normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
       const { access, effectiveAllowFrom, effectiveGroupAllowFrom, groupAllowConfigured } =
         await resolveMatrixAccessState({
@@ -478,6 +474,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
+      const senderUsername = resolveMatrixSenderUsername(senderId);
+      const senderLabel = resolveMatrixInboundSenderLabel({
+        senderName,
+        senderId,
+        senderUsername,
+      });
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = threadRootId
         ? `${bodyText}\n[matrix event id: ${messageId} room: ${roomId} thread: ${threadRootId}]`

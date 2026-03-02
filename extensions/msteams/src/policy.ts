@@ -209,6 +209,7 @@ export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): MSTeamsAllowlistMatch {
   return resolveAllowlistMatchSimple(params);
 }
@@ -253,5 +254,5 @@ export function isMSTeamsGroupAllowed(params: {
   if (groupPolicy === "open") {
     return true;
   }
-  return resolveMSTeamsAllowlistMatch(params).allowed;
+  return resolveMSTeamsAllowlistMatch({ ...params, allowNameMatching: true }).allowed;
 }

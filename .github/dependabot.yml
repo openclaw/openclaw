@@ -10,6 +10,19 @@ registries:
     replaces-base: true
 
 updates:
+  # Docker base images (root Dockerfiles)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docker-images:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+
   # npm dependencies (root)
   - package-ecosystem: npm
     directory: /

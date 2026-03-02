@@ -27,6 +27,7 @@ vi.mock("../agent-scope.js", () => ({
     },
   })),
   resolveAgentModelPrimary: vi.fn(() => undefined),
+  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-planner"),
 }));
 
@@ -82,7 +83,7 @@ describe("sessions_spawn collaboration events", () => {
         method: "agent",
         params: expect.objectContaining({
           lane: "subagent",
-          message: "Review this implementation",
+          message: expect.stringContaining("Review this implementation"),
         }),
       }),
     );

@@ -423,7 +423,7 @@ describe("resolveDiscordChannelInfo", () => {
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
 
-  it("negative-caches missing channels", async () => {
+  it("does not cache missing channels (positive-only cache)", async () => {
     const fetchChannel = vi.fn().mockResolvedValue(null);
     const client = { fetchChannel } as unknown as Client;
 
@@ -432,6 +432,6 @@ describe("resolveDiscordChannelInfo", () => {
 
     expect(first).toBeNull();
     expect(second).toBeNull();
-    expect(fetchChannel).toHaveBeenCalledTimes(1);
+    expect(fetchChannel).toHaveBeenCalledTimes(2);
   });
 });

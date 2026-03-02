@@ -1,9 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TypingMode } from "../../config/types.js";
-import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -18,11 +14,20 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
+  resolveFallbackTransition,
+} from "../fallback-state.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -50,6 +55,7 @@ import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queu
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
+import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const UNSCHEDULED_REMINDER_NOTE =
@@ -304,6 +310,9 @@ export async function runReplyAgent(params: {
       systemSent: false,
       abortedLastRun: false,
     };
+    delete nextEntry.fallbackNoticeSelectedModel;
+    delete nextEntry.fallbackNoticeActiveModel;
+    delete nextEntry.fallbackNoticeReason;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
       nextSessionId,
@@ -386,7 +395,8 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const { runResult, fallbackProvider, fallbackModel, fallbackAttempts, directlySentBlockKeys } =
+      runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -409,6 +419,82 @@ export async function runReplyAgent(params: {
             updatedAt,
           }),
         });
+      }
+    }
+
+    // Resolve fallback transition and emit lifecycle events / visible notices.
+    let fallbackNoticeText: string | undefined;
+    const selectedProvider = followupRun.run.provider;
+    const selectedModel = followupRun.run.model;
+    const activeProvider = fallbackProvider ?? selectedProvider;
+    const activeModel = fallbackModel ?? selectedModel;
+    const fallbackTransition = resolveFallbackTransition({
+      selectedProvider,
+      selectedModel,
+      activeProvider,
+      activeModel,
+      attempts: fallbackAttempts ?? [],
+      state: activeSessionEntry,
+    });
+    const isFallbackVerbose = resolvedVerboseLevel !== "off";
+    if (fallbackTransition.fallbackTransitioned) {
+      emitAgentEvent({
+        runId: runOutcome.runId,
+        stream: "lifecycle",
+        sessionKey,
+        data: {
+          phase: "fallback",
+          selectedModel: fallbackTransition.selectedModelRef,
+          activeModel: fallbackTransition.activeModelRef,
+          reason: fallbackTransition.reasonSummary,
+          attempts: fallbackTransition.attemptSummaries,
+        },
+      });
+      if (isFallbackVerbose) {
+        fallbackNoticeText =
+          buildFallbackNotice({
+            selectedProvider,
+            selectedModel,
+            activeProvider,
+            activeModel,
+            attempts: fallbackAttempts ?? [],
+          }) ?? undefined;
+      }
+    } else if (fallbackTransition.fallbackCleared) {
+      emitAgentEvent({
+        runId: runOutcome.runId,
+        stream: "lifecycle",
+        sessionKey,
+        data: {
+          phase: "fallback_cleared",
+          selectedModel: fallbackTransition.selectedModelRef,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        },
+      });
+      if (isFallbackVerbose) {
+        fallbackNoticeText = buildFallbackClearedNotice({
+          selectedProvider,
+          selectedModel,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        });
+      }
+    }
+    // Update session entry fallback state fields.
+    if (activeSessionEntry && fallbackTransition.stateChanged) {
+      activeSessionEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
+      activeSessionEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
+      activeSessionEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
+      }
+    } else if (
+      activeSessionEntry &&
+      fallbackTransition.fallbackActive &&
+      fallbackTransition.nextState.reason !== activeSessionEntry.fallbackNoticeReason
+    ) {
+      activeSessionEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
       }
     }
 
@@ -566,6 +652,9 @@ export async function runReplyAgent(params: {
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = guardedReplyPayloads;
     const verboseEnabled = resolvedVerboseLevel !== "off";
+    if (fallbackNoticeText) {
+      finalPayloads = [{ text: fallbackNoticeText }, ...finalPayloads];
+    }
     if (autoCompactionCompleted) {
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,

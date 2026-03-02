@@ -905,6 +905,15 @@ export function registerSubagentRun(params: {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  // Collaboration tracking fields
+  conversationId?: string;
+  parentConversationId?: string;
+  workSessionId?: string;
+  taskId?: string;
+  depth?: number;
+  hop?: number;
+  requesterAgentId?: string;
+  targetAgentId?: string;
 }) {
   const now = Date.now();
   const cfg = loadConfig();

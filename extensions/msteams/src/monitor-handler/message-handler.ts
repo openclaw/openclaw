@@ -9,19 +9,18 @@ import {
   resolveControlCommandGate,
   resolveMentionGating,
   formatAllowlistMatchMeta,
+  isDangerousNameMatchingEnabled,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-import type { StoredConversationReference } from "../conversation-store.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
+import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
@@ -30,6 +29,7 @@ import {
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,
@@ -39,6 +39,7 @@ import {
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
@@ -183,11 +184,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
+    const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
+    const groupAllowFrom = msteamsCfg?.groupAllowFrom ?? [];
     const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
     const groupPolicy =
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
+    const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom: groupAllowFrom.map((v) => String(v)),
+      storeAllowFrom: storedAllowFrom,
+      dmPolicy,
+      groupAllowFromFallbackToAllowFrom: false,
+    });
     const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
@@ -221,7 +231,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
         }).allowed,
     });
-    const effectiveDmAllowFrom = access.effectiveAllowFrom;
+    const resolvedDmAllowFrom = access.effectiveAllowFrom;
 
     if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
       if (access.reason === "dmPolicy=disabled") {
@@ -229,7 +239,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
       const allowMatch = resolveMSTeamsAllowlistMatch({
-        allowFrom: effectiveDmAllowFrom,
+        allowFrom: resolvedDmAllowFrom,
         senderId,
         senderName,
         allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
@@ -297,7 +307,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    const commandDmAllowFrom = isDirectMessage ? effectiveDmAllowFrom : configuredDmAllowFrom;
+    const commandDmAllowFrom = isDirectMessage ? resolvedDmAllowFrom : configuredDmAllowFrom;
     const ownerAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: commandDmAllowFrom,

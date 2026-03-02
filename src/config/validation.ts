@@ -342,10 +342,13 @@ function validateConfigObjectWithPluginsBase(
 
   const pluginsConfig = config.plugins;
 
+  const isEffectivelyMissing = (pluginId: string): boolean =>
+    !knownIds.has(pluginId) || LEGACY_REMOVED_PLUGIN_IDS.has(pluginId);
+
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId)) {
+      if (isEffectivelyMissing(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
@@ -357,7 +360,7 @@ function validateConfigObjectWithPluginsBase(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
-    if (!knownIds.has(pluginId)) {
+    if (isEffectivelyMissing(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId);
     }
   }
@@ -367,13 +370,13 @@ function validateConfigObjectWithPluginsBase(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
-    if (!knownIds.has(pluginId)) {
+    if (isEffectivelyMissing(pluginId)) {
       pushMissingPluginIssue("plugins.deny", pluginId);
     }
   }
 
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+  if (typeof memorySlot === "string" && memorySlot.trim() && isEffectivelyMissing(memorySlot)) {
     pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 

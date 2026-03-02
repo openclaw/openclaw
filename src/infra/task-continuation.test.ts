@@ -26,6 +26,10 @@ vi.mock("../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+vi.mock("../routing/bindings.js", () => ({
+  resolveAgentBoundAccountId: vi.fn(() => "test-account-id"),
+}));
+
 vi.mock("../routing/session-key.js", () => ({
   buildAgentMainSessionKey: vi.fn(({ agentId }) => `agent:${agentId}:main`),
 }));

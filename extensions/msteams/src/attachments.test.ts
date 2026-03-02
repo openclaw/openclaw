@@ -301,27 +301,22 @@ describe("msteams attachments", () => {
     });
 
     it("blocks redirects to non-https URLs", async () => {
-      const insecureUrl = "http://x/insecure.png";
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-        const url = typeof input === "string" ? input : input.toString();
-        if (url === TEST_URL_IMAGE) {
-          return createRedirectResponse(insecureUrl);
-        }
-        if (url === insecureUrl) {
-          return createBufferResponse("insecure", CONTENT_TYPE_IMAGE_PNG);
-        }
-        return createNotFoundResponse();
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async () => {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://x/insecure.png" },
+        });
       });
 
-      const media = await downloadAttachmentsWithFetch(
-        createImageAttachments(TEST_URL_IMAGE),
-        fetchMock,
-        {
-          allowHosts: [TEST_HOST],
-        },
-      );
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "image/png", contentUrl: "https://x/img" }],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
 
-      expectAttachmentMediaLength(media, 0);
+      expect(media).toHaveLength(0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });

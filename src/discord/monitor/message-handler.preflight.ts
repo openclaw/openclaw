@@ -22,7 +22,6 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug } from "../../logger.js";
-import { getChildLogger } from "../../logging.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
@@ -111,7 +110,6 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
-  const logger = getChildLogger({ module: "discord-auto-reply" });
   const message = params.data.message;
   const author = params.data.author;
   if (!author) {
@@ -530,13 +528,16 @@ export async function preflightDiscordMessage(
       : undefined;
 
   const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
-  const shouldRequireMention = resolveDiscordShouldRequireMention({
-    isGuildMessage,
-    isThread: Boolean(threadChannel),
-    botId,
-    threadOwnerId,
-    channelConfig,
-    guildInfo,
+  const shouldRequireMention = resolvePreflightMentionRequirement({
+    shouldRequireMention: resolveDiscordShouldRequireMention({
+      isGuildMessage,
+      isThread: Boolean(threadChannel),
+      botId,
+      threadOwnerId,
+      channelConfig,
+      guildInfo,
+    }),
+    isBoundThreadSession: Boolean(boundSessionKey),
   });
 
   // Preflight audio transcription for mention detection in guilds
@@ -692,11 +693,14 @@ export async function preflightDiscordMessage(
     registerThreadParticipant(message.channelId, params.botUserId);
     touchThreadActivity(message.channelId);
     // Skip mention gate — just mentioned in thread, now registered as participant
-  } else if (threadChannel && params.botUserId) {
+  } else if (threadChannel && params.botUserId && !boundSessionKey) {
     // Not a participant and not mentioned in this thread — drop silently.
     // Without this guard every agent bot in the guild would respond to
     // thread messages in channels where shouldRequireMention is false.
-    logVerbose(`discord: drop thread message (not a participant in ${message.channelId})`);
+    // Bound thread sessions are exempt: the binding itself authorizes processing.
+    logVerbose(
+      `discord: drop thread message (not a participant) channel=${message.channelId} bot=${params.botUserId}`,
+    );
     if (historyEntry) {
       recordPendingHistoryEntryIfEnabled({
         historyMap: params.guildHistories,
@@ -710,13 +714,6 @@ export async function preflightDiscordMessage(
     if (botId && mentionGate.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
-      logger.info(
-        {
-          channelId: message.channelId,
-          reason: "no-mention",
-        },
-        "discord: skipping guild message",
-      );
       recordPendingHistoryEntryIfEnabled({
         historyMap: params.guildHistories,
         historyKey: message.channelId,
@@ -824,7 +821,9 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     wasMentioned,
-    route,
+    route: effectiveRoute,
+    boundSessionKey,
+    boundAgentId,
     guildInfo,
     guildSlug,
     threadChannel,

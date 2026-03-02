@@ -60,6 +60,7 @@ export function createOpenClawTools(options?: {
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  workspaceOnly?: boolean;
   pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
@@ -93,6 +94,7 @@ export function createOpenClawTools(options?: {
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
             : undefined,
         modelHasVision: options?.modelHasVision,
+        fsPolicy: options?.workspaceOnly ? { workspaceOnly: true } : undefined,
       })
     : null;
   const webSearchTool = createWebSearchTool({

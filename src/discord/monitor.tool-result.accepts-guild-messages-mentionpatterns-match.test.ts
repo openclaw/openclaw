@@ -12,6 +12,7 @@ import {
 } from "./monitor.tool-result.test-harness.js";
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
+import { registerThreadParticipant } from "./monitor/thread-participants.js";
 const loadConfigMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -401,6 +402,7 @@ describe("discord tool result dispatch", () => {
     }>();
     const cfg = createDefaultThreadConfig();
     const handler = await createHandler(cfg);
+    registerThreadParticipant("t1", "bot-id");
     const threadChannel = createThreadChannel({ includeStarter: true });
     const client = createThreadClient();
     await handler(createThreadEvent("m4", threadChannel), client);
@@ -413,6 +415,7 @@ describe("discord tool result dispatch", () => {
   });
 
   it("skips thread starter context when disabled", async () => {
+    registerThreadParticipant("t1", "bot-id");
     const getCapturedCtx = captureNextDispatchCtx<{ ThreadStarterBody?: string }>();
     const cfg = {
       ...createDefaultThreadConfig(),
@@ -441,6 +444,7 @@ describe("discord tool result dispatch", () => {
   });
 
   it("treats forum threads as distinct sessions without channel payloads", async () => {
+    registerThreadParticipant("t1", "bot-id");
     const getCapturedCtx = captureNextDispatchCtx<{
       SessionKey?: string;
       ParentSessionKey?: string;
@@ -491,6 +495,7 @@ describe("discord tool result dispatch", () => {
   });
 
   it("scopes thread sessions to the routed agent", async () => {
+    registerThreadParticipant("t1", "bot-id");
     const getCapturedCtx = captureNextDispatchCtx<{
       SessionKey?: string;
       ParentSessionKey?: string;

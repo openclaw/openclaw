@@ -470,6 +470,7 @@ export function createOpenClawCodingTools(options?: {
       workspaceDir: workspaceRoot,
       sandboxed: !!sandbox,
       config: options?.config,
+      workspaceOnly,
       pluginToolAllowlist: collectExplicitAllowlist([
         profilePolicy,
         providerProfilePolicy,

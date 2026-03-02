@@ -1,3 +1,9 @@
+import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  normalizeHostnameSuffixAllowlist,
+} from "openclaw/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -243,6 +249,10 @@ export function resolveAllowedHosts(input?: string[]): string[] {
 
 export function resolveAuthAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
+}
+
+export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
+  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
 }
 
 export function isUrlAllowed(url: string, allowlist: string[]): boolean {

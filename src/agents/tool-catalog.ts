@@ -24,6 +24,17 @@ type CoreToolDefinition = {
   includeInOpenClawGroup?: boolean;
 };
 
+/**
+ * Tool section registry.
+ *
+ * Each section `id` becomes a tool group usable in `tools.allow` / `tools.deny`
+ * as `"group:<sectionId>"`. For example:
+ *
+ *   "tools": { "allow": ["group:fs", "group:task", "group:milestone"] }
+ *
+ * Adding a new section here + corresponding entries in CORE_TOOL_DEFINITIONS
+ * is sufficient to make the group resolvable across the entire policy pipeline.
+ */
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "fs", label: "Files" },
   { id: "runtime", label: "Runtime" },
@@ -36,6 +47,8 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "nodes", label: "Nodes" },
   { id: "agents", label: "Agents" },
   { id: "media", label: "Media" },
+  { id: "task", label: "Task Management" },
+  { id: "milestone", label: "Milestones" },
 ];
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
@@ -230,6 +243,150 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "tts",
     description: "Text-to-speech conversion",
     sectionId: "media",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  // ── Task Management (group:task) ─────────────────────────────────
+  // These entries register task tools created by openclaw-tools.ts
+  // (via task-crud.ts / task-tool.ts) into the core tool catalog so that
+  // `"group:task"` in openclaw.json tools.allow resolves correctly.
+  // Without these, agents cannot use any task_* tools.
+  {
+    id: "task_start",
+    label: "task_start",
+    description: "Start a new task",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_update",
+    label: "task_update",
+    description: "Update task progress",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_complete",
+    label: "task_complete",
+    description: "Complete a task",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_status",
+    label: "task_status",
+    description: "Get task status",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_list",
+    label: "task_list",
+    description: "List tasks",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_cancel",
+    label: "task_cancel",
+    description: "Cancel a task",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_approve",
+    label: "task_approve",
+    description: "Approve a pending task",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_block",
+    label: "task_block",
+    description: "Mark task as blocked",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_resume",
+    label: "task_resume",
+    description: "Resume a blocked task",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_backlog_add",
+    label: "task_backlog_add",
+    description: "Add task to backlog",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_pick_backlog",
+    label: "task_pick_backlog",
+    description: "Pick task from backlog",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "task_verify",
+    label: "task_verify",
+    description: "Verify task completion",
+    sectionId: "task",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  // ── Milestones (group:milestone) ─────────────────────────────────
+  // Registered so `"group:milestone"` in tools.allow resolves.
+  // Actual tools created by milestone-tool.ts in openclaw-tools.ts.
+  {
+    id: "milestone_list",
+    label: "milestone_list",
+    description: "List milestones",
+    sectionId: "milestone",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "milestone_create",
+    label: "milestone_create",
+    description: "Create a milestone",
+    sectionId: "milestone",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "milestone_add_item",
+    label: "milestone_add_item",
+    description: "Add item to milestone",
+    sectionId: "milestone",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "milestone_assign_item",
+    label: "milestone_assign_item",
+    description: "Assign milestone item",
+    sectionId: "milestone",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "milestone_update_item",
+    label: "milestone_update_item",
+    description: "Update milestone item",
+    sectionId: "milestone",
     profiles: [],
     includeInOpenClawGroup: true,
   },

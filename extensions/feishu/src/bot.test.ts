@@ -4,6 +4,8 @@ import type { FeishuMessageEvent } from "./bot.js";
 import { buildFeishuAgentBody, handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
+const mockCreateFeishuClient = vi.hoisted(() => vi.fn());
+
 const { mockCreateFeishuReplyDispatcher, mockSendMessageFeishu, mockGetMessageFeishu } = vi.hoisted(
   () => ({
     mockCreateFeishuReplyDispatcher: vi.fn(() => ({
@@ -15,6 +17,10 @@ const { mockCreateFeishuReplyDispatcher, mockSendMessageFeishu, mockGetMessageFe
     mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
   }),
 );
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: mockCreateFeishuClient,
+}));
 
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,

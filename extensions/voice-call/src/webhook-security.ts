@@ -2,6 +2,57 @@ import crypto from "node:crypto";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
+const REPLAY_WINDOW_MS = 10 * 60 * 1000;
+const REPLAY_CACHE_MAX_ENTRIES = 10_000;
+const REPLAY_CACHE_PRUNE_INTERVAL = 64;
+
+type ReplayCache = {
+  seenUntil: Map<string, number>;
+  calls: number;
+};
+
+const twilioReplayCache: ReplayCache = { seenUntil: new Map(), calls: 0 };
+const plivoReplayCache: ReplayCache = { seenUntil: new Map(), calls: 0 };
+const telnyxReplayCache: ReplayCache = { seenUntil: new Map(), calls: 0 };
+
+function sha256Hex(input: string): string {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
+function pruneReplayCache(cache: ReplayCache, now: number): void {
+  for (const [key, expiresAt] of cache.seenUntil) {
+    if (expiresAt <= now) {
+      cache.seenUntil.delete(key);
+    }
+  }
+  while (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
+    const oldest = cache.seenUntil.keys().next().value;
+    if (!oldest) break;
+    cache.seenUntil.delete(oldest);
+  }
+}
+
+function markReplay(cache: ReplayCache, replayKey: string): boolean {
+  const now = Date.now();
+  cache.calls += 1;
+  if (cache.calls % REPLAY_CACHE_PRUNE_INTERVAL === 0) {
+    pruneReplayCache(cache, now);
+  }
+  const existing = cache.seenUntil.get(replayKey);
+  if (existing && existing > now) {
+    return true;
+  }
+  cache.seenUntil.set(replayKey, now + REPLAY_WINDOW_MS);
+  if (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
+    pruneReplayCache(cache, now);
+  }
+  return false;
+}
+
+function createSkippedVerificationReplayKey(provider: string, ctx: WebhookContext): string {
+  return `${provider}:skip:${sha256Hex(`${ctx.rawBody}\n${ctx.url}`)}`;
+}
+
 /**
  * Validate Twilio webhook signature using HMAC-SHA1.
  *
@@ -323,6 +374,10 @@ export interface TwilioVerificationResult {
   verificationUrl?: string;
   /** Whether we're running behind ngrok free tier */
   isNgrokFreeTier?: boolean;
+  /** Request is cryptographically valid but was already processed recently. */
+  isReplay?: boolean;
+  /** Stable request identity derived from signed material or skip hash. */
+  verifiedRequestKey?: string;
 }
 
 export interface TelnyxVerificationResult {
@@ -547,6 +602,10 @@ export interface PlivoVerificationResult {
   verificationUrl?: string;
   /** Signature version used for verification */
   version?: "v3" | "v2";
+  /** Request is cryptographically valid but was already processed recently. */
+  isReplay?: boolean;
+  /** Stable request identity derived from signed material or skip hash. */
+  verifiedRequestKey?: string;
 }
 
 function normalizeSignatureBase64(input: string): string {

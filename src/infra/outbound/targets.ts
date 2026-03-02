@@ -4,6 +4,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { ExtensionChannelConfig } from "../../config/types.channels.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseSlackTarget } from "../../slack/targets.js";
@@ -206,6 +207,14 @@ export function resolveOutboundTarget(params: {
   const allowFrom = allowFromRaw?.map((entry) => String(entry));
 
   // Fall back to per-channel defaultTo when no explicit target is provided.
+  const configDefaultTo =
+    params.cfg && !plugin.config.resolveDefaultTo
+      ? (
+          params.cfg.channels?.[params.channel as keyof typeof params.cfg.channels] as
+            | ExtensionChannelConfig
+            | undefined
+        )?.defaultTo?.trim() || undefined
+      : undefined;
   const effectiveTo =
     params.to?.trim() ||
     (params.cfg && plugin.config.resolveDefaultTo
@@ -213,7 +222,8 @@ export function resolveOutboundTarget(params: {
           cfg: params.cfg,
           accountId: params.accountId ?? undefined,
         })
-      : undefined);
+      : undefined) ||
+    configDefaultTo;
 
   const resolveTarget = plugin.outbound?.resolveTarget;
   if (resolveTarget) {

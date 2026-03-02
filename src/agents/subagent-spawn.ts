@@ -49,6 +49,13 @@ export type SpawnSubagentContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   requesterAgentIdOverride?: string;
+  // Collaboration tracking fields
+  conversationId?: string;
+  parentConversationId?: string;
+  workSessionId?: string;
+  taskId?: string;
+  depth?: number;
+  hop?: number;
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -498,6 +505,14 @@ export async function spawnSubagentDirect(
     runTimeoutSeconds,
     expectsCompletionMessage,
     spawnMode,
+    conversationId: ctx.conversationId,
+    parentConversationId: ctx.parentConversationId,
+    workSessionId: ctx.workSessionId,
+    taskId: ctx.taskId,
+    depth: ctx.depth,
+    hop: ctx.hop,
+    requesterAgentId,
+    targetAgentId,
   });
 
   if (hookRunner?.hasHooks("subagent_spawned")) {

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
 import {
@@ -6,8 +7,10 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
   resolveWebhookPath,
+  resolveWebhookTargets,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
 import type { ResolvedZaloAccount } from "./accounts.js";
@@ -60,6 +63,13 @@ export type ZaloMonitorResult = {
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
+
+type WebhookRateLimitState = { count: number; windowStartMs: number };
+
+const ZALO_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const ZALO_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
+const ZALO_WEBHOOK_COUNTER_LOG_EVERY = 25;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 
@@ -181,60 +191,25 @@ function recordWebhookStatus(
 }
 
 export function registerZaloWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+  return registerZaloWebhookTargetInternal(target as ZaloWebhookTarget);
 }
 
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const resolved = resolveWebhookTargets(req, webhookTargets);
-  if (!resolved) {
-    return false;
-  }
-  const { targets } = resolved;
-
-  if (rejectNonPostWebhookRequest(req, res)) {
-    return true;
-  }
-
-  const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => timingSafeEquals(entry.secret, headerToken));
-  if (matching.length === 0) {
-    res.statusCode = 401;
-    res.end("unauthorized");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
-    return true;
-  }
-  if (matching.length > 1) {
-    res.statusCode = 401;
-    res.end("ambiguous webhook target");
-    recordWebhookStatus(targets[0]?.runtime, req.url ?? "<unknown>", res.statusCode);
-    return true;
-  }
-  const target = matching[0];
-  const path = req.url ?? "<unknown>";
-  const rateLimitKey = `${path}:${req.socket.remoteAddress ?? "unknown"}`;
-  const nowMs = Date.now();
-
-  if (isWebhookRateLimited(rateLimitKey, nowMs)) {
-    res.statusCode = 429;
-    res.end("Too Many Requests");
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-
-  if (!isJsonContentType(req.headers["content-type"])) {
-    res.statusCode = 415;
-    res.end("Unsupported Media Type");
-    recordWebhookStatus(target.runtime, path, res.statusCode);
-    return true;
-  }
-
-  const body = await readJsonBodyWithLimit(req, {
-    maxBytes: 1024 * 1024,
-    timeoutMs: 30_000,
-    emptyObjectOnEmpty: false,
+  return handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
+    await processUpdate(
+      update,
+      target.token,
+      target.account,
+      target.config,
+      target.runtime,
+      target.core as ZaloCoreRuntime,
+      target.mediaMaxMb,
+      target.statusSink,
+      target.fetcher,
+    );
   });
 }
 

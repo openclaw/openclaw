@@ -46,15 +46,17 @@ type DiscordMessageSnapshot = {
 };
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
-const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
-  { value: DiscordChannelInfo | null; expiresAt: number }
+  { value: DiscordChannelInfo; expiresAt: number }
 >();
+// Dedup concurrent in-flight fetches (shared across all bot clients in the same process)
+const DISCORD_CHANNEL_INFO_INFLIGHT = new Map<string, Promise<DiscordChannelInfo | null>>();
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
 export function __resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
+  DISCORD_CHANNEL_INFO_INFLIGHT.clear();
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
@@ -84,6 +86,7 @@ export async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,
 ): Promise<DiscordChannelInfo | null> {
+  // Positive-only cache: successful fetches are shared across all bot clients.
   const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
   if (cached) {
     if (cached.expiresAt > Date.now()) {
@@ -91,38 +94,56 @@ export async function resolveDiscordChannelInfo(
     }
     DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
   }
-  try {
-    const channel = await client.fetchChannel(channelId);
-    if (!channel) {
+
+  // Dedup concurrent in-flight fetches — only one REST call per channelId at a time.
+  // If the in-flight fetch succeeds it populates the cache; if it fails the next
+  // caller retries (no negative cache poisoning).
+  const inflight = DISCORD_CHANNEL_INFO_INFLIGHT.get(channelId);
+  if (inflight) {
+    const result = await inflight;
+    // Re-check cache: the in-flight fetch may have populated it.
+    const recheck = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
+    if (recheck && recheck.expiresAt > Date.now()) {
+      return recheck.value;
+    }
+    return result;
+  }
+
+  const promise = (async (): Promise<DiscordChannelInfo | null> => {
+    try {
+      const channel = await client.fetchChannel(channelId);
+      if (!channel) {
+        // Don't cache null — another client in the same process may succeed.
+        return null;
+      }
+      const name = "name" in channel ? (channel.name ?? undefined) : undefined;
+      const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
+      const parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+      const ownerId = "ownerId" in channel ? (channel.ownerId ?? undefined) : undefined;
+      const payload: DiscordChannelInfo = {
+        type: channel.type,
+        name,
+        topic,
+        parentId,
+        ownerId,
+      };
       DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
+        value: payload,
+        expiresAt: Date.now() + DISCORD_CHANNEL_INFO_CACHE_TTL_MS,
       });
+      return payload;
+    } catch (err) {
+      logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
+      // Don't cache failure — another client in the same process may succeed.
       return null;
     }
-    const name = "name" in channel ? (channel.name ?? undefined) : undefined;
-    const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
-    const parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
-    const ownerId = "ownerId" in channel ? (channel.ownerId ?? undefined) : undefined;
-    const payload: DiscordChannelInfo = {
-      type: channel.type,
-      name,
-      topic,
-      parentId,
-      ownerId,
-    };
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: payload,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_CACHE_TTL_MS,
-    });
-    return payload;
-  } catch (err) {
-    logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: null,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
-    });
-    return null;
+  })();
+
+  DISCORD_CHANNEL_INFO_INFLIGHT.set(channelId, promise);
+  try {
+    return await promise;
+  } finally {
+    DISCORD_CHANNEL_INFO_INFLIGHT.delete(channelId);
   }
 }
 

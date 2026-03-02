@@ -1,9 +1,9 @@
 import type { ReplyToMode } from "../../config/types.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -91,11 +91,12 @@ export function buildReplyPayloads(params: {
     !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
+  const resolvedMessageProvider = resolveOriginMessageProvider({
+    originatingChannel: params.originatingChannel,
+    provider: params.messageProvider,
+  });
   const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.originatingChannel,
-      provider: params.messageProvider,
-    }),
+    messageProvider: resolvedMessageProvider,
     messagingToolSentTargets,
     originatingTo: resolveOriginMessageTo({
       originatingTo: params.originatingTo,
@@ -104,13 +105,20 @@ export function buildReplyPayloads(params: {
       originatingAccountId: params.accountId,
     }),
   });
+  const currentProvider = resolvedMessageProvider?.trim().toLowerCase();
+  const hasSameTargetSend =
+    !currentProvider ||
+    messagingToolSentTargets.length === 0 ||
+    messagingToolSentTargets.some(
+      (target) => target?.provider?.trim().toLowerCase() === currentProvider,
+    );
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,
-    sentTexts: messagingToolSentTexts,
+    sentTexts: hasSameTargetSend ? messagingToolSentTexts : [],
   });
   const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
     payloads: dedupedPayloads,
-    sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
+    sentMediaUrls: hasSameTargetSend ? (params.messagingToolSentMediaUrls ?? []) : [],
   });
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads

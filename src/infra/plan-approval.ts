@@ -48,7 +48,7 @@ export async function submitPlan(
   plan: Omit<Plan, "id" | "status" | "submittedAt">,
 ): Promise<Plan> {
   const dir = await ensurePlansDir(workspaceDir);
-  const id = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const id = `plan_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
   const full: Plan = {
     ...plan,
     id,

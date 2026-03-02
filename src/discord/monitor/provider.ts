@@ -26,9 +26,13 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
-import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+} from "../../config/runtime-group-policy.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -110,7 +114,6 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
 }
-
 
 function dedupeSkillCommandsForDiscord(
   skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
@@ -625,7 +628,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     try {
       loadThreadParticipants();
     } catch (err) {
-      runtime.log?.(`discord: thread participant restore failed (mention-only mode): ${String(err)}`);
+      runtime.log?.(
+        `discord: thread participant restore failed (mention-only mode): ${String(err)}`,
+      );
     }
 
     const voiceManager = voiceEnabled
@@ -758,4 +763,7 @@ export const __testing = {
   createDiscordGatewayPlugin,
   dedupeSkillCommandsForDiscord,
   resolveDiscordRestFetch,
+  resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveThreadBindingsEnabled,
 };

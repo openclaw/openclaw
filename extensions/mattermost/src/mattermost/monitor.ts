@@ -11,14 +11,17 @@ import {
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
+  isDangerousNameMatchingEnabled,
   logInboundDrop,
   logTypingFailure,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveChannelMediaMaxBytes,
+  resolveDmGroupAccessWithLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
@@ -244,6 +247,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "mattermost",
+    accountId: account.accountId,
+  });
 
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
@@ -379,9 +387,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
     const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
     const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-    const storeAllowFrom = normalizeAllowList(
-      await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
-    );
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
         provider: "mattermost",
@@ -390,12 +395,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         readStore: pairing.readStoreForDmPolicy,
       }),
     );
+    const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
     const accessDecision = resolveDmGroupAccessWithLists({
       isGroup: kind !== "direct",
       dmPolicy,
       groupPolicy,
-      allowFrom: normalizedAllowFrom,
-      groupAllowFrom: normalizedGroupAllowFrom,
+      allowFrom: configAllowFrom,
+      groupAllowFrom: configGroupAllowFrom,
       storeAllowFrom,
       isSenderAllowed: (allowFrom) =>
         isMattermostSenderAllowed({
@@ -414,7 +420,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
     const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-    const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
+    const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : configAllowFrom;
     const senderAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,

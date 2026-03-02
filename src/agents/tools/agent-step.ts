@@ -30,6 +30,12 @@ export async function readLatestAssistantReply(params: {
   return undefined;
 }
 
+export interface AgentStepResult {
+  reply: string | undefined;
+  ok: boolean;
+  error?: { code: string; message: string };
+}
+
 export async function runAgentStep(params: {
   sessionKey: string;
   message: string;
@@ -40,41 +46,64 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
-}): Promise<string | undefined> {
+}): Promise<AgentStepResult> {
   const stepIdem = crypto.randomUUID();
-  const response = await callGateway<{ runId?: string }>({
-    method: "agent",
-    params: {
-      message: params.message,
-      sessionKey: params.sessionKey,
-      idempotencyKey: stepIdem,
-      deliver: false,
-      channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
-      lane: params.lane ?? AGENT_LANE_NESTED,
-      extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool ?? "sessions_send",
+  let response: { runId?: string } | undefined;
+  try {
+    response = await callGateway<{ runId?: string }>({
+      method: "agent",
+      params: {
+        message: params.message,
+        sessionKey: params.sessionKey,
+        idempotencyKey: stepIdem,
+        deliver: false,
+        channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
+        lane: params.lane ?? AGENT_LANE_NESTED,
+        extraSystemPrompt: params.extraSystemPrompt,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: params.sourceSessionKey,
+          sourceChannel: params.sourceChannel,
+          sourceTool: params.sourceTool ?? "sessions_send",
+        },
       },
-    },
-    timeoutMs: 10_000,
-  });
+      timeoutMs: 10_000,
+    });
+  } catch (err) {
+    return {
+      reply: undefined,
+      ok: false,
+      error: { code: "gateway_error", message: String(err) },
+    };
+  }
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
   const stepWaitMs = Math.min(params.timeoutMs, 60_000);
-  const wait = await callGateway<{ status?: string }>({
-    method: "agent.wait",
-    params: {
-      runId: resolvedRunId,
-      timeoutMs: stepWaitMs,
-    },
-    timeoutMs: stepWaitMs + 2000,
-  });
-  if (wait?.status !== "ok") {
-    return undefined;
+  let wait: { status?: string } | undefined;
+  try {
+    wait = await callGateway<{ status?: string }>({
+      method: "agent.wait",
+      params: {
+        runId: resolvedRunId,
+        timeoutMs: stepWaitMs,
+      },
+      timeoutMs: stepWaitMs + 2000,
+    });
+  } catch (err) {
+    return {
+      reply: undefined,
+      ok: false,
+      error: { code: "timeout", message: String(err) },
+    };
   }
-  return await readLatestAssistantReply({ sessionKey: params.sessionKey });
+  if (wait?.status !== "ok") {
+    return {
+      reply: undefined,
+      ok: false,
+      error: { code: "timeout", message: "agent step timed out" },
+    };
+  }
+  const reply = await readLatestAssistantReply({ sessionKey: params.sessionKey });
+  return { reply, ok: true };
 }

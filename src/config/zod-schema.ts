@@ -216,6 +216,7 @@ export const OpenClawSchema = z
           .optional(),
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),
+        maxFileBytes: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
@@ -364,7 +365,28 @@ export const OpenClawSchema = z
         maxConcurrentRuns: z.number().int().positive().optional(),
         webhook: HttpUrlSchema.optional(),
         webhookToken: z.string().optional().register(sensitive),
-        sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
+        sessionRetention: z
+          .union([
+            z
+              .string()
+              .refine((v) => /^(\d+(?:\.\d+)?(?:ms|s|m|h|d))+$/.test(v.trim().toLowerCase()), {
+                message: "sessionRetention must be a valid duration (e.g. '1h30m', '7d')",
+              }),
+            z.literal(false),
+          ])
+          .optional(),
+        runLog: z
+          .object({
+            maxBytes: z
+              .string()
+              .refine((v) => /^\d+(?:\.\d+)?\s*(?:b|kb|mb|gb|tb)?$/i.test(v.trim()), {
+                message: "runLog.maxBytes must be a valid size (e.g. '5mb', '1024')",
+              })
+              .optional(),
+            keepLines: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

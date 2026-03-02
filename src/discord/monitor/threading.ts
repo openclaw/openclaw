@@ -100,6 +100,8 @@ export function resolveDiscordThreadChannel(params: {
   }
   const { message, channelInfo } = params;
   const channel = "channel" in message ? (message as { channel?: unknown }).channel : undefined;
+
+  // Path 1: Carbon channel object exposes isThread()
   const isThreadChannel =
     channel &&
     typeof channel === "object" &&
@@ -109,6 +111,36 @@ export function resolveDiscordThreadChannel(params: {
   if (isThreadChannel) {
     return channel as unknown as DiscordThreadChannel;
   }
+  // Path 2: Carbon channel object has a numeric `type` property (gateway event payload)
+  // This works even when channelInfo is null (e.g. REST fetch failed due to rate-limiting).
+  if (
+    channel &&
+    typeof channel === "object" &&
+    "type" in channel &&
+    typeof (channel as { type?: unknown }).type === "number" &&
+    isDiscordThreadType((channel as { type: ChannelType }).type)
+  ) {
+    const messageChannelId = params.messageChannelId || resolveDiscordMessageChannelId({ message });
+    if (messageChannelId) {
+      return {
+        id: messageChannelId,
+        name:
+          "name" in channel ? ((channel as { name?: string | null }).name ?? undefined) : undefined,
+        parentId:
+          ("parentId" in channel
+            ? (channel as { parentId?: string | null }).parentId
+            : undefined) ??
+          channelInfo?.parentId ??
+          undefined,
+        parent: undefined,
+        ownerId:
+          ("ownerId" in channel ? (channel as { ownerId?: string | null }).ownerId : undefined) ??
+          channelInfo?.ownerId ??
+          undefined,
+      };
+    }
+  }
+  // Path 3: REST-fetched channelInfo has thread type
   if (!isDiscordThreadType(channelInfo?.type)) {
     return null;
   }

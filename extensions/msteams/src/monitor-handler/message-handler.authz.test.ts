@@ -90,10 +90,7 @@ describe("msteams monitor handler authz", () => {
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(readAllowFromStore).toHaveBeenCalledWith({
-      channel: "msteams",
-      accountId: "default",
-    });
+    expect(readAllowFromStore).toHaveBeenCalledWith("msteams");
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
 });

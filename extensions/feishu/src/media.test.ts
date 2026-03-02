@@ -220,7 +220,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(capturedPath).not.toContain(imageKey);
     expect(capturedPath).not.toContain("..");
 
-    const tmpRoot = path.resolve(os.tmpdir());
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     const resolved = path.resolve(capturedPath as string);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
@@ -249,7 +249,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(capturedPath).not.toContain(fileKey);
     expect(capturedPath).not.toContain("..");
 
-    const tmpRoot = path.resolve(os.tmpdir());
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     const resolved = path.resolve(capturedPath as string);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);

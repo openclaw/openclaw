@@ -43,7 +43,7 @@ export class UrbitChannelClient {
       return;
     }
 
-    const channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
+    const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID().slice(0, 8)}`;
     this.channelId = channelId;
 
     try {

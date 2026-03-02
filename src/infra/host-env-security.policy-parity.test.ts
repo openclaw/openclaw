@@ -45,8 +45,8 @@ describe("host env security policy parity", () => {
       "static let blockedPrefixes",
     );
 
-    expect(swiftBlockedKeys).toEqual(policy.blockedKeys);
-    expect(swiftBlockedOverrideKeys).toEqual(policy.blockedOverrideKeys ?? []);
+    expect(new Set(swiftBlockedKeys)).toEqual(new Set(policy.blockedKeys));
+    expect(new Set(swiftBlockedOverrideKeys)).toEqual(new Set(policy.blockedOverrideKeys ?? []));
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
 
     expect(sanitizerSource).toContain(

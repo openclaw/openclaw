@@ -153,6 +153,7 @@ if contains_disallowed_chars "$EXTRA_MOUNTS"; then
 fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
+mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
 export OPENCLAW_CONFIG_DIR

@@ -592,5 +592,8 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
 
+// Abort signal utilities
+export { waitForAbortSignal } from "../infra/abort-signal.js";
+
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";

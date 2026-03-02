@@ -4,6 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -74,7 +75,9 @@ export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
+  requesterContextSummary?: string;
 }) {
+  const contextSummary = params.requesterContextSummary?.trim();
   const lines = [
     "Agent-to-agent message context:",
     params.requesterSessionKey
@@ -84,6 +87,7 @@ export function buildAgentToAgentMessageContext(params: {
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    contextSummary ? contextSummary : undefined,
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -148,11 +152,21 @@ export function buildAgentToAgentAnnounceContext(params: {
 }
 
 export function isAnnounceSkip(text?: string) {
-  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
+  const trimmed = (text ?? "").trim().toUpperCase();
+  if (!trimmed.startsWith(ANNOUNCE_SKIP_TOKEN)) {
+    return false;
+  }
+  const after = trimmed.slice(ANNOUNCE_SKIP_TOKEN.length);
+  return after === "" || /^\W/.test(after);
 }
 
 export function isReplySkip(text?: string) {
-  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
+  const trimmed = (text ?? "").trim().toUpperCase();
+  if (!trimmed.startsWith(REPLY_SKIP_TOKEN)) {
+    return false;
+  }
+  const after = trimmed.slice(REPLY_SKIP_TOKEN.length);
+  return after === "" || /^\W/.test(after);
 }
 
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
@@ -166,7 +180,48 @@ export function resolvePingPongTurns(cfg?: OpenClawConfig) {
 }
 
 export async function buildRequesterContextSummary(
-  _sessionKey: string,
-): Promise<string | undefined> {
-  return undefined;
+  sessionKey: string,
+  limit = 10,
+): Promise<string> {
+  try {
+    const result = await callGateway<{
+      messages: Array<{ role: string; content: unknown }>;
+    }>({
+      method: "chat.history",
+      params: { sessionKey, limit },
+    });
+
+    const messages = Array.isArray(result?.messages) ? result.messages : [];
+    if (messages.length === 0) {
+      return "";
+    }
+
+    const filtered = messages.filter((m) => m.role === "user" || m.role === "assistant");
+    if (filtered.length === 0) {
+      return "";
+    }
+
+    const lines = filtered.map((m) => {
+      let text: string;
+      if (typeof m.content === "string") {
+        text = m.content;
+      } else if (Array.isArray(m.content)) {
+        text = m.content
+          .filter(
+            (c): c is { type: string; text: string } =>
+              c && typeof c === "object" && c.type === "text",
+          )
+          .map((c) => c.text)
+          .join(" ");
+      } else {
+        text = String(m.content);
+      }
+      const truncated = text.length > 500 ? text.slice(0, 500) + "..." : text;
+      return `[${m.role}]: ${truncated}`;
+    });
+
+    return `## Requester's Recent Context\n${lines.join("\n")}`;
+  } catch {
+    return "";
+  }
 }

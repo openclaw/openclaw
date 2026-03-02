@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:22-bookworm@sha256:20a424ecd1d2064a44e12fe287bf3dae443aab31dc5e0c0cb6c74bef9c78911c
 
 RUN corepack enable
 

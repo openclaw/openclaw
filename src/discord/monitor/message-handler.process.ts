@@ -23,6 +23,7 @@ import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-r
 import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -38,7 +39,9 @@ import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.j
 import { truncateUtf16Safe } from "../../utils.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { markDmResponded, resolveDmRetryConfig } from "../dm-retry/index.js";
+import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
+import { editMessageDiscord } from "../send.messages.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -65,15 +68,8 @@ const DISCORD_STATUS_THINKING_EMOJI = "🧠";
 const DISCORD_STATUS_TOOL_EMOJI = "🛠️";
 const DISCORD_STATUS_CODING_EMOJI = "💻";
 const DISCORD_STATUS_WEB_EMOJI = "🌐";
-const DISCORD_STATUS_DONE_EMOJI = "✅";
-const DISCORD_STATUS_ERROR_EMOJI = "❌";
-const DISCORD_STATUS_STALL_SOFT_EMOJI = "⏳";
-const DISCORD_STATUS_STALL_HARD_EMOJI = "⚠️";
 const DISCORD_STATUS_DONE_HOLD_MS = 1500;
 const DISCORD_STATUS_ERROR_HOLD_MS = 2500;
-const DISCORD_STATUS_DEBOUNCE_MS = 700;
-const DISCORD_STATUS_STALL_SOFT_MS = 10_000;
-const DISCORD_STATUS_STALL_HARD_MS = 30_000;
 
 const CODING_STATUS_TOOL_TOKENS = [
   "exec",
@@ -117,6 +113,17 @@ function createDiscordStatusReactionController(params: {
   timing?: Record<string, number>;
   onError?: (err: unknown) => void;
 }) {
+  // Resolve effective emojis and timing from overrides, falling back to canonical defaults
+  const eQueued = params.emojis?.queued ?? params.initialEmoji;
+  const eThinking = params.emojis?.thinking ?? DISCORD_STATUS_THINKING_EMOJI;
+  const eDone = params.emojis?.done ?? DEFAULT_EMOJIS.done;
+  const eStallSoft = params.emojis?.stallSoft ?? DEFAULT_EMOJIS.stallSoft;
+  const eStallHard = params.emojis?.stallHard ?? DEFAULT_EMOJIS.stallHard;
+  const eError = params.emojis?.error ?? DEFAULT_EMOJIS.error;
+  const tDebounce = params.timing?.debounceMs ?? DEFAULT_TIMING.debounceMs;
+  const tStallSoft = params.timing?.stallSoftMs ?? DEFAULT_TIMING.stallSoftMs;
+  const tStallHard = params.timing?.stallHardMs ?? DEFAULT_TIMING.stallHardMs;
+
   let activeEmoji: string | null = null;
   let chain: Promise<void> = Promise.resolve();
   let pendingEmoji: string | null = null;
@@ -193,7 +200,7 @@ function createDiscordStatusReactionController(params: {
         return;
       }
       void applyEmoji(emojiToApply);
-    }, DISCORD_STATUS_DEBOUNCE_MS);
+    }, tDebounce);
     return Promise.resolve();
   };
 
@@ -206,14 +213,14 @@ function createDiscordStatusReactionController(params: {
       if (finished) {
         return;
       }
-      void requestEmoji(DISCORD_STATUS_STALL_SOFT_EMOJI, { immediate: true });
-    }, DISCORD_STATUS_STALL_SOFT_MS);
+      void requestEmoji(eStallSoft, { immediate: true });
+    }, tStallSoft);
     hardStallTimer = setTimeout(() => {
       if (finished) {
         return;
       }
-      void requestEmoji(DISCORD_STATUS_STALL_HARD_EMOJI, { immediate: true });
-    }, DISCORD_STATUS_STALL_HARD_MS);
+      void requestEmoji(eStallHard, { immediate: true });
+    }, tStallHard);
   };
 
   const setPhase = (emoji: string) => {
@@ -248,10 +255,10 @@ function createDiscordStatusReactionController(params: {
         DISCORD_STATUS_TOOL_EMOJI,
         DISCORD_STATUS_CODING_EMOJI,
         DISCORD_STATUS_WEB_EMOJI,
-        DISCORD_STATUS_DONE_EMOJI,
-        DISCORD_STATUS_ERROR_EMOJI,
-        DISCORD_STATUS_STALL_SOFT_EMOJI,
-        DISCORD_STATUS_STALL_HARD_EMOJI,
+        eDone,
+        eError,
+        eStallSoft,
+        eStallHard,
       ]);
       activeEmoji = null;
       for (const emoji of cleanupCandidates) {
@@ -287,12 +294,12 @@ function createDiscordStatusReactionController(params: {
   return {
     setQueued: () => {
       scheduleStallTimers();
-      return requestEmoji(params.initialEmoji, { immediate: true });
+      return requestEmoji(eQueued, { immediate: true });
     },
-    setThinking: () => setPhase(DISCORD_STATUS_THINKING_EMOJI),
+    setThinking: () => setPhase(eThinking),
     setTool: (toolName?: string) => setPhase(resolveToolStatusEmoji(toolName)),
-    setDone: () => setTerminal(DISCORD_STATUS_DONE_EMOJI),
-    setError: () => setTerminal(DISCORD_STATUS_ERROR_EMOJI),
+    setDone: () => setTerminal(eDone),
+    setError: () => setTerminal(eError),
     clear,
     restoreInitial,
   };
@@ -340,6 +347,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     baseSessionKey,
     route,
     commandAuthorized,
+    boundSessionKey,
     discordRestFetch,
   } = ctx;
 
@@ -702,7 +710,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     CommandBody: baseText,
     From: effectiveFrom,
     To: effectiveTo,
-    SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    MessageThreadId: boundSessionKey && threadChannel ? resolvedMessageChannelId : undefined,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
@@ -807,6 +816,27 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload: ReplyPayload) => {
+      if ((payload as { isReasoning?: boolean }).isReasoning) {
+        return;
+      }
+      // In partial mode, finalize by editing the preview message if the final fits one chunk
+      const maxLines = (discordConfig as Record<string, unknown> | undefined)?.maxLinesPerMessage as
+        | number
+        | undefined;
+      const previewId = draftStream?.messageId();
+      if (streamMode === "partial" && previewId && payload.text) {
+        const lineCount = payload.text.split("\n").length;
+        if (!maxLines || lineCount <= maxLines) {
+          await editMessageDiscord(
+            resolvedMessageChannelId,
+            previewId,
+            { content: payload.text },
+            { rest: client.rest },
+          );
+          replyReference.markSent();
+          return;
+        }
+      }
       const replyToId = replyReference.use();
       await deliverDiscordReply({
         replies: [payload],
@@ -817,7 +847,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         runtime,
         replyToId,
         textLimit,
-        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+        maxLinesPerMessage: maxLines,
         tableMode,
         chunkMode: resolveChunkMode(cfg, "discord", accountId),
       });
@@ -831,6 +861,25 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       await statusReactions.setThinking();
     },
   });
+
+  // Resolve streaming mode (streamMode / streaming are extension fields)
+  const dcAny = discordConfig as Record<string, unknown> | undefined;
+  const streamMode: string =
+    (dcAny?.streamMode as string) ?? (dcAny?.streaming === true ? "partial" : "off");
+
+  const draftStream =
+    streamMode === "block" || streamMode === "partial"
+      ? createDiscordDraftStream({
+          rest: client.rest as never,
+          channelId: resolvedMessageChannelId,
+        })
+      : null;
+
+  const draftChunkConfig = (cfg as Record<string, unknown>)?.channels as
+    | Record<string, unknown>
+    | undefined;
+  const discordDraftChunk = (draftChunkConfig?.discord as Record<string, unknown> | undefined)
+    ?.draftChunk as { minChars?: number; maxChars?: number } | undefined;
 
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
@@ -853,6 +902,34 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         onToolStart: async (payload) => {
           await statusReactions.setTool(payload.name);
         },
+        onPartialReply: draftStream
+          ? async (payload: { text?: string }) => {
+              let text = payload.text ?? "";
+              // Strip reasoning tags
+              text = text.replace(/<thinking>[\s\S]*?<\/thinking>\n?/g, "").trimStart();
+              // Skip pure-reasoning partial updates
+              if (!text || text.startsWith("Reasoning:")) {
+                return;
+              }
+              const chunkMax = discordDraftChunk?.maxChars;
+              if (chunkMax) {
+                for (let i = chunkMax; i <= text.length; i += chunkMax) {
+                  draftStream.update(text.slice(0, i));
+                }
+                if (text.length % chunkMax !== 0) {
+                  draftStream.update(text);
+                }
+              } else {
+                draftStream.update(text);
+              }
+            }
+          : undefined,
+        onAssistantMessageStart:
+          draftStream && streamMode === "block"
+            ? async () => {
+                draftStream.forceNewMessage();
+              }
+            : undefined,
       },
     });
   } catch (err) {

@@ -1,9 +1,5 @@
-import type {
-  MSTeamsAccessTokenProvider,
-  MSTeamsAttachmentLike,
-  MSTeamsGraphMediaResult,
-  MSTeamsInboundMedia,
-} from "./types.js";
+import type { SsrFPolicy } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import {
@@ -12,7 +8,14 @@ import {
   isRecord,
   normalizeContentType,
   resolveAllowedHosts,
+  resolveMediaSsrfPolicy,
 } from "./shared.js";
+import type {
+  MSTeamsAccessTokenProvider,
+  MSTeamsAttachmentLike,
+  MSTeamsGraphMediaResult,
+  MSTeamsInboundMedia,
+} from "./types.js";
 
 type GraphHostedContent = {
   id?: string | null;
@@ -280,43 +283,44 @@ export async function downloadMSTeamsGraphMedia(params: {
         for (const att of spAttachments) {
           const name = att.name ?? "file";
 
-        try {
-          // SharePoint URLs need to be accessed via Graph shares API
-          const shareUrl = att.contentUrl!;
-          const encodedUrl = Buffer.from(shareUrl).toString("base64url");
-          const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
+          try {
+            // SharePoint URLs need to be accessed via Graph shares API
+            const shareUrl = att.contentUrl!;
+            const encodedUrl = Buffer.from(shareUrl).toString("base64url");
+            const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
-          const spRes = await fetchFn(sharesUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            redirect: "follow",
-          });
+            const spRes = await fetchFn(sharesUrl, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              redirect: "follow",
+            });
 
-          if (spRes.ok) {
-            const buffer = Buffer.from(await spRes.arrayBuffer());
-            if (buffer.byteLength <= params.maxBytes) {
-              const mime = await getMSTeamsRuntime().media.detectMime({
-                buffer,
-                headerMime: spRes.headers.get("content-type") ?? undefined,
-                filePath: name,
-              });
-              const originalFilename = params.preserveFilenames ? name : undefined;
-              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                buffer,
-                mime ?? "application/octet-stream",
-                "inbound",
-                params.maxBytes,
-                originalFilename,
-              );
-              sharePointMedia.push({
-                path: saved.path,
-                contentType: saved.contentType,
-                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-              });
-              downloadedReferenceUrls.add(shareUrl);
+            if (spRes.ok) {
+              const buffer = Buffer.from(await spRes.arrayBuffer());
+              if (buffer.byteLength <= params.maxBytes) {
+                const mime = await getMSTeamsRuntime().media.detectMime({
+                  buffer,
+                  headerMime: spRes.headers.get("content-type") ?? undefined,
+                  filePath: name,
+                });
+                const originalFilename = params.preserveFilenames ? name : undefined;
+                const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
+                  buffer,
+                  mime ?? "application/octet-stream",
+                  "inbound",
+                  params.maxBytes,
+                  originalFilename,
+                );
+                sharePointMedia.push({
+                  path: saved.path,
+                  contentType: saved.contentType,
+                  placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
+                });
+                downloadedReferenceUrls.add(shareUrl);
+              }
             }
+          } catch {
+            // Ignore SharePoint download failures.
           }
-        } catch {
-          // Ignore SharePoint download failures.
         }
       }
     } finally {
