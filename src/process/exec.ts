@@ -8,6 +8,7 @@ import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
+const WINDOWS_UNSAFE_SHELL_ARG_PATTERN = /[\r\n"&|<>^%!]/;
 
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
@@ -75,6 +76,22 @@ export function shouldSpawnWithShell(params: {
     return true;
   }
   return false;
+}
+
+export function assertSafeWindowsShellArgs(params: {
+  args: string[];
+  platform: NodeJS.Platform;
+}): void {
+  if (params.platform !== "win32") {
+    return;
+  }
+  const unsafeArg = params.args.find((arg) => WINDOWS_UNSAFE_SHELL_ARG_PATTERN.test(arg));
+  if (!unsafeArg) {
+    return;
+  }
+  throw new Error(
+    `Unsafe Windows shell argument: ${unsafeArg}. Remove shell metacharacters (" & | < > ^ % !).`,
+  );
 }
 
 // Simple promise-wrapped execFile with optional verbosity logging.
@@ -187,14 +204,21 @@ export async function runCommandWithTimeout(
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
   const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+  const useShell = shouldSpawnWithShell({ resolvedCommand, platform: process.platform });
+  if (useShell) {
+    // SECURITY: when Windows .cmd/.bat launchers require shell mode, reject
+    // shell metacharacters in forwarded args to prevent cmd.exe injection.
+    assertSafeWindowsShellArgs({
+      args: finalArgv.slice(1),
+      platform: process.platform,
+    });
+  }
   const child = spawn(resolvedCommand, finalArgv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
     windowsVerbatimArguments,
-    ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-      ? { shell: true }
-      : {}),
+    ...(useShell ? { shell: true } : {}),
   });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {

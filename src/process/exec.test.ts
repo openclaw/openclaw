@@ -4,7 +4,7 @@ import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
-import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
+import { assertSafeWindowsShellArgs, runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 const CHILD_READY_TIMEOUT_MS = 4_000;
 const CHILD_EXIT_TIMEOUT_MS = 4_000;
@@ -82,6 +82,39 @@ describe("runCommandWithTimeout", () => {
         platform: "linux",
       }),
     ).toBe(false);
+  });
+
+  it("allows safe args when Windows shell mode is required", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["pack", "@openclaw/feishu@0.0.1", "--ignore-scripts", "--json"],
+        platform: "win32",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects unsafe args when Windows shell mode is required", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["pack", "@openclaw/feishu@0.0.1&calc"],
+        platform: "win32",
+      }),
+    ).toThrow(/unsafe windows shell argument/i);
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["%PATH%"],
+        platform: "win32",
+      }),
+    ).toThrow(/unsafe windows shell argument/i);
+  });
+
+  it("does not reject shell metacharacters on non-windows", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["evil&calc"],
+        platform: "linux",
+      }),
+    ).not.toThrow();
   });
 
   it("merges custom env with process.env", async () => {
