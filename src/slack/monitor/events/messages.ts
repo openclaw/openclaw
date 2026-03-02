@@ -63,6 +63,14 @@ export function registerSlackMessageEvents(params: {
       }
 
       const mention = event as SlackAppMentionEvent;
+
+      // Skip app_mention for DMs - they're already handled by message.im event
+      // This prevents duplicate processing when both message and app_mention fire for DMs
+      const channelType = mention.channel_type;
+      if (channelType === "im" || channelType === "mpim") {
+        return;
+      }
+
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",
         wasMentioned: true,
