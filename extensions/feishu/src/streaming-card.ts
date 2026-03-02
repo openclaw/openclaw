@@ -95,12 +95,18 @@ export class FeishuStreamingSession {
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private updateThrottleMs: number; // Throttle updates (default 1000ms = 1 sec)
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    log?: (msg: string) => void,
+    throttleMs: number = 1000,
+  ) {
     this.client = client;
     this.creds = creds;
     this.log = log;
+    this.updateThrottleMs = throttleMs;
   }
 
   async start(
