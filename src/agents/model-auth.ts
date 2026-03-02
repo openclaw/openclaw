@@ -13,6 +13,7 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -248,13 +249,16 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const envHint = getEnvVarHint(provider);
-  throw new Error(
-    [
-      `No API key found for provider "${provider}".`,
-      envHint ? `Set ${envHint} or run` : "Run",
-      `${formatCliCommand("openclaw models auth add")} to configure it.`,
-    ].join(" "),
-  );
+  const parts = [
+    `No API key found for provider "${provider}".`,
+    envHint ? `Set ${envHint} or run` : "Run",
+    `${formatCliCommand("openclaw models auth add")} to configure it.`,
+  ];
+  if (params.agentDir) {
+    const storePath = resolveAuthStorePathForDisplay(params.agentDir);
+    parts.push(`(agent auth store: ${storePath})`);
+  }
+  throw new Error(parts.join(" "));
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
