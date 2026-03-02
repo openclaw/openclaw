@@ -290,7 +290,7 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
 
 export function sortLocaleStrings(values: Iterable<string>): string[] {
   const sorted = Array.from(values);
-  const buffer = new Array<string>(sorted.length);
+  const buffer = Array.from({ length: sorted.length }, () => "");
 
   const merge = (left: number, middle: number, right: number): void => {
     let i = left;
