@@ -782,7 +782,10 @@ async function sendSubagentAnnounceDirectly(params: {
         }
         // Keep non-bound completion announcements coordinated via requester
         // session routing while sibling/descendant runs are still active.
-        if (activeDescendantRuns > 0) {
+        // Also route through parent when configured, so the orchestrator
+        // can synthesize every sub-agent result before delivery.
+        const alwaysRouteViaParent = cfg?.agents?.defaults?.subagents?.completionRouteViaParent === true;
+        if (activeDescendantRuns > 0 || alwaysRouteViaParent) {
           shouldSendCompletionDirectly = false;
         }
       }
