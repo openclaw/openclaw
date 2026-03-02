@@ -61,6 +61,12 @@ export function buildDockerExecArgs(params: {
     args.push("-w", params.workdir);
   }
   for (const [key, value] of Object.entries(params.env)) {
+    // Skip PATH — passing a host PATH (e.g. Windows paths) via -e poisons
+    // Docker's executable lookup, causing "sh: not found" on Windows hosts.
+    // PATH is handled separately via OPENCLAW_PREPEND_PATH below.
+    if (key === "PATH") {
+      continue;
+    }
     args.push("-e", `${key}=${value}`);
   }
   const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
@@ -75,7 +81,8 @@ export function buildDockerExecArgs(params: {
   const pathExport = hasCustomPath
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
-  args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  // Use absolute path for sh to avoid dependency on PATH resolution during exec.
+  args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
   return args;
 }
 
