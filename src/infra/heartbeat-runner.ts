@@ -106,6 +106,7 @@ type HeartbeatAgentState = {
   intervalMs: number;
   lastRunMs?: number;
   nextDueMs: number;
+  consecutiveSkips?: number;
 };
 
 export type HeartbeatRunner = {
@@ -1013,6 +1014,7 @@ export function startHeartbeatRunner(opts: {
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+    agent.consecutiveSkips = 0;
   };
 
   const scheduleNext = () => {
@@ -1174,7 +1176,12 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        // Exponential backoff: 1m, 2m, 4m, 8m… capped at intervalMs.
+        // The heartbeat never ran, so don't advance the schedule by full interval.
+        const skips = (agent.consecutiveSkips ?? 0) + 1;
+        agent.consecutiveSkips = skips;
+        const retryMs = Math.min(60_000 * Math.pow(2, skips - 1), agent.intervalMs);
+        agent.nextDueMs = now + retryMs;
         scheduleNext();
         return res;
       }
