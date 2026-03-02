@@ -1045,7 +1045,7 @@ export function startHeartbeatRunner(opts: {
       Math.min(5 * 60_000, Math.floor(minIntervalMs / WATCHDOG_POLL_DIVISOR)),
     );
     state.watchdog = setInterval(() => {
-      if (state.stopped || state.agents.size === 0) {
+      if (state.stopped || state.agents.size === 0 || !heartbeatsEnabled) {
         return;
       }
       const now = Date.now();
