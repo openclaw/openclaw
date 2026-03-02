@@ -146,10 +146,12 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         // Send invoke response IMMEDIATELY to prevent Teams timeout
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
 
-        // Handle file upload asynchronously (don't await)
-        handleFileConsentInvoke(ctx, deps.log).catch((err) => {
+        // Handle file upload within the turn (context proxy revokes after return)
+        try {
+          await handleFileConsentInvoke(ctx, deps.log);
+        } catch (err) {
           deps.log.debug?.("file consent handler error", { error: String(err) });
-        });
+        }
         return;
       }
       return originalRun.call(handler, context);
