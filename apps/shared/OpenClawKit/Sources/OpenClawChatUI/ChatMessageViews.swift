@@ -70,13 +70,7 @@ private struct ChatBubbleShape: InsettableShape {
             to: baseBottom,
             control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
             control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
-            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        self.addBottomEdge(path: &path, bubbleMinX: bubbleMinX, bubbleMaxX: bubbleMaxX, bubbleMaxY: bubbleMaxY, radius: r)
         path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
@@ -108,13 +102,7 @@ private struct ChatBubbleShape: InsettableShape {
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
-            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        self.addBottomEdge(path: &path, bubbleMinX: bubbleMinX, bubbleMaxX: bubbleMaxX, bubbleMaxY: bubbleMaxY, radius: r)
         path.addLine(to: baseBottom)
         path.addCurve(
             to: tip,
@@ -130,6 +118,22 @@ private struct ChatBubbleShape: InsettableShape {
             control: CGPoint(x: bubbleMinX, y: bubbleMinY))
 
         return path
+    }
+
+    private func addBottomEdge(
+        path: inout Path,
+        bubbleMinX: CGFloat,
+        bubbleMaxX: CGFloat,
+        bubbleMaxY: CGFloat,
+        radius: CGFloat)
+    {
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX - radius, y: bubbleMaxY),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + radius, y: bubbleMaxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - radius),
+            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
     }
 }
 
