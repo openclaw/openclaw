@@ -208,6 +208,31 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("allows media-only prompts when images are provided via reply options", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "webchat",
+        },
+        opts: {
+          images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.commandBody).toContain("[User sent media without caption]");
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({
