@@ -107,6 +107,79 @@ describe("heartbeat-wake", () => {
     });
   });
 
+  it("retries failed handler results after the default retry delay", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", reason: "model timeout" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "exec-event",
+      expectedRetryReason: "exec-event",
+    });
+  });
+
+  it("stops retrying failed results after MAX_FAIL_RETRIES attempts", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "failed", reason: "persistent error" });
+    setHeartbeatWakeHandler(handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0]);
+    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
+
+    // Initial attempt
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Retry 1
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handler).toHaveBeenCalledTimes(2);
+
+    // Retry 2
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handler).toHaveBeenCalledTimes(3);
+
+    // Retry 3 (final)
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handler).toHaveBeenCalledTimes(4);
+
+    // No more retries — exhausted
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(handler).toHaveBeenCalledTimes(4);
+    expect(hasPendingHeartbeatWake()).toBe(false);
+  });
+
+  it("preserves wake target fields across failed-result retries", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", reason: "dispatch error" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toEqual({
+      reason: "exec-event",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toEqual({
+      reason: "exec-event",
+      agentId: "ops",
+      sessionKey: "agent:ops:discord:channel:alerts",
+    });
+  });
+
   it("stale disposer does not clear a newer handler", async () => {
     vi.useFakeTimers();
     const handlerA = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

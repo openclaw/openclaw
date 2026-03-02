@@ -19,6 +19,7 @@ type WakeTimerKind = "normal" | "retry";
 type PendingWakeReason = {
   reason: string;
   priority: number;
+  failCount: number;
   requestedAt: number;
   agentId?: string;
   sessionKey?: string;
@@ -35,6 +36,7 @@ let timerKind: WakeTimerKind | null = null;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
+const MAX_FAIL_RETRIES = 3;
 const REASON_PRIORITY = {
   RETRY: 0,
   INTERVAL: 1,
@@ -76,11 +78,13 @@ function queuePendingWakeReason(params?: {
   requestedAt?: number;
   agentId?: string;
   sessionKey?: string;
+  failCount?: number;
 }) {
   const requestedAt = params?.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params?.reason);
   const normalizedAgentId = normalizeWakeTarget(params?.agentId);
   const normalizedSessionKey = normalizeWakeTarget(params?.sessionKey);
+  const failCount = params?.failCount ?? 0;
   const wakeTargetKey = getWakeTargetKey({
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
@@ -88,6 +92,7 @@ function queuePendingWakeReason(params?: {
   const next: PendingWakeReason = {
     reason: normalizedReason,
     priority: resolveReasonPriority(normalizedReason),
+    failCount,
     requestedAt,
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
@@ -159,8 +164,24 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             reason: pendingWake.reason ?? "retry",
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
+            failCount: pendingWake.failCount,
           });
           schedule(DEFAULT_RETRY_MS, "retry");
+        }
+        if (res.status === "failed") {
+          // Transient dispatch/model failure — requeue with bounded retry so
+          // queued system events (e.g. exec-completion wake) are not silently
+          // dropped.  The fail counter prevents infinite retry loops.
+          const nextFailCount = (pendingWake.failCount ?? 0) + 1;
+          if (nextFailCount <= MAX_FAIL_RETRIES) {
+            queuePendingWakeReason({
+              reason: pendingWake.reason ?? "retry",
+              agentId: pendingWake.agentId,
+              sessionKey: pendingWake.sessionKey,
+              failCount: nextFailCount,
+            });
+            schedule(DEFAULT_RETRY_MS, "retry");
+          }
         }
       }
     } catch {
@@ -170,6 +191,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           reason: pendingWake.reason ?? "retry",
           agentId: pendingWake.agentId,
           sessionKey: pendingWake.sessionKey,
+          failCount: pendingWake.failCount,
         });
       }
       schedule(DEFAULT_RETRY_MS, "retry");
