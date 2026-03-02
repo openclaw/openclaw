@@ -384,6 +384,67 @@ describe("cron controller", () => {
     expect(state.cronEditingJobId).toBeNull();
   });
 
+  it("sends empty delivery.accountId in cron.update to clear persisted account routing", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-account-id" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-account-id" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: "job-clear-account-id",
+      cronJobs: [
+        {
+          id: "job-clear-account-id",
+          name: "clear account",
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "cron", expr: "0 * * * *" },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "run" },
+          delivery: { mode: "announce", accountId: "ops-bot" },
+          state: {},
+        },
+      ],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "clear account",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "run",
+        deliveryMode: "announce",
+        deliveryAccountId: "   ",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-clear-account-id",
+      patch: {
+        delivery: {
+          mode: "announce",
+          accountId: "",
+        },
+      },
+    });
+  });
+
   it("maps a cron job into editable form fields", () => {
     const state = createState();
     const job = {

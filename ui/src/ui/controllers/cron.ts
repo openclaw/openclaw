@@ -645,9 +645,7 @@ export async function addCronJob(state: CronState) {
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
             accountId:
-              selectedDeliveryMode === "announce"
-                ? form.deliveryAccountId.trim() || undefined
-                : undefined,
+              selectedDeliveryMode === "announce" ? form.deliveryAccountId.trim() : undefined,
             bestEffort: form.deliveryBestEffort,
           }
         : selectedDeliveryMode === "none"
