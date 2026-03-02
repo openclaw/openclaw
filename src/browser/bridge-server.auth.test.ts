@@ -11,6 +11,8 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     enabled: true,
     evaluateEnabled: false,
     controlPort: 0,
+    cdpPortRangeStart: 18800,
+    cdpPortRangeEnd: 18899,
     cdpProtocol: "http",
     cdpHost: "127.0.0.1",
     cdpIsLoopback: true,
