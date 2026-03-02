@@ -165,6 +165,20 @@ function resolveInboundTimestamp(rawTs: unknown): number {
   return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
 }
 
+function extractMentionIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return "";
+      }
+      return toNumberId((entry as { uid?: unknown }).uid);
+    })
+    .filter(Boolean);
+}
+
 function extractSendMessageId(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -422,7 +436,7 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   return result;
 }
 
-function toInboundMessage(message: Message): ZaloInboundMessage | null {
+function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
   const data = message.data as Record<string, unknown>;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
@@ -433,6 +447,20 @@ function toInboundMessage(message: Message): ZaloInboundMessage | null {
     return null;
   }
   const content = normalizeMessageContent(data.content);
+  const normalizedOwnUserId = toNumberId(ownUserId);
+  const mentionIds = extractMentionIds(data.mentions);
+  const quoteOwnerId =
+    data.quote && typeof data.quote === "object"
+      ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
+      : "";
+  const hasAnyMention = mentionIds.length > 0;
+  const canResolveExplicitMention = Boolean(normalizedOwnUserId);
+  const wasExplicitlyMentioned = Boolean(
+    normalizedOwnUserId && mentionIds.some((id) => id === normalizedOwnUserId),
+  );
+  const implicitMention = Boolean(
+    normalizedOwnUserId && quoteOwnerId && quoteOwnerId === normalizedOwnUserId,
+  );
   return {
     threadId,
     isGroup,
@@ -442,6 +470,10 @@ function toInboundMessage(message: Message): ZaloInboundMessage | null {
     timestampMs: resolveInboundTimestamp(data.ts),
     msgId: typeof data.msgId === "string" ? data.msgId : undefined,
     cliMsgId: typeof data.cliMsgId === "string" ? data.cliMsgId : undefined,
+    hasAnyMention,
+    canResolveExplicitMention,
+    wasExplicitlyMentioned,
+    implicitMention,
     raw: message,
   };
 }
@@ -668,6 +700,20 @@ export async function sendZaloTextMessage(
   } catch (error) {
     return { ok: false, error: toErrorMessage(error) };
   }
+}
+
+export async function sendZaloTypingEvent(
+  threadId: string,
+  options: Pick<ZaloSendOptions, "profile" | "isGroup"> = {},
+): Promise<void> {
+  const profile = normalizeProfile(options.profile);
+  const trimmedThreadId = threadId.trim();
+  if (!trimmedThreadId) {
+    throw new Error("No threadId provided");
+  }
+  const api = await ensureApi(profile);
+  const type = options.isGroup ? ThreadType.Group : ThreadType.User;
+  await api.sendTypingEvent(trimmedThreadId, type);
 }
 
 export async function sendZaloLink(
@@ -956,6 +1002,7 @@ export async function startZaloListener(params: {
   }
 
   const api = await ensureApi(profile);
+  const ownUserId = toNumberId(api.getOwnId());
   let stopped = false;
 
   const cleanup = () => {
@@ -982,7 +1029,7 @@ export async function startZaloListener(params: {
     if (incoming.isSelf) {
       return;
     }
-    const normalized = toInboundMessage(incoming);
+    const normalized = toInboundMessage(incoming, ownUserId);
     if (!normalized) {
       return;
     }

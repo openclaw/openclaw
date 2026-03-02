@@ -26,6 +26,10 @@ export type ZaloInboundMessage = {
   timestampMs: number;
   msgId?: string;
   cliMsgId?: string;
+  hasAnyMention?: boolean;
+  wasExplicitlyMentioned?: boolean;
+  canResolveExplicitMention?: boolean;
+  implicitMention?: boolean;
   raw: unknown;
 };
 
@@ -59,6 +63,7 @@ type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
 type ZalouserGroupConfig = {
   allow?: boolean;
   enabled?: boolean;
+  requireMention?: boolean;
   tools?: ZalouserToolConfig;
 };
 
