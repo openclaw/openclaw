@@ -1,6 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  readFileUtf8AndCleanup,
+  stubFetchResponse,
+} from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   cameraTempPath,
@@ -17,13 +21,6 @@ async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T
 }
 
 describe("nodes camera helpers", () => {
-  function stubFetchResponse(response: Response) {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response),
-    );
-  }
-
   it("parses camera.snap payload", () => {
     expect(
       parseCameraSnapPayload({
@@ -88,7 +85,7 @@ describe("nodes camera helpers", () => {
         id: "clip1",
       });
       expect(out).toBe(path.join(dir, "openclaw-camera-clip-front-clip1.mp4"));
-      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
     });
   });
 
@@ -109,7 +106,7 @@ describe("nodes camera helpers", () => {
         expectedHost,
       });
       expect(out).toBe(path.join(dir, "openclaw-camera-clip-back-clip2.mp4"));
-      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-clip");
+      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-clip");
     });
   });
 
@@ -132,7 +129,7 @@ describe("nodes camera helpers", () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeBase64ToFile(out, "aGk=");
-      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
     });
   });
 
@@ -147,7 +144,7 @@ describe("nodes camera helpers", () => {
       await writeUrlToFile(out, "https://198.51.100.42/clip.mp4", {
         expectedHost: "198.51.100.42",
       });
-      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
+      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("url-content");
     });
   });
 

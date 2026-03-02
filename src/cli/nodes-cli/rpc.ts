@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
-import { resolveNodeIdFromCandidates } from "../../shared/node-match.js";
+import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
@@ -77,11 +77,6 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 }
 
 export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
-  const q = String(query ?? "").trim();
-  if (!q) {
-    throw new Error("node required");
-  }
-
   let nodes: NodeListNode[] = [];
   try {
     const res = await callGatewayCli("node.list", opts, {});
@@ -97,6 +92,5 @@ export async function resolveNode(opts: NodesRpcOpts, query: string): Promise<No
       remoteIp: n.remoteIp,
     }));
   }
-  const nodeId = resolveNodeIdFromCandidates(nodes, q);
-  return nodes.find((node) => node.nodeId === nodeId) ?? { nodeId };
+  return resolveNodeFromNodeList(nodes, query);
 }
