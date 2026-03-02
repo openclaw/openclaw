@@ -24,7 +24,7 @@ import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
 import { createTextPairingAdapter } from "./channel-pairing.js";
 import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { definePluginEntry } from "./plugin-entry.js";
-
+export { Type } from "@sinclair/typebox";
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
@@ -118,6 +118,9 @@ export {
 } from "../infra/secret-file.js";
 export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secret-file.js";
 
+export { callGatewayTool, readGatewayCallOptions } from "../agents/tools/gateway.js";
+export type { GatewayCallOptions } from "../agents/tools/gateway.js";
+
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
@@ -134,6 +137,9 @@ export {
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
+export { parseAgentSessionKey } from "../routing/session-key.js";
+export type { ParsedAgentSessionKey } from "../routing/session-key.js";
+export { extractDeliveryInfo } from "../config/sessions.js";
 
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
