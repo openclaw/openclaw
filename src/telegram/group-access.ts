@@ -3,6 +3,7 @@ import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type {
   TelegramAccountConfig,
+  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../config/types.js";
@@ -20,7 +21,7 @@ export type TelegramGroupBaseAccessResult =
 
 export const evaluateTelegramGroupBaseAccess = (params: {
   isGroup: boolean;
-  groupConfig?: TelegramGroupConfig;
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   hasGroupAllowOverride: boolean;
   effectiveGroupAllow: NormalizedAllowFrom;
@@ -29,14 +30,33 @@ export const evaluateTelegramGroupBaseAccess = (params: {
   enforceAllowOverride: boolean;
   requireSenderForAllowOverride: boolean;
 }): TelegramGroupBaseAccessResult => {
-  if (!params.isGroup) {
-    return { allowed: true };
-  }
+  // Check enabled flags for both groups and DMs
   if (params.groupConfig?.enabled === false) {
     return { allowed: false, reason: "group-disabled" };
   }
   if (params.topicConfig?.enabled === false) {
     return { allowed: false, reason: "topic-disabled" };
+  }
+  if (!params.isGroup) {
+    // For DMs, check allowFrom override if present
+    if (params.enforceAllowOverride && params.hasGroupAllowOverride) {
+      if (!params.effectiveGroupAllow.hasEntries) {
+        return { allowed: false, reason: "group-override-unauthorized" };
+      }
+      const senderId = params.senderId ?? "";
+      if (params.requireSenderForAllowOverride && !senderId) {
+        return { allowed: false, reason: "group-override-unauthorized" };
+      }
+      const allowed = isSenderAllowed({
+        allow: params.effectiveGroupAllow,
+        senderId,
+        senderUsername: params.senderUsername ?? "",
+      });
+      if (!allowed) {
+        return { allowed: false, reason: "group-override-unauthorized" };
+      }
+    }
+    return { allowed: true };
   }
   if (!params.enforceAllowOverride || !params.hasGroupAllowOverride) {
     return { allowed: true };

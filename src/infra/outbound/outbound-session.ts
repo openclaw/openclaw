@@ -293,7 +293,9 @@ function resolveTelegramSession(
     (chatType === "unknown" &&
       params.resolvedTarget?.kind &&
       params.resolvedTarget.kind !== "user");
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
+  // For groups: include thread ID in peerId. For DMs: use simple chatId (thread handled via suffix).
+  const peerId =
+    isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
@@ -305,12 +307,21 @@ function resolveTelegramSession(
     accountId: params.accountId,
     peer,
   });
+  // Use thread suffix for DM topics to match inbound session key format
+  const threadKeys =
+    resolvedThreadId && !isGroup
+      ? { sessionKey: `${baseSessionKey}:thread:${resolvedThreadId}` }
+      : null;
   return {
-    sessionKey: baseSessionKey,
+    sessionKey: threadKeys?.sessionKey ?? baseSessionKey,
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `telegram:group:${peerId}` : `telegram:${chatId}`,
+    from: isGroup
+      ? `telegram:group:${peerId}`
+      : resolvedThreadId
+        ? `telegram:${chatId}:topic:${resolvedThreadId}`
+        : `telegram:${chatId}`,
     to: `telegram:${chatId}`,
     threadId: resolvedThreadId,
   };
