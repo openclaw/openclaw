@@ -62,11 +62,11 @@ describe("windows command wrapper behavior", () => {
     );
 
     try {
-      const result = await runCommandWithTimeout(["npm", "view", "openclaw"], { timeoutMs: 1000 });
+      const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
       expect(captured?.command).toBe(expectedComSpec);
       expect(captured?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-      expect(captured?.args[3]).toContain("npm.cmd view openclaw");
+      expect(captured?.args[3]).toContain("pnpm.cmd --version");
       expect(captured?.options.windowsVerbatimArguments).toBe(true);
     } finally {
       platformSpy.mockRestore();
@@ -92,10 +92,10 @@ describe("windows command wrapper behavior", () => {
     );
 
     try {
-      await runExec("npm", ["--version"], 1000);
+      await runExec("pnpm", ["--version"], 1000);
       expect(captured?.command).toBe(expectedComSpec);
       expect(captured?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-      expect(captured?.args[3]).toContain("npm.cmd --version");
+      expect(captured?.args[3]).toContain("pnpm.cmd --version");
       expect(captured?.options.windowsVerbatimArguments).toBe(true);
     } finally {
       platformSpy.mockRestore();
