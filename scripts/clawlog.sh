@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# VibeTunnel Logging Utility
-# Simplifies access to VibeTunnel logs using macOS unified logging system
+# OpenClaw Logging Utility
+# Simplifies access to OpenClaw logs using macOS unified logging system
 
 set -euo pipefail
 
@@ -124,7 +124,7 @@ EOF
 
 # Function to list categories
 list_categories() {
-    echo -e "${BLUE}Fetching VibeTunnel log categories from the last hour...${NC}\n"
+    echo -e "${BLUE}Fetching OpenClaw log categories from the last hour...${NC}\n"
 
     # Get unique categories from recent logs
     log show --predicate "subsystem == \"$SUBSYSTEM\"" --last 1h 2>/dev/null | \
@@ -243,7 +243,7 @@ if [[ "$STREAM_MODE" == true ]]; then
     # Streaming mode
     LOG_CMD+=(stream --predicate "$PREDICATE" --level "$LOG_LEVEL" --info)
 
-    echo -e "${GREEN}Streaming VibeTunnel logs continuously...${NC}"
+    echo -e "${GREEN}Streaming OpenClaw logs continuously...${NC}"
     echo -e "${YELLOW}Press Ctrl+C to stop${NC}\n"
 else
     # Show mode
