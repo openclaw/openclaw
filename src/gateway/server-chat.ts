@@ -350,8 +350,18 @@ export function createAgentEventHandler({
       text: bufferedText,
     });
     const text = normalizedHeartbeatText.text.trim();
+    // Suppress partial silent tokens: when the model streams NO_REPLY as multiple
+    // tokens (e.g. "NO" then "_REPLY"), lifecycle:end can fire while the buffer
+    // only contains the partial prefix.  isSilentReplyText returns false for "NO",
+    // causing it to leak as a real message.  Catch these by checking if the
+    // buffered text is a strict prefix of the silent token.
+    const isPartialSilent =
+      text.length >= 2 &&
+      text.length < SILENT_REPLY_TOKEN.length &&
+      SILENT_REPLY_TOKEN.startsWith(text.toUpperCase()) &&
+      /^[A-Z_]+$/.test(text);
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN) || isPartialSilent;
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
