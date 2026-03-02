@@ -89,6 +89,45 @@ function formatBindingConflicts(
   );
 }
 
+function resolveParsedBindingsOrExit(params: {
+  runtime: RuntimeEnv;
+  cfg: NonNullable<Awaited<ReturnType<typeof requireValidConfig>>>;
+  agentId: string;
+  bindValues: string[] | undefined;
+  emptyMessage: string;
+}): ReturnType<typeof parseBindingSpecs> | null {
+  const specs = (params.bindValues ?? []).map((value) => value.trim()).filter(Boolean);
+  if (specs.length === 0) {
+    params.runtime.error(params.emptyMessage);
+    params.runtime.exit(1);
+    return null;
+  }
+
+  const parsed = parseBindingSpecs({ agentId: params.agentId, specs, config: params.cfg });
+  if (parsed.errors.length > 0) {
+    params.runtime.error(parsed.errors.join("\n"));
+    params.runtime.exit(1);
+    return null;
+  }
+  return parsed;
+}
+
+function emitJsonPayload(params: {
+  runtime: RuntimeEnv;
+  json: boolean | undefined;
+  payload: unknown;
+  conflictCount?: number;
+}): boolean {
+  if (!params.json) {
+    return false;
+  }
+  params.runtime.log(JSON.stringify(params.payload, null, 2));
+  if ((params.conflictCount ?? 0) > 0) {
+    params.runtime.exit(1);
+  }
+  return true;
+}
+
 export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -157,17 +196,14 @@ export async function agentsBindCommand(
     return;
   }
 
-  const specs = (opts.bind ?? []).map((value) => value.trim()).filter(Boolean);
-  if (specs.length === 0) {
-    runtime.error("Provide at least one --bind <channel[:accountId]>.");
-    runtime.exit(1);
-    return;
-  }
-
-  const parsed = parseBindingSpecs({ agentId, specs, config: cfg });
-  if (parsed.errors.length > 0) {
-    runtime.error(parsed.errors.join("\n"));
-    runtime.exit(1);
+  const parsed = resolveParsedBindingsOrExit({
+    runtime,
+    cfg,
+    agentId,
+    bindValues: opts.bind,
+    emptyMessage: "Provide at least one --bind <channel[:accountId]>.",
+  });
+  if (!parsed) {
     return;
   }
 
@@ -186,11 +222,9 @@ export async function agentsBindCommand(
     skipped: result.skipped.map(describeBinding),
     conflicts: formatBindingConflicts(result.conflicts),
   };
-  if (opts.json) {
-    runtime.log(JSON.stringify(payload, null, 2));
-    if (result.conflicts.length > 0) {
-      runtime.exit(1);
-    }
+  if (
+    emitJsonPayload({ runtime, json: opts.json, payload, conflictCount: result.conflicts.length })
+  ) {
     return;
   }
 
@@ -267,25 +301,21 @@ export async function agentsUnbindCommand(
       missing: [] as string[],
       conflicts: [] as string[],
     };
-    if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+    if (emitJsonPayload({ runtime, json: opts.json, payload })) {
       return;
     }
     runtime.log(`Removed ${removed.length} binding(s) for "${agentId}".`);
     return;
   }
 
-  const specs = (opts.bind ?? []).map((value) => value.trim()).filter(Boolean);
-  if (specs.length === 0) {
-    runtime.error("Provide at least one --bind <channel[:accountId]> or use --all.");
-    runtime.exit(1);
-    return;
-  }
-
-  const parsed = parseBindingSpecs({ agentId, specs, config: cfg });
-  if (parsed.errors.length > 0) {
-    runtime.error(parsed.errors.join("\n"));
-    runtime.exit(1);
+  const parsed = resolveParsedBindingsOrExit({
+    runtime,
+    cfg,
+    agentId,
+    bindValues: opts.bind,
+    emptyMessage: "Provide at least one --bind <channel[:accountId]> or use --all.",
+  });
+  if (!parsed) {
     return;
   }
 
@@ -303,11 +333,9 @@ export async function agentsUnbindCommand(
     missing: result.missing.map(describeBinding),
     conflicts: formatBindingConflicts(result.conflicts),
   };
-  if (opts.json) {
-    runtime.log(JSON.stringify(payload, null, 2));
-    if (result.conflicts.length > 0) {
-      runtime.exit(1);
-    }
+  if (
+    emitJsonPayload({ runtime, json: opts.json, payload, conflictCount: result.conflicts.length })
+  ) {
     return;
   }
 
