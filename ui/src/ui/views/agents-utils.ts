@@ -288,6 +288,10 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
   }
 }
 
+export function sortLocaleStrings(values: Iterable<string>): string[] {
+  return Array.from(values).toSorted((a, b) => a.localeCompare(b));
+}
+
 export function resolveConfiguredCronModelSuggestions(
   configForm: Record<string, unknown> | null,
 ): string[] {
@@ -319,7 +323,7 @@ export function resolveConfiguredCronModelSuggestions(
       addModelConfigIds(out, (entry as Record<string, unknown>).model);
     }
   }
-  return [...out].toSorted((a, b) => a.localeCompare(b));
+  return sortLocaleStrings(out);
 }
 
 export function parseFallbackList(value: string): string[] {
