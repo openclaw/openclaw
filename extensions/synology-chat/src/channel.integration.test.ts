@@ -16,6 +16,11 @@ vi.mock("openclaw/plugin-sdk", () => ({
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
   registerPluginHttpRoute: registerPluginHttpRouteMock,
   buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
+  createFixedWindowRateLimiter: vi.fn(() => ({
+    isRateLimited: vi.fn(() => false),
+    size: vi.fn(() => 0),
+    clear: vi.fn(),
+  })),
 }));
 
 vi.mock("./runtime.js", () => ({
