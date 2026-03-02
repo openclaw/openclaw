@@ -1,3 +1,4 @@
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -325,8 +326,16 @@ export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
   if (heartbeatInterval) {
     return;
   }
-  const stuckSessionWarnMs = resolveStuckSessionWarnMs(config);
   heartbeatInterval = setInterval(() => {
+    let heartbeatConfig = config;
+    if (!heartbeatConfig) {
+      try {
+        heartbeatConfig = loadConfig();
+      } catch {
+        heartbeatConfig = undefined;
+      }
+    }
+    const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const activeCount = Array.from(diagnosticSessionStates.values()).filter(
