@@ -108,6 +108,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/qiniu",
+      "destination": "/providers/qiniu"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -1120,7 +1124,8 @@
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",
-                  "providers/qianfan"
+                  "providers/qianfan",
+                  "providers/qiniu"
                 ]
               }
             ]

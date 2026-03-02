@@ -187,6 +187,17 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const QINIU_BASE_URL = "https://api.qnaigc.com/v1";
+export const QINIU_DEFAULT_MODEL_ID = "deepseek/deepseek-v3.2-251201";
+const QINIU_DEFAULT_CONTEXT_WINDOW = 65536;
+const QINIU_DEFAULT_MAX_TOKENS = 8192;
+const QINIU_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
 const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
@@ -868,6 +879,24 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildQiniuProvider(): ProviderConfig {
+  return {
+    baseUrl: QINIU_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: QINIU_DEFAULT_MODEL_ID,
+        name: "DeepSeek V3.2",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: QINIU_DEFAULT_COST,
+        contextWindow: QINIU_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QINIU_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildNvidiaProvider(): ProviderConfig {
   return {
     baseUrl: NVIDIA_BASE_URL,
@@ -1113,6 +1142,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const qiniuKey =
+    resolveEnvApiKeyVarName("qiniu") ??
+    resolveApiKeyFromProfiles({ provider: "qiniu", store: authStore });
+  if (qiniuKey) {
+    providers.qiniu = { ...buildQiniuProvider(), apiKey: qiniuKey };
   }
 
   const openrouterKey =
