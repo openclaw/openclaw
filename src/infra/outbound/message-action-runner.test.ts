@@ -1151,4 +1151,15 @@ describe("suppressOutbound blocks agent tool actions", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toMatch(/outbound suppressed/i);
   });
+
+  it("allows download-file past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "download-file",
+      params: { channel: "slack", url: "https://files.slack.com/test.pdf" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
 });

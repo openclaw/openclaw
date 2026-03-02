@@ -61,6 +61,7 @@ const SUPPRESS_EXEMPT_ACTIONS: ReadonlySet<string> = new Set([
   "channel-list",
   "list-pins",
   "permissions",
+  "download-file",
   "thread-list",
   "voice-status",
   "event-list",
