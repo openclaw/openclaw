@@ -540,8 +540,9 @@ describe("session-memory hook", () => {
       // Mock fetch
       fetchCalls = [];
       originalFetch = global.fetch;
-      global.fetch = async (url: string | URL, options?: RequestInit) => {
-        fetchCalls.push({ url: url.toString(), options: options || {} });
+      global.fetch = async (url: string | URL | Request, options?: RequestInit) => {
+        const urlStr = url instanceof Request ? url.url : String(url);
+        fetchCalls.push({ url: urlStr, options: options || {} });
         return new Response(JSON.stringify({ success: true }), {
           status: 200,
           headers: { "Content-Type": "application/json" },

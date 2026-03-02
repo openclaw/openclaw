@@ -4,6 +4,7 @@ import {
   DEFAULT_TASKS_FILENAME,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
 describe("TASKS.md bootstrap", () => {
@@ -44,14 +45,14 @@ describe("TASKS.md bootstrap", () => {
   });
 
   it("TASKS.md is in SUBAGENT_BOOTSTRAP_ALLOWLIST (kept for subagent sessions)", () => {
-    const files = [
+    const files: WorkspaceBootstrapFile[] = [
       {
-        name: DEFAULT_TASKS_FILENAME as const,
+        name: DEFAULT_TASKS_FILENAME,
         path: "/tmp/TASKS.md",
         missing: false,
         content: "tasks",
       },
-      { name: "SOUL.md" as const, path: "/tmp/SOUL.md", missing: false, content: "soul" },
+      { name: "SOUL.md", path: "/tmp/SOUL.md", missing: false, content: "soul" },
     ];
 
     const filtered = filterBootstrapFilesForSession(files, "agent:main:subagent:test-123");
@@ -61,14 +62,14 @@ describe("TASKS.md bootstrap", () => {
   });
 
   it("filterBootstrapFilesForSession drops non-allowlisted files for subagent sessions", () => {
-    const files = [
+    const files: WorkspaceBootstrapFile[] = [
       {
-        name: DEFAULT_TASKS_FILENAME as const,
+        name: DEFAULT_TASKS_FILENAME,
         path: "/tmp/TASKS.md",
         missing: false,
         content: "tasks",
       },
-      { name: "SOUL.md" as const, path: "/tmp/SOUL.md", missing: false, content: "soul" },
+      { name: "SOUL.md", path: "/tmp/SOUL.md", missing: false, content: "soul" },
     ];
 
     const filtered = filterBootstrapFilesForSession(files, "agent:main:subagent:test-123");

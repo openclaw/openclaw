@@ -23,6 +23,7 @@ import {
   extractAssistantMessages,
   stripAssistantWrappers,
 } from "./message-utils.js";
+import type { Logger } from "./schema.js";
 import { runSleepCycle } from "./sleep-cycle.js";
 
 // ============================================================================
@@ -771,12 +772,7 @@ describe("extractEntities", () => {
 describe("runBackgroundExtraction", () => {
   const originalFetch = globalThis.fetch;
 
-  let mockLogger: {
-    info: ReturnType<typeof vi.fn>;
-    warn: ReturnType<typeof vi.fn>;
-    error: ReturnType<typeof vi.fn>;
-    debug: ReturnType<typeof vi.fn>;
-  };
+  let mockLogger: Logger;
 
   let mockDb: {
     updateExtractionStatus: ReturnType<typeof vi.fn>;
@@ -1125,7 +1121,11 @@ describe("auto-recall core memory deduplication", () => {
 
   it("should keep all results when core set is undefined", () => {
     const results = [makeResult("a", 0.8), makeResult("b", 0.7)];
-    const coreIds: Set<string> | undefined = undefined;
+    // Use a function to prevent TS from narrowing the const to literal `undefined`
+    function getCoreIds(): Set<string> | undefined {
+      return undefined;
+    }
+    const coreIds = getCoreIds();
     const filtered = coreIds ? results.filter((r) => !coreIds.has(r.id)) : results;
     expect(filtered).toHaveLength(2);
   });
