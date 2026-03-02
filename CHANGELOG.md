@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Tests/Subagent announce: set `OPENCLAW_TEST_FAST=1` before importing `subagent-announce` format suites so module-level fast-mode constants are captured deterministically on Windows CI, preventing timeout flakes in nested completion announce coverage. (#31370) Thanks @zwffff.
 - Gateway/Node dangerous-command parity: include `sms.send` in default onboarding node `denyCommands`, share onboarding deny defaults with the gateway dangerous-command source of truth, and include `sms.send` in phone-control `/phone arm writes` handling so SMS follows the same break-glass flow as other dangerous node commands. Thanks @zpbrent.
 - Zalo/Pairing auth tests: add webhook regression coverage asserting DM pairing-store reads/writes remain account-scoped, preventing cross-account authorization bleed in multi-account setups. (#26121) Thanks @bmendonca3.
 - Logging: use local time for logged timestamps instead of UTC, aligning log output with documented local timezone behavior and avoiding confusion during local diagnostics. (#28434) Thanks @liuy.
