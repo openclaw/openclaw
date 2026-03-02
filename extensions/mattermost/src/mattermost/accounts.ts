@@ -68,11 +68,19 @@ function mergeMattermostAccountConfig(
   return { ...base, ...account };
 }
 
-function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
+function resolveMattermostRequireMention(
+  config: MattermostAccountConfig,
+  accountId?: string,
+): boolean | undefined {
   if (config.chatmode === "oncall") {
     return true;
   }
   if (config.chatmode === "onmessage") {
+    if (config.requireMention === true) {
+      console.warn(
+        `[mattermost] account '${accountId ?? "default"}': chatmode 'onmessage' overrides explicit requireMention=true — use per-group requireMention or set chatmode to 'oncall'`,
+      );
+    }
     return false;
   }
   if (config.chatmode === "onchar") {
@@ -98,7 +106,7 @@ export function resolveMattermostAccount(params: {
   const configUrl = merged.baseUrl?.trim();
   const botToken = configToken || envToken;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
-  const requireMention = resolveMattermostRequireMention(merged);
+  const requireMention = resolveMattermostRequireMention(merged, accountId);
 
   const botTokenSource: MattermostTokenSource = configToken ? "config" : envToken ? "env" : "none";
   const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";

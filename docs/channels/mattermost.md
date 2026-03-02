@@ -90,6 +90,50 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
 
+### Chatmode and requireMention interaction
+
+> **Important:** `chatmode: "onmessage"` implicitly sets `requireMention: false` at the
+> account level. If you also set `requireMention: true` on the same account, the chatmode
+> value wins silently (a warning is logged). This applies to all channels the account is in,
+> unless overridden per-group.
+
+Group-level `requireMention` in `groups.<channelId>` **does** override the account-level
+value derived from chatmode. However, this interaction is non-obvious — the account-level
+setting is derived implicitly from `chatmode`, not from the explicit `requireMention` field.
+
+#### Common pattern: respond to everything in a dedicated channel, mention-only elsewhere
+
+Set `chatmode: "oncall"` on the account (which implies `requireMention: true`), then
+use a per-group override to disable mention gating only in the bot's dedicated channel:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      accounts: {
+        mybot: {
+          botToken: "...",
+          baseUrl: "https://chat.example.com",
+          chatmode: "oncall", // mention-only by default
+        },
+      },
+      groups: {
+        "<dedicated-channel-id>": {
+          requireMention: false, // respond to everything here
+        },
+        "<other-channel-id>": {
+          // inherits requireMention: true from chatmode "oncall"
+        },
+      },
+    },
+  },
+}
+```
+
+> **Tip:** After changing `chatmode` or `requireMention` config, stale sessions may retain
+> the old behavior. Delete affected sessions from `agents/<agentId>/sessions/sessions.json`
+> to force a clean state.
+
 ## Access control (DMs)
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
