@@ -542,6 +542,17 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
+  if (isAuthErrorMessage(raw)) {
+    const providerName = opts?.provider?.trim();
+    const modelName = opts?.model?.trim() ?? msg.model?.trim();
+    const providerLabel =
+      providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+    if (providerLabel) {
+      return `⚠️ ${providerLabel} returned an authentication error — please check your API key or credentials.`;
+    }
+    return "⚠️ API provider returned an authentication error — please check your API key or credentials.";
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -628,12 +639,26 @@ const ERROR_PATTERNS = {
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
+    // Chinese provider rate limit messages (MiniMax, Kimi/Moonshot, Doubao, Qwen, etc.)
+    "请求频率超限",
+    "请求过于频繁",
+    "调用频率",
+    "频率限制",
+    "请求次数超",
+    "concurrency exceeds",
+    /request[_ ]?rate[_ ]?limit/i,
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
     "overloaded",
     "service unavailable",
     "high demand",
+    // Chinese provider overloaded messages
+    "服务繁忙",
+    "系统繁忙",
+    "服务暂时不可用",
+    "服务器繁忙",
+    "当前服务负载过高",
   ],
   timeout: [
     "timeout",
@@ -644,6 +669,10 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*abort\b/i,
     /\breason:\s*abort\b/i,
     /\bunhandled stop reason:\s*abort\b/i,
+    // Chinese provider timeout messages
+    "请求超时",
+    "连接超时",
+    "响应超时",
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,
@@ -652,6 +681,15 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    // Chinese provider billing messages (MiniMax, Kimi/Moonshot, Doubao, Qwen, etc.)
+    "余额不足",
+    "额度不足",
+    "账户余额",
+    "账户欠费",
+    "欠费",
+    "充值",
+    "额度已用完",
+    "配额不足",
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
@@ -680,6 +718,15 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    // Chinese provider auth messages (MiniMax, Kimi/Moonshot, Doubao, Qwen, etc.)
+    "无效的api",
+    "api密钥无效",
+    "鉴权失败",
+    "认证失败",
+    "密钥错误",
+    "apikey无效",
+    "无权访问",
+    "权限不足",
   ],
   format: [
     "string should match pattern",

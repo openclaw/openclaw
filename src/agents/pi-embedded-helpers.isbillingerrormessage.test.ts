@@ -532,4 +532,46 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  // Chinese model provider error classification
+  it("classifies Chinese provider rate limit errors", () => {
+    expect(classifyFailoverReason("请求频率超限")).toBe("rate_limit");
+    expect(classifyFailoverReason("请求过于频繁，请稍后再试")).toBe("rate_limit");
+    expect(classifyFailoverReason("调用频率超出限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("请求次数超出配额")).toBe("rate_limit");
+  });
+
+  it("classifies Chinese provider billing errors", () => {
+    expect(classifyFailoverReason("余额不足")).toBe("billing");
+    expect(classifyFailoverReason("账户余额不足，请充值")).toBe("billing");
+    expect(classifyFailoverReason("额度不足")).toBe("billing");
+    expect(classifyFailoverReason("账户欠费")).toBe("billing");
+    expect(classifyFailoverReason("额度已用完")).toBe("billing");
+    expect(classifyFailoverReason("配额不足，请升级")).toBe("billing");
+  });
+
+  it("classifies Chinese provider auth errors", () => {
+    expect(classifyFailoverReason("鉴权失败")).toBe("auth");
+    expect(classifyFailoverReason("认证失败")).toBe("auth");
+    expect(classifyFailoverReason("密钥错误")).toBe("auth");
+    expect(classifyFailoverReason("无效的API密钥")).toBe("auth");
+    expect(classifyFailoverReason("apikey无效")).toBe("auth");
+    expect(classifyFailoverReason("无权访问该资源")).toBe("auth");
+    expect(classifyFailoverReason("权限不足")).toBe("auth");
+  });
+
+  it("classifies Chinese provider timeout errors", () => {
+    expect(classifyFailoverReason("请求超时")).toBe("timeout");
+    expect(classifyFailoverReason("连接超时")).toBe("timeout");
+    expect(classifyFailoverReason("响应超时")).toBe("timeout");
+  });
+
+  it("classifies Chinese provider overloaded errors as rate_limit", () => {
+    expect(classifyFailoverReason("服务繁忙，请稍后再试")).toBe("rate_limit");
+    expect(classifyFailoverReason("系统繁忙")).toBe("rate_limit");
+    expect(classifyFailoverReason("服务暂时不可用")).toBe("rate_limit");
+    expect(classifyFailoverReason("服务器繁忙")).toBe("rate_limit");
+    expect(classifyFailoverReason("当前服务负载过高")).toBe("rate_limit");
+  });
 });
