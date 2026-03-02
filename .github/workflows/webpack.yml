@@ -23,6 +23,5 @@ jobs:
         node-version: ${{ matrix.node-version }}
 
     - name: Build
-      run: |
-        npm install
-        npx webpack
+        pnpm install --frozen-lockfile
+        pnpm build
