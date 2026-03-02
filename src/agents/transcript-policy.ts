@@ -102,12 +102,18 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
+  // OpenAI Responses API rejects input[].id values containing characters
+  // outside [A-Za-z0-9_-]. Composite IDs with "|" must be sanitized.
+  const isOpenAiResponses =
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic || isOpenAiResponses;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
-    : sanitizeToolCallIds
-      ? "strict"
-      : undefined;
+    : isOpenAiResponses
+      ? "openai-responses"
+      : sanitizeToolCallIds
+        ? "strict"
+        : undefined;
   // All providers need orphaned tool_result repair after history truncation.
   // OpenAI rejects function_call_output items whose call_id has no matching
   // function_call in the conversation, so the repair must run universally.
@@ -117,7 +123,7 @@ export function resolveTranscriptPolicy(params: {
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
+    sanitizeToolCallIds: isOpenAiResponses || (!isOpenAi && sanitizeToolCallIds),
     toolCallIdMode,
     repairToolUseResultPairing,
     preserveSignatures: false,

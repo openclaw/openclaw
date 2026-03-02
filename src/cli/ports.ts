@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { sleep } from "../utils.js";
@@ -124,6 +125,70 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
   }
 }
 
+/**
+ * Find PIDs listening on a port by parsing /proc/net/tcp (Linux only).
+ * Works without elevated privileges for processes owned by the current user.
+ */
+function findListenersFromProcNet(port: number): PortProcess[] {
+  const procPath = "/proc/net/tcp";
+  if (!existsSync(procPath)) {
+    return [];
+  }
+  try {
+    const hex = port.toString(16).toUpperCase().padStart(4, "0");
+    const content = readFileSync(procPath, "utf-8");
+    const inodes = new Set<string>();
+    for (const line of content.split("\n").slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      if (!parts[1] || !parts[3]) {
+        continue;
+      }
+      // Column 1 = local address (hex IP:port), column 3 = state (0A = LISTEN)
+      if (parts[3] !== "0A") {
+        continue;
+      }
+      const addrPort = parts[1].split(":")[1];
+      if (addrPort === hex) {
+        const inode = parts[9];
+        if (inode) {
+          inodes.add(inode);
+        }
+      }
+    }
+    if (inodes.size === 0) {
+      return [];
+    }
+    // Walk /proc/[pid]/fd to find which process holds the socket inode.
+    const pids = new Set<number>();
+    for (const entry of readdirSync("/proc")) {
+      const pid = Number.parseInt(entry, 10);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        continue;
+      }
+      try {
+        const fdDir = `/proc/${pid}/fd`;
+        for (const fd of readdirSync(fdDir)) {
+          try {
+            const link = readlinkSync(`${fdDir}/${fd}`);
+            for (const inode of inodes) {
+              if (link === `socket:[${inode}]`) {
+                pids.add(pid);
+              }
+            }
+          } catch {
+            // Permission denied for other users' fds — expected.
+          }
+        }
+      } catch {
+        // Cannot read fd dir — skip.
+      }
+    }
+    return [...pids].map((pid) => ({ pid }));
+  } catch {
+    return [];
+  }
+}
+
 async function isPortBusy(port: number): Promise<boolean> {
   try {
     await tryListenOnPort({ port, exclusive: true });
@@ -244,8 +309,19 @@ export async function forceFreePortAndWait(
     if (!isRecoverableLsofError(err)) {
       throw err;
     }
-    useFuserFallback = true;
-    killed = killPortWithFuser(port, "SIGTERM");
+    try {
+      useFuserFallback = true;
+      killed = killPortWithFuser(port, "SIGTERM");
+    } catch {
+      // Both lsof and fuser failed (common in Docker as non-root).
+      // Fall back to /proc/net/tcp on Linux (#27941).
+      const procListeners = findListenersFromProcNet(port);
+      if (procListeners.length === 0) {
+        throw err;
+      }
+      killPids(procListeners, "SIGTERM");
+      killed = procListeners;
+    }
   }
 
   const checkBusy = async (): Promise<boolean> =>

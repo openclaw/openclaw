@@ -231,4 +231,52 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect(bId.length).toBe(9);
     });
   });
+
+  describe("openai-responses mode", () => {
+    it("preserves underscores and dashes but strips pipe characters", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call_abc|fc_def", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc|fc_def",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] as unknown as AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "openai-responses");
+      expect(out).not.toBe(input);
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      // Pipe stripped, underscores preserved
+      expect(toolCall.id).toBe("call_abcfc_def");
+      expect(isValidCloudCodeAssistToolId(toolCall.id as string, "openai-responses")).toBe(true);
+    });
+
+    it("is a no-op for IDs already valid under openai-responses rules", () => {
+      const input = [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call_abc-def_123", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc-def_123",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ] as unknown as AgentMessage[];
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "openai-responses");
+      // IDs with underscores and dashes are valid — no rewrite needed
+      expect(out).toBe(input);
+    });
+  });
 });
