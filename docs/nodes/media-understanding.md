@@ -40,6 +40,7 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
   - defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
   - provider overrides (`baseUrl`, `headers`, `providerOptions`)
   - Deepgram audio options via `tools.media.audio.providerOptions.deepgram`
+  - audio transcript echo controls (`echoTranscript`, default `false`; `echoFormat`)
   - optional **per‑capability `models` list** (preferred before shared models)
   - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
   - `scope` (optional gating by channel/chatType/session key)
@@ -57,6 +58,8 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
       },
       audio: {
         /* optional overrides */
+        echoTranscript: true,
+        echoFormat: '📝 "{transcript}"',
       },
       video: {
         /* optional overrides */
