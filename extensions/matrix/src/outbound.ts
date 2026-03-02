@@ -35,6 +35,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     }
     const limit = matrixOutbound.textChunkLimit;
     const chunks = limit && matrixOutbound.chunker ? matrixOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "matrix", messageId: "" };
     let lastResult: Awaited<ReturnType<NonNullable<typeof matrixOutbound.sendText>>>;
     for (const chunk of chunks) {
       lastResult = await matrixOutbound.sendText!({ ...ctx, text: chunk });

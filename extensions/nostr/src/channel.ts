@@ -157,6 +157,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       const outbound = nostrPlugin.outbound!;
       const limit = outbound.textChunkLimit;
       const chunks = limit && outbound.chunker ? outbound.chunker(combined, limit) : [combined];
+      if (!chunks.length) return { channel: "nostr", messageId: "" };
       let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
       for (const chunk of chunks) {
         lastResult = await outbound.sendText!({ ...ctx, text: chunk });

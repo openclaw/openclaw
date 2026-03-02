@@ -120,6 +120,19 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "irc", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(ircPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(ircPlugin.outbound!, "sendText");
+    const result = await ircPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "irc", messageId: "" });
+    chunkerSpy.mockRestore();
+    sendTextSpy.mockRestore();
+  });
+
   it("chunking splits long text", async () => {
     // ircPlugin.outbound.textChunkLimit is 350
     const longText = "A".repeat(700);

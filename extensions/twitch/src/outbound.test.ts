@@ -480,6 +480,21 @@ describe("outbound", () => {
       expect(result).toEqual({ channel: "twitch", messageId: "" });
     });
 
+    it("returns no-op when chunker produces empty array", async () => {
+      const chunkerSpy = vi.spyOn(twitchOutbound, "chunker").mockReturnValue([]);
+      const sendTextSpy = vi.spyOn(twitchOutbound, "sendText");
+      const result = await twitchOutbound.sendPayload!({
+        cfg: mockConfig,
+        to: "#testchannel",
+        payload: { text: "   " },
+        accountId: "default",
+      } as never);
+      expect(sendTextSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({ channel: "twitch", messageId: "" });
+      chunkerSpy.mockRestore();
+      sendTextSpy.mockRestore();
+    });
+
     it("chunking splits long text", async () => {
       const { getAccountConfig } = await import("./config.js");
       const { sendMessageTwitchInternal } = await import("./send.js");

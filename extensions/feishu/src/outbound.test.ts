@@ -417,6 +417,19 @@ describe("feishuOutbound.sendPayload", () => {
     expect(result).toEqual({ channel: "feishu", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(feishuOutbound, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(feishuOutbound, "sendText");
+    const result = await feishuOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "feishu", messageId: "" });
+    chunkerSpy.mockRestore();
+    sendTextSpy.mockRestore();
+  });
+
   it("chunking splits long text", async () => {
     // feishuOutbound.textChunkLimit is 4000; mock chunker returns [text] (single chunk)
     // so for text under limit, one call

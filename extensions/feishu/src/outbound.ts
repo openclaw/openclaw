@@ -139,6 +139,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     }
     const limit = feishuOutbound.textChunkLimit;
     const chunks = limit && feishuOutbound.chunker ? feishuOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "feishu", messageId: "" };
     let lastResult: Awaited<ReturnType<NonNullable<typeof feishuOutbound.sendText>>>;
     for (const chunk of chunks) {
       lastResult = await feishuOutbound.sendText!({ ...ctx, text: chunk });

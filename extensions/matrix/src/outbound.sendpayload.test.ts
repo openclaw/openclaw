@@ -106,6 +106,19 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "matrix", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(matrixOutbound, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(matrixOutbound, "sendText");
+    const result = await matrixOutbound.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "matrix", messageId: "" });
+    chunkerSpy.mockRestore();
+    sendTextSpy.mockRestore();
+  });
+
   it("chunking splits long text", async () => {
     // matrixOutbound.textChunkLimit is 4000
     const longText = "A".repeat(8000);

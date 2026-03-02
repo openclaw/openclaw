@@ -120,6 +120,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "tlon", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    tlonPlugin.outbound!.chunker = vi.fn().mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(tlonPlugin.outbound!, "sendText");
+    const result = await tlonPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "tlon", messageId: "" });
+    delete (tlonPlugin.outbound as any).chunker;
+  });
+
   it("sends as single chunk when text is within limit", async () => {
     // tlonOutbound.textChunkLimit is 10000, no chunker defined — sends as one
     const text = "A".repeat(5000);

@@ -120,6 +120,19 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "nextcloud-talk", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    const chunkerSpy = vi.spyOn(nextcloudTalkPlugin.outbound!, "chunker").mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(nextcloudTalkPlugin.outbound!, "sendText");
+    const result = await nextcloudTalkPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "nextcloud-talk", messageId: "" });
+    chunkerSpy.mockRestore();
+    sendTextSpy.mockRestore();
+  });
+
   it("chunking splits long text", async () => {
     // nextcloudTalkPlugin.outbound.textChunkLimit is 4000
     const longText = "A".repeat(8000);

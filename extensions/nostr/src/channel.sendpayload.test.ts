@@ -113,6 +113,18 @@ describe("sendPayload", () => {
     expect(result).toEqual({ channel: "nostr", messageId: "" });
   });
 
+  it("returns no-op when chunker produces empty array", async () => {
+    nostrPlugin.outbound!.chunker = vi.fn().mockReturnValue([]);
+    const sendTextSpy = vi.spyOn(nostrPlugin.outbound!, "sendText");
+    const result = await nostrPlugin.outbound!.sendPayload!({
+      ...baseCtx,
+      payload: { text: "   " },
+    } as never);
+    expect(sendTextSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "nostr", messageId: "" });
+    delete (nostrPlugin.outbound as any).chunker;
+  });
+
   it("chunking splits long text-only payloads", async () => {
     // nostrPlugin.outbound.textChunkLimit is 4000, but no chunker is defined on outbound
     // so it falls through to the [text] fallback — sends as single chunk

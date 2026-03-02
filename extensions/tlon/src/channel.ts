@@ -196,6 +196,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
     }
     const limit = tlonOutbound.textChunkLimit;
     const chunks = limit && tlonOutbound.chunker ? tlonOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "tlon", messageId: "" };
     let lastResult: Awaited<ReturnType<NonNullable<typeof tlonOutbound.sendText>>>;
     for (const chunk of chunks) {
       lastResult = await tlonOutbound.sendText!({ ...ctx, text: chunk });

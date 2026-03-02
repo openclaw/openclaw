@@ -132,6 +132,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     }
     const limit = twitchOutbound.textChunkLimit;
     const chunks = limit && twitchOutbound.chunker ? twitchOutbound.chunker(text, limit) : [text];
+    if (!chunks.length) return { channel: "twitch", messageId: "" };
     let lastResult: Awaited<ReturnType<NonNullable<typeof twitchOutbound.sendText>>>;
     for (const chunk of chunks) {
       lastResult = await twitchOutbound.sendText!({ ...ctx, text: chunk });
