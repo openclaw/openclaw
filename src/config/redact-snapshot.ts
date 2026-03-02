@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
@@ -23,6 +24,24 @@ function isWholeObjectSensitivePath(path: string): boolean {
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
 }
 
+function isSecretRefShape(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { source: string; id: string } {
+  return typeof value.source === "string" && typeof value.id === "string";
+}
+
+function redactSecretRef(
+  value: Record<string, unknown> & { source: string; id: string },
+  values: string[],
+): Record<string, unknown> {
+  const redacted: Record<string, unknown> = { ...value };
+  if (!isEnvVarPlaceholder(value.id)) {
+    values.push(value.id);
+    redacted.id = REDACTED_SENTINEL;
+  }
+  return redacted;
+}
+
 function collectSensitiveStrings(value: unknown, values: string[]): void {
   if (typeof value === "string") {
     if (!isEnvVarPlaceholder(value)) {
@@ -37,7 +56,16 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
     return;
   }
   if (value && typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) {
+    const obj = value as Record<string, unknown>;
+    // SecretRef objects include structural fields like source/provider that are
+    // not secret material and may appear widely in config text.
+    if (isSecretRefShape(obj)) {
+      if (!isEnvVarPlaceholder(obj.id)) {
+        values.push(obj.id);
+      }
+      return;
+    }
+    for (const item of Object.values(obj)) {
       collectSensitiveStrings(item, values);
     }
   }
@@ -176,8 +204,13 @@ function redactObjectWithLookup(
             values.push(value);
           } else if (typeof value === "object" && value !== null) {
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
-              collectSensitiveStrings(value, values);
-              result[key] = REDACTED_SENTINEL;
+              const objectValue = value as Record<string, unknown>;
+              if (isSecretRefShape(objectValue)) {
+                result[key] = redactSecretRef(objectValue, values);
+              } else {
+                collectSensitiveStrings(objectValue, values);
+                result[key] = REDACTED_SENTINEL;
+              }
             } else {
               result[key] = redactObjectWithLookup(value, lookup, candidate, values, hints);
             }
@@ -295,6 +328,18 @@ function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): str
   return result;
 }
 
+let suppressRestoreWarnings = false;
+
+function withRestoreWarningsSuppressed<T>(fn: () => T): T {
+  const prev = suppressRestoreWarnings;
+  suppressRestoreWarnings = true;
+  try {
+    return fn();
+  } finally {
+    suppressRestoreWarnings = prev;
+  }
+}
+
 function shouldFallbackToStructuredRawRedaction(params: {
   redactedRaw: string;
   originalConfig: unknown;
@@ -302,11 +347,13 @@ function shouldFallbackToStructuredRawRedaction(params: {
 }): boolean {
   try {
     const parsed = JSON5.parse(params.redactedRaw);
-    const restored = restoreRedactedValues(parsed, params.originalConfig, params.hints);
+    const restored = withRestoreWarningsSuppressed(() =>
+      restoreRedactedValues(parsed, params.originalConfig, params.hints),
+    );
     if (!restored.ok) {
       return true;
     }
-    return JSON.stringify(restored.result) !== JSON.stringify(params.originalConfig);
+    return !isDeepStrictEqual(restored.result, params.originalConfig);
   } catch {
     return true;
   }
@@ -448,7 +495,9 @@ function restoreOriginalValueOrThrow(params: {
   if (params.key in params.original) {
     return params.original[params.key];
   }
-  log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  if (!suppressRestoreWarnings) {
+    log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+  }
   throw new RedactionError(params.path);
 }
 
