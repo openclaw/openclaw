@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadWebMediaRaw } from "../../web/media.js";
+import { getDefaultLocalRoots, loadWebMediaRaw } from "../../web/media.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -30,6 +30,7 @@ import {
   discoverAuthStorage,
   discoverModels,
   ensureOpenClawModelsJson,
+  normalizeWorkspaceDir,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
