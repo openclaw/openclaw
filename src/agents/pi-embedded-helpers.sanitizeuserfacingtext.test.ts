@@ -320,54 +320,55 @@ describe("downgradeOpenAIReasoningBlocks", () => {
 });
 
 describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
+  const callIdWithReasoning = "call_123|fc_123";
+  const callIdWithoutReasoning = "call_123";
+  const readArgs = {} as Record<string, never>;
+
+  const makeToolCall = (id: string) => ({
+    type: "toolCall",
+    id,
+    name: "read",
+    arguments: readArgs,
+  });
+  const makeToolResult = (toolCallId: string, text: string) => ({
+    role: "toolResult",
+    toolCallId,
+    toolName: "read",
+    content: [{ type: "text", text }],
+  });
+  const makeReasoningAssistantTurn = (id: string) => ({
+    role: "assistant",
+    content: [
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
+      },
+      makeToolCall(id),
+    ],
+  });
+  const makePlainAssistantTurn = (id: string) => ({
+    role: "assistant",
+    content: [makeToolCall(id)],
+  });
+
   it("strips fc ids when reasoning cannot be replayed", () => {
     const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-      },
+      makePlainAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "ok"),
     ];
 
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-      },
+      makePlainAssistantTurn(callIdWithoutReasoning),
+      makeToolResult(callIdWithoutReasoning, "ok"),
     ]);
   });
 
   it("keeps fc ids when replayable reasoning is present", () => {
     const input = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-      },
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "ok"),
     ];
 
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -376,64 +377,18 @@ describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
 
   it("only rewrites tool results paired to the downgraded assistant turn", () => {
     const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "read",
-        content: [{ type: "text", text: "turn1" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "read",
-        content: [{ type: "text", text: "turn2" }],
-      },
+      makePlainAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn1"),
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn2"),
     ];
 
     // oxlint-disable-next-line typescript/no-explicit-any
     expect(downgradeOpenAIFunctionCallReasoningPairs(input as any)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_123", name: "read", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123",
-        toolName: "read",
-        content: [{ type: "text", text: "turn1" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal",
-            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-          },
-          { type: "toolCall", id: "call_123|fc_123", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "read",
-        content: [{ type: "text", text: "turn2" }],
-      },
+      makePlainAssistantTurn(callIdWithoutReasoning),
+      makeToolResult(callIdWithoutReasoning, "turn1"),
+      makeReasoningAssistantTurn(callIdWithReasoning),
+      makeToolResult(callIdWithReasoning, "turn2"),
     ]);
   });
 });
