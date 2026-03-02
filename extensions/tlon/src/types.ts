@@ -8,13 +8,17 @@ export type TlonResolvedAccount = {
   ship: string | null;
   url: string | null;
   code: string | null;
+  allowPrivateNetwork: boolean | null;
   groupChannels: string[];
   dmAllowlist: string[];
   autoDiscoverChannels: boolean | null;
   showModelSignature: boolean | null;
 };
 
-export function resolveTlonAccount(cfg: OpenClawConfig, accountId?: string | null): TlonResolvedAccount {
+export function resolveTlonAccount(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): TlonResolvedAccount {
   const base = cfg.channels?.tlon as
     | {
         name?: string;
@@ -22,6 +26,7 @@ export function resolveTlonAccount(cfg: OpenClawConfig, accountId?: string | nul
         ship?: string;
         url?: string;
         code?: string;
+        allowPrivateNetwork?: boolean;
         groupChannels?: string[];
         dmAllowlist?: string[];
         autoDiscoverChannels?: boolean;
@@ -39,6 +44,7 @@ export function resolveTlonAccount(cfg: OpenClawConfig, accountId?: string | nul
       ship: null,
       url: null,
       code: null,
+      allowPrivateNetwork: null,
       groupChannels: [],
       dmAllowlist: [],
       autoDiscoverChannels: null,
@@ -47,17 +53,22 @@ export function resolveTlonAccount(cfg: OpenClawConfig, accountId?: string | nul
   }
 
   const useDefault = !accountId || accountId === "default";
-  const account = useDefault ? base : (base.accounts?.[accountId] as Record<string, unknown> | undefined);
+  const account = useDefault ? base : base.accounts?.[accountId];
 
   const ship = (account?.ship ?? base.ship ?? null) as string | null;
   const url = (account?.url ?? base.url ?? null) as string | null;
   const code = (account?.code ?? base.code ?? null) as string | null;
+  const allowPrivateNetwork = (account?.allowPrivateNetwork ?? base.allowPrivateNetwork ?? null) as
+    | boolean
+    | null;
   const groupChannels = (account?.groupChannels ?? base.groupChannels ?? []) as string[];
   const dmAllowlist = (account?.dmAllowlist ?? base.dmAllowlist ?? []) as string[];
-  const autoDiscoverChannels =
-    (account?.autoDiscoverChannels ?? base.autoDiscoverChannels ?? null) as boolean | null;
-  const showModelSignature =
-    (account?.showModelSignature ?? base.showModelSignature ?? null) as boolean | null;
+  const autoDiscoverChannels = (account?.autoDiscoverChannels ??
+    base.autoDiscoverChannels ??
+    null) as boolean | null;
+  const showModelSignature = (account?.showModelSignature ?? base.showModelSignature ?? null) as
+    | boolean
+    | null;
   const configured = Boolean(ship && url && code);
 
   return {
@@ -68,6 +79,7 @@ export function resolveTlonAccount(cfg: OpenClawConfig, accountId?: string | nul
     ship,
     url,
     code,
+    allowPrivateNetwork,
     groupChannels,
     dmAllowlist,
     autoDiscoverChannels,
@@ -79,7 +91,9 @@ export function listTlonAccountIds(cfg: OpenClawConfig): string[] {
   const base = cfg.channels?.tlon as
     | { ship?: string; accounts?: Record<string, Record<string, unknown>> }
     | undefined;
-  if (!base) return [];
+  if (!base) {
+    return [];
+  }
   const accounts = base.accounts ?? {};
   return [...(base.ship ? ["default"] : []), ...Object.keys(accounts)];
 }

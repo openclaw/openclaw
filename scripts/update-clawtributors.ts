@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
@@ -15,7 +15,6 @@ const emailToLogin = normalizeMap(mapConfig.emailToLogin ?? {});
 const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) => login.toLowerCase());
 
 const readmePath = resolve("README.md");
-const placeholderAvatar = mapConfig.placeholderAvatar ?? "assets/avatar-placeholder.svg";
 const seedCommit = mapConfig.seedCommit ?? null;
 const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
@@ -98,33 +97,33 @@ for (const login of ensureLogins) {
 const entriesByKey = new Map<string, Entry>();
 
 for (const seed of seedEntries) {
-  const login = loginFromUrl(seed.html_url);
-  const resolvedLogin =
-    login ?? resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
-  const key = resolvedLogin ? resolvedLogin.toLowerCase() : `name:${normalizeName(seed.display)}`;
-  const avatar =
-    seed.avatar_url && !isGhostAvatar(seed.avatar_url)
-      ? normalizeAvatar(seed.avatar_url)
-      : placeholderAvatar;
+  const login =
+    loginFromUrl(seed.html_url) ??
+    resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
+  if (!login) {
+    continue;
+  }
+  const key = login.toLowerCase();
+  const user = apiByLogin.get(key) ?? fetchUser(login);
+  if (!user) {
+    continue;
+  }
+  apiByLogin.set(key, user);
   const existing = entriesByKey.get(key);
   if (!existing) {
-    const user = resolvedLogin ? apiByLogin.get(key) : null;
     entriesByKey.set(key, {
       key,
-      login: resolvedLogin ?? login ?? undefined,
+      login: user.login,
       display: seed.display,
-      html_url: user?.html_url ?? seed.html_url,
-      avatar_url: user?.avatar_url ?? avatar,
+      html_url: user.html_url,
+      avatar_url: user.avatar_url,
       lines: 0,
     });
   } else {
     existing.display = existing.display || seed.display;
-    if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
-      existing.avatar_url = avatar;
-    }
-    if (!existing.html_url || existing.html_url.includes("/search?q=")) {
-      existing.html_url = seed.html_url;
-    }
+    existing.login = user.login;
+    existing.html_url = user.html_url;
+    existing.avatar_url = user.avatar_url;
   }
 }
 
@@ -138,52 +137,37 @@ for (const item of contributors) {
     ? item.login
     : resolveLogin(baseName, item.email ?? null, apiByLogin, nameToLogin, emailToLogin);
 
-  if (resolvedLogin) {
-    const key = resolvedLogin.toLowerCase();
-    const existing = entriesByKey.get(key);
-    if (!existing) {
-      let user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
-      if (user) {
-        const lines = linesByLogin.get(key) ?? 0;
-        const contributions = contributionsByLogin.get(key) ?? 0;
-        entriesByKey.set(key, {
-          key,
-          login: user.login,
-          display: pickDisplay(baseName, user.login, existing?.display),
-          html_url: user.html_url,
-          avatar_url: normalizeAvatar(user.avatar_url),
-          lines: lines > 0 ? lines : contributions,
-        });
-      }
-    } else if (existing) {
-      existing.login = existing.login ?? resolvedLogin;
-      existing.display = pickDisplay(baseName, existing.login, existing.display);
-      if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
-        const user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
-        if (user) {
-          existing.html_url = user.html_url;
-          existing.avatar_url = normalizeAvatar(user.avatar_url);
-        }
-      }
-      const lines = linesByLogin.get(key) ?? 0;
-      const contributions = contributionsByLogin.get(key) ?? 0;
-      existing.lines = Math.max(existing.lines, lines > 0 ? lines : contributions);
-    }
+  if (!resolvedLogin) {
     continue;
   }
 
-  const anonKey = `name:${normalizeName(baseName)}`;
-  const existingAnon = entriesByKey.get(anonKey);
-  if (!existingAnon) {
-    entriesByKey.set(anonKey, {
-      key: anonKey,
-      display: baseName,
-      html_url: fallbackHref(baseName),
-      avatar_url: placeholderAvatar,
-      lines: item.contributions ?? 0,
+  const key = resolvedLogin.toLowerCase();
+  const user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
+  if (!user) {
+    continue;
+  }
+  apiByLogin.set(key, user);
+
+  const existing = entriesByKey.get(key);
+  if (!existing) {
+    const lines = linesByLogin.get(key) ?? 0;
+    const contributions = contributionsByLogin.get(key) ?? 0;
+    entriesByKey.set(key, {
+      key,
+      login: user.login,
+      display: pickDisplay(baseName, user.login),
+      html_url: user.html_url,
+      avatar_url: normalizeAvatar(user.avatar_url),
+      lines: lines > 0 ? lines : contributions,
     });
   } else {
-    existingAnon.lines = Math.max(existingAnon.lines, item.contributions ?? 0);
+    existing.login = user.login;
+    existing.display = pickDisplay(baseName, user.login, existing.display);
+    existing.html_url = user.html_url;
+    existing.avatar_url = normalizeAvatar(user.avatar_url);
+    const lines = linesByLogin.get(key) ?? 0;
+    const contributions = contributionsByLogin.get(key) ?? 0;
+    existing.lines = Math.max(existing.lines, lines > 0 ? lines : contributions);
   }
 }
 
@@ -193,7 +177,7 @@ for (const [login, lines] of linesByLogin.entries()) {
   }
   let user = apiByLogin.get(login);
   if (!user) {
-    user = fetchUser(login);
+    user = fetchUser(login) || undefined;
   }
   if (user) {
     const contributions = contributionsByLogin.get(login) ?? 0;
@@ -204,14 +188,6 @@ for (const [login, lines] of linesByLogin.entries()) {
       html_url: user.html_url,
       avatar_url: normalizeAvatar(user.avatar_url),
       lines: lines > 0 ? lines : contributions,
-    });
-  } else {
-    entriesByKey.set(login, {
-      key: login,
-      display: login,
-      html_url: fallbackHref(login),
-      avatar_url: placeholderAvatar,
-      lines,
     });
   }
 }
@@ -229,7 +205,7 @@ const lines: string[] = [];
 for (let i = 0; i < entries.length; i += PER_LINE) {
   const chunk = entries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
-    return `<a href=\"${entry.html_url}\"><img src=\"${entry.avatar_url}\" width=\"48\" height=\"48\" alt=\"${entry.display}\" title=\"${entry.display}\"/></a>`;
+    return `<a href="${entry.html_url}"><img src="${entry.avatar_url}" width="48" height="48" alt="${entry.display}" title="${entry.display}"/></a>`;
   });
   lines.push(`  ${parts.join(" ")}`);
 }
@@ -243,7 +219,7 @@ if (start === -1 || end === -1) {
   throw new Error("README.md missing clawtributors block");
 }
 
-const next = `${readme.slice(0, start)}<p align=\"left\">\n${block}${readme.slice(end)}`;
+const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(end)}`;
 writeFileSync(readmePath, next);
 
 console.log(`Updated README clawtributors: ${entries.length} entries`);
@@ -256,7 +232,9 @@ function run(cmd: string): string {
   }).trim();
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any
 function parsePaginatedJson(raw: string): any[] {
+  // oxlint-disable-next-line typescript/no-explicit-any
   const items: any[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) {
@@ -288,6 +266,27 @@ function parseCount(value: string): number {
   return /^\d+$/.test(value) ? Number(value) : 0;
 }
 
+function isValidLogin(login: string): boolean {
+  if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) {
+    return false;
+  }
+  if (login.startsWith("-") || login.endsWith("-")) {
+    return false;
+  }
+  if (login.includes("--")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeLogin(login: string | null): string | null {
+  if (!login) {
+    return null;
+  }
+  const trimmed = login.trim();
+  return isValidLogin(trimmed) ? trimmed : null;
+}
+
 function normalizeAvatar(url: string): string {
   if (!/^https?:/i.test(url)) {
     return url;
@@ -300,13 +299,13 @@ function normalizeAvatar(url: string): string {
   return `${url}${sep}s=48`;
 }
 
-function isGhostAvatar(url: string): boolean {
-  return url.toLowerCase().includes("ghost.png");
-}
-
 function fetchUser(login: string): User | null {
+  const normalized = normalizeLogin(login);
+  if (!normalized) {
+    return null;
+  }
   try {
-    const data = execSync(`gh api users/${login}`, {
+    const data = execFileSync("gh", ["api", `users/${normalized}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -329,48 +328,48 @@ function resolveLogin(
   email: string | null,
   apiByLogin: Map<string, User>,
   nameToLogin: Record<string, string>,
-  emailToLogin: Record<string, string>
+  emailToLogin: Record<string, string>,
 ): string | null {
   if (email && emailToLogin[email]) {
-    return emailToLogin[email];
+    return normalizeLogin(emailToLogin[email]);
   }
 
   if (email && name) {
     const guessed = guessLoginFromEmailName(name, email, apiByLogin);
     if (guessed) {
-      return guessed;
+      return normalizeLogin(guessed);
     }
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
     const local = email.split("@", 1)[0];
     const login = local.includes("+") ? local.split("+")[1] : local;
-    return login || null;
+    return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
     const login = email.split("@", 1)[0];
     if (apiByLogin.has(login.toLowerCase())) {
-      return login;
+      return normalizeLogin(login);
     }
   }
 
   const normalized = normalizeName(name);
   if (nameToLogin[normalized]) {
-    return nameToLogin[normalized];
+    return normalizeLogin(nameToLogin[normalized]);
   }
 
   const compact = normalized.replace(/\s+/g, "");
   if (nameToLogin[compact]) {
-    return nameToLogin[compact];
+    return normalizeLogin(nameToLogin[compact]);
   }
 
   if (apiByLogin.has(normalized)) {
-    return normalized;
+    return normalizeLogin(normalized);
   }
 
   if (apiByLogin.has(compact)) {
-    return compact;
+    return normalizeLogin(compact);
   }
 
   return null;
@@ -379,7 +378,7 @@ function resolveLogin(
 function guessLoginFromEmailName(
   name: string,
   email: string,
-  apiByLogin: Map<string, User>
+  apiByLogin: Map<string, User>,
 ): string | null {
   const local = email.split("@", 1)[0]?.trim();
   if (!local) {
@@ -410,7 +409,7 @@ function normalizeIdentifier(value: string): string {
 }
 
 function parseReadmeEntries(
-  content: string
+  content: string,
 ): Array<{ display: string; html_url: string; avatar_url: string }> {
   const start = content.indexOf('<p align="left">');
   const end = content.indexOf("</p>", start);
@@ -419,7 +418,7 @@ function parseReadmeEntries(
   }
   const block = content.slice(start, end);
   const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
-  const linked = /<a href=\"([^\"]+)\"><img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of block.matchAll(linked)) {
     const [, href, src, alt] = match;
     if (!href || !src || !alt) {
@@ -427,7 +426,7 @@ function parseReadmeEntries(
     }
     entries.push({ html_url: href, avatar_url: src, display: alt });
   }
-  const standalone = /<img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of block.matchAll(standalone)) {
     const [, src, alt] = match;
     if (!src || !alt) {
@@ -442,7 +441,7 @@ function parseReadmeEntries(
 }
 
 function loginFromUrl(url: string): string | null {
-  const match = /^https?:\/\/github\.com\/([^\/?#]+)/i.exec(url);
+  const match = /^https?:\/\/github\.com\/([^/?#]+)/i.exec(url);
   if (!match) {
     return null;
   }
@@ -458,7 +457,11 @@ function fallbackHref(value: string): string {
   return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
 }
 
-function pickDisplay(baseName: string | null | undefined, login: string, existing?: string): string {
+function pickDisplay(
+  baseName: string | null | undefined,
+  login: string,
+  existing?: string,
+): string {
   const key = login.toLowerCase();
   if (displayName[key]) {
     return displayName[key];

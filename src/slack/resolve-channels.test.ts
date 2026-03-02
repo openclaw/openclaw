@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 
 describe("resolveSlackChannelAllowlist", () => {

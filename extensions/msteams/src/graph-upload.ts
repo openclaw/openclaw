@@ -24,7 +24,6 @@ export interface OneDriveUploadResult {
 /**
  * Upload a file to the user's OneDrive root folder.
  * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -182,14 +181,17 @@ export async function uploadToSharePoint(params: {
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
 
-  const res = await fetchFn(`${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": params.contentType ?? "application/octet-stream",
+  const res = await fetchFn(
+    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": params.contentType ?? "application/octet-stream",
+      },
+      body: new Uint8Array(params.buffer),
     },
-    body: new Uint8Array(params.buffer),
-  });
+  );
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -342,18 +344,23 @@ export async function createSharePointSharingLink(params: {
     body.recipients = params.recipientObjectIds.map((id) => ({ objectId: id }));
   }
 
-  const res = await fetchFn(`${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+  const res = await fetchFn(
+    `${apiRoot}/sites/${params.siteId}/drive/items/${params.itemId}/createLink`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+  );
 
   if (!res.ok) {
     const respBody = await res.text().catch(() => "");
-    throw new Error(`Create SharePoint sharing link failed: ${res.status} ${res.statusText} - ${respBody}`);
+    throw new Error(
+      `Create SharePoint sharing link failed: ${res.status} ${res.statusText} - ${respBody}`,
+    );
   }
 
   const data = (await res.json()) as {

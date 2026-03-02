@@ -1,12 +1,12 @@
-import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import { chunkMarkdownTextWithMode } from "../../auto-reply/chunk.js";
+import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { sendMessageSlack } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -16,9 +16,14 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
+  replyToMode: "off" | "first" | "all";
+  identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
-    const threadTs = payload.replyToId ?? params.replyThreadTs;
+    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+    // must not force threading.
+    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
+    const threadTs = inlineReplyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
@@ -34,6 +39,7 @@ export async function deliverReplies(params: {
         token: params.token,
         threadTs,
         accountId: params.accountId,
+        ...(params.identity ? { identity: params.identity } : {}),
       });
     } else {
       let first = true;
@@ -45,6 +51,7 @@ export async function deliverReplies(params: {
           mediaUrl,
           threadTs,
           accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
         });
       }
     }
@@ -68,12 +75,14 @@ export function resolveSlackThreadTs(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
+  isThreadReply?: boolean;
 }): string | undefined {
   const planner = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasReplied,
+    isThreadReply: params.isThreadReply,
   });
   return planner.use();
 }
@@ -88,9 +97,16 @@ function createSlackReplyReferencePlanner(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
+  isThreadReply?: boolean;
 }) {
+  // Keep backward-compatible behavior: when a thread id is present and caller
+  // does not provide explicit classification, stay in thread. Callers that can
+  // distinguish Slack's auto-populated top-level thread_ts should pass
+  // `isThreadReply: false` to preserve replyToMode behavior.
+  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
+  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
-    replyToMode: params.replyToMode,
+    replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
     startId: params.messageTs,
     hasReplied: params.hasReplied,
@@ -102,12 +118,14 @@ export function createSlackReplyDeliveryPlan(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
+  isThreadReply?: boolean;
 }): SlackReplyDeliveryPlan {
   const replyReference = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasRepliedRef.value,
+    isThreadReply: params.isThreadReply,
   });
   return {
     nextThreadTs: () => replyReference.use(),

@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw message` (send + channel actions)"
 read_when:
   - Adding or modifying message CLI actions
   - Changing outbound channel behavior
+title: "message"
 ---
 
 # `openclaw message`
@@ -17,11 +18,13 @@ openclaw message <subcommand> [flags]
 ```
 
 Channel selection:
+
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
 - Values: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
 
 Target formats (`--target`):
+
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
 - Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
@@ -33,6 +36,7 @@ Target formats (`--target`):
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
 Name lookup:
+
 - For supported providers (Discord/Slack/etc), channel names like `Help` or `#help` are resolved via the directory cache.
 - On cache miss, OpenClaw will attempt a live directory lookup when the provider supports it.
 
@@ -60,10 +64,11 @@ Name lookup:
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Discord/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/MS Teams
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
-  - Discord only: `--poll-duration-hours`, `--message`
+  - Discord only: `--poll-duration-hours`, `--silent`, `--message`
+  - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
   - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
@@ -114,7 +119,7 @@ Name lookup:
 - `thread create`
   - Channels: Discord
   - Required: `--thread-name`, `--target` (channel id)
-  - Optional: `--message-id`, `--auto-archive-min`
+  - Optional: `--message-id`, `--message`, `--auto-archive-min`
 
 - `thread list`
   - Channels: Discord
@@ -180,12 +185,24 @@ Name lookup:
 ## Examples
 
 Send a Discord reply:
+
 ```
 openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456
 ```
 
+Send a Discord message with components:
+
+```
+openclaw message send --channel discord \
+  --target channel:123 --message "Choose:" \
+  --components '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve","style":"success"},{"label":"Decline","style":"danger"}]}]}'
+```
+
+See [Discord components](/channels/discord#interactive-components) for the full schema.
+
 Create a Discord poll:
+
 ```
 openclaw message poll --channel discord \
   --target channel:123 \
@@ -194,13 +211,25 @@ openclaw message poll --channel discord \
   --poll-multi --poll-duration-hours 48
 ```
 
+Create a Telegram poll (auto-close in 2 minutes):
+
+```
+openclaw message poll --channel telegram \
+  --target @mychat \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi \
+  --poll-duration-seconds 120 --silent
+```
+
 Send a Teams proactive message:
+
 ```
 openclaw message send --channel msteams \
   --target conversation:19:abc@thread.tacv2 --message "hi"
 ```
 
 Create a Teams poll:
+
 ```
 openclaw message poll --channel msteams \
   --target conversation:19:abc@thread.tacv2 \
@@ -209,12 +238,14 @@ openclaw message poll --channel msteams \
 ```
 
 React in Slack:
+
 ```
 openclaw message react --channel slack \
   --target C123 --message-id 456 --emoji "✅"
 ```
 
 React in a Signal group:
+
 ```
 openclaw message react --channel signal \
   --target signal:group:abc123 --message-id 1737630212345 \
@@ -222,6 +253,7 @@ openclaw message react --channel signal \
 ```
 
 Send Telegram inline buttons:
+
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'

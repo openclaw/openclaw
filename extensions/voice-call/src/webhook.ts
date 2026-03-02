@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { URL } from "node:url";
-
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
@@ -11,6 +15,9 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
+import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
+
+const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 /**
  * HTTP server for receiving voice call webhooks from providers.
@@ -22,6 +29,7 @@ export class VoiceCallWebhookServer {
   private manager: CallManager;
   private provider: VoiceCallProvider;
   private coreConfig: CoreConfig | null;
+  private stopStaleCallReaper: (() => void) | null = null;
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
@@ -54,13 +62,10 @@ export class VoiceCallWebhookServer {
    * Initialize media streaming with OpenAI Realtime STT.
    */
   private initializeMediaStreaming(): void {
-    const apiKey =
-      this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+    const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
-      console.warn(
-        "[voice-call] Streaming enabled but no OpenAI API key found",
-      );
+      console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
       return;
     }
 
@@ -73,10 +78,26 @@ export class VoiceCallWebhookServer {
 
     const streamConfig: MediaStreamConfig = {
       sttProvider,
+      preStartTimeoutMs: this.config.streaming?.preStartTimeoutMs,
+      maxPendingConnections: this.config.streaming?.maxPendingConnections,
+      maxPendingConnectionsPerIp: this.config.streaming?.maxPendingConnectionsPerIp,
+      maxConnections: this.config.streaming?.maxConnections,
+      shouldAcceptStream: ({ callId, token }) => {
+        const call = this.manager.getCallByProviderCallId(callId);
+        if (!call) {
+          return false;
+        }
+        if (this.provider.name === "twilio") {
+          const twilio = this.provider as TwilioProvider;
+          if (!twilio.isValidStreamToken(callId, token)) {
+            console.warn(`[voice-call] Rejecting media stream: invalid token for ${callId}`);
+            return false;
+          }
+        }
+        return true;
+      },
       onTranscript: (providerCallId, transcript) => {
-        console.log(
-          `[voice-call] Transcript for ${providerCallId}: ${transcript}`,
-        );
+        console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
 
         // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
         if (this.provider.name === "twilio") {
@@ -86,9 +107,7 @@ export class VoiceCallWebhookServer {
         // Look up our internal call ID from the provider call ID
         const call = this.manager.getCallByProviderCallId(providerCallId);
         if (!call) {
-          console.warn(
-            `[voice-call] No active call found for provider ID: ${providerCallId}`,
-          );
+          console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
         }
 
@@ -106,8 +125,7 @@ export class VoiceCallWebhookServer {
 
         // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
         const callMode = call.metadata?.mode as string | undefined;
-        const shouldRespond =
-          call.direction === "inbound" || callMode === "conversation";
+        const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
@@ -123,15 +141,10 @@ export class VoiceCallWebhookServer {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
       },
       onConnect: (callId, streamSid) => {
-        console.log(
-          `[voice-call] Media stream connected: ${callId} -> ${streamSid}`,
-        );
+        console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
         // Register stream with provider for TTS routing
         if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).registerCallStream(
-            callId,
-            streamSid,
-          );
+          (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
         // Speak initial message if one was provided when call was initiated
@@ -144,6 +157,17 @@ export class VoiceCallWebhookServer {
       },
       onDisconnect: (callId) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
+        // Auto-end call when media stream disconnects to prevent stuck calls.
+        // Without this, calls can remain active indefinitely after the stream closes.
+        const disconnectedCall = this.manager.getCallByProviderCallId(callId);
+        if (disconnectedCall) {
+          console.log(
+            `[voice-call] Auto-ending call ${disconnectedCall.callId} on stream disconnect`,
+          );
+          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+            console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
+          });
+        }
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).unregisterCallStream(callId);
         }
@@ -173,12 +197,8 @@ export class VoiceCallWebhookServer {
       // Handle WebSocket upgrades for media streams
       if (this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
-          const url = new URL(
-            request.url || "/",
-            `http://${request.headers.host}`,
-          );
-
-          if (url.pathname === streamPath) {
+          const path = this.getUpgradePathname(request);
+          if (path === streamPath) {
             console.log("[voice-call] WebSocket upgrade for media stream");
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
@@ -193,11 +213,15 @@ export class VoiceCallWebhookServer {
         const url = `http://${bind}:${port}${webhookPath}`;
         console.log(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
-          console.log(
-            `[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`,
-          );
+          console.log(`[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`);
         }
         resolve(url);
+
+        // Start the stale call reaper if configured
+        this.stopStaleCallReaper = startStaleCallReaper({
+          manager: this.manager,
+          staleCallReaperSeconds: this.config.staleCallReaperSeconds,
+        });
       });
     });
   }
@@ -206,6 +230,10 @@ export class VoiceCallWebhookServer {
    * Stop the webhook server.
    */
   async stop(): Promise<void> {
+    if (this.stopStaleCallReaper) {
+      this.stopStaleCallReaper();
+      this.stopStaleCallReaper = null;
+    }
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
@@ -216,6 +244,15 @@ export class VoiceCallWebhookServer {
         resolve();
       }
     });
+  }
+
+  private getUpgradePathname(request: http.IncomingMessage): string | null {
+    try {
+      const host = request.headers.host || "localhost";
+      return new URL(request.url || "/", `http://${host}`).pathname;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -243,7 +280,22 @@ export class VoiceCallWebhookServer {
     }
 
     // Read body
-    const body = await this.readBody(req);
+    let body = "";
+    try {
+      body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES);
+    } catch (err) {
+      if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
+        res.statusCode = 413;
+        res.end("Payload Too Large");
+        return;
+      }
+      if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
+        res.statusCode = 408;
+        res.end(requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+        return;
+      }
+      throw err;
+    }
 
     // Build webhook context
     const ctx: WebhookContext = {
@@ -258,26 +310,33 @@ export class VoiceCallWebhookServer {
     // Verify signature
     const verification = this.provider.verifyWebhook(ctx);
     if (!verification.ok) {
-      console.warn(
-        `[voice-call] Webhook verification failed: ${verification.reason}`,
-      );
+      console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
+      res.statusCode = 401;
+      res.end("Unauthorized");
+      return;
+    }
+    if (!verification.verifiedRequestKey) {
+      console.warn("[voice-call] Webhook verification succeeded without request identity key");
       res.statusCode = 401;
       res.end("Unauthorized");
       return;
     }
 
     // Parse events
-    const result = this.provider.parseWebhookEvent(ctx);
+    const result = this.provider.parseWebhookEvent(ctx, {
+      verifiedRequestKey: verification.verifiedRequestKey,
+    });
 
     // Process each event
-    for (const event of result.events) {
-      try {
-        this.manager.processEvent(event);
-      } catch (err) {
-        console.error(
-          `[voice-call] Error processing event ${event.type}:`,
-          err,
-        );
+    if (verification.isReplay) {
+      console.warn("[voice-call] Replay detected; skipping event side effects");
+    } else {
+      for (const event of result.events) {
+        try {
+          this.manager.processEvent(event);
+        } catch (err) {
+          console.error(`[voice-call] Error processing event ${event.type}:`, err);
+        }
       }
     }
 
@@ -285,9 +344,7 @@ export class VoiceCallWebhookServer {
     res.statusCode = result.statusCode || 200;
 
     if (result.providerResponseHeaders) {
-      for (const [key, value] of Object.entries(
-        result.providerResponseHeaders,
-      )) {
+      for (const [key, value] of Object.entries(result.providerResponseHeaders)) {
         res.setHeader(key, value);
       }
     }
@@ -296,28 +353,22 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Read request body as string.
+   * Read request body as string with timeout protection.
    */
-  private readBody(req: http.IncomingMessage): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk) => chunks.push(chunk));
-      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-      req.on("error", reject);
-    });
+  private readBody(
+    req: http.IncomingMessage,
+    maxBytes: number,
+    timeoutMs = 30_000,
+  ): Promise<string> {
+    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
   }
 
   /**
    * Handle auto-response for inbound calls using the agent system.
    * Supports tool calling for richer voice interactions.
    */
-  private async handleInboundResponse(
-    callId: string,
-    userMessage: string,
-  ): Promise<void> {
-    console.log(
-      `[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`,
-    );
+  private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
+    console.log(`[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`);
 
     // Get call context for conversation history
     const call = this.manager.getCall(callId);
@@ -344,9 +395,7 @@ export class VoiceCallWebhookServer {
       });
 
       if (result.error) {
-        console.error(
-          `[voice-call] Response generation error: ${result.error}`,
-        );
+        console.error(`[voice-call] Response generation error: ${result.error}`);
         return;
       }
 
@@ -399,7 +448,9 @@ function runTailscaleCommand(
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
   const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
-  if (code !== 0) return null;
+  if (code !== 0) {
+    return null;
+  }
 
   try {
     const status = JSON.parse(stdout);
@@ -458,9 +509,7 @@ export async function cleanupTailscaleExposureRoute(opts: {
  * Setup Tailscale serve/funnel for the webhook server.
  * This is a helper that shells out to `tailscale serve` or `tailscale funnel`.
  */
-export async function setupTailscaleExposure(
-  config: VoiceCallConfig,
-): Promise<string | null> {
+export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<string | null> {
   if (config.tailscale.mode === "off") {
     return null;
   }
@@ -479,9 +528,7 @@ export async function setupTailscaleExposure(
 /**
  * Cleanup Tailscale serve/funnel.
  */
-export async function cleanupTailscaleExposure(
-  config: VoiceCallConfig,
-): Promise<void> {
+export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise<void> {
   if (config.tailscale.mode === "off") {
     return;
   }

@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import type { DispatchInboundResult } from "../dispatch.js";
 import {
   dispatchInboundMessageWithBufferedDispatcher,
   dispatchInboundMessageWithDispatcher,
 } from "../dispatch.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { GetReplyOptions } from "../types.js";
 import type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,

@@ -4,7 +4,9 @@ read_when:
   - Pairing or reconnecting the iOS node
   - Running the iOS app from source
   - Debugging gateway discovery or canvas commands
+title: "iOS App"
 ---
+
 # iOS App (Node)
 
 Availability: internal preview. The iOS app is not publicly distributed yet.
@@ -25,22 +27,22 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## Quick start (pair + connect)
 
-1) Start the Gateway:
+1. Start the Gateway:
 
 ```bash
 openclaw gateway --port 18789
 ```
 
-2) In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
+2. In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
 
-3) Approve the pairing request on the gateway host:
+3. Approve the pairing request on the gateway host:
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-4) Verify connection:
+4. Verify connection:
 
 ```bash
 openclaw nodes status
@@ -67,11 +69,13 @@ In Settings, enable **Manual Host** and enter the gateway host + port (default `
 The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
 
 ```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'
+openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18789/__openclaw__/canvas/"}'
 ```
 
 Notes:
+
 - The Gateway canvas host serves `/__openclaw__/canvas/` and `/__openclaw__/a2ui/`.
+- It is served from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
 - The iOS node auto-navigates to A2UI on connect when a canvas host URL is advertised.
 - Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
 

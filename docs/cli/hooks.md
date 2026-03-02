@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
   - You want to install or update hooks
+title: "hooks"
 ---
 
 # `openclaw hooks`
@@ -10,8 +11,9 @@ read_when:
 Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
 
 Related:
-- Hooks: [Hooks](/hooks)
-- Plugin hooks: [Plugins](/plugin#plugin-hooks)
+
+- Hooks: [Hooks](/automation/hooks)
+- Plugin hooks: [Plugins](/tools/plugin#plugin-hooks)
 
 ## List All Hooks
 
@@ -22,6 +24,7 @@ openclaw hooks list
 List all discovered hooks from workspace, managed, and bundled directories.
 
 **Options:**
+
 - `--eligible`: Show only eligible hooks (requirements met)
 - `--json`: Output as JSON
 - `-v, --verbose`: Show detailed information including missing requirements
@@ -33,9 +36,9 @@ Hooks (4/4 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
+  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new command is issued
-  😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
 ```
 
 **Example (verbose):**
@@ -63,9 +66,11 @@ openclaw hooks info <name>
 Show detailed information about a specific hook.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `session-memory`)
 
 **Options:**
+
 - `--json`: Output as JSON
 
 **Example:**
@@ -85,7 +90,7 @@ Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/hooks#session-memory
+  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
   Events: command:new
 
 Requirements:
@@ -101,6 +106,7 @@ openclaw hooks check
 Show summary of hook eligibility status (how many are ready vs. not ready).
 
 **Options:**
+
 - `--json`: Output as JSON
 
 **Example output:**
@@ -125,6 +131,7 @@ Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
 can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `session-memory`)
 
 **Example:**
@@ -140,11 +147,13 @@ openclaw hooks enable session-memory
 ```
 
 **What it does:**
+
 - Checks if hook exists and is eligible
 - Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - Saves config to disk
 
 **After enabling:**
+
 - Restart the gateway so hooks reload (menu bar app restart on macOS, or restart your gateway process in dev).
 
 ## Disable a Hook
@@ -156,6 +165,7 @@ openclaw hooks disable <name>
 Disable a specific hook by updating your config.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `command-logger`)
 
 **Example:**
@@ -171,23 +181,31 @@ openclaw hooks disable command-logger
 ```
 
 **After disabling:**
+
 - Restart the gateway so hooks reload
 
 ## Install Hooks
 
 ```bash
 openclaw hooks install <path-or-spec>
+openclaw hooks install <npm-spec> --pin
 ```
 
 Install a hook pack from a local folder/archive or npm.
 
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
+
 **What it does:**
+
 - Copies the hook pack into `~/.openclaw/hooks/<id>`
 - Enables the installed hooks in `hooks.internal.entries.*`
 - Records the install under `hooks.internal.installs`
 
 **Options:**
+
 - `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
+- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
 
 **Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
 
@@ -217,8 +235,13 @@ openclaw hooks update --all
 Update installed hook packs (npm installs only).
 
 **Options:**
+
 - `--all`: Update all tracked hook packs
 - `--dry-run`: Show what would change without writing
+
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ## Bundled Hooks
 
@@ -234,7 +257,19 @@ openclaw hooks enable session-memory
 
 **Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
 
-**See:** [session-memory documentation](/hooks#session-memory)
+**See:** [session-memory documentation](/automation/hooks#session-memory)
+
+### bootstrap-extra-files
+
+Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+
+**Enable:**
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
+**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
 
 ### command-logger
 
@@ -261,19 +296,7 @@ cat ~/.openclaw/logs/commands.log | jq .
 grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
-**See:** [command-logger documentation](/hooks#command-logger)
-
-### soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Enable:**
-
-```bash
-openclaw hooks enable soul-evil
-```
-
-**See:** [SOUL Evil Hook](/hooks/soul-evil)
+**See:** [command-logger documentation](/automation/hooks#command-logger)
 
 ### boot-md
 
@@ -287,4 +310,4 @@ Runs `BOOT.md` when the gateway starts (after channels start).
 openclaw hooks enable boot-md
 ```
 
-**See:** [boot-md documentation](/hooks#boot-md)
+**See:** [boot-md documentation](/automation/hooks#boot-md)

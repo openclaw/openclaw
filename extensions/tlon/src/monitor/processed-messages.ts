@@ -1,3 +1,5 @@
+import { createDedupeCache } from "openclaw/plugin-sdk";
+
 export type ProcessedMessageTracker = {
   mark: (id?: string | null) => boolean;
   has: (id?: string | null) => boolean;
@@ -5,34 +7,27 @@ export type ProcessedMessageTracker = {
 };
 
 export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTracker {
-  const seen = new Set<string>();
-  const order: string[] = [];
+  const dedupe = createDedupeCache({ ttlMs: 0, maxSize: limit });
 
   const mark = (id?: string | null) => {
     const trimmed = id?.trim();
-    if (!trimmed) return true;
-    if (seen.has(trimmed)) return false;
-    seen.add(trimmed);
-    order.push(trimmed);
-    if (order.length > limit) {
-      const overflow = order.length - limit;
-      for (let i = 0; i < overflow; i += 1) {
-        const oldest = order.shift();
-        if (oldest) seen.delete(oldest);
-      }
+    if (!trimmed) {
+      return true;
     }
-    return true;
+    return !dedupe.check(trimmed);
   };
 
   const has = (id?: string | null) => {
     const trimmed = id?.trim();
-    if (!trimmed) return false;
-    return seen.has(trimmed);
+    if (!trimmed) {
+      return false;
+    }
+    return dedupe.peek(trimmed);
   };
 
   return {
     mark,
     has,
-    size: () => seen.size,
+    size: () => dedupe.size(),
   };
 }

@@ -3,6 +3,7 @@ summary: "OpenClaw CLI reference for `openclaw` commands, subcommands, and optio
 read_when:
   - Adding or modifying CLI commands or options
   - Documenting new command surfaces
+title: "CLI Reference"
 ---
 
 # CLI reference
@@ -15,6 +16,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`onboard`](/cli/onboard)
 - [`configure`](/cli/configure)
 - [`config`](/cli/config)
+- [`completion`](/cli/completion)
 - [`doctor`](/cli/doctor)
 - [`dashboard`](/cli/dashboard)
 - [`reset`](/cli/reset)
@@ -32,6 +34,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`system`](/cli/system)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
+- [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
 - [`devices`](/cli/devices)
 - [`node`](/cli/node)
@@ -45,10 +48,14 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`hooks`](/cli/hooks)
 - [`webhooks`](/cli/webhooks)
 - [`pairing`](/cli/pairing)
+- [`qr`](/cli/qr)
 - [`plugins`](/cli/plugins) (plugin commands)
 - [`channels`](/cli/channels)
 - [`security`](/cli/security)
+- [`secrets`](/cli/secrets)
 - [`skills`](/cli/skills)
+- [`daemon`](/cli/daemon) (legacy alias for gateway service commands)
+- [`clawbot`](/cli/clawbot) (legacy alias namespace)
 - [`voicecall`](/cli/voicecall) (plugin; if installed)
 
 ## Global flags
@@ -93,9 +100,14 @@ openclaw [--dev] [--profile <name>] <command>
     get
     set
     unset
+  completion
   doctor
+  dashboard
   security
     audit
+  secrets
+    reload
+    migrate
   reset
   uninstall
   update
@@ -107,6 +119,7 @@ openclaw [--dev] [--profile <name>] <command>
     remove
     login
     logout
+  directory
   skills
     list
     info
@@ -144,6 +157,13 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
+  daemon
+    status
+    install
+    uninstall
+    start
+    stop
+    restart
   logs
   system
     event
@@ -230,6 +250,9 @@ openclaw [--dev] [--profile <name>] <command>
   pairing
     list
     approve
+  qr
+  clawbot
+    qr
   docs
   dns
     setup
@@ -244,6 +267,13 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 - `openclaw security audit --deep` — best-effort live Gateway probe.
 - `openclaw security audit --fix` — tighten safe defaults and chmod state/config.
 
+## Secrets
+
+- `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
+- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift.
+- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply.
+- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported).
+
 ## Plugins
 
 Manage extensions and their config:
@@ -254,7 +284,7 @@ Manage extensions and their config:
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — report plugin load errors.
 
-Most plugin changes require a gateway restart. See [/plugin](/plugin).
+Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 ## Memory
 
@@ -262,13 +292,14 @@ Vector search over `MEMORY.md` + `memory/*.md`:
 
 - `openclaw memory status` — show index stats.
 - `openclaw memory index` — reindex memory files.
-- `openclaw memory search "<query>"` — semantic search over memory.
+- `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 
 ## Chat slash commands
 
 Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
 
 Highlights:
+
 - `/status` for quick diagnostics.
 - `/config` for persisted config changes.
 - `/debug` for runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
@@ -276,9 +307,11 @@ Highlights:
 ## Setup + onboarding
 
 ### `setup`
+
 Initialize config + workspace.
 
 Options:
+
 - `--workspace <dir>`: agent workspace path (default `~/.openclaw/workspace`).
 - `--wizard`: run the onboarding wizard.
 - `--non-interactive`: run wizard without prompts.
@@ -289,21 +322,26 @@ Options:
 Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
 
 ### `onboard`
+
 Interactive wizard to set up gateway, workspace, and skills.
 
 Options:
+
 - `--workspace <dir>`
-- `--reset` (reset config + credentials + sessions + workspace before wizard)
+- `--reset` (reset config + credentials + sessions before wizard)
+- `--reset-scope <config|config+creds+sessions|full>` (default `config+creds+sessions`; use `full` to also remove workspace)
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
-- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|skip>`
+- `--auth-choice <setup-token|token|chutes|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|moonshot-api-key-cn|kimi-code-api-key|synthetic-api-key|venice-api-key|gemini-api-key|zai-api-key|mistral-api-key|apiKey|minimax-api|minimax-api-lightning|opencode-zen|custom-api-key|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
 - `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
+- `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
+- `--mistral-api-key <key>`
 - `--openrouter-api-key <key>`
 - `--ai-gateway-api-key <key>`
 - `--moonshot-api-key <key>`
@@ -312,6 +350,11 @@ Options:
 - `--zai-api-key <key>`
 - `--minimax-api-key <key>`
 - `--opencode-zen-api-key <key>`
+- `--custom-base-url <url>` (non-interactive; used with `--auth-choice custom-api-key`)
+- `--custom-model-id <id>` (non-interactive; used with `--auth-choice custom-api-key`)
+- `--custom-api-key <key>` (non-interactive; optional; used with `--auth-choice custom-api-key`; falls back to `CUSTOM_API_KEY` when omitted)
+- `--custom-provider-id <id>` (non-interactive; optional custom provider id)
+- `--custom-compatibility <openai|anthropic>` (non-interactive; optional; default `openai`)
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto|custom>`
 - `--gateway-auth <token|password>`
@@ -332,21 +375,26 @@ Options:
 - `--json`
 
 ### `configure`
+
 Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
+
 Non-interactive config helpers (get/set/unset). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
+
 - `config get <path>`: print a config value (dot/bracket path).
 - `config set <path> <value>`: set a value (JSON5 or raw string).
 - `config unset <path>`: remove a value.
 
 ### `doctor`
+
 Health checks + quick fixes (config + gateway + legacy services).
 
 Options:
+
 - `--no-workspace-suggestions`: disable workspace memory hints.
 - `--yes`: accept defaults without prompting (headless).
 - `--non-interactive`: skip prompts; apply safe migrations only.
@@ -355,37 +403,46 @@ Options:
 ## Channel helpers
 
 ### `channels`
+
 Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
 
 Subcommands:
+
 - `channels list`: show configured channels and auth profiles.
 - `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `openclaw health` or `openclaw status --deep` for gateway health probes).
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
+  - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `channels login`: interactive channel login (WhatsApp Web only).
 - `channels logout`: log out of a channel session (if supported).
 
 Common options:
+
 - `--channel <name>`: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams`
 - `--account <id>`: channel account id (default `default`)
 - `--name <label>`: display name for the account
 
 `channels login` options:
+
 - `--channel <channel>` (default `whatsapp`; supports `whatsapp`/`web`)
 - `--account <id>`
 - `--verbose`
 
 `channels logout` options:
+
 - `--channel <channel>` (default `whatsapp`)
 - `--account <id>`
 
 `channels list` options:
+
 - `--no-usage`: skip model provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
 `channels logs` options:
+
 - `--channel <name|all>` (default `all`)
 - `--lines <n>` (default `200`)
 - `--json`
@@ -393,6 +450,7 @@ Common options:
 More detail: [/concepts/oauth](/concepts/oauth)
 
 Examples:
+
 ```bash
 openclaw channels add --channel telegram --account alerts --name "Alerts Bot" --token $TELEGRAM_BOT_TOKEN
 openclaw channels add --channel discord --account work --name "Work Bot" --token $DISCORD_BOT_TOKEN
@@ -402,14 +460,17 @@ openclaw status --deep
 ```
 
 ### `skills`
+
 List and inspect available skills plus readiness info.
 
 Subcommands:
+
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
 
 Options:
+
 - `--eligible`: show only ready skills.
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
@@ -417,33 +478,56 @@ Options:
 Tip: use `npx clawhub` to search, install, and sync skills.
 
 ### `pairing`
+
 Approve DM pairing requests across channels.
 
 Subcommands:
-- `pairing list <channel> [--json]`
-- `pairing approve <channel> <code> [--notify]`
+
+- `pairing list [channel] [--channel <channel>] [--account <id>] [--json]`
+- `pairing approve <channel> <code> [--account <id>] [--notify]`
+- `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
+
+### `devices`
+
+Manage gateway device pairing entries and per-role device tokens.
+
+Subcommands:
+
+- `devices list [--json]`
+- `devices approve [requestId] [--latest]`
+- `devices reject <requestId>`
+- `devices remove <deviceId>`
+- `devices clear --yes [--pending]`
+- `devices rotate --device <id> --role <role> [--scope <scope...>]`
+- `devices revoke --device <id> --role <role>`
 
 ### `webhooks gmail`
+
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Subcommands:
+
 - `webhooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
 - `webhooks gmail run` (runtime overrides for the same flags)
 
 ### `dns setup`
+
 Wide-area discovery DNS helper (CoreDNS + Tailscale). See [/gateway/discovery](/gateway/discovery).
 
 Options:
+
 - `--apply`: install/update CoreDNS config (requires sudo; macOS only).
 
 ## Messaging + agent
 
 ### `message`
+
 Unified outbound messaging + channel actions.
 
 See: [/cli/message](/cli/message)
 
 Subcommands:
+
 - `message send|poll|react|reactions|read|edit|delete|pin|unpin|pins|permissions|search|timeout|kick|ban`
 - `message thread <create|list|reply>`
 - `message emoji <list|upload>`
@@ -455,16 +539,20 @@ Subcommands:
 - `message event <list|create>`
 
 Examples:
+
 - `openclaw message send --target +15555550123 --message "Hi"`
 - `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
+
 Run one agent turn via the Gateway (or `--local` embedded).
 
 Required:
+
 - `--message <text>`
 
 Options:
+
 - `--to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
 - `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
@@ -476,19 +564,24 @@ Options:
 - `--timeout <seconds>`
 
 ### `agents`
+
 Manage isolated agents (workspaces + auth + routing).
 
 #### `agents list`
+
 List configured agents.
 
 Options:
+
 - `--json`
 - `--bindings`
 
 #### `agents add [name]`
+
 Add a new isolated agent. Runs the guided wizard unless flags (or `--non-interactive`) are passed; `--workspace` is required in non-interactive mode.
 
 Options:
+
 - `--workspace <dir>`
 - `--model <id>`
 - `--agent-dir <dir>`
@@ -496,24 +589,59 @@ Options:
 - `--non-interactive`
 - `--json`
 
-Binding specs use `channel[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
+Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+
+#### `agents bindings`
+
+List routing bindings.
+
+Options:
+
+- `--agent <id>`
+- `--json`
+
+#### `agents bind`
+
+Add routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--json`
+
+#### `agents unbind`
+
+Remove routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--all`
+- `--json`
 
 #### `agents delete <id>`
+
 Delete an agent and prune its workspace + state.
 
 Options:
+
 - `--force`
 - `--json`
 
 ### `acp`
+
 Run the ACP bridge that connects IDEs to the Gateway.
 
 See [`acp`](/cli/acp) for full options and examples.
 
 ### `status`
+
 Show linked session health and recent recipients.
 
 Options:
+
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
 - `--deep` (probe channels)
@@ -523,34 +651,42 @@ Options:
 - `--debug` (alias for `--verbose`)
 
 Notes:
+
 - Overview includes Gateway + node host service status when available.
 
 ### Usage tracking
+
 OpenClaw can surface provider usage/quota when OAuth/API creds are available.
 
 Surfaces:
+
 - `/status` (adds a short provider usage line when available)
 - `openclaw status --usage` (prints full provider breakdown)
 - macOS menu bar (Usage section under Context)
 
 Notes:
+
 - Data comes directly from provider usage endpoints (no estimates).
 - Providers: Anthropic, GitHub Copilot, OpenAI Codex OAuth, plus Gemini CLI/Antigravity when those provider plugins are enabled.
 - If no matching credentials exist, usage is hidden.
 - Details: see [Usage tracking](/concepts/usage-tracking).
 
 ### `health`
+
 Fetch health from the running Gateway.
 
 Options:
+
 - `--json`
 - `--timeout <ms>`
 - `--verbose`
 
 ### `sessions`
+
 List stored conversation sessions.
 
 Options:
+
 - `--json`
 - `--verbose`
 - `--store <path>`
@@ -559,21 +695,26 @@ Options:
 ## Reset / Uninstall
 
 ### `reset`
+
 Reset local config/state (keeps the CLI installed).
 
 Options:
+
 - `--scope <config|config+creds+sessions|full>`
 - `--yes`
 - `--non-interactive`
 - `--dry-run`
 
 Notes:
+
 - `--non-interactive` requires `--scope` and `--yes`.
 
 ### `uninstall`
+
 Uninstall the gateway service + local data (CLI remains).
 
 Options:
+
 - `--service`
 - `--state`
 - `--workspace`
@@ -584,14 +725,17 @@ Options:
 - `--dry-run`
 
 Notes:
+
 - `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
 
 ## Gateway
 
 ### `gateway`
+
 Run the WebSocket Gateway.
 
 Options:
+
 - `--port <port>`
 - `--bind <loopback|tailnet|lan|auto|custom>`
 - `--token <token>`
@@ -611,9 +755,11 @@ Options:
 - `--raw-stream-path <path>`
 
 ### `gateway service`
+
 Manage the Gateway service (launchd/systemd/schtasks).
 
 Subcommands:
+
 - `gateway status` (probes the Gateway RPC by default)
 - `gateway install` (service install)
 - `gateway uninstall`
@@ -622,6 +768,7 @@ Subcommands:
 - `gateway restart`
 
 Notes:
+
 - `gateway status` probes the Gateway RPC by default using the service’s resolved port/config (override with `--url/--token/--password`).
 - `gateway status` supports `--no-probe`, `--deep`, and `--json` for scripting.
 - `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
@@ -631,13 +778,16 @@ Notes:
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
 
 ### `logs`
+
 Tail Gateway file logs via RPC.
 
 Notes:
+
 - TTY sessions render a colorized, structured view; non-TTY falls back to plain text.
 - `--json` emits line-delimited JSON (one log event per line).
 
 Examples:
+
 ```bash
 openclaw logs --follow
 openclaw logs --limit 200
@@ -647,9 +797,13 @@ openclaw logs --no-color
 ```
 
 ### `gateway <subcommand>`
+
 Gateway CLI helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for RPC subcommands).
+When you pass `--url`, the CLI does not auto-apply config or environment credentials.
+Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 Subcommands:
+
 - `gateway call <method> [--params <json>]`
 - `gateway health`
 - `gateway status`
@@ -659,6 +813,7 @@ Subcommands:
 - `gateway run`
 
 Common RPCs:
+
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
 - `update.run` (run update + restart + wake)
@@ -679,14 +834,18 @@ openclaw models status
 ```
 
 ### `models` (root)
+
 `openclaw models` is an alias for `models status`.
 
 Root options:
+
 - `--status-json` (alias for `models status --json`)
 - `--status-plain` (alias for `models status --plain`)
 
 ### `models list`
+
 Options:
+
 - `--all`
 - `--local`
 - `--provider <name>`
@@ -694,7 +853,9 @@ Options:
 - `--plain`
 
 ### `models status`
+
 Options:
+
 - `--json`
 - `--plain`
 - `--check` (exit 1=expired/missing, 2=expiring)
@@ -709,33 +870,43 @@ Always includes the auth overview and OAuth expiry status for profiles in the au
 `--probe` runs live requests (may consume tokens and trigger rate limits).
 
 ### `models set <model>`
+
 Set `agents.defaults.model.primary`.
 
 ### `models set-image <model>`
+
 Set `agents.defaults.imageModel.primary`.
 
 ### `models aliases list|add|remove`
+
 Options:
+
 - `list`: `--json`, `--plain`
 - `add <alias> <model>`
 - `remove <alias>`
 
 ### `models fallbacks list|add|remove|clear`
+
 Options:
+
 - `list`: `--json`, `--plain`
 - `add <model>`
 - `remove <model>`
 - `clear`
 
 ### `models image-fallbacks list|add|remove|clear`
+
 Options:
+
 - `list`: `--json`, `--plain`
 - `add <model>`
 - `remove <model>`
 - `clear`
 
 ### `models scan`
+
 Options:
+
 - `--min-params <b>`
 - `--max-age-days <days>`
 - `--provider <name>`
@@ -750,13 +921,17 @@ Options:
 - `--json`
 
 ### `models auth add|setup-token|paste-token`
+
 Options:
+
 - `add`: interactive auth helper
 - `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
 ### `models auth order get|set|clear`
+
 Options:
+
 - `get`: `--provider <name>`, `--agent <id>`, `--json`
 - `set`: `--provider <name>`, `--agent <id>`, `<profileIds...>`
 - `clear`: `--provider <name>`, `--agent <id>`
@@ -764,34 +939,43 @@ Options:
 ## System
 
 ### `system event`
+
 Enqueue a system event and optionally trigger a heartbeat (Gateway RPC).
 
 Required:
+
 - `--text <text>`
 
 Options:
+
 - `--mode <now|next-heartbeat>`
 - `--json`
 - `--url`, `--token`, `--timeout`, `--expect-final`
 
 ### `system heartbeat last|enable|disable`
+
 Heartbeat controls (Gateway RPC).
 
 Options:
+
 - `--json`
 - `--url`, `--token`, `--timeout`, `--expect-final`
 
 ### `system presence`
+
 List system presence entries (Gateway RPC).
 
 Options:
+
 - `--json`
 - `--url`, `--token`, `--timeout`, `--expect-final`
 
 ## Cron
+
 Manage scheduled jobs (Gateway RPC). See [/automation/cron-jobs](/automation/cron-jobs).
 
 Subcommands:
+
 - `cron status [--json]`
 - `cron list [--all] [--json]` (table output by default; use `--json` for raw)
 - `cron add` (alias: `create`; requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
@@ -810,6 +994,7 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 [`openclaw node`](/cli/node).
 
 Subcommands:
+
 - `node run --host <gateway-host> --port 18789`
 - `node status`
 - `node install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
@@ -822,9 +1007,11 @@ Subcommands:
 `nodes` talks to the Gateway and targets paired nodes. See [/nodes](/nodes).
 
 Common options:
+
 - `--url`, `--token`, `--timeout`, `--json`
 
 Subcommands:
+
 - `nodes status [--connected] [--last-connected <duration>]`
 - `nodes describe --node <id|name|ip>`
 - `nodes list [--connected] [--last-connected <duration>]`
@@ -837,11 +1024,13 @@ Subcommands:
 - `nodes notify --node <id|name|ip> [--title <text>] [--body <text>] [--sound <name>] [--priority <passive|active|timeSensitive>] [--delivery <system|overlay|auto>] [--invoke-timeout <ms>]` (mac only)
 
 Camera:
+
 - `nodes camera list --node <id|name|ip>`
 - `nodes camera snap --node <id|name|ip> [--facing front|back|both] [--device-id <id>] [--max-width <px>] [--quality <0-1>] [--delay-ms <ms>] [--invoke-timeout <ms>]`
 - `nodes camera clip --node <id|name|ip> [--facing front|back] [--device-id <id>] [--duration <ms|10s|1m>] [--no-audio] [--invoke-timeout <ms>]`
 
 Canvas + screen:
+
 - `nodes canvas snapshot --node <id|name|ip> [--format png|jpg|jpeg] [--max-width <px>] [--quality <0-1>] [--invoke-timeout <ms>]`
 - `nodes canvas present --node <id|name|ip> [--target <urlOrPath>] [--x <px>] [--y <px>] [--width <px>] [--height <px>] [--invoke-timeout <ms>]`
 - `nodes canvas hide --node <id|name|ip> [--invoke-timeout <ms>]`
@@ -852,6 +1041,7 @@ Canvas + screen:
 - `nodes screen record --node <id|name|ip> [--screen <index>] [--duration <ms|10s>] [--fps <n>] [--no-audio] [--out <path>] [--invoke-timeout <ms>]`
 
 Location:
+
 - `nodes location get --node <id|name|ip> [--max-age <ms>] [--accuracy <coarse|balanced|precise>] [--location-timeout <ms>] [--invoke-timeout <ms>]`
 
 ## Browser
@@ -859,10 +1049,12 @@ Location:
 Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`openclaw browser`](/cli/browser) and the [Browser tool](/tools/browser).
 
 Common options:
+
 - `--url`, `--token`, `--timeout`, `--json`
 - `--browser-profile <name>`
 
 Manage:
+
 - `browser status`
 - `browser start`
 - `browser stop`
@@ -876,10 +1068,12 @@ Manage:
 - `browser delete-profile --name <name>`
 
 Inspect:
+
 - `browser screenshot [targetId] [--full-page] [--ref <ref>] [--element <selector>] [--type png|jpeg]`
 - `browser snapshot [--format aria|ai] [--target-id <id>] [--limit <n>] [--interactive] [--compact] [--depth <n>] [--selector <sel>] [--out <path>]`
 
 Actions:
+
 - `browser navigate <url> [--target-id <id>]`
 - `browser resize <width> <height> [--target-id <id>]`
 - `browser click <ref> [--double] [--button <left|right|middle>] [--modifiers <csv>] [--target-id <id>]`
@@ -899,14 +1093,17 @@ Actions:
 ## Docs search
 
 ### `docs [query...]`
+
 Search the live docs index.
 
 ## TUI
 
 ### `tui`
+
 Open the terminal UI connected to the Gateway.
 
 Options:
+
 - `--url <url>`
 - `--token <token>`
 - `--password <password>`

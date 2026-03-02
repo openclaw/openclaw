@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { saveJsonFile } from "../../infra/json-file.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";

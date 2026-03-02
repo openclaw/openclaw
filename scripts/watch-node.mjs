@@ -1,76 +1,92 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
+import { runNodeWatchedPaths } from "./run-node.mjs";
 
-const args = process.argv.slice(2);
-const env = { ...process.env };
-const cwd = process.cwd();
+const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 
-const initialBuild = spawnSync("pnpm", ["build"], {
-  cwd,
-  env,
-  stdio: "inherit",
-});
+const buildWatchArgs = (args) => [
+  ...runNodeWatchedPaths.flatMap((watchPath) => ["--watch-path", watchPath]),
+  "--watch-preserve-output",
+  WATCH_NODE_RUNNER,
+  ...args,
+];
 
-if (initialBuild.status !== 0) {
-  process.exit(initialBuild.status ?? 1);
-}
+export async function runWatchMain(params = {}) {
+  const deps = {
+    spawn: params.spawn ?? spawn,
+    process: params.process ?? process,
+    cwd: params.cwd ?? process.cwd(),
+    args: params.args ?? process.argv.slice(2),
+    env: params.env ? { ...params.env } : { ...process.env },
+    now: params.now ?? Date.now,
+  };
 
-const compilerProcess = spawn("pnpm", ["tsc", '-p', 'tsconfig.json', '--noEmit', 'false', '--watch'], {
-  cwd,
-  env,
-  stdio: "inherit",
-});
+  const childEnv = { ...deps.env };
+  const watchSession = `${deps.now()}-${deps.process.pid}`;
+  childEnv.OPENCLAW_WATCH_MODE = "1";
+  childEnv.OPENCLAW_WATCH_SESSION = watchSession;
+  if (deps.args.length > 0) {
+    childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
+  }
 
-let nodeProcess = null;
-let restartTimer = null;
-
-function spawnNode() {
-  nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args], {
-    cwd,
-    env,
+  const watchProcess = deps.spawn(deps.process.execPath, buildWatchArgs(deps.args), {
+    cwd: deps.cwd,
+    env: childEnv,
     stdio: "inherit",
   });
 
-  nodeProcess.on("exit", (code, signal) => {
-    if (signal || exiting) {
+  let settled = false;
+  let onSigInt;
+  let onSigTerm;
+
+  const settle = (resolve, code) => {
+    if (settled) {
       return;
     }
-    // If the build is mid-refresh, node can exit on missing modules. Retry.
-    if (restartTimer) {
-      clearTimeout(restartTimer);
+    settled = true;
+    if (onSigInt) {
+      deps.process.off("SIGINT", onSigInt);
     }
-    restartTimer = setTimeout(() => {
-      restartTimer = null;
-      spawnNode();
-    }, 250);
+    if (onSigTerm) {
+      deps.process.off("SIGTERM", onSigTerm);
+    }
+    resolve(code);
+  };
+
+  return await new Promise((resolve) => {
+    onSigInt = () => {
+      if (typeof watchProcess.kill === "function") {
+        watchProcess.kill("SIGTERM");
+      }
+      settle(resolve, 130);
+    };
+    onSigTerm = () => {
+      if (typeof watchProcess.kill === "function") {
+        watchProcess.kill("SIGTERM");
+      }
+      settle(resolve, 143);
+    };
+
+    deps.process.on("SIGINT", onSigInt);
+    deps.process.on("SIGTERM", onSigTerm);
+
+    watchProcess.on("exit", (code, signal) => {
+      if (signal) {
+        settle(resolve, 1);
+        return;
+      }
+      settle(resolve, code ?? 1);
+    });
   });
 }
 
-spawnNode();
-
-let exiting = false;
-
-function cleanup(code = 0) {
-  if (exiting) {
-    return;
-  }
-  exiting = true;
-  if (restartTimer) {
-    clearTimeout(restartTimer);
-    restartTimer = null;
-  }
-  nodeProcess?.kill("SIGTERM");
-  compilerProcess.kill("SIGTERM");
-  process.exit(code);
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  void runWatchMain()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }
-
-process.on("SIGINT", () => cleanup(130));
-process.on("SIGTERM", () => cleanup(143));
-
-compilerProcess.on("exit", (code) => {
-  if (exiting) {
-    return;
-  }
-  cleanup(code ?? 1);
-});

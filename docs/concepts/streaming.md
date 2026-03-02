@@ -1,17 +1,20 @@
 ---
-summary: "Streaming + chunking behavior (block replies, draft streaming, limits)"
+summary: "Streaming + chunking behavior (block replies, channel preview streaming, mode mapping)"
 read_when:
   - Explaining how streaming or chunking works on channels
   - Changing block streaming or channel chunking behavior
-  - Debugging duplicate/early block replies or draft streaming
+  - Debugging duplicate/early block replies or channel preview streaming
+title: "Streaming and Chunking"
 ---
+
 # Streaming + chunking
 
-OpenClaw has two separate “streaming” layers:
-- **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
-- **Token-ish streaming (Telegram only):** update a **draft bubble** with partial text while generating; final message is sent at the end.
+OpenClaw has two separate streaming layers:
 
-There is **no real token streaming** to external channel messages today. Telegram draft streaming is the only partial-stream surface.
+- **Block streaming (channels):** emit completed **blocks** as the assistant writes. These are normal channel messages (not token deltas).
+- **Preview streaming (Telegram/Discord/Slack):** update a temporary **preview message** while generating.
+
+There is **no true token-delta streaming** to channel messages today. Preview streaming is message-based (send + edits/appends).
 
 ## Block streaming (channel messages)
 
@@ -26,12 +29,15 @@ Model output
             └─ chunker flushes at message_end
                    └─ channel send (block replies)
 ```
+
 Legend:
+
 - `text_delta/events`: model stream events (may be sparse for non-streaming models).
 - `chunker`: `EmbeddedBlockChunker` applying min/max bounds + break preference.
 - `channel send`: actual outbound messages (block replies).
 
 **Controls:**
+
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
 - Channel overrides: `*.blockStreaming` (and per-account variants) to force `"on"`/`"off"` per channel.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"`.
@@ -42,6 +48,7 @@ Legend:
 - Discord soft cap: `channels.discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
 **Boundary semantics:**
+
 - `text_end`: stream blocks as soon as chunker emits; flush on each `text_end`.
 - `message_end`: wait until assistant message finishes, then flush buffered output.
 
@@ -50,6 +57,7 @@ Legend:
 ## Chunking algorithm (low/high bounds)
 
 Block chunking is implemented by `EmbeddedBlockChunker`:
+
 - **Low bound:** don’t emit until buffer >= `minChars` (unless forced).
 - **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
 - **Break preference:** `paragraph` → `newline` → `sentence` → `whitespace` → hard break.
@@ -85,39 +93,63 @@ more natural.
 ## “Stream chunks or everything”
 
 This maps to:
+
 - **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (emit as you go). Non-Telegram channels also need `*.blockStreaming: true`.
 - **Stream everything at end:** `blockStreamingBreak: "message_end"` (flush once, possibly multiple chunks if very long).
 - **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
 
-**Channel note:** For non-Telegram channels, block streaming is **off unless**
-`*.blockStreaming` is explicitly set to `true`. Telegram can stream drafts
-(`channels.telegram.streamMode`) without block replies.
+**Channel note:** Block streaming is **off unless**
+`*.blockStreaming` is explicitly set to `true`. Channels can stream a live preview
+(`channels.<channel>.streaming`) without block replies.
 
 Config location reminder: the `blockStreaming*` defaults live under
 `agents.defaults`, not the root config.
 
-## Telegram draft streaming (token-ish)
+## Preview streaming modes
 
-Telegram is the only channel with draft streaming:
-- Uses Bot API `sendMessageDraft` in **private chats with topics**.
-- `channels.telegram.streamMode: "partial" | "block" | "off"`.
-  - `partial`: draft updates with the latest stream text.
-  - `block`: draft updates in chunked blocks (same chunker rules).
-  - `off`: no draft streaming.
-- Draft chunk config (only for `streamMode: "block"`): `channels.telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
-- Draft streaming is separate from block streaming; block replies are off by default and only enabled by `*.blockStreaming: true` on non-Telegram channels.
-- Final reply is still a normal message.
-- `/reasoning stream` writes reasoning into the draft bubble (Telegram only).
+Canonical key: `channels.<channel>.streaming`
 
-When draft streaming is active, OpenClaw disables block streaming for that reply to avoid double-streaming.
+Modes:
 
-```
-Telegram (private + topics)
-  └─ sendMessageDraft (draft bubble)
-       ├─ streamMode=partial → update latest text
-       └─ streamMode=block   → chunker updates draft
-  └─ final reply → normal message
-```
-Legend:
-- `sendMessageDraft`: Telegram draft bubble (not a real message).
-- `final reply`: normal Telegram message send.
+- `off`: disable preview streaming.
+- `partial`: single preview that is replaced with latest text.
+- `block`: preview updates in chunked/appended steps.
+- `progress`: progress/status preview during generation, final answer at completion.
+
+### Channel mapping
+
+| Channel  | `off` | `partial` | `block` | `progress`        |
+| -------- | ----- | --------- | ------- | ----------------- |
+| Telegram | ✅    | ✅        | ✅      | maps to `partial` |
+| Discord  | ✅    | ✅        | ✅      | maps to `partial` |
+| Slack    | ✅    | ✅        | ✅      | ✅                |
+
+Slack-only:
+
+- `channels.slack.nativeStreaming` toggles Slack native streaming API calls when `streaming=partial` (default: `true`).
+
+Legacy key migration:
+
+- Telegram: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
+- Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
+- Slack: `streamMode` auto-migrates to `streaming` enum; boolean `streaming` auto-migrates to `nativeStreaming`.
+
+### Runtime behavior
+
+Telegram:
+
+- Uses Bot API `sendMessage` + `editMessageText`.
+- Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
+- `/reasoning stream` can write reasoning to preview.
+
+Discord:
+
+- Uses send + edit preview messages.
+- `block` mode uses draft chunking (`draftChunk`).
+- Preview streaming is skipped when Discord block streaming is explicitly enabled.
+
+Slack:
+
+- `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`) when available.
+- `block` uses append-style draft previews.
+- `progress` uses status preview text, then final answer.

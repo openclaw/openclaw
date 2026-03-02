@@ -1,6 +1,10 @@
+import crypto from "node:crypto";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { redactIdentifier } from "../logging/redact-identifier.js";
 import { setActiveWebListener } from "./active-listener.js";
 
 const loadWebMediaMock = vi.fn();
@@ -131,7 +135,9 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/file.pdf",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf");
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
+      fileName: "file.pdf",
+    });
   });
 
   it("sends polls via active listener", async () => {
@@ -148,8 +154,34 @@ describe("web outbound", () => {
       question: "Lunch?",
       options: ["Pizza", "Sushi"],
       maxSelections: 2,
+      durationSeconds: undefined,
       durationHours: undefined,
     });
+  });
+
+  it("redacts recipients and poll text in outbound logs", async () => {
+    const logPath = path.join(os.tmpdir(), `openclaw-outbound-${crypto.randomUUID()}.log`);
+    setLoggerOverride({ level: "trace", file: logPath });
+
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 1 },
+      { verbose: false },
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const content = fsSync.readFileSync(logPath, "utf-8");
+    expect(content).toContain(redactIdentifier("+1555"));
+    expect(content).toContain(redactIdentifier("1555@s.whatsapp.net"));
+    expect(content).not.toContain(`"to":"+1555"`);
+    expect(content).not.toContain(`"jid":"1555@s.whatsapp.net"`);
+    expect(content).not.toContain("Lunch?");
   });
 
   it("sends reactions via active listener", async () => {

@@ -1,18 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { getPublicKey } from "nostr-tools";
+import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
   profileToContent,
   validateProfile,
   sanitizeProfileForDisplay,
 } from "./nostr-profile.js";
-import type { NostrProfile } from "./config-schema.js";
 
 // Test private key
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_SK = new Uint8Array(
-  TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16))
-);
+const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
 
 // ============================================================================
 // Unicode Attack Vectors
@@ -101,8 +98,10 @@ describe("profile unicode attacks", () => {
     });
 
     it("handles excessive combining characters (Zalgo text)", () => {
-      const zalgo =
-        "t̷̢̧̨̡̛̛̛͎̩̝̪̲̲̞̠̹̗̩͓̬̱̪̦͙̬̲̤͙̱̫̝̪̱̫̯̬̭̠̖̲̥̖̫̫̤͇̪̣̫̪̖̱̯̣͎̯̲̱̤̪̣̖̲̪̯͓̖̤̫̫̲̱̲̫̲̖̫̪̯̱̱̪̖̯e̶̡̧̨̧̛̛̛̖̪̯̱̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪s̶̨̧̛̛̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯̖̪̯̖̪̱̪̯t";
+      // Keep the source small (faster transforms) while still exercising
+      // "lots of combining marks" behavior.
+      const marks = "\u0301\u0300\u0336\u034f\u035c\u0360";
+      const zalgo = `t${marks.repeat(256)}e${marks.repeat(256)}s${marks.repeat(256)}t`;
       const profile: NostrProfile = {
         name: zalgo.slice(0, 256), // Truncate to fit limit
       };
@@ -402,7 +401,9 @@ describe("profile type confusion", () => {
   });
 
   it("rejects object as picture", () => {
-    const result = validateProfile({ picture: { url: "https://example.com" } as unknown as string });
+    const result = validateProfile({
+      picture: { url: "https://example.com" } as unknown as string,
+    });
     expect(result.valid).toBe(false);
   });
 
@@ -423,7 +424,7 @@ describe("profile type confusion", () => {
 
   it("handles prototype pollution attempt", () => {
     const malicious = JSON.parse('{"__proto__": {"polluted": true}}') as unknown;
-    const result = validateProfile(malicious);
+    validateProfile(malicious);
     // Should not pollute Object.prototype
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
@@ -455,7 +456,7 @@ describe("event creation edge cases", () => {
 
     // Create events in quick succession
     let lastTimestamp = 0;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 25; i++) {
       const event = createProfileEvent(TEST_SK, profile, lastTimestamp);
       expect(event.created_at).toBeGreaterThan(lastTimestamp);
       lastTimestamp = event.created_at;

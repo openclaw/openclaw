@@ -3,7 +3,9 @@ summary: "Bonjour/mDNS discovery + debugging (Gateway beacons, clients, and comm
 read_when:
   - Debugging Bonjour discovery issues on macOS/iOS
   - Changing mDNS service types, TXT records, or discovery UX
+title: "Bonjour Discovery"
 ---
+
 # Bonjour / mDNS discovery
 
 OpenClaw uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to discover
@@ -18,10 +20,10 @@ boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD*
 
 High‑level steps:
 
-1) Run a DNS server on the gateway host (reachable over Tailnet).
-2) Publish DNS‑SD records for `_openclaw-gw._tcp` under a dedicated zone
+1. Run a DNS server on the gateway host (reachable over Tailnet).
+2. Publish DNS‑SD records for `_openclaw-gw._tcp` under a dedicated zone
    (example: `openclaw.internal.`).
-3) Configure Tailscale **split DNS** so your chosen domain resolves via that
+3. Configure Tailscale **split DNS** so your chosen domain resolves via that
    DNS server for clients (including iOS).
 
 OpenClaw supports any discovery domain; `openclaw.internal.` is just an example.
@@ -32,7 +34,7 @@ iOS/Android nodes browse both `local.` and your configured wide‑area domain.
 ```json5
 {
   gateway: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true } } // enables wide-area DNS-SD publishing
+  discovery: { wideArea: { enabled: true } }, // enables wide-area DNS-SD publishing
 }
 ```
 
@@ -43,6 +45,7 @@ openclaw dns setup --apply
 ```
 
 This installs CoreDNS and configures it to:
+
 - listen on port 53 only on the gateway’s Tailscale interfaces
 - serve your chosen domain (example: `openclaw.internal.`) from `~/.openclaw/dns/<domain>.db`
 
@@ -69,6 +72,7 @@ The Gateway WS port (default `18789`) binds to loopback by default. For LAN/tail
 access, bind explicitly and keep auth enabled.
 
 For tailnet‑only setups:
+
 - Set `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json`.
 - Restart the Gateway (or restart the macOS menubar app).
 
@@ -90,21 +94,31 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayPort=<port>` (Gateway WS + HTTP)
 - `gatewayTls=1` (only when TLS is enabled)
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
-- `canvasPort=<port>` (only when the canvas host is enabled; default `18793`)
+- `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `transport=gateway`
 - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+
+Security notes:
+
+- Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
+- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
+- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
 
 ## Debugging on macOS
 
 Useful built‑in tools:
 
 - Browse instances:
+
   ```bash
   dns-sd -B _openclaw-gw._tcp local.
   ```
+
 - Resolve one instance (replace `<instance>`):
+
   ```bash
   dns-sd -L "<instance>" _openclaw-gw._tcp local.
   ```
@@ -126,6 +140,7 @@ The Gateway writes a rolling log file (printed on startup as
 The iOS node uses `NWBrowser` to discover `_openclaw-gw._tcp`.
 
 To capture logs:
+
 - Settings → Gateway → Advanced → **Discovery Debug Logs**
 - Settings → Gateway → Advanced → **Discovery Logs** → reproduce → **Copy**
 

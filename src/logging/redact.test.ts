@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
@@ -50,6 +49,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("123456…cdef");
   });
 
+  it("masks Telegram Bot API URL tokens", () => {
+    const input =
+      "GET https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef/getMe HTTP/1.1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET https://api.telegram.org/bot123456…cdef/getMe HTTP/1.1");
+  });
+
   it("redacts short tokens fully", () => {
     const input = "TOKEN=shortvalue";
     const output = redactSensitiveText(input, {
@@ -82,6 +91,15 @@ describe("redactSensitiveText", () => {
       patterns: ["/token=([A-Za-z0-9]+)/i"],
     });
     expect(output).toBe("token=abcdef…ghij");
+  });
+
+  it("ignores unsafe nested-repetition custom patterns", () => {
+    const input = `${"a".repeat(28)}!`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: ["(a+)+$"],
+    });
+    expect(output).toBe(input);
   });
 
   it("skips redaction when mode is off", () => {

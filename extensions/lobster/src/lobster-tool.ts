@@ -1,8 +1,8 @@
-import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import path from "node:path";
-
+import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import { resolveWindowsLobsterSpawn } from "./windows-spawn.js";
 
 type LobsterEnvelope =
   | {
@@ -21,30 +21,39 @@ type LobsterEnvelope =
       error: { type?: string; message: string };
     };
 
-function resolveExecutablePath(lobsterPathRaw: string | undefined) {
-  const lobsterPath = lobsterPathRaw?.trim() || "lobster";
-  if (lobsterPath !== "lobster" && !path.isAbsolute(lobsterPath)) {
-    throw new Error("lobsterPath must be an absolute path (or omit to use PATH)");
+function normalizeForCwdSandbox(p: string): string {
+  const normalized = path.normalize(p);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function resolveCwd(cwdRaw: unknown): string {
+  if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
+    return process.cwd();
   }
-  return lobsterPath;
+  const cwd = cwdRaw.trim();
+  if (path.isAbsolute(cwd)) {
+    throw new Error("cwd must be a relative path");
+  }
+  const base = process.cwd();
+  const resolved = path.resolve(base, cwd);
+
+  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
+  if (rel === "" || rel === ".") {
+    return resolved;
+  }
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("cwd must stay within the gateway working directory");
+  }
+  return resolved;
 }
 
-function isWindowsSpawnEINVAL(err: unknown) {
-  if (!err || typeof err !== "object") return false;
-  const code = (err as { code?: unknown }).code;
-  return code === "EINVAL";
-}
-
-async function runLobsterSubprocessOnce(
-  params: {
-    execPath: string;
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    maxStdoutBytes: number;
-  },
-  useShell: boolean,
-) {
+async function runLobsterSubprocessOnce(params: {
+  execPath: string;
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+}) {
   const { execPath, argv, cwd } = params;
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
@@ -54,19 +63,46 @@ async function runLobsterSubprocessOnce(
   if (nodeOptions.includes("--inspect")) {
     delete env.NODE_OPTIONS;
   }
+  const spawnTarget =
+    process.platform === "win32"
+      ? resolveWindowsLobsterSpawn(execPath, argv, env)
+      : { command: execPath, argv };
 
   return await new Promise<{ stdout: string }>((resolve, reject) => {
-    const child = spawn(execPath, argv, {
+    const child = spawn(spawnTarget.command, spawnTarget.argv, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
-      shell: useShell,
-      windowsHide: useShell ? true : undefined,
+      windowsHide: spawnTarget.windowsHide,
     });
 
     let stdout = "";
     let stdoutBytes = 0;
     let stderr = "";
+    let settled = false;
+
+    const settle = (
+      result: { ok: true; value: { stdout: string } } | { ok: false; error: Error },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (result.ok) {
+        resolve(result.value);
+      } else {
+        reject(result.error);
+      }
+    };
+
+    const failAndTerminate = (message: string) => {
+      try {
+        child.kill("SIGKILL");
+      } finally {
+        settle({ ok: false, error: new Error(message) });
+      }
+    };
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
@@ -75,11 +111,7 @@ async function runLobsterSubprocessOnce(
       const str = String(chunk);
       stdoutBytes += Buffer.byteLength(str, "utf8");
       if (stdoutBytes > maxStdoutBytes) {
-        try {
-          child.kill("SIGKILL");
-        } finally {
-          reject(new Error("lobster output exceeded maxStdoutBytes"));
-        }
+        failAndTerminate("lobster output exceeded maxStdoutBytes");
         return;
       }
       stdout += str;
@@ -90,44 +122,24 @@ async function runLobsterSubprocessOnce(
     });
 
     const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        reject(new Error("lobster subprocess timed out"));
-      }
+      failAndTerminate("lobster subprocess timed out");
     }, timeoutMs);
 
     child.once("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
+      settle({ ok: false, error: err });
     });
 
     child.once("exit", (code) => {
-      clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`));
+        settle({
+          ok: false,
+          error: new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`),
+        });
         return;
       }
-      resolve({ stdout });
+      settle({ ok: true, value: { stdout } });
     });
   });
-}
-
-async function runLobsterSubprocess(params: {
-  execPath: string;
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  maxStdoutBytes: number;
-}) {
-  try {
-    return await runLobsterSubprocessOnce(params, false);
-  } catch (err) {
-    if (process.platform === "win32" && isWindowsSpawnEINVAL(err)) {
-      return await runLobsterSubprocessOnce(params, true);
-    }
-    throw err;
-  }
 }
 
 function parseEnvelope(stdout: string): LobsterEnvelope {
@@ -168,9 +180,37 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
   throw new Error("lobster returned invalid JSON envelope");
 }
 
+function buildLobsterArgv(action: string, params: Record<string, unknown>): string[] {
+  if (action === "run") {
+    const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
+    if (!pipeline.trim()) {
+      throw new Error("pipeline required");
+    }
+    const argv = ["run", "--mode", "tool", pipeline];
+    const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
+    if (argsJson.trim()) {
+      argv.push("--args-json", argsJson);
+    }
+    return argv;
+  }
+  if (action === "resume") {
+    const token = typeof params.token === "string" ? params.token : "";
+    if (!token.trim()) {
+      throw new Error("token required");
+    }
+    const approve = params.approve;
+    if (typeof approve !== "boolean") {
+      throw new Error("approve required");
+    }
+    return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
+  }
+  throw new Error(`Unknown action: ${action}`);
+}
+
 export function createLobsterTool(api: OpenClawPluginApi) {
   return {
     name: "lobster",
+    label: "Lobster Workflow",
     description:
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
@@ -180,48 +220,34 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
-      lobsterPath: Type.Optional(Type.String()),
-      cwd: Type.Optional(Type.String()),
+      cwd: Type.Optional(
+        Type.String({
+          description:
+            "Relative working directory (optional). Must stay within the gateway working directory.",
+        }),
+      ),
       timeoutMs: Type.Optional(Type.Number()),
       maxStdoutBytes: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
-      const action = String(params.action || "").trim();
-      if (!action) throw new Error("action required");
+      const action = typeof params.action === "string" ? params.action.trim() : "";
+      if (!action) {
+        throw new Error("action required");
+      }
 
-      const execPath = resolveExecutablePath(
-        typeof params.lobsterPath === "string" ? params.lobsterPath : undefined,
-      );
-      const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+      const execPath = "lobster";
+      const cwd = resolveCwd(params.cwd);
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
-      const maxStdoutBytes = typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+      const maxStdoutBytes =
+        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
 
-      const argv = (() => {
-        if (action === "run") {
-          const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
-          if (!pipeline.trim()) throw new Error("pipeline required");
-          const argv = ["run", "--mode", "tool", pipeline];
-          const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
-          if (argsJson.trim()) {
-            argv.push("--args-json", argsJson);
-          }
-          return argv;
-        }
-        if (action === "resume") {
-          const token = typeof params.token === "string" ? params.token : "";
-          if (!token.trim()) throw new Error("token required");
-          const approve = params.approve;
-          if (typeof approve !== "boolean") throw new Error("approve required");
-          return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
-        }
-        throw new Error(`Unknown action: ${action}`);
-      })();
+      const argv = buildLobsterArgv(action, params);
 
       if (api.runtime?.version && api.logger?.debug) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
       }
 
-      const { stdout } = await runLobsterSubprocess({
+      const { stdout } = await runLobsterSubprocessOnce({
         execPath,
         argv,
         cwd,

@@ -5,7 +5,7 @@ import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { formatAge, redactSecrets } from "./format.js";
+import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
 type ConfigIssueLike = { path: string; message: string };
@@ -71,7 +71,7 @@ export async function appendStatusAllDiagnosis(params: {
   };
 
   lines.push("");
-  lines.push(`${muted("Gateway connection details:")}`);
+  lines.push(muted("Gateway connection details:"));
   for (const line of redactSecrets(params.connectionDetailsForReport)
     .split("\n")
     .map((l) => l.trimEnd())) {
@@ -106,7 +106,7 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
     lines.push(
-      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatAge(Date.now() - params.sentinel.payload.ts)}`)}`,
+      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
   } else {
     emitCheck("Restart sentinel: none", "ok");
@@ -116,7 +116,7 @@ export async function appendStatusAllDiagnosis(params: {
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(`${muted("Gateway last log line:")}`);
+    lines.push(muted("Gateway last log line:"));
     lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
   }
 
@@ -179,7 +179,7 @@ export async function appendStatusAllDiagnosis(params: {
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
-      lines.push(`${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`);
+      lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
       lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
       for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
@@ -236,7 +236,7 @@ export async function appendStatusAllDiagnosis(params: {
   })();
   if (healthErr) {
     lines.push("");
-    lines.push(`${muted("Gateway health:")}`);
+    lines.push(muted("Gateway health:"));
     lines.push(`  ${muted(redactSecrets(healthErr))}`);
   }
 

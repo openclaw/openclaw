@@ -32,7 +32,66 @@ if (modalElement && Array.isArray(modalElement.styles)) {
   modalElement.styles = [...modalElement.styles, modalStyles];
 }
 
-const empty = Object.freeze({});
+const appendComponentStyles = (tagName, extraStyles) => {
+  const component = customElements.get(tagName);
+  if (!component) {
+    return;
+  }
+
+  const current = component.styles;
+  if (!current) {
+    component.styles = [extraStyles];
+    return;
+  }
+
+  component.styles = Array.isArray(current) ? [...current, extraStyles] : [current, extraStyles];
+};
+
+appendComponentStyles(
+  "a2ui-row",
+  css`
+    @media (max-width: 860px) {
+      section {
+        flex-wrap: wrap;
+        align-content: flex-start;
+      }
+
+      ::slotted(*) {
+        flex: 1 1 100%;
+        min-width: 100%;
+        width: 100%;
+        max-width: 100%;
+      }
+    }
+  `,
+);
+
+appendComponentStyles(
+  "a2ui-column",
+  css`
+    :host {
+      min-width: 0;
+    }
+
+    section {
+      min-width: 0;
+    }
+  `,
+);
+
+appendComponentStyles(
+  "a2ui-card",
+  css`
+    :host {
+      min-width: 0;
+    }
+
+    section {
+      min-width: 0;
+    }
+  `,
+);
+
 const emptyClasses = () => ({});
 const textHintStyles = () => ({ h1: {}, h2: {}, h3: {}, h4: {}, h5: {}, body: {}, caption: {} });
 
@@ -160,7 +219,7 @@ class OpenClawA2UIHost extends LitElement {
   };
 
   #processor = v0_8.Data.createSignalA2uiMessageProcessor();
-  #themeProvider = new ContextProvider(this, {
+  themeProvider = new ContextProvider(this, {
     context: themeContext,
     initialValue: openclawTheme,
   });
@@ -318,8 +377,8 @@ class OpenClawA2UIHost extends LitElement {
 
   #handleActionStatus(evt) {
     const detail = evt?.detail ?? null;
-    if (!detail || typeof detail.id !== "string") return;
-    if (!this.pendingAction || this.pendingAction.id !== detail.id) return;
+    if (!detail || typeof detail.id !== "string") {return;}
+    if (!this.pendingAction || this.pendingAction.id !== detail.id) {return;}
 
     if (detail.ok) {
       this.pendingAction = { ...this.pendingAction, phase: "sent", sentAt: Date.now() };
@@ -362,7 +421,7 @@ class OpenClawA2UIHost extends LitElement {
     for (const item of ctxItems) {
       const key = item?.key;
       const value = item?.value ?? null;
-      if (!key || !value) continue;
+      if (!key || !value) {continue;}
 
       if (typeof value.path === "string") {
         const resolved = sourceNode
@@ -452,7 +511,6 @@ class OpenClawA2UIHost extends LitElement {
     if (this.surfaces.length === 0) {
       return html`<div class="empty">
         <div class="empty-title">Canvas (A2UI)</div>
-        <div>Waiting for A2UI messages…</div>
       </div>`;
     }
 

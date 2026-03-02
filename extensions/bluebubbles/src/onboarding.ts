@@ -9,6 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   addWildcardAllowFrom,
   formatDocsLink,
+  mergeAllowFromEntries,
   normalizeAccountId,
   promptAccountId,
 } from "openclaw/plugin-sdk";
@@ -17,8 +18,8 @@ import {
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
+import { parseBlueBubblesAllowTarget } from "./targets.js";
 import { normalizeBlueBubblesServerUrl } from "./types.js";
-import { parseBlueBubblesAllowTarget, normalizeBlueBubblesHandle } from "./targets.js";
 
 const channel = "bluebubbles" as const;
 
@@ -110,10 +111,14 @@ async function promptBlueBubblesAllowFrom(params: {
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
+      if (!raw) {
+        return "Required";
+      }
       const parts = parseBlueBubblesAllowFromInput(raw);
       for (const part of parts) {
-        if (part === "*") continue;
+        if (part === "*") {
+          continue;
+        }
         const parsed = parseBlueBubblesAllowTarget(part);
         if (parsed.kind === "handle" && !parsed.handle) {
           return `Invalid entry: ${part}`;
@@ -123,7 +128,7 @@ async function promptBlueBubblesAllowFrom(params: {
     },
   });
   const parts = parseBlueBubblesAllowFromInput(String(entry));
-  const unique = [...new Set(parts)];
+  const unique = mergeAllowFromEntries(undefined, parts);
   return setBlueBubblesAllowFrom(params.cfg, accountId, unique);
 }
 
@@ -171,6 +176,28 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
 
     let next = cfg;
     const resolvedAccount = resolveBlueBubblesAccount({ cfg: next, accountId });
+    const validateServerUrlInput = (value: unknown): string | undefined => {
+      const trimmed = String(value ?? "").trim();
+      if (!trimmed) {
+        return "Required";
+      }
+      try {
+        const normalized = normalizeBlueBubblesServerUrl(trimmed);
+        new URL(normalized);
+        return undefined;
+      } catch {
+        return "Invalid URL format";
+      }
+    };
+    const promptServerUrl = async (initialValue?: string): Promise<string> => {
+      const entered = await prompter.text({
+        message: "BlueBubbles server URL",
+        placeholder: "http://192.168.1.100:1234",
+        initialValue,
+        validate: validateServerUrlInput,
+      });
+      return String(entered).trim();
+    };
 
     // Prompt for server URL
     let serverUrl = resolvedAccount.config.serverUrl?.trim();
@@ -183,45 +210,14 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
         ].join("\n"),
         "BlueBubbles server URL",
       );
-      const entered = await prompter.text({
-        message: "BlueBubbles server URL",
-        placeholder: "http://192.168.1.100:1234",
-        validate: (value) => {
-          const trimmed = String(value ?? "").trim();
-          if (!trimmed) return "Required";
-          try {
-            const normalized = normalizeBlueBubblesServerUrl(trimmed);
-            new URL(normalized);
-            return undefined;
-          } catch {
-            return "Invalid URL format";
-          }
-        },
-      });
-      serverUrl = String(entered).trim();
+      serverUrl = await promptServerUrl();
     } else {
       const keepUrl = await prompter.confirm({
         message: `BlueBubbles server URL already set (${serverUrl}). Keep it?`,
         initialValue: true,
       });
       if (!keepUrl) {
-        const entered = await prompter.text({
-          message: "BlueBubbles server URL",
-          placeholder: "http://192.168.1.100:1234",
-          initialValue: serverUrl,
-          validate: (value) => {
-            const trimmed = String(value ?? "").trim();
-            if (!trimmed) return "Required";
-            try {
-              const normalized = normalizeBlueBubblesServerUrl(trimmed);
-              new URL(normalized);
-              return undefined;
-            } catch {
-              return "Invalid URL format";
-            }
-          },
-        });
-        serverUrl = String(entered).trim();
+        serverUrl = await promptServerUrl(serverUrl);
       }
     }
 
@@ -268,8 +264,12 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: existingWebhookPath || "/bluebubbles-webhook",
         validate: (value) => {
           const trimmed = String(value ?? "").trim();
-          if (!trimmed) return "Required";
-          if (!trimmed.startsWith("/")) return "Path must start with /";
+          if (!trimmed) {
+            return "Required";
+          }
+          if (!trimmed.startsWith("/")) {
+            return "Path must start with /";
+          }
           return undefined;
         },
       });

@@ -1,7 +1,5 @@
 import { EventEmitter } from "node:events";
-
 import { describe, expect, it, vi } from "vitest";
-
 import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
 
 describe("waitForDiscordGatewayStop", () => {
@@ -82,5 +80,49 @@ describe("waitForDiscordGatewayStop", () => {
     abort.abort();
 
     await expect(promise).resolves.toBeUndefined();
+  });
+
+  it("rejects via registerForceStop and disconnects gateway", async () => {
+    const emitter = new EventEmitter();
+    const disconnect = vi.fn();
+    const abort = new AbortController();
+    let forceStop: ((err: unknown) => void) | undefined;
+
+    const promise = waitForDiscordGatewayStop({
+      gateway: { emitter, disconnect },
+      abortSignal: abort.signal,
+      registerForceStop: (fn) => {
+        forceStop = fn;
+      },
+    });
+
+    expect(forceStop).toBeDefined();
+
+    forceStop?.(new Error("reconnect watchdog timeout"));
+
+    await expect(promise).rejects.toThrow("reconnect watchdog timeout");
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(emitter.listenerCount("error")).toBe(0);
+  });
+
+  it("ignores forceStop after promise already settled", async () => {
+    const emitter = new EventEmitter();
+    const disconnect = vi.fn();
+    const abort = new AbortController();
+    let forceStop: ((err: unknown) => void) | undefined;
+
+    const promise = waitForDiscordGatewayStop({
+      gateway: { emitter, disconnect },
+      abortSignal: abort.signal,
+      registerForceStop: (fn) => {
+        forceStop = fn;
+      },
+    });
+
+    abort.abort();
+    await expect(promise).resolves.toBeUndefined();
+
+    forceStop?.(new Error("too late"));
+    expect(disconnect).toHaveBeenCalledTimes(1);
   });
 });

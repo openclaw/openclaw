@@ -8,14 +8,24 @@ echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running plugins Docker E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
-  set -euo pipefail
+	docker run --rm -t "$IMAGE_NAME" bash -lc '
+	  set -euo pipefail
+	  if [ -f dist/index.mjs ]; then
+	    OPENCLAW_ENTRY="dist/index.mjs"
+	  elif [ -f dist/index.js ]; then
+	    OPENCLAW_ENTRY="dist/index.js"
+	  else
+	    echo "Missing dist/index.(m)js (build output):"
+	    ls -la dist || true
+	    exit 1
+	  fi
+	  export OPENCLAW_ENTRY
 
-  home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
-  export HOME="$home_dir"
-  mkdir -p "$HOME/.openclaw/extensions"
+	  home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
+	  export HOME="$home_dir"
+  mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
 
-  cat > "$HOME/.openclaw/extensions/demo-plugin.js" <<'"'"'JS'"'"'
+  cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'"'"'JS'"'"'
 module.exports = {
   id: "demo-plugin",
   name: "Demo Plugin",
@@ -28,8 +38,17 @@ module.exports = {
   },
 };
 JS
+  cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'"'"'JSON'"'"'
+{
+  "id": "demo-plugin",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
 
-  node dist/index.js plugins list --json > /tmp/plugins.json
+	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -79,10 +98,19 @@ module.exports = {
   },
 };
 JS
+  cat > "$pack_dir/package/openclaw.plugin.json" <<'"'"'JSON'"'"'
+{
+  "id": "demo-plugin-tgz",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
   tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
-  node dist/index.js plugins install /tmp/demo-plugin-tgz.tgz
-  node dist/index.js plugins list --json > /tmp/plugins2.json
+	  node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
+	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -117,9 +145,18 @@ module.exports = {
   },
 };
 JS
+  cat > "$dir_plugin/openclaw.plugin.json" <<'"'"'JSON'"'"'
+{
+  "id": "demo-plugin-dir",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
 
-  node dist/index.js plugins install "$dir_plugin"
-  node dist/index.js plugins list --json > /tmp/plugins3.json
+	  node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
+	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");
@@ -155,9 +192,18 @@ module.exports = {
   },
 };
 JS
+  cat > "$file_pack_dir/package/openclaw.plugin.json" <<'"'"'JSON'"'"'
+{
+  "id": "demo-plugin-file",
+  "configSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+JSON
 
-  node dist/index.js plugins install "file:$file_pack_dir/package"
-  node dist/index.js plugins list --json > /tmp/plugins4.json
+	  node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
+	  node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
 
   node - <<'"'"'NODE'"'"'
 const fs = require("node:fs");

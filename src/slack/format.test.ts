@@ -1,92 +1,52 @@
 import { describe, expect, it } from "vitest";
-
 import { markdownToSlackMrkdwn } from "./format.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
-  it("converts bold from double asterisks to single", () => {
-    const res = markdownToSlackMrkdwn("**bold text**");
-    expect(res).toBe("*bold text*");
+  it("handles core markdown formatting conversions", () => {
+    const cases = [
+      ["converts bold from double asterisks to single", "**bold text**", "*bold text*"],
+      ["preserves italic underscore format", "_italic text_", "_italic text_"],
+      [
+        "converts strikethrough from double tilde to single",
+        "~~strikethrough~~",
+        "~strikethrough~",
+      ],
+      [
+        "renders basic inline formatting together",
+        "hi _there_ **boss** `code`",
+        "hi _there_ *boss* `code`",
+      ],
+      ["renders inline code", "use `npm install`", "use `npm install`"],
+      ["renders fenced code blocks", "```js\nconst x = 1;\n```", "```\nconst x = 1;\n```"],
+      [
+        "renders links with Slack mrkdwn syntax",
+        "see [docs](https://example.com)",
+        "see <https://example.com|docs>",
+      ],
+      ["does not duplicate bare URLs", "see https://example.com", "see https://example.com"],
+      ["escapes unsafe characters", "a & b < c > d", "a &amp; b &lt; c &gt; d"],
+      [
+        "preserves Slack angle-bracket markup (mentions/links)",
+        "hi <@U123> see <https://example.com|docs> and <!here>",
+        "hi <@U123> see <https://example.com|docs> and <!here>",
+      ],
+      ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
+      ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
+      ["renders bullet lists", "- one\n- two", "• one\n• two"],
+      ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
+      ["renders headings as bold text", "# Title", "*Title*"],
+      ["renders blockquotes", "> Quote", "> Quote"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(markdownToSlackMrkdwn(input), name).toBe(expected);
+    }
   });
 
-  it("preserves italic underscore format", () => {
-    const res = markdownToSlackMrkdwn("_italic text_");
-    expect(res).toBe("_italic text_");
-  });
-
-  it("converts strikethrough from double tilde to single", () => {
-    const res = markdownToSlackMrkdwn("~~strikethrough~~");
-    expect(res).toBe("~strikethrough~");
-  });
-
-  it("renders basic inline formatting together", () => {
-    const res = markdownToSlackMrkdwn("hi _there_ **boss** `code`");
-    expect(res).toBe("hi _there_ *boss* `code`");
-  });
-
-  it("renders inline code", () => {
-    const res = markdownToSlackMrkdwn("use `npm install`");
-    expect(res).toBe("use `npm install`");
-  });
-
-  it("renders fenced code blocks", () => {
-    const res = markdownToSlackMrkdwn("```js\nconst x = 1;\n```");
-    expect(res).toBe("```\nconst x = 1;\n```");
-  });
-
-  it("renders links with Slack mrkdwn syntax", () => {
-    const res = markdownToSlackMrkdwn("see [docs](https://example.com)");
-    expect(res).toBe("see <https://example.com|docs>");
-  });
-
-  it("does not duplicate bare URLs", () => {
-    const res = markdownToSlackMrkdwn("see https://example.com");
-    expect(res).toBe("see https://example.com");
-  });
-
-  it("escapes unsafe characters", () => {
-    const res = markdownToSlackMrkdwn("a & b < c > d");
-    expect(res).toBe("a &amp; b &lt; c &gt; d");
-  });
-
-  it("preserves Slack angle-bracket markup (mentions/links)", () => {
-    const res = markdownToSlackMrkdwn("hi <@U123> see <https://example.com|docs> and <!here>");
-    expect(res).toBe("hi <@U123> see <https://example.com|docs> and <!here>");
-  });
-
-  it("escapes raw HTML", () => {
-    const res = markdownToSlackMrkdwn("<b>nope</b>");
-    expect(res).toBe("&lt;b&gt;nope&lt;/b&gt;");
-  });
-
-  it("renders paragraphs with blank lines", () => {
-    const res = markdownToSlackMrkdwn("first\n\nsecond");
-    expect(res).toBe("first\n\nsecond");
-  });
-
-  it("renders bullet lists", () => {
-    const res = markdownToSlackMrkdwn("- one\n- two");
-    expect(res).toBe("• one\n• two");
-  });
-
-  it("renders ordered lists with numbering", () => {
-    const res = markdownToSlackMrkdwn("2. two\n3. three");
-    expect(res).toBe("2. two\n3. three");
-  });
-
-  it("renders headings as bold text", () => {
-    const res = markdownToSlackMrkdwn("# Title");
-    expect(res).toBe("*Title*");
-  });
-
-  it("renders blockquotes", () => {
-    const res = markdownToSlackMrkdwn("> Quote");
-    expect(res).toBe("> Quote");
-  });
-
-  it("handles adjacent list items", () => {
+  it("handles nested list items", () => {
     const res = markdownToSlackMrkdwn("- item\n  - nested");
-    // markdown-it treats indented items as continuation, not nesting
-    expect(res).toBe("• item  • nested");
+    // markdown-it correctly parses this as a nested list
+    expect(res).toBe("• item\n  • nested");
   });
 
   it("handles complex message with multiple elements", () => {
@@ -96,5 +56,15 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe(
       "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
+  });
+});
+
+describe("escapeSlackMrkdwn", () => {
+  it("returns plain text unchanged", () => {
+    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
+  });
+
+  it("escapes slack and mrkdwn control characters", () => {
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
   });
 });

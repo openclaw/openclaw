@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";

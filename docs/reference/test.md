@@ -2,28 +2,66 @@
 summary: "How to run tests locally (vitest) and when to use force/coverage modes"
 read_when:
   - Running or fixing tests
+title: "Tests"
 ---
+
 # Tests
 
-- Full testing kit (suites, live, Docker): [Testing](/testing)
+- Full testing kit (suites, live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
-- `pnpm test:coverage`: Runs Vitest with V8 coverage. Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
-- `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing).
+- `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
+- `pnpm test` on Node 24+: OpenClaw auto-disables Vitest `vmForks` and uses `forks` to avoid `ERR_VM_MODULE_LINK_FAILURE` / `module is already linked`. You can force behavior with `OPENCLAW_TEST_VM_FORKS=0|1`.
+- `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `vmForks` + adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
+
+## Local PR gate
+
+For local PR land/gate checks, run:
+
+- `pnpm check`
+- `pnpm build`
+- `pnpm test`
+- `pnpm check:docs`
+
+If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
+
+- `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
 
 ## Model latency bench (local keys)
 
 Script: [`scripts/bench-model.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-model.ts)
 
 Usage:
+
 - `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
 - Optional env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
 - Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
 
 Last run (2025-12-31, 20 runs):
+
 - minimax median 1279ms (min 1114, max 2431)
 - opus median 2454ms (min 1224, max 3170)
+
+## CLI startup bench
+
+Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-cli-startup.ts)
+
+Usage:
+
+- `pnpm tsx scripts/bench-cli-startup.ts`
+- `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
+
+This benchmarks these commands:
+
+- `--version`
+- `--help`
+- `health --json`
+- `status --json`
+- `status`
+
+Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
 
 ## Onboarding E2E (Docker)
 

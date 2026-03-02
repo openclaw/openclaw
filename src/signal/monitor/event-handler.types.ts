@@ -16,10 +16,19 @@ export type SignalEnvelope = {
   reactionMessage?: SignalReactionMessage | null;
 };
 
+export type SignalMention = {
+  name?: string | null;
+  number?: string | null;
+  uuid?: string | null;
+  start?: number | null;
+  length?: number | null;
+};
+
 export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
   attachments?: Array<SignalAttachment>;
+  mentions?: Array<SignalMention> | null;
   groupInfo?: {
     groupId?: string | null;
     groupName?: string | null;
@@ -63,6 +72,7 @@ export type SignalEventHandlerDeps = {
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;
+  accountUuid?: string;
   accountId: string;
   blockStreaming?: boolean;
   historyLimit: number;

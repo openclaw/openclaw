@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { validateConfigObject } from "./config.js";
 
 describe("Slack token config fields", () => {
@@ -33,5 +32,40 @@ describe("Slack token config fields", () => {
       },
     });
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid userTokenReadOnly types", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          botToken: "xoxb-any",
+          appToken: "xapp-any",
+          userToken: "xoxp-any",
+          // oxlint-disable-next-line typescript/no-explicit-any
+          userTokenReadOnly: "no" as any,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.path.includes("userTokenReadOnly"))).toBe(true);
+    }
+  });
+
+  it("rejects invalid userToken types", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          botToken: "xoxb-any",
+          appToken: "xapp-any",
+          // oxlint-disable-next-line typescript/no-explicit-any
+          userToken: 123 as any,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.path.includes("userToken"))).toBe(true);
+    }
   });
 });

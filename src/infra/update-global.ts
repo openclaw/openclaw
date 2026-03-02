@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathExists } from "../utils.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -11,15 +12,12 @@ export type CommandRunner = (
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const GLOBAL_RENAME_PREFIX = ".";
+const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
+const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
+  "--omit=optional",
+  ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+] as const;
 
 async function tryRealpath(targetPath: string): Promise<string> {
   try {
@@ -90,7 +88,8 @@ export async function detectGlobalInstallManagerForRoot(
     const globalReal = await tryRealpath(globalRoot);
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
-      if (path.resolve(expected) === path.resolve(pkgReal)) {
+      const expectedReal = await tryRealpath(expected);
+      if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
         return manager;
       }
     }
@@ -100,7 +99,8 @@ export async function detectGlobalInstallManagerForRoot(
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
   for (const name of ALL_PACKAGE_NAMES) {
     const bunExpected = path.join(bunGlobalReal, name);
-    if (path.resolve(bunExpected) === path.resolve(pkgReal)) {
+    const bunExpectedReal = await tryRealpath(bunExpected);
+    if (path.resolve(bunExpectedReal) === path.resolve(pkgReal)) {
       return "bun";
     }
   }
@@ -140,5 +140,51 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec];
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+}
+
+export function globalInstallFallbackArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+): string[] | null {
+  if (manager !== "npm") {
+    return null;
+  }
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+}
+
+export async function cleanupGlobalRenameDirs(params: {
+  globalRoot: string;
+  packageName: string;
+}): Promise<{ removed: string[] }> {
+  const removed: string[] = [];
+  const root = params.globalRoot.trim();
+  const name = params.packageName.trim();
+  if (!root || !name) {
+    return { removed };
+  }
+  const prefix = `${GLOBAL_RENAME_PREFIX}${name}-`;
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(root);
+  } catch {
+    return { removed };
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const target = path.join(root, entry);
+    try {
+      const stat = await fs.lstat(target);
+      if (!stat.isDirectory()) {
+        continue;
+      }
+      await fs.rm(target, { recursive: true, force: true });
+      removed.push(entry);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+  return { removed };
 }

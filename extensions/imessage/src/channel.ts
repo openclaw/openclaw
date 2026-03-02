@@ -18,11 +18,12 @@ import {
   resolveIMessageAccount,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk";
-
 import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");
@@ -38,10 +39,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   pairing: {
     idLabel: "imessageSenderId",
     notifyApproval: async ({ id }) => {
-      await getIMessageRuntime().channel.imessage.sendMessageIMessage(
-        id,
-        PAIRING_APPROVED_MESSAGE,
-      );
+      await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
     },
   },
   capabilities: {
@@ -82,6 +80,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -99,9 +99,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.imessage !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
+      if (groupPolicy !== "open") {
+        return [];
+      }
       return [
         `- iMessage groups: groupPolicy="open" allows any member to trigger the bot. Set channels.imessage.groupPolicy="allowlist" + channels.imessage.groupAllowFrom to restrict senders.`,
       ];
@@ -185,7 +191,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
@@ -197,10 +203,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       const result = await send(to, text, {
         maxBytes,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, replyToId }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
@@ -213,6 +220,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         mediaUrl,
         maxBytes,
         accountId: accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
       });
       return { channel: "imessage", ...result };
     },
@@ -230,7 +238,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
         const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) return [];
+        if (!lastError) {
+          return [];
+        }
         return [
           {
             channel: "imessage",

@@ -1,9 +1,9 @@
-import { runGatewayUpdate } from "../infra/update-runner.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git" | "unknown"> {

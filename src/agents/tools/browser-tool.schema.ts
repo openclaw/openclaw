@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 
 const BROWSER_ACT_KINDS = [
@@ -87,6 +86,7 @@ export const BrowserToolSchema = Type.Object({
   node: Type.Optional(Type.String()),
   profile: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),

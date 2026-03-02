@@ -1,12 +1,12 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
+import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
@@ -253,6 +253,7 @@ export async function monitorWebInbox(options: {
 
       let mediaPath: string | undefined;
       let mediaType: string | undefined;
+      let mediaFileName: string | undefined;
       try {
         const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
         if (inboundMedia) {
@@ -266,9 +267,11 @@ export async function monitorWebInbox(options: {
             inboundMedia.mimetype,
             "inbound",
             maxBytes,
+            inboundMedia.fileName,
           );
           mediaPath = saved.path;
           mediaType = inboundMedia.mimetype;
+          mediaFileName = inboundMedia.fileName;
         }
       } catch (err) {
         logVerbose(`Inbound media download failed: ${String(err)}`);
@@ -293,7 +296,7 @@ export async function monitorWebInbox(options: {
       const senderName = msg.pushName ?? undefined;
 
       inboundLogger.info(
-        { from, to: selfE164 ?? "me", body, mediaPath, mediaType, timestamp },
+        { from, to: selfE164 ?? "me", body, mediaPath, mediaType, mediaFileName, timestamp },
         "inbound message",
       );
       const inboundMessage: WebInboundMessage = {
@@ -326,6 +329,7 @@ export async function monitorWebInbox(options: {
         sendMedia,
         mediaPath,
         mediaType,
+        mediaFileName,
       };
       try {
         const task = Promise.resolve(debouncer.enqueue(inboundMessage));

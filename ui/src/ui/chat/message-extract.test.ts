@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-
 import {
   extractText,
   extractTextCached,
   extractThinking,
   extractThinkingCached,
-} from "./message-extract";
+} from "./message-extract.ts";
 
 describe("extractTextCached", () => {
   it("matches extractText output", () => {
@@ -23,6 +22,25 @@ describe("extractTextCached", () => {
     };
     expect(extractTextCached(message)).toBe("plain text");
     expect(extractTextCached(message)).toBe("plain text");
+  });
+
+  it("strips assistant relevant-memories scaffolding", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "<relevant-memories>",
+            "Internal memory context",
+            "</relevant-memories>",
+            "Final user answer",
+          ].join("\n"),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("Final user answer");
+    expect(extractTextCached(message)).toBe("Final user answer");
   });
 });
 

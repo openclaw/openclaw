@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 
 struct WideAreaGatewayBeacon: Sendable, Equatable {
     var instanceName: String
@@ -117,13 +117,12 @@ enum WideAreaGatewayDiscovery {
         }
 
         var seen = Set<String>()
-        let ordered = ips.filter { value in
+        return ips.filter { value in
             guard self.isTailnetIPv4(value) else { return false }
             if seen.contains(value) { return false }
             seen.insert(value)
             return true
         }
-        return ordered
     }
 
     private static func readTailscaleStatus() -> String? {
@@ -222,9 +221,9 @@ enum WideAreaGatewayDiscovery {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
         let outPipe = Pipe()
-        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = errPipe
+        // Avoid stderr pipe backpressure; we don't consume it.
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
@@ -370,5 +369,7 @@ private struct TailscaleStatus: Decodable {
 }
 
 extension Collection {
-    fileprivate var nonEmpty: Self? { isEmpty ? nil : self }
+    fileprivate var nonEmpty: Self? {
+        isEmpty ? nil : self
+    }
 }

@@ -4,11 +4,15 @@ Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/KeychainStore.swift
 Sources/Camera/CameraController.swift
+Sources/Device/DeviceInfoHelper.swift
+Sources/Device/DeviceStatusService.swift
+Sources/Device/NetworkStatusService.swift
 Sources/Chat/ChatSheet.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/OpenClawApp.swift
 Sources/Location/LocationService.swift
 Sources/Model/NodeAppModel.swift
+Sources/Model/NodeAppModel+Canvas.swift
 Sources/RootCanvas.swift
 Sources/RootTabs.swift
 Sources/Screen/ScreenController.swift

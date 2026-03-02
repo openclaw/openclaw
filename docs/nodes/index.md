@@ -4,6 +4,7 @@ read_when:
   - Pairing iOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
   - Adding new node commands or CLI helpers
+title: "Nodes"
 ---
 
 # Nodes
@@ -15,8 +16,10 @@ Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprec
 macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
 
 Notes:
+
 - Nodes are **peripherals**, not gateways. They don’t run the gateway service.
 - Telegram/WhatsApp/etc. messages land on the **gateway**, not on nodes.
+- Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
@@ -34,6 +37,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 ```
 
 Notes:
+
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
@@ -45,6 +49,7 @@ to execute on another. The model still talks to the **gateway**; the gateway
 forwards `exec` calls to the **node host** when `host=node` is selected.
 
 ### What runs where
+
 - **Gateway host**: receives messages, runs the model, routes tool calls.
 - **Node host**: executes `system.run`/`system.which` on the node machine.
 - **Approvals**: enforced on the node host via `~/.openclaw/exec-approvals.json`.
@@ -56,6 +61,28 @@ On the node machine:
 ```bash
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
+
+### Remote gateway via SSH tunnel (loopback bind)
+
+If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode),
+remote node hosts cannot connect directly. Create an SSH tunnel and point the
+node host at the local end of the tunnel.
+
+Example (node host -> gateway host):
+
+```bash
+# Terminal A (keep running): forward local 18790 -> gateway 127.0.0.1:18789
+ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
+
+# Terminal B: export the gateway token and connect through the tunnel
+export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
+openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+```
+
+Notes:
+
+- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
+- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
 
 ### Start a node host (service)
 
@@ -75,6 +102,7 @@ openclaw nodes list
 ```
 
 Naming options:
+
 - `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
@@ -109,6 +137,7 @@ Once set, any `exec` call with `host=node` runs on the node host (subject to the
 node allowlist/approvals).
 
 Related:
+
 - [Node host CLI](/cli/node)
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
@@ -144,6 +173,7 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 ```
 
 Notes:
+
 - `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
 - `canvas eval` accepts inline JS (`--js`) or a positional arg.
 
@@ -156,6 +186,7 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 ```
 
 Notes:
+
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 
 ## Photos + videos (node camera)
@@ -176,6 +207,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 Notes:
+
 - The node must be **foregrounded** for `canvas.*` and `camera.*` (background calls return `NODE_BACKGROUND_UNAVAILABLE`).
 - Clip duration is clamped (currently `<= 60s`) to avoid oversized base64 payloads.
 - Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
@@ -190,6 +222,7 @@ openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-
 ```
 
 Notes:
+
 - `screen.record` requires the node app to be foregrounded.
 - Android will show the system screen-capture prompt before recording.
 - Screen recordings are clamped to `<= 60s`.
@@ -208,6 +241,7 @@ openclaw nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 1
 ```
 
 Notes:
+
 - Location is **off by default**.
 - “Always” requires system permission; background fetch is best-effort.
 - The response includes lat/lon, accuracy (meters), and timestamp.
@@ -223,6 +257,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 ```
 
 Notes:
+
 - The permission prompt must be accepted on the Android device before the capability is advertised.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
 
@@ -239,11 +274,16 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 ```
 
 Notes:
+
 - `system.run` returns stdout/stderr/exit code in the payload.
 - `system.notify` respects notification permission state on the macOS app.
+- Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
+- For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped `--env` values are reduced to an explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
+- For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
+- On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- macOS nodes drop `PATH` overrides; headless node hosts only accept `PATH` when it prepends the node host PATH.
+- Node hosts ignore `PATH` overrides and strip dangerous startup/shell keys (`DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`). If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `--env`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.openclaw/exec-approvals.json`).
@@ -290,13 +330,14 @@ openclaw node run --host <gateway-host> --port 18789
 ```
 
 Notes:
+
 - Pairing is still required (the Gateway will show a node approval prompt).
 - The node host stores its node id, token, display name, and gateway connection info in `~/.openclaw/node.json`.
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).
-- On macOS, the headless node host prefers the companion app exec host when reachable and falls
-  back to local execution if the app is unavailable. Set `OPENCLAW_NODE_EXEC_HOST=app` to require
-  the app, or `OPENCLAW_NODE_EXEC_FALLBACK=0` to disable fallback.
+- On macOS, the headless node host executes `system.run` locally by default. Set
+  `OPENCLAW_NODE_EXEC_HOST=app` to route `system.run` through the companion app exec host; add
+  `OPENCLAW_NODE_EXEC_FALLBACK=0` to require the app host and fail closed if it is unavailable.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode

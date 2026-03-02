@@ -47,6 +47,11 @@ export type MSTeamsConfig = {
   enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /**
+   * Break-glass override: allow mutable identity matching (display names/UPNs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -63,6 +68,8 @@ export type MSTeamsConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (AAD object IDs or UPNs). */
   allowFrom?: Array<string>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for group/channel senders (AAD object IDs or UPNs). */
   groupAllowFrom?: Array<string>;
   /**
@@ -83,6 +90,11 @@ export type MSTeamsConfig = {
    * Use ["*"] to allow any host (not recommended).
    */
   mediaAllowHosts?: Array<string>;
+  /**
+   * Allowed host suffixes for attaching Authorization headers to inbound media retries.
+   * Use specific hosts only; avoid multi-tenant suffixes.
+   */
+  mediaAuthAllowHosts?: Array<string>;
   /** Default: require @mention to respond in channels/groups. */
   requireMention?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */
@@ -101,4 +113,6 @@ export type MSTeamsConfig = {
   sharePointSiteId?: string;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };

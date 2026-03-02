@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
@@ -8,7 +7,11 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { HookMessageChannel, HooksConfigResolved } from "../hooks.js";
+import {
+  normalizeHookDispatchSessionKey,
+  type HookAgentDispatchPayload,
+  type HooksConfigResolved,
+} from "../hooks.js";
 import { createHooksRequestHandler } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -30,30 +33,22 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
-  const dispatchAgentHook = (value: {
-    message: string;
-    name: string;
-    wakeMode: "now" | "next-heartbeat";
-    sessionKey: string;
-    deliver: boolean;
-    channel: HookMessageChannel;
-    to?: string;
-    model?: string;
-    thinking?: string;
-    timeoutSeconds?: number;
-    allowUnsafeExternalContent?: boolean;
-  }) => {
-    const sessionKey = value.sessionKey.trim() ? value.sessionKey.trim() : `hook:${randomUUID()}`;
+  const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
+    const sessionKey = normalizeHookDispatchSessionKey({
+      sessionKey: value.sessionKey,
+      targetAgentId: value.agentId,
+    });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
       id: jobId,
+      agentId: value.agentId,
       name: value.name,
       enabled: true,
       createdAtMs: now,
       updatedAtMs: now,
-      schedule: { kind: "at", atMs: now },
+      schedule: { kind: "at", at: new Date(now).toISOString() },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {
@@ -85,11 +80,13 @@ export function createGatewayHooksRequestHandler(params: {
         const summary = result.summary?.trim() || result.error?.trim() || result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
-        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-          sessionKey: mainSessionKey,
-        });
-        if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}` });
+        if (!result.delivered) {
+          enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+            sessionKey: mainSessionKey,
+          });
+          if (value.wakeMode === "now") {
+            requestHeartbeatNow({ reason: `hook:${jobId}` });
+          }
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);

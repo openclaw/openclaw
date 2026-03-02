@@ -1,5 +1,5 @@
-import type { ResolvedAgentRoute } from "../../../routing/resolve-route.js";
 import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
+import type { ResolvedAgentRoute } from "../../../routing/resolve-route.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
@@ -13,6 +13,7 @@ export type PreparedSlackMessage = {
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
+  replyToMode: "off" | "first" | "all";
   isDirectMessage: boolean;
   isRoomish: boolean;
   historyKey: string;

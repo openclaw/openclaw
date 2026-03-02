@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
@@ -7,11 +5,13 @@ import {
   MarkdownConfigSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk";
+import { z } from "zod";
 
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),
+    dangerouslyAllowNameMatching: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
@@ -28,6 +28,12 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    responsePrefix: z.string().optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+      })
+      .optional(),
   })
   .strict();
 

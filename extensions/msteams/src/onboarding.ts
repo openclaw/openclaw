@@ -4,20 +4,21 @@ import type {
   OpenClawConfig,
   DmPolicy,
   WizardPrompter,
+  MSTeamsTeamConfig,
 } from "openclaw/plugin-sdk";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptChannelAccessConfig,
 } from "openclaw/plugin-sdk";
-
-import { resolveMSTeamsCredentials } from "./token.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
 
@@ -61,6 +62,32 @@ function parseAllowFromInput(raw: string): string[] {
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
+}
+
+async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
+  appId: string;
+  appPassword: string;
+  tenantId: string;
+}> {
+  const appId = String(
+    await prompter.text({
+      message: "Enter MS Teams App ID",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  const appPassword = String(
+    await prompter.text({
+      message: "Enter MS Teams App Password",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  const tenantId = String(
+    await prompter.text({
+      message: "Enter MS Teams Tenant ID",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    }),
+  ).trim();
+  return { appId, appPassword, tenantId };
 }
 
 async function promptMSTeamsAllowFrom(params: {
@@ -107,9 +134,7 @@ async function promptMSTeamsAllowFrom(params: {
         );
         continue;
       }
-      const unique = [
-        ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-      ];
+      const unique = mergeAllowFromEntries(existing, ids);
       return setMSTeamsAllowFrom(params.cfg, unique);
     }
 
@@ -123,9 +148,7 @@ async function promptMSTeamsAllowFrom(params: {
     }
 
     const ids = resolved.map((item) => item.id as string);
-    const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-    ];
+    const unique = mergeAllowFromEntries(existing, ids);
     return setMSTeamsAllowFrom(params.cfg, unique);
   }
 }
@@ -168,10 +191,12 @@ function setMSTeamsTeamsAllowlist(
   const teams: Record<string, { channels?: Record<string, unknown> }> = { ...baseTeams };
   for (const entry of entries) {
     const teamKey = entry.teamKey;
-    if (!teamKey) continue;
+    if (!teamKey) {
+      continue;
+    }
     const existing = teams[teamKey] ?? {};
     if (entry.channelKey) {
-      const channels = { ...(existing.channels ?? {}) };
+      const channels = { ...existing.channels };
       channels[entry.channelKey] = channels[entry.channelKey] ?? {};
       teams[teamKey] = { ...existing, channels };
     } else {
@@ -185,7 +210,7 @@ function setMSTeamsTeamsAllowlist(
       msteams: {
         ...cfg.channels?.msteams,
         enabled: true,
-        teams,
+        teams: teams as Record<string, MSTeamsTeamConfig>,
       },
     },
   };
@@ -251,24 +276,7 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         };
       } else {
-        appId = String(
-          await prompter.text({
-            message: "Enter MS Teams App ID",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        appPassword = String(
-          await prompter.text({
-            message: "Enter MS Teams App Password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        tenantId = String(
-          await prompter.text({
-            message: "Enter MS Teams Tenant ID",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
       }
     } else if (hasConfigCreds) {
       const keep = await prompter.confirm({
@@ -276,44 +284,10 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keep) {
-        appId = String(
-          await prompter.text({
-            message: "Enter MS Teams App ID",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        appPassword = String(
-          await prompter.text({
-            message: "Enter MS Teams App Password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
-        tenantId = String(
-          await prompter.text({
-            message: "Enter MS Teams Tenant ID",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          }),
-        ).trim();
+        ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
       }
     } else {
-      appId = String(
-        await prompter.text({
-          message: "Enter MS Teams App ID",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
-      appPassword = String(
-        await prompter.text({
-          message: "Enter MS Teams App Password",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
-      tenantId = String(
-        await prompter.text({
-          message: "Enter MS Teams Tenant ID",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-      ).trim();
+      ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
     }
 
     if (appId && appPassword && tenantId) {
@@ -336,7 +310,9 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
       ([teamKey, value]) => {
         const channels = value?.channels ?? {};
         const channelKeys = Object.keys(channels);
-        if (channelKeys.length === 0) return [teamKey];
+        if (channelKeys.length === 0) {
+          return [teamKey];
+        }
         return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
       },
     );
@@ -379,9 +355,7 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
               ...resolvedTeams.map((entry) => ({
                 teamKey: entry.teamId as string,
               })),
-              ...unresolved
-                .map((entry) => parseMSTeamsTeamEntry(entry))
-                .filter(Boolean),
+              ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean),
             ] as Array<{ teamKey: string; channelKey?: string }>;
 
             if (resolvedChannels.length > 0 || resolvedTeams.length > 0 || unresolved.length > 0) {

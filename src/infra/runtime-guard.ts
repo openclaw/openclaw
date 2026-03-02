@@ -1,5 +1,4 @@
 import process from "node:process";
-
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 export type RuntimeKind = "node" | "unknown";
@@ -10,7 +9,7 @@ type Semver = {
   patch: number;
 };
 
-const MIN_NODE: Semver = { major: 22, minor: 0, patch: 0 };
+const MIN_NODE: Semver = { major: 22, minor: 12, patch: 0 };
 
 export type RuntimeDetails = {
   kind: RuntimeKind;
@@ -89,7 +88,7 @@ export function assertSupportedRuntime(
 
   runtime.error(
     [
-      "openclaw requires Node >=22.0.0.",
+      "openclaw requires Node >=22.12.0.",
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
       "Install Node: https://nodejs.org/en/download",

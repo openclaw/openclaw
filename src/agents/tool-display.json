@@ -30,6 +30,16 @@
       "title": "Exec",
       "detailKeys": ["command"]
     },
+    "tool_call": {
+      "emoji": "🧰",
+      "title": "Tool Call",
+      "detailKeys": []
+    },
+    "tool_call_update": {
+      "emoji": "🧰",
+      "title": "Tool Call",
+      "detailKeys": []
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -267,9 +277,17 @@
         "model",
         "thinking",
         "runTimeoutSeconds",
-        "cleanup",
-        "timeoutSeconds"
+        "cleanup"
       ]
+    },
+    "subagents": {
+      "emoji": "🤖",
+      "title": "Subagents",
+      "actions": {
+        "list": { "label": "list", "detailKeys": ["recentMinutes"] },
+        "kill": { "label": "kill", "detailKeys": ["target"] },
+        "steer": { "label": "steer", "detailKeys": ["target"] }
+      }
     },
     "session_status": {
       "emoji": "📊",

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 
 // --- Mocks ---
@@ -206,7 +205,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([match, noMatch]);
 
       await sandboxRecreateCommand(
-        { session: "target-session", browser: false, force: true },
+        { session: "target-session", all: false, browser: false, force: true },
         runtime as never,
       );
 
@@ -221,7 +220,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([agent, agentSub, other]);
 
       await sandboxRecreateCommand(
-        { agent: "work", browser: false, force: true },
+        { agent: "work", all: false, browser: false, force: true },
         runtime as never,
       );
 
@@ -251,6 +250,13 @@ describe("sandboxRecreateCommand", () => {
   });
 
   describe("confirmation flow", () => {
+    async function runCancelledConfirmation(confirmResult: boolean | symbol) {
+      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
+      mocks.clackConfirm.mockResolvedValue(confirmResult);
+
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
+    }
+
     it("should require confirmation without --force", async () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
       mocks.clackConfirm.mockResolvedValue(true);
@@ -262,20 +268,14 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel when user declines", async () => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-      mocks.clackConfirm.mockResolvedValue(false);
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
+      await runCancelledConfirmation(false);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
-      mocks.clackConfirm.mockResolvedValue(Symbol.for("clack:cancel"));
-
-      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
+      await runCancelledConfirmation(Symbol.for("clack:cancel"));
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();

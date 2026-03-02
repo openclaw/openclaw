@@ -1,9 +1,12 @@
-import type { WebClient } from "@slack/web-api";
-
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
+import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
+import { resolveSlackMedia } from "./monitor/media.js";
+import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -23,6 +26,12 @@ export type SlackMessageSummary = {
     name?: string;
     count?: number;
     users?: string[];
+  }>;
+  /** File attachments on this message. Present when the message has files. */
+  files?: Array<{
+    id?: string;
+    name?: string;
+    mimetype?: string;
   }>;
 };
 
@@ -148,7 +157,11 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & { mediaUrl?: string; threadTs?: string } = {},
+  opts: SlackActionClientOpts & {
+    mediaUrl?: string;
+    threadTs?: string;
+    blocks?: (Block | KnownBlock)[];
+  } = {},
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
@@ -156,6 +169,7 @@ export async function sendSlackMessage(
     mediaUrl: opts.mediaUrl,
     client: opts.client,
     threadTs: opts.threadTs,
+    blocks: opts.blocks,
   });
 }
 
@@ -163,13 +177,16 @@ export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts = {},
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
   const client = await getClient(opts);
+  const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
+  const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: content,
+    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    ...(blocks ? { blocks } : {}),
   });
 }
 
@@ -261,4 +278,49 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+/**
+ * Downloads a Slack file by ID and saves it to the local media store.
+ * Fetches a fresh download URL via files.info to avoid using stale private URLs.
+ * Returns null when the file cannot be found or downloaded.
+ */
+export async function downloadSlackFile(
+  fileId: string,
+  opts: SlackActionClientOpts & { maxBytes: number },
+): Promise<SlackMediaResult | null> {
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = await getClient(opts);
+
+  // Fetch fresh file metadata (includes a current url_private_download).
+  const info = await client.files.info({ file: fileId });
+  const file = info.file as
+    | {
+        id?: string;
+        name?: string;
+        mimetype?: string;
+        url_private?: string;
+        url_private_download?: string;
+      }
+    | undefined;
+
+  if (!file?.url_private_download && !file?.url_private) {
+    return null;
+  }
+
+  const results = await resolveSlackMedia({
+    files: [
+      {
+        id: file.id,
+        name: file.name,
+        mimetype: file.mimetype,
+        url_private: file.url_private,
+        url_private_download: file.url_private_download,
+      },
+    ],
+    token,
+    maxBytes: opts.maxBytes,
+  });
+
+  return results?.[0] ?? null;
 }

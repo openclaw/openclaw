@@ -1,8 +1,9 @@
 ---
-summary: 'Optional Docker-based setup and onboarding for OpenClaw'
+summary: "Optional Docker-based setup and onboarding for OpenClaw"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
+title: "Docker"
 ---
 
 # Docker (optional)
@@ -25,6 +26,7 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 ## Requirements
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
+- At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
 - Enough disk for images + logs
 
 ## Containerized Gateway (Docker Compose)
@@ -55,13 +57,57 @@ After it finishes:
 
 - Open `http://127.0.0.1:18789/` in your browser.
 - Paste the token into the Control UI (Settings → token).
+- Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
+
+### Automation/CI (non-interactive, no TTY noise)
+
+For scripts and CI, disable Compose pseudo-TTY allocation with `-T`:
+
+```bash
+docker compose run -T --rm openclaw-cli gateway probe
+docker compose run -T --rm openclaw-cli devices list --json
+```
+
+If your automation exports no Claude session vars, leaving them unset now resolves to
+empty values by default in `docker-compose.yml` to avoid repeated "variable is not set"
+warnings.
+
+### Shared-network security note (CLI + gateway)
+
+`openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI commands can
+reliably reach the gateway over `127.0.0.1` in Docker.
+
+Treat this as a shared trust boundary: loopback binding is not isolation between these two
+containers. If you need stronger separation, run commands from a separate container/host
+network path instead of the bundled `openclaw-cli` service.
+
+To reduce impact if the CLI process is compromised, the compose config drops
+`NET_RAW`/`NET_ADMIN` and enables `no-new-privileges` on `openclaw-cli`.
 
 It writes config/workspace on the host:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-Running on a VPS? See [Hetzner (Docker VPS)](/platforms/hetzner).
+Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
+
+### Shell Helpers (optional)
+
+For easier day-to-day Docker management, install `ClawDock`:
+
+```bash
+mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+```
+
+**Add to your shell config (zsh):**
+
+```bash
+echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
+```
+
+Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run `clawdock-help` for all commands.
+
+See [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md) for details.
 
 ### Manual flow (compose)
 
@@ -70,6 +116,27 @@ docker build -t openclaw:local -f Dockerfile .
 docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
+
+Note: run `docker compose ...` from the repo root. If you enabled
+`OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup script writes
+`docker-compose.extra.yml`; include it when running Compose elsewhere:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
+```
+
+### Control UI token + pairing (Docker)
+
+If you see “unauthorized” or “disconnected (1008): pairing required”, fetch a
+fresh dashboard link and approve the browser device:
+
+```bash
+docker compose run --rm openclaw-cli dashboard --no-open
+docker compose run --rm openclaw-cli devices list
+docker compose run --rm openclaw-cli devices approve <requestId>
+```
+
+More detail: [Dashboard](/web/dashboard), [Devices](/cli/devices).
 
 ### Extra mounts (optional)
 
@@ -88,6 +155,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 Notes:
 
 - Paths must be shared with Docker Desktop on macOS/Windows.
+- Each entry must be `source:target[:options]` with no spaces, tabs, or newlines.
 - If you edit `OPENCLAW_EXTRA_MOUNTS`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
 - `docker-compose.extra.yml` is generated. Don’t hand-edit it.
@@ -117,6 +185,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 Notes:
 
+- Named volumes must match `^[A-Za-z0-9][A-Za-z0-9_.-]*$`.
 - If you change `OPENCLAW_HOME_VOLUME`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
 - The named volume persists until removed with `docker volume rm <name>`.
@@ -140,6 +209,61 @@ Notes:
 - This accepts a space-separated list of apt package names.
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
+
+### Power-user / full-featured container (opt-in)
+
+The default Docker image is **security-first** and runs as the non-root `node`
+user. This keeps the attack surface small, but it means:
+
+- no system package installs at runtime
+- no Homebrew by default
+- no bundled Chromium/Playwright browsers
+
+If you want a more full-featured container, use these opt-in knobs:
+
+1. **Persist `/home/node`** so browser downloads and tool caches survive:
+
+```bash
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./docker-setup.sh
+```
+
+2. **Bake system deps into the image** (repeatable + persistent):
+
+```bash
+export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"
+./docker-setup.sh
+```
+
+3. **Install Playwright browsers without `npx`** (avoids npm override conflicts):
+
+```bash
+docker compose run --rm openclaw-cli \
+  node /app/node_modules/playwright-core/cli.js install chromium
+```
+
+If you need Playwright to install system deps, rebuild the image with
+`OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
+
+4. **Persist Playwright browser downloads**:
+
+- Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
+  `docker-compose.yml`.
+- Ensure `/home/node` persists via `OPENCLAW_HOME_VOLUME`, or mount
+  `/home/node/.cache/ms-playwright` via `OPENCLAW_EXTRA_MOUNTS`.
+
+### Permissions + EACCES
+
+The image runs as `node` (uid 1000). If you see permission errors on
+`/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000.
+
+Example (Linux host):
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+If you choose to run as root for convenience, you accept the security tradeoff.
 
 ### Faster rebuilds (recommended)
 
@@ -198,6 +322,13 @@ docker compose run --rm openclaw-cli channels add --channel discord --token "<to
 
 Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord)
 
+### OpenAI Codex OAuth (headless Docker)
+
+If you pick OpenAI Codex OAuth in the wizard, it opens a browser URL and tries
+to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
+headless setups that callback can show a browser error. Copy the full redirect
+URL you land on and paste it back into the wizard to finish auth.
+
 ### Health check
 
 ```bash
@@ -216,9 +347,31 @@ scripts/e2e/onboard-docker.sh
 pnpm test:docker:qr
 ```
 
+### LAN vs loopback (Docker Compose)
+
+`docker-setup.sh` defaults `OPENCLAW_GATEWAY_BIND=lan` so host access to
+`http://127.0.0.1:18789` works with Docker port publishing.
+
+- `lan` (default): host browser + host CLI can reach the published gateway port.
+- `loopback`: only processes inside the container network namespace can reach
+  the gateway directly; host-published port access may fail.
+
+The setup script also pins `gateway.mode=local` after onboarding so Docker CLI
+commands default to local loopback targeting.
+
+If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
+errors from Docker CLI commands, run:
+
+```bash
+docker compose run --rm openclaw-cli config set gateway.mode local
+docker compose run --rm openclaw-cli config set gateway.bind lan
+docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
+```
+
 ### Notes
 
-- Gateway bind defaults to `lan` for container use.
+- Gateway bind defaults to `lan` for container use (`OPENCLAW_GATEWAY_BIND`).
+- Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
 
 ## Agent Sandbox (host gateway + Docker tools)
@@ -250,7 +403,7 @@ mixed access levels in one gateway:
 - Read-only tools + read-only workspace (family/work agent)
 - No filesystem/shell tools (public agent)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for examples,
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for examples,
 precedence, and troubleshooting.
 
 ### Default behavior
@@ -262,6 +415,8 @@ precedence, and troubleshooting.
   - `"rw"` mounts the agent workspace read/write at `/workspace`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
+  - `host` is blocked.
+  - `container:<id>` is blocked by default (namespace-join risk).
 - Default allow: `exec`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
@@ -270,6 +425,9 @@ precedence, and troubleshooting.
 If you plan to install packages in `setupCommand`, note:
 
 - Default `docker.network` is `"none"` (no egress).
+- `docker.network: "host"` is blocked.
+- `docker.network: "container:<id>"` is blocked by default.
+- Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
 - `readOnlyRoot: true` blocks package installs.
 - `user` must be root for `apt-get` (omit `user` or set `user: "0:0"`).
   OpenClaw auto-recreates containers when `setupCommand` (or docker config) changes
@@ -281,32 +439,32 @@ If you plan to install packages in `setupCommand`, note:
   agents: {
     defaults: {
       sandbox: {
-        mode: 'non-main', // off | non-main | all
-        scope: 'agent', // session | agent | shared (agent is default)
-        workspaceAccess: 'none', // none | ro | rw
-        workspaceRoot: '~/.openclaw/sandboxes',
+        mode: "non-main", // off | non-main | all
+        scope: "agent", // session | agent | shared (agent is default)
+        workspaceAccess: "none", // none | ro | rw
+        workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: 'openclaw-sandbox:bookworm-slim',
-          workdir: '/workspace',
+          image: "openclaw-sandbox:bookworm-slim",
+          workdir: "/workspace",
           readOnlyRoot: true,
-          tmpfs: ['/tmp', '/var/tmp', '/run'],
-          network: 'none',
-          user: '1000:1000',
-          capDrop: ['ALL'],
-          env: { LANG: 'C.UTF-8' },
-          setupCommand: 'apt-get update && apt-get install -y git curl jq',
+          tmpfs: ["/tmp", "/var/tmp", "/run"],
+          network: "none",
+          user: "1000:1000",
+          capDrop: ["ALL"],
+          env: { LANG: "C.UTF-8" },
+          setupCommand: "apt-get update && apt-get install -y git curl jq",
           pidsLimit: 256,
-          memory: '1g',
-          memorySwap: '2g',
+          memory: "1g",
+          memorySwap: "2g",
           cpus: 1,
           ulimits: {
             nofile: { soft: 1024, hard: 2048 },
             nproc: 256,
           },
-          seccompProfile: '/path/to/seccomp.json',
-          apparmorProfile: 'openclaw-sandbox',
-          dns: ['1.1.1.1', '8.8.8.8'],
-          extraHosts: ['internal.service:10.0.0.5'],
+          seccompProfile: "/path/to/seccomp.json",
+          apparmorProfile: "openclaw-sandbox",
+          dns: ["1.1.1.1", "8.8.8.8"],
+          extraHosts: ["internal.service:10.0.0.5"],
         },
         prune: {
           idleHours: 24, // 0 disables idle pruning
@@ -319,18 +477,18 @@ If you plan to install packages in `setupCommand`, note:
     sandbox: {
       tools: {
         allow: [
-          'exec',
-          'process',
-          'read',
-          'write',
-          'edit',
-          'sessions_list',
-          'sessions_history',
-          'sessions_send',
-          'sessions_spawn',
-          'session_status',
+          "exec",
+          "process",
+          "read",
+          "write",
+          "edit",
+          "sessions_list",
+          "sessions_history",
+          "sessions_send",
+          "sessions_spawn",
+          "session_status",
         ],
-        deny: ['browser', 'canvas', 'nodes', 'cron', 'discord', 'gateway'],
+        deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"],
       },
     },
   },
@@ -339,7 +497,8 @@ If you plan to install packages in `setupCommand`, note:
 
 Hardening knobs live under `agents.defaults.sandbox.docker`:
 `network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
-`seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`.
+`seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`,
+`dangerouslyAllowContainerNamespaceJoin` (break-glass only).
 
 Multi-agent: override `agents.defaults.sandbox.{docker,browser,prune}.*` per agent via `agents.list[].sandbox.{docker,browser,prune}.*`
 (ignored when `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` is `"shared"`).
@@ -366,7 +525,7 @@ This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
 {
   agents: {
     defaults: {
-      sandbox: { docker: { image: 'openclaw-sandbox-common:bookworm-slim' } },
+      sandbox: { docker: { image: "openclaw-sandbox-common:bookworm-slim" } },
     },
   },
 }
@@ -389,6 +548,9 @@ Notes:
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.
+- Browser containers default to a dedicated Docker network (`openclaw-sandbox-browser`) instead of global `bridge`.
+- Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress by CIDR (for example `172.21.0.1/32`).
+- noVNC observer access is password-protected by default; OpenClaw provides a short-lived observer token URL that serves a local bootstrap page and keeps the password in URL fragment (instead of URL query).
 
 Use config:
 
@@ -410,7 +572,7 @@ Custom browser image:
 {
   agents: {
     defaults: {
-      sandbox: { browser: { image: 'my-openclaw-browser' } },
+      sandbox: { browser: { image: "my-openclaw-browser" } },
     },
   },
 }
@@ -437,7 +599,7 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 {
   agents: {
     defaults: {
-      sandbox: { docker: { image: 'my-openclaw-sbx' } },
+      sandbox: { docker: { image: "my-openclaw-sbx" } },
     },
   },
 }

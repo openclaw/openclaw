@@ -18,6 +18,8 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
+      - id: detect-private-key
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
 
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
@@ -45,15 +47,14 @@ repos:
           - '=== "string"'
           - --exclude-lines
           - 'typeof remote\?\.password === "string"'
-
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=error]  # Only fail on errors, not warnings/info
+        args: [--severity=error] # Only fail on errors, not warnings/info
         # Exclude vendor and scripts with embedded code or known issues
-        exclude: '^(vendor/|scripts/e2e/)'
+        exclude: "^(vendor/|scripts/e2e/)"
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
@@ -67,11 +68,36 @@ repos:
     hooks:
       - id: zizmor
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
-        exclude: '^(vendor/|Swabble/)'
+        exclude: "^(vendor/|Swabble/)"
+
+  # Python checks for skills scripts
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        files: "^skills/.*\\.py$"
+        args: [--config, pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: skills-python-tests
+        name: skills python tests
+        entry: pytest -q skills
+        language: python
+        additional_dependencies: [pytest>=8, <9]
+        pass_filenames: false
+        files: "^skills/.*\\.py$"
 
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # pnpm audit --prod --audit-level=high
+      - id: pnpm-audit-prod
+        name: pnpm-audit-prod
+        entry: pnpm audit --prod --audit-level=high
+        language: system
+        pass_filenames: false
+
       # oxlint --type-aware src test
       - id: oxlint
         name: oxlint

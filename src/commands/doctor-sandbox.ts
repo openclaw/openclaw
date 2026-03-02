@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -78,8 +77,11 @@ async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
     return true;
-  } catch (error: any) {
-    const stderr = error?.stderr || error?.message || "";
+  } catch (error) {
+    const stderr =
+      (error as { stderr: string } | undefined)?.stderr ||
+      (error as { message: string } | undefined)?.message ||
+      "";
     if (String(stderr).includes("No such image")) {
       return false;
     }
@@ -186,7 +188,16 @@ export async function maybeRepairSandboxImages(
 
   const dockerAvailable = await isDockerAvailable();
   if (!dockerAvailable) {
-    note("Docker not available; skipping sandbox image checks.", "Sandbox");
+    const lines = [
+      `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
+      "Docker is required for sandbox mode to function.",
+      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+      "",
+      "Options:",
+      "- Install Docker and restart the gateway",
+      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+    ];
+    note(lines.join("\n"), "Sandbox");
     return cfg;
   }
 

@@ -1,16 +1,29 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { shortenHomePath } from "../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { shortenHomePath } from "../utils.js";
 
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
+}
+
+function resolveDebugQuery(params: {
+  targetId?: unknown;
+  clear?: unknown;
+  profile?: string;
+  filter?: unknown;
+}) {
+  return {
+    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
+    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
+    clear: Boolean(params.clear),
+    profile: params.profile,
+  };
 }
 
 export function registerBrowserDebugCommands(
@@ -63,11 +76,11 @@ export function registerBrowserDebugCommands(
           {
             method: "GET",
             path: "/errors",
-            query: {
-              targetId: opts.targetId?.trim() || undefined,
-              clear: Boolean(opts.clear),
+            query: resolveDebugQuery({
+              targetId: opts.targetId,
+              clear: opts.clear,
               profile,
-            },
+            }),
           },
           { timeoutMs: 20000 },
         );
@@ -111,12 +124,12 @@ export function registerBrowserDebugCommands(
           {
             method: "GET",
             path: "/requests",
-            query: {
-              targetId: opts.targetId?.trim() || undefined,
-              filter: opts.filter?.trim() || undefined,
-              clear: Boolean(opts.clear),
+            query: resolveDebugQuery({
+              targetId: opts.targetId,
+              filter: opts.filter,
+              clear: opts.clear,
               profile,
-            },
+            }),
           },
           { timeoutMs: 20000 },
         );
@@ -180,7 +193,10 @@ export function registerBrowserDebugCommands(
   trace
     .command("stop")
     .description("Stop trace recording and write a .zip")
-    .option("--out <path>", "Output path for the trace zip")
+    .option(
+      "--out <path>",
+      "Output path within openclaw temp dir (e.g. trace.zip or /tmp/openclaw/trace.zip)",
+    )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);

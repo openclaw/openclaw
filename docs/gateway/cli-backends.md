@@ -4,7 +4,9 @@ read_when:
   - You want a reliable fallback when API providers fail
   - You are running Claude Code CLI or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
+title: "CLI Backends"
 ---
+
 # CLI backends (fallback runtime)
 
 OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
@@ -23,13 +25,13 @@ want “always works” text responses without relying on external APIs.
 You can use Claude Code CLI **without any config** (OpenClaw ships a built-in default):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/opus-4.5
+openclaw agent --message "hi" --model claude-cli/opus-4.6
 ```
 
 Codex CLI also works out of the box:
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
+openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -41,11 +43,11 @@ command path:
     defaults: {
       cliBackends: {
         "claude-cli": {
-          command: "/opt/homebrew/bin/claude"
-        }
-      }
-    }
-  }
+          command: "/opt/homebrew/bin/claude",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -60,21 +62,21 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
   agents: {
     defaults: {
       model: {
-        primary: "anthropic/claude-opus-4-5",
-        fallbacks: [
-          "claude-cli/opus-4.5"
-        ]
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["claude-cli/opus-4.6", "claude-cli/opus-4.5"],
       },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
-        "claude-cli/opus-4.5": {}
-      }
-    }
-  }
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "claude-cli/opus-4.6": {},
+        "claude-cli/opus-4.5": {},
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - If you use `agents.defaults.models` (allowlist), you must include `claude-cli/...`.
 - If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
   try the CLI backend next.
@@ -102,7 +104,7 @@ The provider id becomes the left side of your model ref:
     defaults: {
       cliBackends: {
         "claude-cli": {
-          command: "/opt/homebrew/bin/claude"
+          command: "/opt/homebrew/bin/claude",
         },
         "my-cli": {
           command: "my-cli",
@@ -111,8 +113,9 @@ The provider id becomes the left side of your model ref:
           input: "arg",
           modelArg: "--model",
           modelAliases: {
+            "claude-opus-4-6": "opus",
             "claude-opus-4-5": "opus",
-            "claude-sonnet-4-5": "sonnet"
+            "claude-sonnet-4-5": "sonnet",
           },
           sessionArg: "--session",
           sessionMode: "existing",
@@ -121,21 +124,21 @@ The provider id becomes the left side of your model ref:
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
-          serialize: true
-        }
-      }
-    }
-  }
+          serialize: true,
+        },
+      },
+    },
+  },
 }
 ```
 
 ## How it works
 
-1) **Selects a backend** based on the provider prefix (`claude-cli/...`).
-2) **Builds a system prompt** using the same OpenClaw prompt + workspace context.
-3) **Executes the CLI** with a session id (if supported) so history stays consistent.
-4) **Parses output** (JSON or plain text) and returns the final text.
-5) **Persists session ids** per backend, so follow-ups reuse the same CLI session.
+1. **Selects a backend** based on the provider prefix (`claude-cli/...`).
+2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
+3. **Executes the CLI** with a session id (if supported) so history stays consistent.
+4. **Parses output** (JSON or plain text) and returns the final text.
+5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
 ## Sessions
 
@@ -172,6 +175,7 @@ load local files from plain paths (Claude Code CLI behavior).
 - `output: "text"` treats stdout as the final response.
 
 Input modes:
+
 - `input: "arg"` (default) passes the prompt as the last CLI arg.
 - `input: "stdin"` sends the prompt via stdin.
 - If the prompt is very long and `maxPromptArgChars` is set, stdin is used.

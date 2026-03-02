@@ -1,3 +1,11 @@
+---
+title: "Pi Integration Architecture"
+summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
+read_when:
+  - Understanding Pi SDK integration design in OpenClaw
+  - Modifying agent session lifecycle, tooling, or provider wiring for Pi
+---
+
 # Pi Integration Architecture
 
 This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
@@ -24,12 +32,12 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 }
 ```
 
-| Package | Purpose |
-|---------|---------|
-| `pi-ai` | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs |
-| `pi-agent-core` | Agent loop, tool execution, `AgentMessage` types |
+| Package           | Purpose                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| `pi-ai`           | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs                           |
+| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                                       |
 | `pi-coding-agent` | High-level SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, built-in tools |
-| `pi-tui` | Terminal UI components (used in OpenClaw's local TUI mode) |
+| `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                                             |
 
 ## File Structure
 
@@ -155,7 +163,20 @@ const result = await runEmbeddedPiAgent({
 Inside `runEmbeddedAttempt()` (called by `runEmbeddedPiAgent()`), the pi SDK is used:
 
 ```typescript
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
+
+const resourceLoader = new DefaultResourceLoader({
+  cwd: resolvedWorkspace,
+  agentDir,
+  settingsManager,
+  additionalExtensionPaths,
+});
+await resourceLoader.reload();
 
 const { session } = await createAgentSession({
   cwd: resolvedWorkspace,
@@ -164,15 +185,14 @@ const { session } = await createAgentSession({
   modelRegistry: params.modelRegistry,
   model: params.model,
   thinkingLevel: mapThinkingLevel(params.thinkLevel),
-  systemPrompt: createSystemPromptOverride(appendPrompt),
   tools: builtInTools,
   customTools: allCustomTools,
   sessionManager,
   settingsManager,
-  skills: [],
-  contextFiles: [],
-  additionalExtensionPaths,
+  resourceLoader,
 });
+
+applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
 ### 3. Event Subscription
@@ -195,6 +215,7 @@ const subscription = subscribeEmbeddedPiSession({
 ```
 
 Events handled include:
+
 - `message_start` / `message_end` / `message_update` (streaming text/thinking)
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end`
 - `turn_start` / `turn_end`
@@ -210,6 +231,10 @@ await session.prompt(effectivePrompt, { images: imageResult.images });
 ```
 
 The SDK handles the full agent loop: sending to LLM, executing tool calls, streaming responses.
+
+Image injection is prompt-local: OpenClaw loads image refs from the current prompt and
+passes them via `images` for that turn only. It does not re-scan older history turns
+to re-inject image payloads.
 
 ## Tool Architecture
 
@@ -249,7 +274,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 ```typescript
 export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: boolean }) {
   return {
-    builtInTools: [],  // Empty. We override everything
+    builtInTools: [], // Empty. We override everything
     customTools: toToolDefinitions(options.tools),
   };
 }
@@ -259,13 +284,13 @@ This ensures OpenClaw's policy filtering, sandbox integration, and extended tool
 
 ## System Prompt Construction
 
-The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
+The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
-The prompt is passed to pi via `systemPrompt` override:
+The prompt is applied after session creation via `applySystemPromptOverrideToSession()`:
 
 ```typescript
-const systemPrompt = createSystemPromptOverride(appendPrompt);
-// Returns: (defaultPrompt: string) => trimmed custom prompt
+const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
 ## Session Management
@@ -328,7 +353,10 @@ const rotated = await advanceAuthProfile();
 import { resolveModel } from "./pi-embedded-runner/model.js";
 
 const { model, error, authStorage, modelRegistry } = resolveModel(
-  provider, modelId, agentDir, config
+  provider,
+  modelId,
+  agentDir,
+  config,
 );
 
 // Uses pi's ModelRegistry and AuthStorage
@@ -343,7 +371,9 @@ authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
   throw new FailoverError(errorText, {
     reason: promptFailoverReason ?? "unknown",
-    provider, model: modelId, profileId,
+    provider,
+    model: modelId,
+    profileId,
     status: resolveFailoverStatus(promptFailoverReason),
   });
 }
@@ -355,7 +385,7 @@ OpenClaw loads custom pi extensions for specialized behavior:
 
 ### Compaction Safeguard
 
-`pi-extensions/compaction-safeguard.ts` adds guardrails to compaction, including adaptive token budgeting plus tool failure and file operation summaries:
+`src/agents/pi-extensions/compaction-safeguard.ts` adds guardrails to compaction, including adaptive token budgeting plus tool failure and file operation summaries:
 
 ```typescript
 if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -366,12 +396,15 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 
 ### Context Pruning
 
-`pi-extensions/context-pruning.ts` implements cache-TTL based context pruning:
+`src/agents/pi-extensions/context-pruning.ts` implements cache-TTL based context pruning:
 
 ```typescript
 if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
   setContextPruningRuntime(params.sessionManager, {
-    settings, contextWindowTokens, isToolPrunable, lastCacheTouchAt,
+    settings,
+    contextWindowTokens,
+    isToolPrunable,
+    lastCacheTouchAt,
   });
   paths.push(resolvePiExtensionPath("context-pruning"));
 }
@@ -486,15 +519,15 @@ This provides the interactive terminal experience similar to pi's native mode.
 
 ## Key Differences from Pi CLI
 
-| Aspect | Pi CLI | OpenClaw Embedded |
-|--------|--------|-------------------|
-| Invocation | `pi` command / RPC | SDK via `createAgentSession()` |
-| Tools | Default coding tools | Custom OpenClaw tool suite |
-| System prompt | AGENTS.md + prompts | Dynamic per-channel/context |
+| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                              |
+| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
+| Invocation      | `pi` command / RPC      | SDK via `createAgentSession()`                                                                 |
+| Tools           | Default coding tools    | Custom OpenClaw tool suite                                                                     |
+| System prompt   | AGENTS.md + prompts     | Dynamic per-channel/context                                                                    |
 | Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (or `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth | Single credential | Multi-profile with rotation |
-| Extensions | Loaded from disk | Programmatic + disk paths |
-| Event handling | TUI rendering | Callback-based (onBlockReply, etc.) |
+| Auth            | Single credential       | Multi-profile with rotation                                                                    |
+| Extensions      | Loaded from disk        | Programmatic + disk paths                                                                      |
+| Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                            |
 
 ## Future Considerations
 
@@ -508,80 +541,22 @@ Areas for potential rework:
 
 ## Tests
 
-All existing tests that cover the pi integration and its extensions:
+Pi integration coverage spans these suites:
 
-- `src/agents/pi-embedded-block-chunker.test.ts`
-- `src/agents/pi-embedded-helpers.buildbootstrapcontextfiles.test.ts`
-- `src/agents/pi-embedded-helpers.classifyfailoverreason.test.ts`
-- `src/agents/pi-embedded-helpers.downgradeopenai-reasoning.test.ts`
-- `src/agents/pi-embedded-helpers.formatassistanterrortext.test.ts`
-- `src/agents/pi-embedded-helpers.formatrawassistanterrorforui.test.ts`
-- `src/agents/pi-embedded-helpers.image-dimension-error.test.ts`
-- `src/agents/pi-embedded-helpers.image-size-error.test.ts`
-- `src/agents/pi-embedded-helpers.isautherrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.iscloudcodeassistformaterror.test.ts`
-- `src/agents/pi-embedded-helpers.iscompactionfailureerror.test.ts`
-- `src/agents/pi-embedded-helpers.iscontextoverflowerror.test.ts`
-- `src/agents/pi-embedded-helpers.isfailovererrormessage.test.ts`
-- `src/agents/pi-embedded-helpers.islikelycontextoverflowerror.test.ts`
-- `src/agents/pi-embedded-helpers.ismessagingtoolduplicate.test.ts`
-- `src/agents/pi-embedded-helpers.messaging-duplicate.test.ts`
-- `src/agents/pi-embedded-helpers.normalizetextforcomparison.test.ts`
-- `src/agents/pi-embedded-helpers.resolvebootstrapmaxchars.test.ts`
-- `src/agents/pi-embedded-helpers.sanitize-session-messages-images.keeps-tool-call-tool-result-ids-unchanged.test.ts`
-- `src/agents/pi-embedded-helpers.sanitize-session-messages-images.removes-empty-assistant-text-blocks-but-preserves.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizegoogleturnordering.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizesessionmessagesimages-thought-signature-stripping.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizetoolcallid.test.ts`
-- `src/agents/pi-embedded-helpers.sanitizeuserfacingtext.test.ts`
-- `src/agents/pi-embedded-helpers.stripthoughtsignatures.test.ts`
-- `src/agents/pi-embedded-helpers.validate-turns.test.ts`
-- `src/agents/pi-embedded-runner-extraparams.live.test.ts` (live)
-- `src/agents/pi-embedded-runner-extraparams.test.ts`
-- `src/agents/pi-embedded-runner.applygoogleturnorderingfix.test.ts`
-- `src/agents/pi-embedded-runner.buildembeddedsandboxinfo.test.ts`
-- `src/agents/pi-embedded-runner.createsystempromptoverride.test.ts`
-- `src/agents/pi-embedded-runner.get-dm-history-limit-from-session-key.falls-back-provider-default-per-dm-not.test.ts`
-- `src/agents/pi-embedded-runner.get-dm-history-limit-from-session-key.returns-undefined-sessionkey-is-undefined.test.ts`
-- `src/agents/pi-embedded-runner.google-sanitize-thinking.test.ts`
-- `src/agents/pi-embedded-runner.guard.test.ts`
-- `src/agents/pi-embedded-runner.limithistoryturns.test.ts`
-- `src/agents/pi-embedded-runner.resolvesessionagentids.test.ts`
-- `src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts`
-- `src/agents/pi-embedded-runner.sanitize-session-history.test.ts`
-- `src/agents/pi-embedded-runner.splitsdktools.test.ts`
-- `src/agents/pi-embedded-runner.test.ts`
-- `src/agents/pi-embedded-subscribe.code-span-awareness.test.ts`
-- `src/agents/pi-embedded-subscribe.reply-tags.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.calls-onblockreplyflush-before-tool-execution-start-preserve.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-append-text-end-content-is.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-call-onblockreplyflush-callback-is-not.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-duplicate-text-end-repeats-full.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.does-not-emit-duplicate-block-replies-text.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.emits-block-replies-text-end-does-not.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.emits-reasoning-as-separate-message-enabled.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.filters-final-suppresses-output-without-start-tag.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.includes-canvas-action-metadata-tool-summaries.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.keeps-assistanttexts-final-answer-block-replies-are.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.keeps-indented-fenced-blocks-intact.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.reopens-fenced-blocks-splitting-inside-them.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.splits-long-single-line-fenced-blocks-reopen.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.streams-soft-chunks-paragraph-preference.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.subscribeembeddedpisession.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.suppresses-message-end-block-replies-message-tool.test.ts`
-- `src/agents/pi-embedded-subscribe.subscribe-embedded-pi-session.waits-multiple-compaction-retries-before-resolving.test.ts`
-- `src/agents/pi-embedded-subscribe.tools.test.ts`
-- `src/agents/pi-embedded-utils.test.ts`
-- `src/agents/pi-extensions/compaction-safeguard.test.ts`
-- `src/agents/pi-extensions/context-pruning.test.ts`
+- `src/agents/pi-*.test.ts`
+- `src/agents/pi-auth-json.test.ts`
+- `src/agents/pi-embedded-*.test.ts`
+- `src/agents/pi-embedded-helpers*.test.ts`
+- `src/agents/pi-embedded-runner*.test.ts`
+- `src/agents/pi-embedded-runner/**/*.test.ts`
+- `src/agents/pi-embedded-subscribe*.test.ts`
+- `src/agents/pi-tools*.test.ts`
+- `src/agents/pi-tool-definition-adapter*.test.ts`
 - `src/agents/pi-settings.test.ts`
-- `src/agents/pi-tool-definition-adapter.test.ts`
-- `src/agents/pi-tools-agent-config.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-b.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-d.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping-f.test.ts`
-- `src/agents/pi-tools.create-openclaw-coding-tools.adds-claude-style-aliases-schemas-without-dropping.test.ts`
-- `src/agents/pi-tools.policy.test.ts`
-- `src/agents/pi-tools.safe-bins.test.ts`
-- `src/agents/pi-tools.workspace-paths.test.ts`
+- `src/agents/pi-extensions/**/*.test.ts`
+
+Live/opt-in:
+
+- `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `OPENCLAW_LIVE_TEST=1`)
+
+For current run commands, see [Pi Development Workflow](/pi-dev).

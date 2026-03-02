@@ -1,5 +1,5 @@
-import type { MatrixRoomConfig } from "../../types.js";
 import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "openclaw/plugin-sdk";
+import type { MatrixRoomConfig } from "../../types.js";
 
 export type MatrixRoomConfigResolved = {
   allowed: boolean;
@@ -22,9 +22,13 @@ export function resolveMatrixRoomConfig(params: {
     params.roomId,
     `room:${params.roomId}`,
     ...params.aliases,
-    params.name ?? "",
   );
-  const { entry: matched, key: matchedKey, wildcardEntry, wildcardKey } = resolveChannelEntryMatch({
+  const {
+    entry: matched,
+    key: matchedKey,
+    wildcardEntry,
+    wildcardKey,
+  } = resolveChannelEntryMatch({
     entries: rooms,
     keys: candidates,
     wildcardKey: "*",

@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import type { MSTeamsConfig } from "openclaw/plugin-sdk";
+import { describe, expect, it } from "vitest";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
@@ -185,13 +184,25 @@ describe("msteams policy", () => {
       ).toBe(true);
     });
 
-    it("allows allowlist when sender name matches", () => {
+    it("blocks sender-name allowlist matches by default", () => {
       expect(
         isMSTeamsGroupAllowed({
           groupPolicy: "allowlist",
           allowFrom: ["user"],
           senderId: "other",
           senderName: "User",
+        }),
+      ).toBe(false);
+    });
+
+    it("allows sender-name allowlist matches when explicitly enabled", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: ["user"],
+          senderId: "other",
+          senderName: "User",
+          allowNameMatching: true,
         }),
       ).toBe(true);
     });

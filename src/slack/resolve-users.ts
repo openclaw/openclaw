@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-
 import { createSlackWebClient } from "./client.js";
 
 export type SlackUserLookup = {
@@ -116,6 +115,27 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
   return score;
 }
 
+function resolveSlackUserFromMatches(
+  input: string,
+  matches: SlackUserLookup[],
+  parsed: { name?: string; email?: string },
+): SlackUserResolution {
+  const scored = matches
+    .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
+    .toSorted((a, b) => b.score - a.score);
+  const best = scored[0]?.user ?? matches[0];
+  return {
+    input,
+    resolved: true,
+    id: best.id,
+    name: best.displayName ?? best.realName ?? best.name,
+    email: best.email,
+    deleted: best.deleted,
+    isBot: best.isBot,
+    note: matches.length > 1 ? "multiple matches; chose best" : undefined,
+  };
+}
+
 export async function resolveSlackUserAllowlist(params: {
   token: string;
   entries: string[];
@@ -143,20 +163,7 @@ export async function resolveSlackUserAllowlist(params: {
     if (parsed.email) {
       const matches = users.filter((user) => user.email === parsed.email);
       if (matches.length > 0) {
-        const scored = matches
-          .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .toSorted((a, b) => b.score - a.score);
-        const best = scored[0]?.user ?? matches[0];
-        results.push({
-          input,
-          resolved: true,
-          id: best.id,
-          name: best.displayName ?? best.realName ?? best.name,
-          email: best.email,
-          deleted: best.deleted,
-          isBot: best.isBot,
-          note: matches.length > 1 ? "multiple matches; chose best" : undefined,
-        });
+        results.push(resolveSlackUserFromMatches(input, matches, parsed));
         continue;
       }
     }
@@ -169,20 +176,7 @@ export async function resolveSlackUserAllowlist(params: {
         return candidates.includes(target);
       });
       if (matches.length > 0) {
-        const scored = matches
-          .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
-          .toSorted((a, b) => b.score - a.score);
-        const best = scored[0]?.user ?? matches[0];
-        results.push({
-          input,
-          resolved: true,
-          id: best.id,
-          name: best.displayName ?? best.realName ?? best.name,
-          email: best.email,
-          deleted: best.deleted,
-          isBot: best.isBot,
-          note: matches.length > 1 ? "multiple matches; chose best" : undefined,
-        });
+        results.push(resolveSlackUserFromMatches(input, matches, parsed));
         continue;
       }
     }

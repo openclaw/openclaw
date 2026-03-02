@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import type { Page } from "playwright-core";
-
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
+import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   ensurePageState,
   getPageForTargetId,
@@ -19,10 +20,39 @@ import {
   toAIFriendlyError,
 } from "./pw-tools-core.shared.js";
 
+function sanitizeDownloadFileName(fileName: string): string {
+  const trimmed = String(fileName ?? "").trim();
+  if (!trimmed) {
+    return "download.bin";
+  }
+
+  // `suggestedFilename()` is untrusted (influenced by remote servers). Force a basename so
+  // path separators/traversal can't escape the downloads dir on any platform.
+  let base = path.posix.basename(trimmed);
+  base = path.win32.basename(base);
+  let cleaned = "";
+  for (let i = 0; i < base.length; i++) {
+    const code = base.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      continue;
+    }
+    cleaned += base[i];
+  }
+  base = cleaned.trim();
+
+  if (!base || base === "." || base === "..") {
+    return "download.bin";
+  }
+  if (base.length > 200) {
+    base = base.slice(0, 200);
+  }
+  return base;
+}
+
 function buildTempDownloadPath(fileName: string): string {
   const id = crypto.randomUUID();
-  const safeName = fileName.trim() ? fileName.trim() : "download.bin";
-  return path.join("/tmp/openclaw/downloads", `${id}-${safeName}`);
+  const safeName = sanitizeDownloadFileName(fileName);
+  return path.join(resolvePreferredOpenClawTmpDir(), "downloads", `${id}-${safeName}`);
 }
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
@@ -74,6 +104,54 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   };
 }
 
+type DownloadPayload = {
+  url?: () => string;
+  suggestedFilename?: () => string;
+  saveAs?: (outPath: string) => Promise<void>;
+};
+
+async function saveDownloadPayload(download: DownloadPayload, outPath: string) {
+  const suggested = download.suggestedFilename?.() || "download.bin";
+  const requestedPath = outPath?.trim();
+  const resolvedOutPath = path.resolve(requestedPath || buildTempDownloadPath(suggested));
+  await fs.mkdir(path.dirname(resolvedOutPath), { recursive: true });
+
+  if (!requestedPath) {
+    await download.saveAs?.(resolvedOutPath);
+  } else {
+    await writeViaSiblingTempPath({
+      targetPath: resolvedOutPath,
+      writeTemp: async (tempPath) => {
+        await download.saveAs?.(tempPath);
+      },
+    });
+  }
+
+  return {
+    url: download.url?.() || "",
+    suggestedFilename: suggested,
+    path: resolvedOutPath,
+  };
+}
+
+async function awaitDownloadPayload(params: {
+  waiter: ReturnType<typeof createPageDownloadWaiter>;
+  state: ReturnType<typeof ensurePageState>;
+  armId: number;
+  outPath?: string;
+}) {
+  try {
+    const download = (await params.waiter.promise) as DownloadPayload;
+    if (params.state.armIdDownload !== params.armId) {
+      throw new Error("Download was superseded by another waiter");
+    }
+    return await saveDownloadPayload(download, params.outPath ?? "");
+  } catch (err) {
+    params.waiter.cancel();
+    throw err;
+  }
+}
+
 export async function armFileUploadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -102,7 +180,20 @@ export async function armFileUploadViaPlaywright(opts: {
         }
         return;
       }
-      await fileChooser.setFiles(opts.paths);
+      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+        rootDir: DEFAULT_UPLOAD_DIR,
+        requestedPaths: opts.paths,
+        scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+      });
+      if (!uploadPathsResult.ok) {
+        try {
+          await page.keyboard.press("Escape");
+        } catch {
+          // Best-effort.
+        }
+        return;
+      }
+      await fileChooser.setFiles(uploadPathsResult.paths);
       try {
         const input =
           typeof fileChooser.element === "function"
@@ -172,28 +263,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   const armId = state.armIdDownload;
 
   const waiter = createPageDownloadWaiter(page, timeout);
-  try {
-    const download = (await waiter.promise) as {
-      url?: () => string;
-      suggestedFilename?: () => string;
-      saveAs?: (outPath: string) => Promise<void>;
-    };
-    if (state.armIdDownload !== armId) {
-      throw new Error("Download was superseded by another waiter");
-    }
-    const suggested = download.suggestedFilename?.() || "download.bin";
-    const outPath = opts.path?.trim() || buildTempDownloadPath(suggested);
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    await download.saveAs?.(outPath);
-    return {
-      url: download.url?.() || "",
-      suggestedFilename: suggested,
-      path: path.resolve(outPath),
-    };
-  } catch (err) {
-    waiter.cancel();
-    throw err;
-  }
+  return await awaitDownloadPayload({ waiter, state, armId, outPath: opts.path });
 }
 
 export async function downloadViaPlaywright(opts: {
@@ -229,23 +299,7 @@ export async function downloadViaPlaywright(opts: {
     } catch (err) {
       throw toAIFriendlyError(err, ref);
     }
-
-    const download = (await waiter.promise) as {
-      url?: () => string;
-      suggestedFilename?: () => string;
-      saveAs?: (outPath: string) => Promise<void>;
-    };
-    if (state.armIdDownload !== armId) {
-      throw new Error("Download was superseded by another waiter");
-    }
-    const suggested = download.suggestedFilename?.() || "download.bin";
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    await download.saveAs?.(outPath);
-    return {
-      url: download.url?.() || "",
-      suggestedFilename: suggested,
-      path: path.resolve(outPath),
-    };
+    return await awaitDownloadPayload({ waiter, state, armId, outPath });
   } catch (err) {
     waiter.cancel();
     throw err;

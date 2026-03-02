@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 
@@ -29,7 +28,7 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "update" | "restart";
+  kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
@@ -110,7 +109,22 @@ export async function consumeRestartSentinel(
 }
 
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
-  return `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
+  const message = payload.message?.trim();
+  if (message && !payload.stats) {
+    return message;
+  }
+  const lines: string[] = [summarizeRestartSentinel(payload)];
+  if (message) {
+    lines.push(message);
+  }
+  const reason = payload.stats?.reason?.trim();
+  if (reason) {
+    lines.push(`Reason: ${reason}`);
+  }
+  if (payload.doctorHint?.trim()) {
+    lines.push(payload.doctorHint.trim());
+  }
+  return lines.join("\n");
 }
 
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {

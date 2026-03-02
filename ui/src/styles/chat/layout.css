@@ -77,7 +77,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out,
+    border-color 150ms ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -95,6 +98,44 @@
   stroke-width: 2px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* New messages indicator - floating pill above compose */
+.chat-new-messages {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  margin: 8px auto;
+  font-size: 13px;
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  z-index: 10;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.chat-new-messages:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+}
+
+.chat-new-messages svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
 }
 
 /* Chat compose - sticky at bottom */
@@ -292,6 +333,7 @@
 
 .chat-controls__session {
   min-width: 140px;
+  max-width: 300px;
 }
 
 .chat-controls__thinking {
@@ -344,6 +386,27 @@
   color: var(--text);
 }
 
+/* Light theme icon button overrides */
+:root[data-theme="light"] .btn--icon {
+  background: #ffffff;
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  color: var(--muted);
+}
+
+:root[data-theme="light"] .btn--icon:hover {
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;
@@ -358,6 +421,9 @@
 .chat-controls__session select {
   padding: 6px 10px;
   font-size: 13px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-controls__thinking {
@@ -384,6 +450,24 @@
 
   .chat-compose {
     grid-template-columns: 1fr;
+  }
+
+  /* Mobile: stack compose row vertically */
+  .chat-compose__row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Mobile: stack action buttons vertically */
+  .chat-compose__actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
+  }
+
+  /* Mobile: full-width buttons */
+  .chat-compose .chat-compose__actions .btn {
+    width: 100%;
   }
 
   .chat-controls {

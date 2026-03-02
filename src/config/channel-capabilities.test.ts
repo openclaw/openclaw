@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveChannelCapabilities } from "./channel-capabilities.js";
 import type { OpenClawConfig } from "./config.js";
 
@@ -86,7 +86,7 @@ describe("resolveChannelCapabilities", () => {
 
   it("supports msteams capabilities", () => {
     setActivePluginRegistry(
-      createRegistry([
+      createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -115,7 +115,7 @@ describe("resolveChannelCapabilities", () => {
           capabilities: { inlineButtons: "dm" },
         },
       },
-    };
+    } as unknown as Partial<OpenClawConfig>;
 
     // Should return undefined (not crash), allowing channel-specific handlers to process it.
     expect(
@@ -125,19 +125,6 @@ describe("resolveChannelCapabilities", () => {
       }),
     ).toBeUndefined();
   });
-});
-
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
 });
 
 const createStubPlugin = (id: string): ChannelPlugin => ({
@@ -156,23 +143,9 @@ const createStubPlugin = (id: string): ChannelPlugin => ({
   },
 });
 
-const baseRegistry = createRegistry([
+const baseRegistry = createTestRegistry([
   { pluginId: "telegram", source: "test", plugin: createStubPlugin("telegram") },
   { pluginId: "slack", source: "test", plugin: createStubPlugin("slack") },
 ]);
 
-const createMSTeamsPlugin = (): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});
+const createMSTeamsPlugin = (): ChannelPlugin => createStubPlugin("msteams");

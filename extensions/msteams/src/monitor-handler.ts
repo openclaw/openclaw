@@ -1,10 +1,7 @@
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import {
-  buildFileInfoCard,
-  parseFileConsentInvoke,
-  uploadToConsentUrl,
-} from "./file-consent.js";
+import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -46,6 +43,8 @@ async function handleFileConsentInvoke(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<boolean> {
+  const expiredUploadMessage =
+    "The file upload request has expired. Please try sending the file again.";
   const activity = context.activity;
   if (activity.type !== "invoke" || activity.name !== "fileConsent/invoke") {
     return false;
@@ -53,7 +52,7 @@ async function handleFileConsentInvoke(
 
   const consentResponse = parseFileConsentInvoke(activity);
   if (!consentResponse) {
-    log.debug("invalid file consent invoke", { value: activity.value });
+    log.debug?.("invalid file consent invoke", { value: activity.value });
     return false;
   }
 
@@ -61,11 +60,26 @@ async function handleFileConsentInvoke(
     typeof consentResponse.context?.uploadId === "string"
       ? consentResponse.context.uploadId
       : undefined;
+  const pendingFile = getPendingUpload(uploadId);
+  if (pendingFile) {
+    const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
+    const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+    if (!invokeConversationId || pendingConversationId !== invokeConversationId) {
+      log.info("file consent conversation mismatch", {
+        uploadId,
+        expectedConversationId: pendingConversationId,
+        receivedConversationId: invokeConversationId || undefined,
+      });
+      if (consentResponse.action === "accept") {
+        await context.sendActivity(expiredUploadMessage);
+      }
+      return true;
+    }
+  }
 
   if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
-    const pendingFile = getPendingUpload(uploadId);
     if (pendingFile) {
-      log.debug("user accepted file consent, uploading", {
+      log.debug?.("user accepted file consent, uploading", {
         uploadId,
         filename: pendingFile.filename,
         size: pendingFile.buffer.length,
@@ -98,20 +112,18 @@ async function handleFileConsentInvoke(
           uniqueId: consentResponse.uploadInfo.uniqueId,
         });
       } catch (err) {
-        log.debug("file upload failed", { uploadId, error: String(err) });
+        log.debug?.("file upload failed", { uploadId, error: String(err) });
         await context.sendActivity(`File upload failed: ${String(err)}`);
       } finally {
         removePendingUpload(uploadId);
       }
     } else {
-      log.debug("pending file not found for consent", { uploadId });
-      await context.sendActivity(
-        "The file upload request has expired. Please try sending the file again.",
-      );
+      log.debug?.("pending file not found for consent", { uploadId });
+      await context.sendActivity(expiredUploadMessage);
     }
   } else {
     // User declined
-    log.debug("user declined file consent", { uploadId });
+    log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
   }
 
@@ -131,12 +143,14 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       const ctx = context as MSTeamsTurnContext;
       // Handle file consent invokes before passing to normal flow
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
-        const handled = await handleFileConsentInvoke(ctx, deps.log);
-        if (handled) {
-          // Send invoke response for file consent
-          await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
-          return;
-        }
+        // Send invoke response IMMEDIATELY to prevent Teams timeout
+        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+
+        // Handle file upload asynchronously (don't await)
+        handleFileConsentInvoke(ctx, deps.log).catch((err) => {
+          deps.log.debug?.("file consent handler error", { error: String(err) });
+        });
+        return;
       }
       return originalRun.call(handler, context);
     };
@@ -155,7 +169,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
     for (const member of membersAdded) {
       if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
-        deps.log.debug("member added", { member: member.id });
+        deps.log.debug?.("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }
     }
