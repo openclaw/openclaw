@@ -263,6 +263,27 @@ export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
   return tempDir;
 }
 
+/**
+ * Parse fenced code block markers.
+ * Supports backticks and tildes, and tracks fence length so we don't
+ * accidentally toggle on shorter fence runs inside longer-fenced blocks.
+ *
+ * @param {string} trimmedLine
+ * @returns {{ch: "`" | "~"; len: number} | null}
+ */
+function parseFence(trimmedLine) {
+  const match = trimmedLine.match(/^([`~]{3,})/);
+  if (!match) {
+    return null;
+  }
+  const fence = match[1];
+  const ch = fence[0];
+  if (ch !== "`" && ch !== "~") {
+    return null;
+  }
+  return { ch, len: fence.length };
+}
+
 export function auditDocsLinks() {
   /** @type {{file: string; line: number; link: string; reason: string}[]} */
   const broken = [];
@@ -274,16 +295,22 @@ export function auditDocsLinks() {
     const rawText = fs.readFileSync(abs, "utf8");
     const lines = rawText.split("\n");
 
-    let inCodeFence = false;
+    /** @type {{ch: "`" | "~"; len: number} | null} */
+    let codeFence = null;
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
       let line = lines[lineNum];
 
-      if (line.trim().startsWith("```")) {
-        inCodeFence = !inCodeFence;
+      const fence = parseFence(line.trim());
+      if (fence) {
+        if (!codeFence) {
+          codeFence = fence;
+        } else if (codeFence.ch === fence.ch && fence.len >= codeFence.len) {
+          codeFence = null;
+        }
         continue;
       }
-      if (inCodeFence) {
+      if (codeFence) {
         continue;
       }
 
