@@ -3,6 +3,7 @@ const KEY = "openclaw.control.settings.v1";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import type { ThemeMode } from "./theme.ts";
+import type { LogLevel } from "./types.ts";
 
 export type UiSettings = {
   gatewayUrl: string;
@@ -16,6 +17,7 @@ export type UiSettings = {
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   locale?: string;
+  logsLevelFilters: Record<LogLevel, boolean>; // Log level filters
 };
 
 export function loadSettings(): UiSettings {
@@ -42,6 +44,14 @@ export function loadSettings(): UiSettings {
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
+    logsLevelFilters: {
+      trace: true,
+      debug: true,
+      info: true,
+      warn: true,
+      error: true,
+      fatal: true,
+    },
   };
 
   try {
@@ -88,6 +98,18 @@ export function loadSettings(): UiSettings {
           ? parsed.navGroupsCollapsed
           : defaults.navGroupsCollapsed,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      logsLevelFilters: (() => {
+        if (typeof parsed.logsLevelFilters !== "object" || parsed.logsLevelFilters === null) {
+          return defaults.logsLevelFilters;
+        }
+        const result = { ...defaults.logsLevelFilters };
+        for (const level of Object.keys(defaults.logsLevelFilters) as LogLevel[]) {
+          if (typeof parsed.logsLevelFilters[level] === "boolean") {
+            result[level] = parsed.logsLevelFilters[level];
+          }
+        }
+        return result;
+      })(),
     };
   } catch {
     return defaults;
