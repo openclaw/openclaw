@@ -11,7 +11,14 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 const callGatewayMock = getCallGatewayMock();
 
 describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
-  function setAllowAgents(allowAgents: string[]) {
+  function setAllowAgents(allowAgents: string[], knownAgents: string[] = []) {
+    const knownAgentIds = Array.from(
+      new Set(
+        knownAgents
+          .map((id) => id.trim().toLowerCase())
+          .filter((id) => id.length > 0 && id !== "main"),
+      ),
+    );
     setSessionsSpawnConfigOverride({
       session: {
         mainKey: "main",
@@ -25,6 +32,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
               allowAgents,
             },
           },
+          ...knownAgentIds.map((id) => ({ id })),
         ],
       },
     });
@@ -61,7 +69,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     callId: string;
     acceptedAt: number;
   }) {
-    setAllowAgents(params.allowAgents);
+    setAllowAgents(params.allowAgents, [params.agentId]);
     const getChildSessionKey = mockAcceptedSpawn(params.acceptedAt);
 
     const result = await executeSpawn(params.callId, params.agentId);
@@ -80,6 +88,15 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("sessions_spawn only allows same-agent by default", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [{ id: "main" }, { id: "beta" }],
+      },
+    });
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "whatsapp",
@@ -108,6 +125,9 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
             subagents: {
               allowAgents: ["alpha"],
             },
+          },
+          {
+            id: "beta",
           },
         ],
       },
@@ -153,6 +173,24 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       callId: "call10",
       acceptedAt: 5200,
     });
+  });
+
+  it("sessions_spawn rejects explicit unknown agent ids before spawn", async () => {
+    setAllowAgents(["*"]);
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call10b", {
+      task: "do thing",
+      agentId: "totally-missing-agent",
+    });
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("error");
+    expect(details.error).toContain('agent "totally-missing-agent" not found');
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
