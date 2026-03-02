@@ -348,6 +348,12 @@ fi
 
 echo ""
 echo "==> Onboarding (interactive)"
+echo "When prompted:"
+echo "  - Gateway bind: $OPENCLAW_GATEWAY_BIND"
+echo "  - Gateway auth: token"
+echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+echo "  - Tailscale exposure: Off"
+echo "  - Install Gateway daemon: No"
 echo "Docker setup pins Gateway mode to local."
 echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
 echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
