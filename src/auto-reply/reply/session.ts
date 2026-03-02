@@ -457,7 +457,6 @@ export async function initSessionState(params: {
     persistedLastChannel: preservedEntry?.lastChannel,
     sessionKey,
   });
-<<<<<<< HEAD
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
     originatingToRaw: isSyntheticProvider ? undefined : ctx.OriginatingTo,
