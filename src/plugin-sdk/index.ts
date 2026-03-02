@@ -134,6 +134,7 @@ export {
   isJsonContentType,
   readJsonWebhookBodyOrReject,
 } from "./webhook-request-guards.js";
+export { waitForAbortSignal } from "../infra/abort-signal.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {

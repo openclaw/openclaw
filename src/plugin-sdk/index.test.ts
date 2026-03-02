@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import * as sdk from "./index.js";
 
 describe("plugin-sdk exports", () => {
+  it("exports waitForAbortSignal for extension webhook flows", async () => {
+    expect(typeof sdk.waitForAbortSignal).toBe("function");
+    const controller = new AbortController();
+    const waitPromise = sdk.waitForAbortSignal(controller.signal);
+    controller.abort();
+    await expect(waitPromise).resolves.toBeUndefined();
+  });
+
   it("does not expose runtime modules", () => {
     const forbidden = [
       "chunkMarkdownText",
