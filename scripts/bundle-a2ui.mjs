@@ -42,11 +42,40 @@ function resolveLocalBin(name) {
   return path.join(rootDir, "node_modules", ".bin", `${name}${ext}`);
 }
 
+function resolveExecutableCandidate(executable) {
+  if (process.platform !== "win32" || !executable.toLowerCase().endsWith(".cmd")) {
+    return executable;
+  }
+
+  if (path.isAbsolute(executable)) {
+    return existsSync(executable) ? executable : null;
+  }
+
+  const whereResult = spawnSync("where", [executable], {
+    cwd: rootDir,
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8",
+  });
+  if (whereResult.error || whereResult.status !== 0) {
+    return null;
+  }
+
+  const resolved = whereResult.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return resolved ?? null;
+}
+
 function runCommand(command, args) {
   const executables = resolveExecutables(command);
   for (const executable of executables) {
-    const useShell = process.platform === "win32" && executable.toLowerCase().endsWith(".cmd");
-    const result = spawnSync(executable, args, {
+    const candidate = resolveExecutableCandidate(executable);
+    if (!candidate) {
+      continue;
+    }
+    const useShell = process.platform === "win32" && candidate.toLowerCase().endsWith(".cmd");
+    const result = spawnSync(candidate, args, {
       cwd: rootDir,
       stdio: "inherit",
       shell: useShell,
@@ -72,8 +101,12 @@ function hasRolldown() {
   }
   const executables = resolveExecutables("rolldown");
   for (const executable of executables) {
-    const useShell = process.platform === "win32" && executable.toLowerCase().endsWith(".cmd");
-    const result = spawnSync(executable, ["--version"], {
+    const candidate = resolveExecutableCandidate(executable);
+    if (!candidate) {
+      continue;
+    }
+    const useShell = process.platform === "win32" && candidate.toLowerCase().endsWith(".cmd");
+    const result = spawnSync(candidate, ["--version"], {
       cwd: rootDir,
       stdio: "ignore",
       shell: useShell,
