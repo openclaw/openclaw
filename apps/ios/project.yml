@@ -8,6 +8,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    ENABLE_APP_INTENTS_METADATA_GENERATION: NO
 
 packages:
   OpenClawKit:
@@ -80,9 +81,11 @@ targets:
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
+        TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
     info:
       path: Sources/Info.plist
       properties:
@@ -92,7 +95,7 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.3.1"
+        CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -140,6 +143,7 @@ targets:
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_SHARE_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_SHARE_PROFILE)"
         SWIFT_VERSION: "6.0"
@@ -148,7 +152,7 @@ targets:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.3.1"
+        CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
@@ -174,12 +178,13 @@ targets:
     settings:
       base:
         ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
     info:
       path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.1"
+        CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKWatchKitApp: true
@@ -191,6 +196,7 @@ targets:
     sources:
       - path: WatchExtension/Sources
     dependencies:
+      - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
       - sdk: UserNotifications.framework
     configFiles:
@@ -203,7 +209,7 @@ targets:
       path: WatchExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.1"
+        CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"
         NSExtension:
           NSExtensionAttributes:
@@ -229,6 +235,7 @@ targets:
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/OpenClaw"
@@ -237,5 +244,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.3.1"
+        CFBundleShortVersionString: "2026.3.2"
         CFBundleVersion: "20260301"

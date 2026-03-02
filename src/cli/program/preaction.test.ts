@@ -78,7 +78,18 @@ describe("registerPreActionHooks", () => {
     program.command("doctor").action(async () => {});
     program.command("completion").action(async () => {});
     program.command("secrets").action(async () => {});
-    program.command("update").action(async () => {});
+    program
+      .command("update")
+      .command("status")
+      .option("--json")
+      .action(async () => {});
+    const config = program.command("config");
+    config
+      .command("set")
+      .argument("<path>")
+      .argument("<value>")
+      .option("--json")
+      .action(async () => {});
     program.command("channels").action(async () => {});
     program.command("directory").action(async () => {});
     program.command("agents").action(async () => {});
@@ -87,6 +98,7 @@ describe("registerPreActionHooks", () => {
     program
       .command("message")
       .command("send")
+      .option("--json")
       .action(async () => {});
     registerPreActionHooks(program, "9.9.9-test");
     return program;
@@ -193,5 +205,43 @@ describe("registerPreActionHooks", () => {
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses doctor stdout for any --json output command", async () => {
+    await runCommand({
+      parseArgv: ["message", "send", "--json"],
+      processArgv: ["node", "openclaw", "message", "send", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["message", "send"],
+      suppressDoctorStdout: true,
+    });
+
+    vi.clearAllMocks();
+
+    await runCommand({
+      parseArgv: ["update", "status", "--json"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["update", "status"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("does not treat config set --json (strict-parse alias) as json output mode", async () => {
+    await runCommand({
+      parseArgv: ["config", "set", "gateway.auth.mode", "{bad", "--json"],
+      processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["config", "set"],
+    });
   });
 });

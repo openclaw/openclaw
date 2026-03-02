@@ -517,6 +517,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (voiceEnabled) {
       clientPlugins.push(new VoicePlugin());
     }
+    // Pass eventQueue config to Carbon so the listener timeout can be tuned.
+    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    const eventQueueOpts = {
+      listenerTimeout: 120_000,
+      ...discordCfg.eventQueue,
+    };
     const client = new Client(
       {
         baseUrl: "http://localhost",
@@ -525,6 +531,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         publicKey: "a",
         token,
         autoDeploy: false,
+        eventQueue: eventQueueOpts,
       },
       {
         commands,
@@ -542,6 +549,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const logger = createSubsystemLogger("discord/monitor");
     const guildHistories = new Map<string, HistoryEntry[]>();
     let botUserId: string | undefined;
+    let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (nativeDisabledExplicit) {
@@ -555,6 +563,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     try {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
+      botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     } catch (err) {
       runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     }
@@ -650,7 +659,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
     }
 
-    runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
+    const botIdentity =
+      botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
+    runtime.log?.(`logged in to discord${botIdentity ? ` as ${botIdentity}` : ""}`);
 
     lifecycleStarted = true;
     await runDiscordGatewayLifecycle({

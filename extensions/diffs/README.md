@@ -52,7 +52,13 @@ Useful options:
 - `path`: display name for before/after input
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime
-- `baseUrl`: override the gateway base URL used in the returned viewer link
+- `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)
+
+Input safety limits:
+
+- `before` / `after`: max 512 KiB each
+- `patch`: max 2 MiB
+- patch rendering cap: max 128 files / 120,000 lines
 
 ## Plugin Defaults
 
@@ -68,7 +74,10 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
           defaults: {
             fontFamily: "Fira Code",
             fontSize: 15,
+            lineSpacing: 1.6,
             layout: "unified",
+            showLineNumbers: true,
+            diffIndicators: "bars",
             wordWrap: true,
             background: true,
             theme: "dark",
@@ -82,6 +91,10 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 ```
 
 Explicit tool parameters still win over these defaults.
+
+Security options:
+
+- `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 
 ## Example Agent Prompts
 
@@ -149,6 +162,8 @@ diff --git a/src/example.ts b/src/example.ts
 ## Notes
 
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
-- Artifacts are ephemeral and stored in the local temp directory.
+- Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
+- Default viewer URLs use loopback (`127.0.0.1`) unless you set `baseUrl` (or use `gateway.bind=custom` + `gateway.customBindHost`).
+- Remote viewer misses are throttled to reduce token-guess abuse.
 - PNG rendering requires a Chromium-compatible browser. Set `browser.executablePath` if auto-detection is not enough.
 - Diff rendering is powered by [Diffs](https://diffs.com).

@@ -307,6 +307,62 @@ describe("browser tool url alias support", () => {
   });
 });
 
+describe("browser tool act compatibility", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("accepts flattened act params for backward compatibility", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "type",
+      ref: "f1e3",
+      text: "Test Title",
+      targetId: "tab-1",
+      timeoutMs: 5000,
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "type",
+        ref: "f1e3",
+        text: "Test Title",
+        targetId: "tab-1",
+        timeoutMs: 5000,
+      }),
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("prefers request payload when both request and flattened fields are present", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "click",
+      ref: "legacy-ref",
+      request: {
+        kind: "press",
+        key: "Enter",
+        targetId: "tab-2",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      {
+        kind: "press",
+        key: "Enter",
+        targetId: "tab-2",
+      },
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+});
+
 describe("browser tool snapshot labels", () => {
   afterEach(() => {
     vi.clearAllMocks();

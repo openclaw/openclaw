@@ -124,6 +124,43 @@ describe("abort detection", () => {
     });
   }
 
+  function enqueueQueuedFollowupRun(params: {
+    root: string;
+    cfg: OpenClawConfig;
+    sessionId: string;
+    sessionKey: string;
+  }) {
+    const followupRun: FollowupRun = {
+      prompt: "queued",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: path.join(params.root, "agent"),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        messageProvider: "telegram",
+        agentAccountId: "acct",
+        sessionFile: path.join(params.root, "session.jsonl"),
+        workspaceDir: path.join(params.root, "workspace"),
+        config: params.cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        timeoutMs: 1000,
+        blockReplyBreak: "text_end",
+      },
+    };
+    enqueueFollowupRun(
+      params.sessionKey,
+      followupRun,
+      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+      "none",
+    );
+  }
+
+  function expectSessionLaneCleared(sessionKey: string) {
+    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
+  }
+
   afterEach(() => {
     resetAbortMemoryForTest();
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
@@ -338,31 +375,7 @@ describe("abort detection", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
-    const followupRun: FollowupRun = {
-      prompt: "queued",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: path.join(root, "agent"),
-        sessionId,
-        sessionKey,
-        messageProvider: "telegram",
-        agentAccountId: "acct",
-        sessionFile: path.join(root, "session.jsonl"),
-        workspaceDir: path.join(root, "workspace"),
-        config: cfg,
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        timeoutMs: 1000,
-        blockReplyBreak: "text_end",
-      },
-    };
-    enqueueFollowupRun(
-      sessionKey,
-      followupRun,
-      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-      "none",
-    );
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     expect(getFollowupQueueDepth(sessionKey)).toBe(1);
 
     const result = await runStopCommand({
@@ -374,7 +387,7 @@ describe("abort detection", () => {
 
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
+    expectSessionLaneCleared(sessionKey);
   });
 
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
@@ -411,31 +424,7 @@ describe("abort detection", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
-    const followupRun: FollowupRun = {
-      prompt: "queued",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: path.join(root, "agent"),
-        sessionId,
-        sessionKey,
-        messageProvider: "telegram",
-        agentAccountId: "acct",
-        sessionFile: path.join(root, "session.jsonl"),
-        workspaceDir: path.join(root, "workspace"),
-        config: cfg,
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        timeoutMs: 1000,
-        blockReplyBreak: "text_end",
-      },
-    };
-    enqueueFollowupRun(
-      sessionKey,
-      followupRun,
-      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-      "none",
-    );
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     acpManagerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey,
@@ -453,7 +442,7 @@ describe("abort detection", () => {
 
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
+    expectSessionLaneCleared(sessionKey);
   });
 
   it("persists abort cutoff metadata on /stop when command and target session match", async () => {
@@ -546,7 +535,7 @@ describe("abort detection", () => {
     });
 
     expect(result.stoppedSubagents).toBe(1);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${childKey}`);
+    expectSessionLaneCleared(childKey);
   });
 
   it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
@@ -601,8 +590,8 @@ describe("abort detection", () => {
 
     // Should stop both depth-1 and depth-2 agents (cascade)
     expect(result.stoppedSubagents).toBe(2);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${depth1Key}`);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${depth2Key}`);
+    expectSessionLaneCleared(depth1Key);
+    expectSessionLaneCleared(depth2Key);
   });
 
   it("cascade stop traverses ended depth-1 parents to stop active depth-2 children", async () => {
@@ -660,7 +649,7 @@ describe("abort detection", () => {
 
     // Should skip killing the ended depth-1 run itself, but still kill depth-2.
     expect(result.stoppedSubagents).toBe(1);
-    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${depth2Key}`);
+    expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-2", childSessionKey: depth2Key }),
     );

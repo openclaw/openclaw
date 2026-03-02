@@ -189,6 +189,16 @@ const voiceCallPlugin = {
       respond(false, { error: err instanceof Error ? err.message : String(err) });
     };
 
+    const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
+      const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
+      const message = typeof params?.message === "string" ? params.message.trim() : "";
+      if (!callId || !message) {
+        return { error: "callId and message required" } as const;
+      }
+      const rt = await ensureRuntime();
+      return { rt, callId, message } as const;
+    };
+
     api.registerGatewayMethod(
       "voicecall.initiate",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
@@ -228,14 +238,12 @@ const voiceCallPlugin = {
       "voicecall.continue",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
-          if (!callId || !message) {
-            respond(false, { error: "callId and message required" });
+          const request = await resolveCallMessageRequest(params);
+          if ("error" in request) {
+            respond(false, { error: request.error });
             return;
           }
-          const rt = await ensureRuntime();
-          const result = await rt.manager.continueCall(callId, message);
+          const result = await request.rt.manager.continueCall(request.callId, request.message);
           if (!result.success) {
             respond(false, { error: result.error || "continue failed" });
             return;
@@ -251,14 +259,12 @@ const voiceCallPlugin = {
       "voicecall.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
-          const message = typeof params?.message === "string" ? params.message.trim() : "";
-          if (!callId || !message) {
-            respond(false, { error: "callId and message required" });
+          const request = await resolveCallMessageRequest(params);
+          if ("error" in request) {
+            respond(false, { error: request.error });
             return;
           }
-          const rt = await ensureRuntime();
-          const result = await rt.manager.speak(callId, message);
+          const result = await request.rt.manager.speak(request.callId, request.message);
           if (!result.success) {
             respond(false, { error: result.error || "speak failed" });
             return;

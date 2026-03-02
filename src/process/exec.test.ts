@@ -101,24 +101,24 @@ describe("runCommandWithTimeout", () => {
           "let count = 0;",
           'const ticker = setInterval(() => { process.stdout.write(".");',
           "count += 1;",
-          "if (count === 10) {",
+          "if (count === 6) {",
           "clearInterval(ticker);",
           "process.exit(0);",
           "}",
-          "}, 100);",
+          "}, 25);",
         ].join(" "),
       ],
       {
-        timeoutMs: 10_000,
-        // Extra headroom for busy CI workers while still validating timer resets.
-        noOutputTimeoutMs: 2_500,
+        timeoutMs: 3_000,
+        // Keep a healthy margin above the emit interval while avoiding a 1s+ test delay.
+        noOutputTimeoutMs: 400,
       },
     );
 
     expect(result.code ?? 0).toBe(0);
     expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout.length).toBeGreaterThanOrEqual(11);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(7);
   });
 
   it("reports global timeout termination when overall timeout elapses", async () => {
@@ -133,6 +133,15 @@ describe("runCommandWithTimeout", () => {
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.code).not.toBe(0);
   });
+
+  it.runIf(process.platform === "win32")(
+    "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
+    async () => {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    },
+  );
 });
 
 describe("attachChildProcessBridge", () => {

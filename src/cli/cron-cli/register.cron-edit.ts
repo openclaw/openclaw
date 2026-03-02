@@ -51,6 +51,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs")
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
+      .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--announce", "Announce summary to a chat (subagent-style)")
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery")
@@ -226,6 +228,7 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(model) ||
             Boolean(thinking) ||
             hasTimeoutSeconds ||
+            typeof opts.lightContext === "boolean" ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
@@ -244,6 +247,12 @@ export function registerCronEditCommand(cron: Command) {
             assignIf(payload, "model", model, Boolean(model));
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(
+              payload,
+              "lightContext",
+              opts.lightContext,
+              typeof opts.lightContext === "boolean",
+            );
             patch.payload = payload;
           }
 

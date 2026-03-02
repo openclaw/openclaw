@@ -62,6 +62,35 @@ describe("DiffArtifactStore", () => {
     expect(updated.imagePath).toBe(imagePath);
   });
 
+  it("rejects image paths that escape the store root", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    await expect(store.updateImagePath(artifact.id, "../outside.png")).rejects.toThrow(
+      "escapes store root",
+    );
+  });
+
+  it("rejects tampered html metadata paths outside the store root", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+    const metaPath = path.join(rootDir, artifact.id, "meta.json");
+    const rawMeta = await fs.readFile(metaPath, "utf8");
+    const meta = JSON.parse(rawMeta) as { htmlPath: string };
+    meta.htmlPath = "../outside.html";
+    await fs.writeFile(metaPath, JSON.stringify(meta), "utf8");
+
+    await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
+  });
+
   it("allocates standalone image paths outside artifact metadata", async () => {
     const imagePath = store.allocateStandaloneImagePath();
     expect(imagePath).toMatch(/preview\.png$/);
