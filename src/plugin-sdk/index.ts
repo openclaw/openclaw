@@ -228,8 +228,10 @@ export {
   TtsProviderSchema,
 } from "../config/zod-schema.core.js";
 export {
+  assertSecretInputResolved,
   hasConfiguredSecretInput,
   isSecretRef,
+  normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";

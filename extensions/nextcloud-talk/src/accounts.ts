@@ -8,7 +8,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { normalizeSecretInputString } from "./secret-input.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
@@ -120,7 +120,10 @@ function resolveNextcloudTalkSecret(
     }
   }
 
-  const inlineSecret = normalizeSecretInputString(merged.botSecret);
+  const inlineSecret = normalizeResolvedSecretInputString({
+    value: merged.botSecret,
+    path: `channels.nextcloud-talk.accounts.${opts.accountId ?? DEFAULT_ACCOUNT_ID}.botSecret`,
+  });
   if (inlineSecret) {
     return { secret: inlineSecret, source: "config" };
   }

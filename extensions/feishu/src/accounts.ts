@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { normalizeSecretInputString } from "./secret-input.js";
+import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -110,7 +110,10 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
   domain: FeishuDomain;
 } | null {
   const appId = cfg?.appId?.trim();
-  const appSecret = normalizeSecretInputString(cfg?.appSecret);
+  const appSecret = normalizeResolvedSecretInputString({
+    value: cfg?.appSecret,
+    path: "channels.feishu.appSecret",
+  });
   if (!appId || !appSecret) {
     return null;
   }
@@ -118,7 +121,11 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
     appId,
     appSecret,
     encryptKey: cfg?.encryptKey?.trim() || undefined,
-    verificationToken: normalizeSecretInputString(cfg?.verificationToken) || undefined,
+    verificationToken:
+      normalizeResolvedSecretInputString({
+        value: cfg?.verificationToken,
+        path: "channels.feishu.verificationToken",
+      }) || undefined,
     domain: cfg?.domain ?? "feishu",
   };
 }

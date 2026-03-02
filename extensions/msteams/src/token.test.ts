@@ -40,18 +40,18 @@ describe("resolveMSTeamsCredentials", () => {
     });
   });
 
-  it("does not throw when appPassword is a SecretRef object", () => {
-    const resolved = resolveMSTeamsCredentials({
-      appId: "app-id",
-      appPassword: {
-        source: "env",
-        provider: "default",
-        id: "MSTEAMS_APP_PASSWORD",
-      },
-      tenantId: "tenant-id",
-    });
-
-    expect(resolved).toBeUndefined();
+  it("throws when appPassword remains an unresolved SecretRef object", () => {
+    expect(() =>
+      resolveMSTeamsCredentials({
+        appId: "app-id",
+        appPassword: {
+          source: "env",
+          provider: "default",
+          id: "MSTEAMS_APP_PASSWORD",
+        },
+        tenantId: "tenant-id",
+      }),
+    ).toThrow(/channels\.msteams\.appPassword: unresolved SecretRef/i);
   });
 });
 

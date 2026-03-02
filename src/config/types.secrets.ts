@@ -113,6 +113,43 @@ export function normalizeSecretInputString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function formatSecretRefLabel(ref: SecretRef): string {
+  return `${ref.source}:${ref.provider}:${ref.id}`;
+}
+
+export function assertSecretInputResolved(params: {
+  value: unknown;
+  refValue?: unknown;
+  defaults?: SecretDefaults;
+  path: string;
+}): void {
+  const { ref } = resolveSecretInputRef({
+    value: params.value,
+    refValue: params.refValue,
+    defaults: params.defaults,
+  });
+  if (!ref) {
+    return;
+  }
+  throw new Error(
+    `${params.path}: unresolved SecretRef "${formatSecretRefLabel(ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+  );
+}
+
+export function normalizeResolvedSecretInputString(params: {
+  value: unknown;
+  refValue?: unknown;
+  defaults?: SecretDefaults;
+  path: string;
+}): string | undefined {
+  const normalized = normalizeSecretInputString(params.value);
+  if (normalized) {
+    return normalized;
+  }
+  assertSecretInputResolved(params);
+  return undefined;
+}
+
 export function resolveSecretInputRef(params: {
   value: unknown;
   refValue?: unknown;

@@ -52,6 +52,38 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("resolves gateway.auth.password SecretRef for pairing payload", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      {
+        env: {
+          GW_PASSWORD: "resolved-password",
+        },
+      },
+    );
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("expected setup resolution to succeed");
+    }
+    expect(resolved.payload.password).toBe("resolved-password");
+    expect(resolved.authLabel).toBe("password");
+  });
+
   it("honors env token override", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {

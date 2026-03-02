@@ -1,7 +1,9 @@
 import os from "node:os";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import { secretRefKey } from "../secrets/ref-contract.js";
+import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -180,6 +182,38 @@ function resolveAuth(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): ResolveAuthRe
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
+async function resolveGatewayPasswordSecretRef(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<OpenClawConfig> {
+  const authPassword = cfg.gateway?.auth?.password;
+  const { ref } = resolveSecretInputRef({
+    value: authPassword,
+    defaults: cfg.secrets?.defaults,
+  });
+  if (!ref) {
+    return cfg;
+  }
+  const resolved = await resolveSecretRefValues([ref], {
+    config: cfg,
+    env,
+  });
+  const value = resolved.get(secretRefKey(ref));
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  }
+  return {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      auth: {
+        ...cfg.gateway?.auth,
+        password: value.trim(),
+      },
+    },
+  };
+}
+
 async function resolveGatewayUrl(
   cfg: OpenClawConfig,
   opts: {
@@ -253,12 +287,13 @@ export async function resolvePairingSetupFromConfig(
   options: ResolvePairingSetupOptions = {},
 ): Promise<PairingSetupResolution> {
   const env = options.env ?? process.env;
-  const auth = resolveAuth(cfg, env);
+  const cfgForAuth = await resolveGatewayPasswordSecretRef(cfg, env);
+  const auth = resolveAuth(cfgForAuth, env);
   if (auth.error) {
     return { ok: false, error: auth.error };
   }
 
-  const urlResult = await resolveGatewayUrl(cfg, {
+  const urlResult = await resolveGatewayUrl(cfgForAuth, {
     env,
     publicUrl: options.publicUrl,
     preferRemoteUrl: options.preferRemoteUrl,

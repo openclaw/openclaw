@@ -1,14 +1,17 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { getMatrixRuntime } from "../../runtime.js";
-import { normalizeSecretInputString } from "../../secret-input.js";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "../../secret-input.js";
 import type { CoreConfig } from "../../types.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
-function clean(value: unknown): string {
-  return normalizeSecretInputString(value) ?? "";
+function clean(value: unknown, path: string): string {
+  return normalizeResolvedSecretInputString({ value, path }) ?? "";
 }
 
 /** Shallow-merge known nested config sub-objects so partial overrides inherit base values. */
@@ -54,11 +57,23 @@ export function resolveMatrixConfigForAccount(
   // nested object inheritance (dm, actions, groups) so partial overrides work.
   const matrix = accountConfig ? deepMergeConfig(matrixBase, accountConfig) : matrixBase;
 
-  const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
-  const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
-  const accessToken = clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
-  const password = clean(matrix.password) || clean(env.MATRIX_PASSWORD) || undefined;
-  const deviceName = clean(matrix.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
+  const homeserver =
+    clean(matrix.homeserver, "channels.matrix.homeserver") ||
+    clean(env.MATRIX_HOMESERVER, "MATRIX_HOMESERVER");
+  const userId =
+    clean(matrix.userId, "channels.matrix.userId") || clean(env.MATRIX_USER_ID, "MATRIX_USER_ID");
+  const accessToken =
+    clean(matrix.accessToken, "channels.matrix.accessToken") ||
+    clean(env.MATRIX_ACCESS_TOKEN, "MATRIX_ACCESS_TOKEN") ||
+    undefined;
+  const password =
+    clean(matrix.password, "channels.matrix.password") ||
+    clean(env.MATRIX_PASSWORD, "MATRIX_PASSWORD") ||
+    undefined;
+  const deviceName =
+    clean(matrix.deviceName, "channels.matrix.deviceName") ||
+    clean(env.MATRIX_DEVICE_NAME, "MATRIX_DEVICE_NAME") ||
+    undefined;
   const initialSyncLimit =
     typeof matrix.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))

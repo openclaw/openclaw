@@ -4,7 +4,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import { normalizeSecretInputString } from "../secret-input.js";
+import { normalizeResolvedSecretInputString } from "../secret-input.js";
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
@@ -112,7 +112,10 @@ export function resolveMattermostAccount(params: {
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const envToken = allowEnv ? process.env.MATTERMOST_BOT_TOKEN?.trim() : undefined;
   const envUrl = allowEnv ? process.env.MATTERMOST_URL?.trim() : undefined;
-  const configToken = normalizeSecretInputString(merged.botToken);
+  const configToken = normalizeResolvedSecretInputString({
+    value: merged.botToken,
+    path: `channels.mattermost.accounts.${accountId}.botToken`,
+  });
   const configUrl = merged.baseUrl?.trim();
   const botToken = configToken || envToken;
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);

@@ -1,3 +1,7 @@
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "openclaw/plugin-sdk";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk";
 
-export { hasConfiguredSecretInput, normalizeSecretInputString };
+export { hasConfiguredSecretInput, normalizeResolvedSecretInputString, normalizeSecretInputString };

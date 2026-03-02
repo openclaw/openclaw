@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
-import { normalizeSecretInputString } from "./secret-input.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -20,7 +20,10 @@ function readApiPassword(params: {
   apiPassword?: unknown;
   apiPasswordFile?: string;
 }): string | undefined {
-  const inlinePassword = normalizeSecretInputString(params.apiPassword);
+  const inlinePassword = normalizeResolvedSecretInputString({
+    value: params.apiPassword,
+    path: "channels.nextcloud-talk.apiPassword",
+  });
   if (inlinePassword) {
     return inlinePassword;
   }

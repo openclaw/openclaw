@@ -43,4 +43,18 @@ describe("resolveDiscordToken", () => {
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");
   });
+
+  it("throws when token is an unresolved SecretRef object", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveDiscordToken(cfg)).toThrow(
+      /channels\.discord\.token: unresolved SecretRef/i,
+    );
+  });
 });

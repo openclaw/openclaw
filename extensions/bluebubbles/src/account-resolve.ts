@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { normalizeSecretInputString } from "./secret-input.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
@@ -20,11 +20,23 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     accountId: params.accountId,
   });
   const baseUrl =
-    normalizeSecretInputString(params.serverUrl) ||
-    normalizeSecretInputString(account.config.serverUrl);
+    normalizeResolvedSecretInputString({
+      value: params.serverUrl,
+      path: "channels.bluebubbles.serverUrl",
+    }) ||
+    normalizeResolvedSecretInputString({
+      value: account.config.serverUrl,
+      path: `channels.bluebubbles.accounts.${account.accountId}.serverUrl`,
+    });
   const password =
-    normalizeSecretInputString(params.password) ||
-    normalizeSecretInputString(account.config.password);
+    normalizeResolvedSecretInputString({
+      value: params.password,
+      path: "channels.bluebubbles.password",
+    }) ||
+    normalizeResolvedSecretInputString({
+      value: account.config.password,
+      path: `channels.bluebubbles.accounts.${account.accountId}.password`,
+    });
   if (!baseUrl) {
     throw new Error("BlueBubbles serverUrl is required");
   }

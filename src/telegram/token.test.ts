@@ -88,6 +88,20 @@ describe("resolveTelegramToken", () => {
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");
   });
+
+  it("throws when botToken is an unresolved SecretRef object", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.botToken: unresolved SecretRef/i,
+    );
+  });
 });
 
 describe("telegram update offset store", () => {

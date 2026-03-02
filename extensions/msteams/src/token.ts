@@ -1,5 +1,9 @@
 import type { MSTeamsConfig } from "openclaw/plugin-sdk";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "./secret-input.js";
 
 export type MSTeamsCredentials = {
   appId: string;
@@ -20,8 +24,10 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     normalizeSecretInputString(cfg?.appId) ||
     normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
   const appPassword =
-    normalizeSecretInputString(cfg?.appPassword) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+    normalizeResolvedSecretInputString({
+      value: cfg?.appPassword,
+      path: "channels.msteams.appPassword",
+    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
   const tenantId =
     normalizeSecretInputString(cfg?.tenantId) ||
     normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
