@@ -26,22 +26,40 @@ afterEach(() => {
   childProcessMocks.spawn.mockClear();
 });
 
+function setupSandboxWorkspace(home: string): {
+  cfg: ReturnType<typeof createSandboxMediaStageConfig>;
+  workspaceDir: string;
+  sandboxDir: string;
+} {
+  const cfg = createSandboxMediaStageConfig(home);
+  const workspaceDir = join(home, "openclaw");
+  const sandboxDir = join(home, "sandboxes", "session");
+  vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
+    workspaceDir: sandboxDir,
+    containerWorkdir: "/work",
+  });
+  return { cfg, workspaceDir, sandboxDir };
+}
+
+async function writeInboundMedia(
+  home: string,
+  fileName: string,
+  payload: string | Buffer,
+): Promise<string> {
+  const inboundDir = join(home, ".openclaw", "media", "inbound");
+  await fs.mkdir(inboundDir, { recursive: true });
+  const mediaPath = join(inboundDir, fileName);
+  await fs.writeFile(mediaPath, payload);
+  return mediaPath;
+}
+
 describe("stageSandboxMedia", () => {
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      const cfg = createSandboxMediaStageConfig(home);
-      const workspaceDir = join(home, "openclaw");
-      const sandboxDir = join(home, "sandboxes", "session");
-      vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
-        workspaceDir: sandboxDir,
-        containerWorkdir: "/work",
-      });
+      const { cfg, workspaceDir, sandboxDir } = setupSandboxWorkspace(home);
 
       {
-        const inboundDir = join(home, ".openclaw", "media", "inbound");
-        await fs.mkdir(inboundDir, { recursive: true });
-        const mediaPath = join(inboundDir, "photo.jpg");
-        await fs.writeFile(mediaPath, "test");
+        const mediaPath = await writeInboundMedia(home, "photo.jpg", "test");
         const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
 
         await stageSandboxMedia({
@@ -105,18 +123,9 @@ describe("stageSandboxMedia", () => {
 
   it("blocks destination symlink escapes when staging into sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      const cfg = createSandboxMediaStageConfig(home);
-      const workspaceDir = join(home, "openclaw");
-      const sandboxDir = join(home, "sandboxes", "session");
-      vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
-        workspaceDir: sandboxDir,
-        containerWorkdir: "/work",
-      });
+      const { cfg, workspaceDir, sandboxDir } = setupSandboxWorkspace(home);
 
-      const inboundDir = join(home, ".openclaw", "media", "inbound");
-      await fs.mkdir(inboundDir, { recursive: true });
-      const mediaPath = join(inboundDir, "payload.txt");
-      await fs.writeFile(mediaPath, "PAYLOAD");
+      const mediaPath = await writeInboundMedia(home, "payload.txt", "PAYLOAD");
 
       const outsideDir = join(home, "outside");
       const outsideInboundDir = join(outsideDir, "inbound");
@@ -145,18 +154,13 @@ describe("stageSandboxMedia", () => {
 
   it("skips oversized media staging and keeps original media paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      const cfg = createSandboxMediaStageConfig(home);
-      const workspaceDir = join(home, "openclaw");
-      const sandboxDir = join(home, "sandboxes", "session");
-      vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
-        workspaceDir: sandboxDir,
-        containerWorkdir: "/work",
-      });
+      const { cfg, workspaceDir, sandboxDir } = setupSandboxWorkspace(home);
 
-      const inboundDir = join(home, ".openclaw", "media", "inbound");
-      await fs.mkdir(inboundDir, { recursive: true });
-      const mediaPath = join(inboundDir, "oversized.bin");
-      await fs.writeFile(mediaPath, Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41));
+      const mediaPath = await writeInboundMedia(
+        home,
+        "oversized.bin",
+        Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
+      );
 
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
       await stageSandboxMedia({
