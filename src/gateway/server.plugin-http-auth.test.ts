@@ -348,13 +348,13 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("does not let plugin handlers shadow control ui routes", async () => {
+  test("plugin routes take priority over control ui catch-all", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/chat") {
+      if (pathname === "/my-plugin/inbound") {
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin-shadow");
+        res.end("plugin-handled");
         return true;
       }
       return false;
@@ -370,11 +370,33 @@ describe("gateway plugin HTTP auth boundary", () => {
         handlePluginRequest,
       },
       run: async (server) => {
+        const response = await sendRequest(server, { path: "/my-plugin/inbound" });
+
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toContain("plugin-handled");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
+  test("unmatched plugin paths fall through to control ui", async () => {
+    const handlePluginRequest = vi.fn(async () => false);
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-control-ui-fallthrough-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        controlUiRoot: { kind: "missing" },
+        handlePluginRequest,
+      },
+      run: async (server) => {
         const response = await sendRequest(server, { path: "/chat" });
 
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
         expect(response.res.statusCode).toBe(503);
         expect(response.getBody()).toContain("Control UI assets not found");
-        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });
