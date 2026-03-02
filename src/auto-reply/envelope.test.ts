@@ -144,6 +144,52 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[Telegram Alice] follow-up message");
   });
 
+  it("appends (you) to from for DM messages with fromMe (#12482)", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "+15550009999",
+      body: "hello",
+      chatType: "direct",
+      fromMe: true,
+    });
+    expect(body).toContain("+15550009999 (you)");
+    expect(body).toContain("hello");
+  });
+
+  it("does not append (you) for inbound DM messages", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "+15550001111",
+      body: "hello",
+      chatType: "direct",
+      fromMe: false,
+    });
+    expect(body).toContain("+15550001111");
+    expect(body).not.toContain("(you)");
+  });
+
+  it("does not append (you) for group messages even when fromMe", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "120363400000000000@g.us",
+      body: "hello",
+      chatType: "group",
+      sender: { name: "Owner" },
+      fromMe: true,
+    });
+    expect(body).not.toContain("(you)");
+  });
+
+  it("does not append (you) when fromMe is omitted (backward compat)", () => {
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "+15550001111",
+      body: "hello",
+      chatType: "direct",
+    });
+    expect(body).not.toContain("(you)");
+  });
+
   it("resolves envelope options from config", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {

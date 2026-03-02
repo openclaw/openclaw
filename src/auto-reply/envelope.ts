@@ -197,15 +197,19 @@ export function formatInboundEnvelope(params: {
   sender?: SenderLabelParams;
   previousTimestamp?: number | Date;
   envelope?: EnvelopeFormatOptions;
+  fromMe?: boolean;
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
   const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
+  // For DM messages sent by the owner, append "(you)" to the from field so the
+  // agent can distinguish its operator's messages from the contact's messages.
+  const from = isDirect && params.fromMe ? `${params.from} (you)` : params.from;
   const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
-    from: params.from,
+    from,
     timestamp: params.timestamp,
     previousTimestamp: params.previousTimestamp,
     envelope: params.envelope,
