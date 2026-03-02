@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Avoid importing the full chat command registry for reserved-name calculation.
 vi.mock("./commands-registry.js", () => ({
@@ -113,8 +113,20 @@ describe("resolveSkillCommandInvocation", () => {
 });
 
 describe("listSkillCommandsForAgents", () => {
+  const tempDirs: string[] = [];
+  const makeTempDir = async (prefix: string) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  };
+  afterAll(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
   it("lists all agents when agentIds is omitted", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
+    const baseDir = await makeTempDir("openclaw-skills-");
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });
@@ -137,7 +149,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("scopes to specific agents when agentIds is provided", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-filter-"));
+    const baseDir = await makeTempDir("openclaw-skills-filter-");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(researchWorkspace, { recursive: true });
 
@@ -155,7 +167,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("prevents cross-agent skill leakage when each agent has an allowlist", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-leak-"));
+    const baseDir = await makeTempDir("openclaw-skills-leak-");
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
     await fs.mkdir(mainWorkspace, { recursive: true });
@@ -178,7 +190,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("merges allowlists for agents that share one workspace", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-shared-"));
+    const baseDir = await makeTempDir("openclaw-skills-shared-");
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
@@ -198,8 +210,30 @@ describe("listSkillCommandsForAgents", () => {
     expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
   });
 
+  it("deduplicates overlapping allowlists for shared workspace", async () => {
+    const baseDir = await makeTempDir("openclaw-skills-overlap-");
+    const sharedWorkspace = path.join(baseDir, "research");
+    await fs.mkdir(sharedWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgents({
+      cfg: {
+        agents: {
+          list: [
+            { id: "agent-a", workspace: sharedWorkspace, skills: ["extra-skill"] },
+            { id: "agent-b", workspace: sharedWorkspace, skills: ["extra-skill", "demo-skill"] },
+          ],
+        },
+      },
+      agentIds: ["agent-a", "agent-b"],
+    });
+
+    // Both agents allowlist "extra-skill"; it should appear once, not twice.
+    expect(commands.map((entry) => entry.skillName)).toEqual(["demo-skill", "extra-skill"]);
+    expect(commands.map((entry) => entry.name)).toEqual(["demo_skill", "extra_skill"]);
+  });
+
   it("keeps workspace unrestricted when one co-tenant agent has no skills filter", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-unfiltered-"));
+    const baseDir = await makeTempDir("openclaw-skills-unfiltered-");
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
@@ -221,7 +255,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("merges empty allowlist with non-empty allowlist for shared workspace", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-empty-"));
+    const baseDir = await makeTempDir("openclaw-skills-empty-");
     const sharedWorkspace = path.join(baseDir, "research");
     await fs.mkdir(sharedWorkspace, { recursive: true });
 
@@ -238,5 +272,28 @@ describe("listSkillCommandsForAgents", () => {
     });
 
     expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
+  });
+
+  it("skips agents with missing workspaces gracefully", async () => {
+    const baseDir = await makeTempDir("openclaw-skills-missing-");
+    const validWorkspace = path.join(baseDir, "research");
+    const missingWorkspace = path.join(baseDir, "nonexistent");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    const commands = listSkillCommandsForAgents({
+      cfg: {
+        agents: {
+          list: [
+            { id: "valid", workspace: validWorkspace },
+            { id: "broken", workspace: missingWorkspace },
+          ],
+        },
+      },
+      agentIds: ["valid", "broken"],
+    });
+
+    // The valid agent's skills should still be listed despite the broken one.
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.map((entry) => entry.skillName)).toContain("demo-skill");
   });
 });

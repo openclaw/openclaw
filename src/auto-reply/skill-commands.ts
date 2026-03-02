@@ -6,6 +6,7 @@ import {
 } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { listChatCommands } from "./commands-registry.js";
 
@@ -74,9 +75,16 @@ export function listSkillCommandsForAgents(params: {
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
+      logVerbose(`Skipping agent "${agentId}": workspace does not exist: ${workspaceDir}`);
       continue;
     }
-    const canonicalDir = fs.realpathSync(workspaceDir);
+    let canonicalDir: string;
+    try {
+      canonicalDir = fs.realpathSync(workspaceDir);
+    } catch {
+      logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
+      continue;
+    }
     const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
     const existing = workspaceFilters.get(canonicalDir);
     if (existing) {
