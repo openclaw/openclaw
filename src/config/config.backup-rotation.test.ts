@@ -72,9 +72,14 @@ describe("config backup rotation", () => {
       const bakStat = await fs.stat(`${configPath}.bak`);
       const bak1Stat = await fs.stat(`${configPath}.bak.1`);
 
-      // Owner-only permissions (0o600)
-      expect(bakStat.mode & 0o777).toBe(0o600);
-      expect(bak1Stat.mode & 0o777).toBe(0o600);
+      // Windows does not reliably honor POSIX chmod bits.
+      if (process.platform === "win32") {
+        expect(bakStat.mode & 0o777).toBeGreaterThan(0);
+        expect(bak1Stat.mode & 0o777).toBeGreaterThan(0);
+      } else {
+        expect(bakStat.mode & 0o777).toBe(0o600);
+        expect(bak1Stat.mode & 0o777).toBe(0o600);
+      }
     });
   });
 
@@ -133,9 +138,13 @@ describe("config backup rotation", () => {
       );
       // Prior primary backup gets rotated into ring slot 1.
       await expect(fs.readFile(`${configPath}.bak.1`, "utf-8")).resolves.toBe("previous");
-      // Mode hardening still applies.
+      // Mode hardening still applies on POSIX systems.
       const primaryBackupStat = await fs.stat(`${configPath}.bak`);
-      expect(primaryBackupStat.mode & 0o777).toBe(0o600);
+      if (process.platform === "win32") {
+        expect(primaryBackupStat.mode & 0o777).toBeGreaterThan(0);
+      } else {
+        expect(primaryBackupStat.mode & 0o777).toBe(0o600);
+      }
       // Out-of-ring orphan gets pruned.
       await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
     });
