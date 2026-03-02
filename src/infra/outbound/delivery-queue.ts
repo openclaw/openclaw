@@ -160,15 +160,21 @@ export async function enqueueDelivery(
  * Mark a delivery as "attempt started" before the actual send.
  * This ensures the row passes startup-cutoff filtering even if the
  * subsequent ack/fail bookkeeping write is swallowed.
+ *
+ * Also pushes next_attempt_at forward by the first-retry backoff interval
+ * to prevent the recovery worker from picking up the row while the direct
+ * send is still in progress. If the direct send completes normally,
+ * ackDelivery or failDelivery finalizes the row before recovery touches it.
  */
 export async function markAttemptStarted(id: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
   try {
+    const now = Date.now();
     db.prepare(
       `UPDATE message_outbox
-         SET last_attempt_at = ?
+         SET last_attempt_at = ?, next_attempt_at = ?
        WHERE id = ? AND last_attempt_at IS NULL`,
-    ).run(Date.now(), id);
+    ).run(now, now + computeBackoffMs(1), id);
   } catch (err) {
     logVerbose(`delivery-queue: markAttemptStarted failed: ${String(err)}`);
   }
@@ -511,7 +517,10 @@ export async function recoverPendingDeliveries(opts: {
 
   // Non-final outbox rows (tool/block dispatches) are never recovered — the parent turn
   // will be replayed from scratch. Mark orphaned non-final rows as terminal so they
-  // don't accumulate unboundedly.
+  // don't accumulate unboundedly. Two cases:
+  //   1. Pre-startup rows (crash survivors): queued_at < startupCutoff
+  //   2. Post-startup rows where the direct send already started (markAttemptStarted ran)
+  //      but ack/fail didn't complete: last_attempt_at IS NOT NULL
   if (opts.startupCutoff !== undefined) {
     const db = getLifecycleDb(opts.stateDir);
     try {
@@ -524,7 +533,7 @@ export async function recoverPendingDeliveries(opts: {
          WHERE status IN ('queued','failed_retryable')
            AND dispatch_kind IS NOT NULL
            AND dispatch_kind != 'final'
-           AND queued_at < ?`,
+           AND (queued_at < ? OR last_attempt_at IS NOT NULL)`,
       ).run(Date.now(), opts.startupCutoff);
     } catch (err) {
       logVerbose(`delivery-queue: non-final terminalization failed: ${String(err)}`);
