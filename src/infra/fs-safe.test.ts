@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   copyFileWithinRoot,
@@ -282,29 +283,22 @@ describe("fs-safe", () => {
       const slot = path.join(root, "slot");
       await fs.symlink(inside, slot);
 
-      const realRealpath = fs.realpath.bind(fs);
-      let flipped = false;
-      const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-        const [filePath] = args;
-        if (!flipped && String(filePath).endsWith(path.join("slot", "target.txt"))) {
-          flipped = true;
-          await fs.rm(slot, { recursive: true, force: true });
-          await fs.symlink(outside, slot);
-        }
-        return await realRealpath(...args);
+      await withRealpathSymlinkRebindRace({
+        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
+        symlinkPath: slot,
+        symlinkTarget: outside,
+        timing: "before-realpath",
+        run: async () => {
+          await expect(
+            writeFileWithinRoot({
+              rootDir: root,
+              relativePath: path.join("slot", "target.txt"),
+              data: "new-content",
+              mkdir: false,
+            }),
+          ).rejects.toMatchObject({ code: "outside-workspace" });
+        },
       });
-      try {
-        await expect(
-          writeFileWithinRoot({
-            rootDir: root,
-            relativePath: path.join("slot", "target.txt"),
-            data: "new-content",
-            mkdir: false,
-          }),
-        ).rejects.toMatchObject({ code: "outside-workspace" });
-      } finally {
-        realpathSpy.mockRestore();
-      }
 
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
     },
@@ -325,29 +319,22 @@ describe("fs-safe", () => {
       const slot = path.join(root, "slot");
       await fs.symlink(inside, slot);
 
-      const realRealpath = fs.realpath.bind(fs);
-      let flipped = false;
-      const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-        const [filePath] = args;
-        if (!flipped && String(filePath).endsWith(path.join("slot", "target.txt"))) {
-          flipped = true;
-          await fs.rm(slot, { recursive: true, force: true });
-          await fs.symlink(outside, slot);
-        }
-        return await realRealpath(...args);
+      await withRealpathSymlinkRebindRace({
+        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
+        symlinkPath: slot,
+        symlinkTarget: outside,
+        timing: "before-realpath",
+        run: async () => {
+          await expect(
+            writeFileFromPathWithinRoot({
+              rootDir: root,
+              relativePath: path.join("slot", "target.txt"),
+              sourcePath,
+              mkdir: false,
+            }),
+          ).rejects.toMatchObject({ code: "outside-workspace" });
+        },
       });
-      try {
-        await expect(
-          writeFileFromPathWithinRoot({
-            rootDir: root,
-            relativePath: path.join("slot", "target.txt"),
-            sourcePath,
-            mkdir: false,
-          }),
-        ).rejects.toMatchObject({ code: "outside-workspace" });
-      } finally {
-        realpathSpy.mockRestore();
-      }
 
       await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
     },
