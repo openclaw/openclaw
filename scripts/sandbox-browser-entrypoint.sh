@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+dedupe_chrome_args() {
+  local -A seen_args=()
+  local -a unique_args=()
+
+  for arg in "${CHROME_ARGS[@]}"; do
+    if [[ -n "${seen_args["$arg"]:+x}" ]]; then
+      continue
+    fi
+    seen_args["$arg"]=1
+    unique_args+=("$arg")
+  done
+
+  CHROME_ARGS=("${unique_args[@]}")
+}
+
 export DISPLAY=:1
 export HOME=/tmp/openclaw-home
 export XDG_CONFIG_HOME="${HOME}/.config"
@@ -78,6 +93,7 @@ if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
   )
 fi
 
+dedupe_chrome_args
 chromium "${CHROME_ARGS[@]}" about:blank &
 
 for _ in $(seq 1 50); do
