@@ -43,6 +43,31 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
+function coalesceAssistantTexts(chunks: string[]): string {
+  let merged = "";
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    if (!merged) {
+      merged = chunk;
+      continue;
+    }
+    // Some providers emit incremental snapshots ("Per" -> "Perfeito"), while
+    // others emit hard fragments ("Per" + "feito"). Prefer the longer snapshot
+    // when one contains the other; otherwise append the fragment.
+    if (chunk.startsWith(merged) || chunk.includes(merged)) {
+      merged = chunk;
+      continue;
+    }
+    if (merged.startsWith(chunk) || merged.includes(chunk)) {
+      continue;
+    }
+    merged += chunk;
+  }
+  return merged;
+}
+
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = (error ?? "").toLowerCase();
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
@@ -243,13 +268,15 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
+  const rawAnswerTexts = (
     params.assistantTexts.length
       ? params.assistantTexts
       : fallbackAnswerText
         ? [fallbackAnswerText]
         : []
   ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts =
+    rawAnswerTexts.length > 1 ? [coalesceAssistantTexts(rawAnswerTexts)] : rawAnswerTexts;
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {

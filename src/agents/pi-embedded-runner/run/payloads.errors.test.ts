@@ -108,6 +108,26 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, errorJsonPretty.trim());
   });
 
+  it("coalesces fragmented assistant text chunks into one payload", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Per", "feito, @jarbas! 👊"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Perfeito, @jarbas! 👊");
+  });
+
+  it("prefers longer snapshot updates over shorter assistant text snapshots", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Per", "Perfeito, @jarbas! 👊"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Perfeito, @jarbas! 👊");
+  });
+
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "tab not found" },
