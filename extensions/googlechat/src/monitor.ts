@@ -643,7 +643,7 @@ async function processMessageWithPipeline(params: {
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: spaceId,
     },
     runtime: core.channel,
