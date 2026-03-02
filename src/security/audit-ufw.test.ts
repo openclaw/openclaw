@@ -116,4 +116,18 @@ describe("collectUfwFindings", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.title).toBe("UFW status unknown");
   });
+
+  it("reports UFW status unknown when err message contains 'command not found' from child stderr", async () => {
+    const execUfwFn = vi
+      .fn()
+      .mockRejectedValue(new Error("Command failed: iptables: command not found"));
+    const out = await collectUfwFindings({
+      platform: "linux",
+      execUfwFn,
+      resolveUfwBinary: () => "/usr/sbin/ufw",
+      readUfwConfEnabled: async () => null,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.title).toBe("UFW status unknown");
+  });
 });

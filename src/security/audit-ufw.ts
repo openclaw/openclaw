@@ -120,9 +120,10 @@ export async function collectUfwFindings(params: {
   }
 
   const errMsg = hasError ? (statusResult as { error: string }).error : "";
-  // Only treat as "binary absent" when exec failed to run the binary (e.g. ENOENT).
-  // Do not use stderr: ufw may run but exit with "X not found" for a dependency.
-  const commandNotFound = hasError && /ENOENT|spawn.*ENOENT|command not found/i.test(errMsg);
+  // Only treat as "binary absent" when exec failed to run the binary (ENOENT).
+  // Do not match "command not found": String(err) can include child stderr, so
+  // ufw running but failing with "iptables: command not found" would be misclassified.
+  const commandNotFound = hasError && /ENOENT|spawn.*ENOENT/i.test(errMsg);
 
   if (commandNotFound) {
     return [];
