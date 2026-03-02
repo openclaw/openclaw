@@ -24,6 +24,54 @@ run() {
   fi
 }
 
+resolve_npm_bin() {
+  local openclaw_bin candidate
+  openclaw_bin="$(command -v openclaw 2>/dev/null || true)"
+  if [[ -n "$openclaw_bin" ]]; then
+    candidate="$(dirname "$openclaw_bin")/npm"
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+  command -v npm 2>/dev/null || true
+}
+
+parse_gateway_service_loaded() {
+  node -e '
+let raw = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  raw += chunk;
+});
+process.stdin.on("end", () => {
+  try {
+    const loaded = JSON.parse(raw)?.service?.loaded;
+    process.stdout.write(loaded === true ? "1" : "0");
+  } catch {
+    process.stdout.write("0");
+  }
+});
+'
+}
+
+has_systemd_gateway_service() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+  if systemctl --user --quiet is-enabled openclaw-gateway.service 2>/dev/null; then
+    return 0
+  fi
+  if systemctl --user --quiet is-enabled "openclaw-gateway@*.service" 2>/dev/null; then
+    return 0
+  fi
+  if systemctl --user --no-pager --no-legend list-unit-files 'openclaw-gateway*.service' 2>/dev/null \
+    | awk 'NF{found=1} END{exit found?0:1}'; then
+    return 0
+  fi
+  return 1
+}
+
 REPO_DIR="${OPENCLAW_REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_DIR/.patch-backups}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -35,7 +83,14 @@ fi
 
 cd "$REPO_DIR"
 
-PACKAGE_DIR="$(npm root -g)/openclaw"
+NPM_BIN="$(resolve_npm_bin)"
+if [[ -z "$NPM_BIN" ]]; then
+  echo "error: npm not found in PATH" >&2
+  exit 1
+fi
+
+echo "info: using npm binary: $NPM_BIN"
+PACKAGE_DIR="$("$NPM_BIN" root -g)/openclaw"
 BACKUP_TGZ="$BACKUP_DIR/openclaw-global-backup-$TIMESTAMP.tgz"
 
 if [[ -L "$PACKAGE_DIR" && "$(readlink -f "$PACKAGE_DIR")" == "$REPO_DIR" ]]; then
@@ -64,7 +119,7 @@ run "pnpm test -- --run src/commands/models/auth.login-profiles.test.ts src/cli/
 
 # Create tarball and install globally
 run "rm -f ./openclaw-*.tgz"
-run "npm pack"
+run "'$NPM_BIN' pack"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "[dry-run] would install latest ./openclaw-*.tgz globally"
@@ -83,7 +138,15 @@ if ! tar -tf "$PKG_TGZ" | awk '$0=="package/dist/control-ui/index.html"{found=1}
   exit 1
 fi
 
-run "npm i -g '$PKG_TGZ'"
+run "'$NPM_BIN' i -g '$PKG_TGZ'"
 run "openclaw --version"
+
+GATEWAY_STATUS_JSON="$(openclaw gateway status --json 2>/dev/null || true)"
+GATEWAY_SERVICE_LOADED="$(printf '%s' "$GATEWAY_STATUS_JSON" | parse_gateway_service_loaded)"
+if [[ "$GATEWAY_SERVICE_LOADED" == "1" ]] || has_systemd_gateway_service; then
+  echo "info: gateway service is loaded; refreshing service command path + restart"
+  run "openclaw gateway install --force"
+  run "openclaw gateway restart"
+fi
 
 echo "done"
