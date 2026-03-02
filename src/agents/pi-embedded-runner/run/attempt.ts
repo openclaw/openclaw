@@ -421,6 +421,34 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+/**
+ * Canonical message-sanitization wrapper for StreamFn.
+ * USE THIS — do not write inline message-sanitization wrappers.
+ * Handles: non-array passthrough, identity short-circuit, context reconstruction.
+ * @see AGENTS.md for project-level guidance.
+ */
+export function wrapStreamFnWithMessageSanitizer(
+  inner: StreamFn,
+  sanitize: (messages: AgentMessage[]) => AgentMessage[],
+): StreamFn {
+  return (model, context, options) => {
+    const ctx = context as unknown as { messages?: unknown };
+    const messages = ctx?.messages;
+    if (!Array.isArray(messages)) {
+      return inner(model, context, options);
+    }
+    const sanitized = sanitize(messages as unknown as AgentMessage[]) as unknown;
+    if (sanitized === messages) {
+      return inner(model, context, options);
+    }
+    const nextContext = {
+      ...(context as unknown as Record<string, unknown>),
+      messages: sanitized,
+    } as unknown;
+    return inner(model, nextContext as typeof context, options);
+  };
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -1082,23 +1110,10 @@ export async function runEmbeddedAttempt(
       // on *any* follow-up provider call (including tool continuations). Wrap the stream function
       // so every outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnWithMessageSanitizer(
+          activeSession.agent.streamFn,
+          (msgs) => dropThinkingBlocks(msgs),
+        );
       }
 
       // Mistral (and other strict providers) reject tool call IDs that don't match their
@@ -1107,47 +1122,21 @@ export async function runEmbeddedAttempt(
       // tool result cycles bypass that path. Wrap streamFn so every outbound request
       // sees sanitized tool call IDs.
       if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
-        const inner = activeSession.agent.streamFn;
         const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnWithMessageSanitizer(
+          activeSession.agent.streamFn,
+          (msgs) => sanitizeToolCallIdsForCloudCodeAssist(msgs, mode),
+        );
       }
 
       if (
         params.model.api === "openai-responses" ||
         params.model.api === "openai-codex-responses"
       ) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnWithMessageSanitizer(
+          activeSession.agent.streamFn,
+          (msgs) => downgradeOpenAIFunctionCallReasoningPairs(msgs),
+        );
       }
 
       // Some models emit tool names with surrounding whitespace (e.g. " read ").

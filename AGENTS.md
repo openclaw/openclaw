@@ -212,6 +212,7 @@
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 - Beta release guardrail: when using a beta Git tag (for example `vYYYY.M.D-beta.N`), publish npm with a matching beta version suffix (for example `YYYY.M.D-beta.N`) rather than a plain version on `--tag beta`; otherwise the plain version name gets consumed/blocked.
+- **StreamFn message sanitization**: use `wrapStreamFnWithMessageSanitizer()` from `src/agents/pi-embedded-runner/run/attempt.ts`. Do not create inline streamFn wrappers that extract/sanitize/reconstruct messages — it handles non-array passthrough, identity short-circuit, and context reconstruction.
 
 ## NPM + 1Password (publish/verify)
 
