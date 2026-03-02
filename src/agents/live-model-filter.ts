@@ -71,7 +71,11 @@ export function isModernModelRef(ref: ModelRef): boolean {
   if (provider === "github-copilot" || provider === "copilot-proxy") {
     // Copilot uses dot-notation ("claude-opus-4.6"); normalize to dashes for prefix matching.
     const normalized = id.replace(/\./g, "-");
-    return matchesPrefix(normalized, ANTHROPIC_PREFIXES) || matchesExactOrPrefix(id, OPENAI_MODELS);
+    return (
+      matchesPrefix(normalized, ANTHROPIC_PREFIXES) ||
+      matchesExactOrPrefix(id, OPENAI_MODELS) ||
+      matchesExactOrPrefix(id, CODEX_MODELS)
+    );
   }
 
   if (provider === "opencode" && id.endsWith("-free")) {

@@ -11,6 +11,7 @@ import {
 import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
   COPILOT_1M_FORWARD_COMPAT_CANDIDATES,
+  COPILOT_FAST_FORWARD_COMPAT_CANDIDATES,
 } from "../../agents/model-forward-compat.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
@@ -119,6 +120,12 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
     }
     // Copilot "-1m" variants inherit auth from their base model.
     for (const candidate of COPILOT_1M_FORWARD_COMPAT_CANDIDATES) {
+      if (hasAvailableTemplate(availableKeys, candidate.templatePrefixes)) {
+        availableKeys.add(candidate.key);
+      }
+    }
+    // Copilot "-fast" variants inherit auth from their base model.
+    for (const candidate of COPILOT_FAST_FORWARD_COMPAT_CANDIDATES) {
       if (hasAvailableTemplate(availableKeys, candidate.templatePrefixes)) {
         availableKeys.add(candidate.key);
       }

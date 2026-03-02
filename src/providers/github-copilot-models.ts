@@ -24,6 +24,8 @@ const COPILOT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4-6": 200_000,
   "claude-sonnet-4-5": 200_000,
   "claude-haiku-4-5": 200_000,
+  // Fast variants use the standard 128K context window.
+  "claude-opus-4-6-fast": DEFAULT_CONTEXT_WINDOW,
   // 1M variant — only verified for Opus 4.6.
   "claude-opus-4-6-1m": 936_000,
 };
@@ -31,6 +33,7 @@ const COPILOT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 // Models that support extended thinking / reasoning.
 const COPILOT_REASONING_MODELS = new Set([
   "claude-opus-4-6",
+  "claude-opus-4-6-fast",
   "claude-opus-4-6-1m",
   "claude-opus-4-5",
   "claude-sonnet-4-6",
@@ -47,6 +50,8 @@ const DEFAULT_MODEL_IDS = [
   // Claude models (available on GitHub Copilot)
   "claude-opus-4-6-1m",
   "claude-opus-4-6",
+  "claude-opus-4-6-fast",
+  "claude-opus-4.6-fast",
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
   "claude-sonnet-4-6",
@@ -57,6 +62,7 @@ const DEFAULT_MODEL_IDS = [
   "gpt-4.1",
   "gpt-4.1-mini",
   "gpt-4.1-nano",
+  "gpt-5.3-codex",
   "o1",
   "o1-mini",
   "o3-mini",

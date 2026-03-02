@@ -10,6 +10,8 @@ const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
+const ANTHROPIC_OPUS_46_FAST_MODEL_ID = "claude-opus-4-6-fast";
+const ANTHROPIC_OPUS_46_DOT_FAST_MODEL_ID = "claude-opus-4.6-fast";
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
@@ -59,6 +61,19 @@ export const COPILOT_1M_FORWARD_COMPAT_CANDIDATES = [
   },
   {
     key: "github-copilot/claude-opus-4.6-1m",
+    templatePrefixes: ["github-copilot/claude-opus-4.6", "github-copilot/claude-opus-4-6"],
+  },
+] as const;
+
+// Copilot "-fast" forward-compat candidates.
+// Clone from the base Opus model to inherit transport config.
+export const COPILOT_FAST_FORWARD_COMPAT_CANDIDATES = [
+  {
+    key: "github-copilot/claude-opus-4-6-fast",
+    templatePrefixes: ["github-copilot/claude-opus-4-6", "github-copilot/claude-opus-4.6"],
+  },
+  {
+    key: "github-copilot/claude-opus-4.6-fast",
     templatePrefixes: ["github-copilot/claude-opus-4.6", "github-copilot/claude-opus-4-6"],
   },
 ] as const;
@@ -183,6 +198,23 @@ function resolveAnthropicOpus46ForwardCompatModel(
     modelRegistry,
     dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
     dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
+    dashTemplateId: "claude-opus-4-5",
+    dotTemplateId: "claude-opus-4.5",
+    fallbackTemplateIds: ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS,
+  });
+}
+
+function resolveAnthropicOpus46FastForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  return resolveAnthropic46ForwardCompatModel({
+    provider,
+    modelId,
+    modelRegistry,
+    dashModelId: ANTHROPIC_OPUS_46_FAST_MODEL_ID,
+    dotModelId: ANTHROPIC_OPUS_46_DOT_FAST_MODEL_ID,
     dashTemplateId: "claude-opus-4-5",
     dotTemplateId: "claude-opus-4.5",
     fallbackTemplateIds: ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS,
@@ -421,6 +453,7 @@ export function resolveForwardCompatModel(
   return (
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveAnthropicOpus46FastForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry) ??
