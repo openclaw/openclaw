@@ -44,4 +44,4 @@ Text is supported everywhere; media and reactions vary by channel.
 - Group behavior varies by channel; see [Groups](/channels/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).
-- Model providers are documented separately; see [Model Providers](/providers/models).
+- Model providers are documented separately; see [Model Providers](/providers).
