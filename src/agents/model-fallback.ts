@@ -461,7 +461,11 @@ export async function runWithModelFallback<T>(params: {
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
       const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
+      const isSessionLimit =
+        /session limit|too many sessions|max(?:imum)? number of .*sessions|active sessions/i.test(
+          errMessage,
+        );
+      if (isLikelyContextOverflowError(errMessage) && !isSessionLimit) {
         throw err;
       }
       const normalized =

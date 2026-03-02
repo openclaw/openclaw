@@ -636,17 +636,38 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
+      const fallbackNotice = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+      });
+
       if (verboseEnabled) {
-        const fallbackNotice = buildFallbackNotice({
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          attempts: fallbackAttempts,
-        });
         if (fallbackNotice) {
           verboseNotices.push({ text: fallbackNotice });
         }
+      } else if (!isHeartbeat && replyToChannel === "telegram" && fallbackNotice) {
+        // Less-chatty: inline the fallback notice into the eventual reply (Telegram) rather than
+        // sending a separate operational message.
+        const nextPayloads = [...finalPayloads];
+        const idx = nextPayloads.findIndex(
+          (p) => typeof p.text === "string" && p.text.trim().length > 0,
+        );
+        if (idx >= 0) {
+          const existing = nextPayloads[idx]?.text ?? "";
+          nextPayloads[idx] = {
+            ...nextPayloads[idx],
+            text: `${fallbackNotice}
+
+${existing}`,
+          };
+        } else {
+          // Media-only replies: fall back to a standalone notice payload.
+          nextPayloads.unshift({ text: fallbackNotice });
+        }
+        finalPayloads = nextPayloads;
       }
     }
     if (fallbackTransition.fallbackCleared) {
