@@ -66,6 +66,16 @@ export { telegramUserbotSetupAdapter } from "./adapters/setup.js";
 export { telegramUserbotStatusAdapter } from "./adapters/status.js";
 export type { TelegramUserbotProbe } from "./adapters/status.js";
 export { telegramUserbotSecurityAdapter } from "./adapters/security.js";
+export { telegramUserbotOutboundAdapter } from "./adapters/outbound.js";
+
+// Outbound helpers
+export { chunkMessage, sendText, sendMedia, TELEGRAM_TEXT_LIMIT } from "./outbound.js";
+export type {
+  SendTextParams,
+  SendTextResult,
+  SendMediaParams,
+  SendMediaResult,
+} from "./outbound.js";
 
 // Normalize helpers
 export {
