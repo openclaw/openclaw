@@ -219,6 +219,11 @@ export async function fillFormViaPlaywright(opts: {
   }
 }
 
+// SECURITY: Maximum length for evaluate function bodies.
+// Limits the surface area for code injection via the browser evaluate path.
+// The browser sandbox provides the primary security boundary; this is defense-in-depth.
+const MAX_EVALUATE_FN_LENGTH = 100_000;
+
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -230,6 +235,11 @@ export async function evaluateViaPlaywright(opts: {
   const fnText = String(opts.fn ?? "").trim();
   if (!fnText) {
     throw new Error("function is required");
+  }
+  if (fnText.length > MAX_EVALUATE_FN_LENGTH) {
+    throw new Error(
+      `evaluate function body too large (${fnText.length} chars, max ${MAX_EVALUATE_FN_LENGTH})`,
+    );
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
