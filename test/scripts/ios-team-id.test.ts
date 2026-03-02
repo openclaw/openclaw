@@ -6,6 +6,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
+const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
+const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
 let sharedBinDir = "";
 let caseId = 0;
@@ -25,13 +28,13 @@ function runScript(
 } {
   const binDir = path.join(homeDir, "bin");
   const env = {
-    ...process.env,
     HOME: homeDir,
-    PATH: `${binDir}:${sharedBinDir}:${process.env.PATH ?? ""}`,
+    PATH: `${binDir}:${sharedBinDir}:${BASE_PATH}`,
+    LANG: BASE_LANG,
     ...extraEnv,
   };
   try {
-    const stdout = execFileSync("bash", [SCRIPT], {
+    const stdout = execFileSync(BASH_BIN, [SCRIPT], {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -70,6 +73,24 @@ exit 0`,
     await writeExecutable(
       path.join(sharedBinDir, "security"),
       `#!/usr/bin/env bash
+if [[ "$1" == "cms" && "$2" == "-D" ]]; then
+  if [[ "$4" == *"one.mobileprovision" ]]; then
+    cat <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>AAAAA11111</string></array></dict></plist>
+PLIST
+    exit 0
+  fi
+  if [[ "$4" == *"two.mobileprovision" ]]; then
+    cat <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>BBBBB22222</string></array></dict></plist>
+PLIST
+    exit 0
+  fi
+fi
 exit 1`,
     );
   });
@@ -91,40 +112,20 @@ exit 1`,
     return { homeDir, binDir };
   }
 
-  it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
-    const { homeDir, binDir } = await createHomeDir();
-    await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "one.mobileprovision"),
-      "stub",
-    );
+  it("resolves fallback and preferred team IDs from provisioning profiles", async () => {
+    const { homeDir } = await createHomeDir();
+    const profilesDir = path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles");
+    await mkdir(profilesDir, { recursive: true });
+    await writeFile(path.join(profilesDir, "one.mobileprovision"), "stub1");
 
-    await writeExecutable(
-      path.join(binDir, "security"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "cms" && "$2" == "-D" ]]; then
-  cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>TeamIdentifier</key>
-  <array>
-    <string>ABCDE12345</string>
-  </array>
-</dict>
-</plist>
-PLIST
-  exit 0
-fi
-exit 0`,
-    );
+    const fallbackResult = runScript(homeDir);
+    expect(fallbackResult.ok).toBe(true);
+    expect(fallbackResult.stdout).toBe("AAAAA11111");
 
-    const result = runScript(homeDir);
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("ABCDE12345");
+    await writeFile(path.join(profilesDir, "two.mobileprovision"), "stub2");
+    const preferredResult = runScript(homeDir, { IOS_PREFERRED_TEAM_ID: "BBBBB22222" });
+    expect(preferredResult.ok).toBe(true);
+    expect(preferredResult.stdout).toBe("BBBBB22222");
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
@@ -149,47 +150,6 @@ exit 1`,
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("An Apple account is signed in to Xcode");
     expect(result.stderr).toContain("IOS_DEVELOPMENT_TEAM");
-  });
-
-  it("honors IOS_PREFERRED_TEAM_ID when multiple profile teams are available", async () => {
-    const { homeDir, binDir } = await createHomeDir();
-    await mkdir(path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles"), {
-      recursive: true,
-    });
-    await writeFile(
-      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "one.mobileprovision"),
-      "stub1",
-    );
-    await writeFile(
-      path.join(homeDir, "Library", "MobileDevice", "Provisioning Profiles", "two.mobileprovision"),
-      "stub2",
-    );
-
-    await writeExecutable(
-      path.join(binDir, "security"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "cms" && "$2" == "-D" ]]; then
-  if [[ "$4" == *"one.mobileprovision" ]]; then
-    cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>AAAAA11111</string></array></dict></plist>
-PLIST
-    exit 0
-  fi
-  cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>BBBBB22222</string></array></dict></plist>
-PLIST
-  exit 0
-fi
-exit 0`,
-    );
-
-    const result = runScript(homeDir, { IOS_PREFERRED_TEAM_ID: "BBBBB22222" });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe("BBBBB22222");
   });
 
   it("matches preferred team IDs even when parser output uses CRLF line endings", async () => {
