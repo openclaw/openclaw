@@ -10,7 +10,13 @@ export function createTransport(server: McpServerConfig): Transport {
       return new StdioClientTransport({
         command: server.command,
         args: server.args,
-        env: server.env ? { ...process.env, ...server.env } : undefined,
+        env: server.env
+          ? (Object.fromEntries(
+              Object.entries({ ...process.env, ...server.env }).filter(
+                (e): e is [string, string] => e[1] != null,
+              ),
+            ) as Record<string, string>)
+          : undefined,
         cwd: server.cwd,
       });
 
