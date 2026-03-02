@@ -1,5 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -109,6 +110,13 @@ export async function deliverReplies(params: {
         continue;
       }
       runtime.error?.(danger("reply missing text/media"));
+      continue;
+    }
+    // Suppress NO_REPLY before the Telegram API call to prevent the
+    // send-then-delete flash visible to users in group chats (#27959).
+    const trimmedText = reply.text?.trim() ?? "";
+    if (isSilentReplyText(trimmedText) && !hasMedia) {
+      logVerbose("telegram send: suppressed NO_REPLY token before API call");
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
