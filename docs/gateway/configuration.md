@@ -483,11 +483,25 @@ Env var equivalent: `OPENCLAW_LOAD_SHELL_ENV=1`
 }
 ```
 
+You can also pull values from `pass`/`gopass`:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "${pass:openclaw/openai-api-key}" },
+    },
+  },
+}
+```
+
 Rules:
 
 - Only uppercase names matched: `[A-Z_][A-Z0-9_]*`
 - Missing/empty vars throw an error at load time
+- Secret refs support `${pass:<path>}` and `${gopass:<path>}` (with safe path validation)
 - Escape with `$${VAR}` for literal output
+- Escape secret refs with `$${pass:<path>}` / `$${gopass:<path>}` for literal output
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 

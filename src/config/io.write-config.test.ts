@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { ConfigEnvSubstitutionOptions } from "./env-substitution.js";
 import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
@@ -15,6 +16,7 @@ describe("config io write", () => {
     home: string;
     initialConfig: Record<string, unknown>;
     env?: NodeJS.ProcessEnv;
+    configEnvSubstitutionOptions?: ConfigEnvSubstitutionOptions;
     logger?: { warn: (msg: string) => void; error: (msg: string) => void };
   }) {
     const configPath = path.join(params.home, ".openclaw", "openclaw.json");
@@ -23,6 +25,7 @@ describe("config io write", () => {
 
     const io = createConfigIO({
       env: params.env ?? {},
+      configEnvSubstitutionOptions: params.configEnvSubstitutionOptions,
       homedir: () => params.home,
       logger: params.logger ?? silentLogger,
     });
@@ -298,6 +301,51 @@ describe("config io write", () => {
         port: 18789,
         auth: { mode: "token" },
       });
+    });
+  });
+
+  it("preserves pass secret references when writing unrelated config changes", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                codex: {
+                  command: "codex",
+                  env: {
+                    OPENAI_API_KEY: "${pass:openclaw/openai-api-key}",
+                  },
+                },
+              },
+            },
+          },
+          gateway: { port: 18789 },
+        },
+        configEnvSubstitutionOptions: {
+          secretCommandRunner: (command, args) => {
+            if (command === "pass" && args[0] === "show" && args[1] === "openclaw/openai-api-key") {
+              return "sk-pass-secret\n";
+            }
+            const err = new Error("command not found") as Error & { code?: string };
+            err.code = "ENOENT";
+            throw err;
+          },
+        },
+      });
+
+      expect(snapshot.config.agents?.defaults?.cliBackends?.codex?.env?.OPENAI_API_KEY).toBe(
+        "sk-pass-secret",
+      );
+
+      const persisted = (await writeTokenAuthAndReadConfig({ io, snapshot, configPath })) as {
+        agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
+      };
+
+      expect(persisted.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY).toBe(
+        "${pass:openclaw/openai-api-key}",
+      );
     });
   });
 

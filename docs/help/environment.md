@@ -84,6 +84,11 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 }
 ```
 
+You can also resolve values from password stores:
+
+- `${pass:<path>}` (prefers `pass`, falls back to `gopass` when command is unavailable)
+- `${gopass:<path>}` (prefers `gopass`, falls back to `pass` when command is unavailable)
+
 See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
 
 ## Secret refs vs `${ENV}` strings

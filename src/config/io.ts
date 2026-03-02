@@ -29,7 +29,10 @@ import {
 } from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
+  type ConfigEnvSubstitutionOptions,
+  InvalidSecretReferenceError,
   MissingEnvVarError,
+  MissingSecretError,
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
@@ -539,6 +542,7 @@ export type ConfigIoDeps = {
   fs?: typeof fs;
   json5?: typeof JSON5;
   env?: NodeJS.ProcessEnv;
+  configEnvSubstitutionOptions?: ConfigEnvSubstitutionOptions;
   homedir?: () => string;
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
@@ -599,6 +603,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     fs: overrides.fs ?? fs,
     json5: overrides.json5 ?? JSON5,
     env: overrides.env ?? process.env,
+    configEnvSubstitutionOptions: overrides.configEnvSubstitutionOptions ?? {},
     homedir:
       overrides.homedir ?? (() => resolveRequiredHomeDir(overrides.env ?? process.env, os.homedir)),
     configPath: overrides.configPath ?? "",
@@ -652,6 +657,7 @@ function resolveConfigIncludesForRead(
 function resolveConfigForRead(
   resolvedIncludes: unknown,
   env: NodeJS.ProcessEnv,
+  substitutionOptions: ConfigEnvSubstitutionOptions,
 ): ConfigReadResolution {
   // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
@@ -659,7 +665,7 @@ function resolveConfigForRead(
   }
 
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, substitutionOptions),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
   };
@@ -699,6 +705,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
+        deps.configEnvSubstitutionOptions,
       );
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
@@ -901,12 +908,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       let readResolution: ConfigReadResolution;
       try {
-        readResolution = resolveConfigForRead(resolved, deps.env);
+        readResolution = resolveConfigForRead(
+          resolved,
+          deps.env,
+          deps.configEnvSubstitutionOptions,
+        );
       } catch (err) {
         const message =
-          err instanceof MissingEnvVarError
+          err instanceof MissingEnvVarError ||
+          err instanceof MissingSecretError ||
+          err instanceof InvalidSecretReferenceError
             ? err.message
-            : `Env var substitution failed: ${String(err)}`;
+            : `Config substitution failed: ${String(err)}`;
         return {
           snapshot: {
             path: configPath,

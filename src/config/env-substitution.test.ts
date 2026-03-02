@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  InvalidSecretReferenceError,
+  MissingEnvVarError,
+  MissingSecretError,
+  resolveConfigEnvVars,
+} from "./env-substitution.js";
 
 describe("resolveConfigEnvVars", () => {
   describe("basic substitution", () => {
@@ -191,6 +196,136 @@ describe("resolveConfigEnvVars", () => {
         const result = resolveConfigEnvVars(scenario.config, scenario.env);
         expect(result, scenario.name).toEqual(scenario.expected);
       }
+    });
+  });
+
+  describe("secret store substitution", () => {
+    it("substitutes pass and gopass references", () => {
+      const calls: Array<{ command: string; args: string[]; timeoutMs: number }> = [];
+      const result = resolveConfigEnvVars(
+        {
+          passToken: "${pass:openclaw/discord-token}",
+          gopassToken: "${gopass:openclaw/telegram-token}",
+        },
+        {},
+        {
+          secretCommandTimeoutMs: 4321,
+          secretCommandRunner: (command, args, timeoutMs) => {
+            calls.push({ command, args: [...args], timeoutMs });
+            if (command === "pass") {
+              return "discord-secret\n";
+            }
+            if (command === "gopass") {
+              return "telegram-secret\n";
+            }
+            throw new Error(`unexpected command: ${command}`);
+          },
+        },
+      );
+
+      expect(result).toEqual({
+        passToken: "discord-secret",
+        gopassToken: "telegram-secret",
+      });
+      expect(calls).toEqual([
+        { command: "pass", args: ["show", "openclaw/discord-token"], timeoutMs: 4321 },
+        {
+          command: "gopass",
+          args: ["show", "-o", "openclaw/telegram-token"],
+          timeoutMs: 4321,
+        },
+      ]);
+    });
+
+    it("falls back from pass to gopass when pass is unavailable", () => {
+      const calls: Array<{ command: string; args: string[]; timeoutMs: number }> = [];
+      const result = resolveConfigEnvVars(
+        { token: "${pass:openclaw/gateway-token}" },
+        {},
+        {
+          secretCommandRunner: (command, args, timeoutMs) => {
+            calls.push({ command, args: [...args], timeoutMs });
+            if (command === "pass") {
+              const err = new Error("not found") as Error & { code?: string };
+              err.code = "ENOENT";
+              throw err;
+            }
+            if (command === "gopass") {
+              return "from-gopass\n";
+            }
+            throw new Error(`unexpected command: ${command}`);
+          },
+        },
+      );
+
+      expect(result).toEqual({ token: "from-gopass" });
+      expect(calls.map((call) => call.command)).toEqual(["pass", "gopass"]);
+    });
+
+    it("falls back from gopass to pass when gopass is unavailable", () => {
+      const calls: Array<{ command: string; args: string[]; timeoutMs: number }> = [];
+      const result = resolveConfigEnvVars(
+        { token: "${gopass:openclaw/gateway-token}" },
+        {},
+        {
+          secretCommandRunner: (command, args, timeoutMs) => {
+            calls.push({ command, args: [...args], timeoutMs });
+            if (command === "gopass") {
+              const err = new Error("not found") as Error & { code?: string };
+              err.code = "ENOENT";
+              throw err;
+            }
+            if (command === "pass") {
+              return "from-pass\n";
+            }
+            throw new Error(`unexpected command: ${command}`);
+          },
+        },
+      );
+
+      expect(result).toEqual({ token: "from-pass" });
+      expect(calls.map((call) => call.command)).toEqual(["gopass", "pass"]);
+    });
+
+    it("throws MissingSecretError when secret lookup fails", () => {
+      expect(() =>
+        resolveConfigEnvVars(
+          { token: "${pass:openclaw/missing}" },
+          {},
+          {
+            secretCommandRunner: () => {
+              const err = new Error("secret does not exist") as Error & { code?: string };
+              err.code = "ENOENT";
+              throw err;
+            },
+          },
+        ),
+      ).toThrow(MissingSecretError);
+    });
+
+    it("throws InvalidSecretReferenceError for unsafe secret paths", () => {
+      expect(() =>
+        resolveConfigEnvVars(
+          { token: "${pass:../../etc/passwd}" },
+          {},
+          {
+            secretCommandRunner: () => "unused",
+          },
+        ),
+      ).toThrow(InvalidSecretReferenceError);
+    });
+
+    it("supports escaped secret references", () => {
+      const result = resolveConfigEnvVars(
+        { token: "$${pass:openclaw/discord-token}" },
+        {},
+        {
+          secretCommandRunner: () => {
+            throw new Error("should not execute for escaped refs");
+          },
+        },
+      );
+      expect(result).toEqual({ token: "${pass:openclaw/discord-token}" });
     });
   });
 

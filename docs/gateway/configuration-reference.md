@@ -2582,6 +2582,22 @@ Reference env vars in any config string with `${VAR_NAME}`:
 - Escape with `$${VAR}` for a literal `${VAR}`.
 - Works with `$include`.
 
+You can also resolve secrets from `pass`/`gopass`:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "${pass:openclaw/openai-api-key}" },
+    },
+  },
+}
+```
+
+- Secret refs: `${pass:<path>}` or `${gopass:<path>}`.
+- Secret paths must be slash-separated safe segments (letters, numbers, `.`, `_`, `-`).
+- Escape with `$${pass:<path>}` / `$${gopass:<path>}` for literal output.
+
 ---
 
 ## Secrets
