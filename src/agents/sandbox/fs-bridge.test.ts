@@ -308,6 +308,10 @@ describe("sandbox fs bridge shell compatibility", () => {
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
       const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
+      // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+      if (process.platform === "win32") {
+        return;
+      }
       await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
       const bridge = createSandboxFsBridge({
