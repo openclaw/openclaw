@@ -219,4 +219,20 @@ describe("findExtraGatewayServices (linux)", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("skips browser services when env options consume argument values", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["chromium-env-u.service"] as unknown as Awaited<
+      ReturnType<typeof fs.readdir>
+    >);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/env -u LD_PRELOAD /snap/bin/chromium --headless --user-data-dir=/home/test/snap/chromium/common/openclaw/user-data",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
+  });
 });

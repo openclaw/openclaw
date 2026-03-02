@@ -86,6 +86,27 @@ function stripSystemdExecPrefix(token: string): string {
   return out;
 }
 
+function envOptionConsumesNextValue(token: string): boolean {
+  if (!token.startsWith("-")) {
+    return false;
+  }
+  if (token.includes("=")) {
+    return false;
+  }
+  return (
+    token === "-u" ||
+    token === "-C" ||
+    token === "-S" ||
+    token === "--unset" ||
+    token === "--chdir" ||
+    token === "--split-string" ||
+    token === "--argv0" ||
+    token === "--default-signal" ||
+    token === "--ignore-signal" ||
+    token === "--block-signal"
+  );
+}
+
 export function collectSystemdExecStartValues(contents: string): string[] {
   const logicalLines: string[] = [];
   let currentLine = "";
@@ -137,7 +158,15 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
       index += 1;
       while (index < tokens.length) {
         const envToken = tokens[index] ?? "";
-        if (!envToken || envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
+        if (!envToken) {
+          index += 1;
+          continue;
+        }
+        if (envOptionConsumesNextValue(envToken)) {
+          index += 2;
+          continue;
+        }
+        if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
           index += 1;
           continue;
         }

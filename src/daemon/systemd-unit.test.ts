@@ -67,4 +67,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("skips env option values before picking executable token", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env -u LD_PRELOAD /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });
