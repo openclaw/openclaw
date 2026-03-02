@@ -112,25 +112,38 @@ export function hashCommandList(commands: TelegramMenuCommand[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
-function resolveCommandHashPath(accountId?: string): string {
-  const stateDir = resolveStateDir(process.env, os.homedir);
-  const normalized = accountId?.trim().replace(/[^a-z0-9._-]+/gi, "_") || "default";
-  return path.join(stateDir, "telegram", `command-hash-${normalized}.txt`);
+function hashBotIdentity(botIdentity?: string): string {
+  const normalized = botIdentity?.trim();
+  if (!normalized) {
+    return "no-bot";
+  }
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
-async function readCachedCommandHash(accountId?: string): Promise<string | null> {
+function resolveCommandHashPath(accountId?: string, botIdentity?: string): string {
+  const stateDir = resolveStateDir(process.env, os.homedir);
+  const normalizedAccount = accountId?.trim().replace(/[^a-z0-9._-]+/gi, "_") || "default";
+  const botHash = hashBotIdentity(botIdentity);
+  return path.join(stateDir, "telegram", `command-hash-${normalizedAccount}-${botHash}.txt`);
+}
+
+async function readCachedCommandHash(
+  accountId?: string,
+  botIdentity?: string,
+): Promise<string | null> {
   try {
-    return (await fs.readFile(resolveCommandHashPath(accountId), "utf-8")).trim();
+    return (await fs.readFile(resolveCommandHashPath(accountId, botIdentity), "utf-8")).trim();
   } catch {
     return null;
   }
 }
 
-async function writeCachedCommandHash(accountId?: string, hash?: string): Promise<void> {
-  if (!hash) {
-    return;
-  }
-  const filePath = resolveCommandHashPath(accountId);
+async function writeCachedCommandHash(
+  accountId: string | undefined,
+  botIdentity: string | undefined,
+  hash: string,
+): Promise<void> {
+  const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, hash, "utf-8");
@@ -145,15 +158,16 @@ export function syncTelegramMenuCommands(params: {
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
+  botIdentity?: string;
 }): void {
-  const { bot, runtime, commandsToRegister, accountId } = params;
+  const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
   const sync = async () => {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
     // See: openclaw/openclaw#32017
     const currentHash = hashCommandList(commandsToRegister);
-    const cachedHash = await readCachedCommandHash(accountId);
+    const cachedHash = await readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
       runtime.log?.("telegram: command menu unchanged; skipping sync");
       return;
@@ -169,7 +183,7 @@ export function syncTelegramMenuCommands(params: {
     }
 
     if (commandsToRegister.length === 0) {
-      await writeCachedCommandHash(accountId, currentHash);
+      await writeCachedCommandHash(accountId, botIdentity, currentHash);
       return;
     }
 
@@ -181,7 +195,7 @@ export function syncTelegramMenuCommands(params: {
           runtime,
           fn: () => bot.api.setMyCommands(retryCommands),
         });
-        await writeCachedCommandHash(accountId, currentHash);
+        await writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {
