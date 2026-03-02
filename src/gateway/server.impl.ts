@@ -18,7 +18,6 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
-import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -101,6 +100,7 @@ import {
 } from "./server/health-state.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
+import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
 
@@ -379,53 +379,12 @@ export async function startGatewayServer(
     () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
-  // bind=lan/custom installs that upgraded to v2026.2.26+ without the required origins set.
-  // This runs regardless of whether legacy-key issues exist — the affected config is
-  // schema-valid (no legacy keys), so it is never caught by the legacyIssues gate above.
-  // Without this guard the gateway would proceed to resolveGatewayRuntimeConfig and throw,
-  // causing a systemd crash-loop with no recovery path (issue #29385).
-  const controlUiBind = cfgAtStart.gateway?.bind;
-  const isNonLoopbackBind =
-    controlUiBind === "lan" || controlUiBind === "tailnet" || controlUiBind === "custom";
-  const hasControlUiOrigins = (cfgAtStart.gateway?.controlUi?.allowedOrigins ?? []).some(
-    (origin) => typeof origin === "string" && origin.trim().length > 0,
-  );
-  const hasControlUiFallback =
-    cfgAtStart.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
-  if (isNonLoopbackBind && !hasControlUiOrigins && !hasControlUiFallback) {
-    const bindPort =
-      typeof cfgAtStart.gateway?.port === "number" && cfgAtStart.gateway.port > 0
-        ? cfgAtStart.gateway.port
-        : DEFAULT_GATEWAY_PORT;
-    const seededOrigins = new Set<string>([
-      `http://localhost:${bindPort}`,
-      `http://127.0.0.1:${bindPort}`,
-    ]);
-    const customBindHost = cfgAtStart.gateway?.customBindHost?.trim();
-    if (controlUiBind === "custom" && customBindHost) {
-      seededOrigins.add(`http://${customBindHost}:${bindPort}`);
-    }
-    cfgAtStart = {
-      ...cfgAtStart,
-      gateway: {
-        ...cfgAtStart.gateway,
-        controlUi: {
-          ...cfgAtStart.gateway?.controlUi,
-          allowedOrigins: [...seededOrigins],
-        },
-      },
-    };
-    try {
-      await writeConfigFile(cfgAtStart);
-      log.info(
-        `gateway: seeded gateway.controlUi.allowedOrigins ${JSON.stringify([...seededOrigins])} for bind=${controlUiBind} (required since v2026.2.26; see issue #29385). Add other origins to gateway.controlUi.allowedOrigins if needed.`,
-      );
-    } catch (err) {
-      log.warn(
-        `gateway: failed to persist gateway.controlUi.allowedOrigins seed: ${String(err)}. The gateway will start with the in-memory value but config was not saved.`,
-      );
-    }
-  }
+  // non-loopback installs that upgraded to v2026.2.26+ without required origins.
+  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
+    config: cfgAtStart,
+    writeConfig: writeConfigFile,
+    log,
+  });
 
   initSubagentRegistry();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);

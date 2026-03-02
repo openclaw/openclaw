@@ -1,4 +1,10 @@
 import {
+  buildDefaultControlUiAllowedOrigins,
+  hasConfiguredControlUiAllowedOrigins,
+  isGatewayNonLoopbackBindMode,
+  resolveGatewayPortWithDefault,
+} from "./gateway-control-ui-origins.js";
+import {
   ensureAgentEntry,
   ensureRecord,
   getAgentsList,
@@ -31,34 +37,30 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         return;
       }
       const bind = gateway.bind;
-      if (bind !== "lan" && bind !== "tailnet" && bind !== "custom") {
+      if (!isGatewayNonLoopbackBindMode(bind)) {
         return;
       }
       const controlUi = getRecord(gateway.controlUi) ?? {};
-      const existingOrigins = controlUi.allowedOrigins;
-      const hasConfiguredOrigins =
-        Array.isArray(existingOrigins) &&
-        existingOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0);
-      if (hasConfiguredOrigins) {
-        return; // already configured
-      }
-      if (controlUi.dangerouslyAllowHostHeaderOriginFallback === true) {
-        return; // already opted into fallback
-      }
-      const port =
-        typeof gateway.port === "number" && gateway.port > 0 ? gateway.port : DEFAULT_GATEWAY_PORT;
-      const origins = new Set<string>([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
       if (
-        bind === "custom" &&
-        typeof gateway.customBindHost === "string" &&
-        gateway.customBindHost.trim()
+        hasConfiguredControlUiAllowedOrigins({
+          allowedOrigins: controlUi.allowedOrigins,
+          dangerouslyAllowHostHeaderOriginFallback:
+            controlUi.dangerouslyAllowHostHeaderOriginFallback,
+        })
       ) {
-        origins.add(`http://${gateway.customBindHost.trim()}:${port}`);
+        return;
       }
-      gateway.controlUi = { ...controlUi, allowedOrigins: [...origins] };
+      const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
+      const origins = buildDefaultControlUiAllowedOrigins({
+        port,
+        bind,
+        customBindHost:
+          typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
+      });
+      gateway.controlUi = { ...controlUi, allowedOrigins: origins };
       raw.gateway = gateway;
       changes.push(
-        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify([...origins])} for bind=${String(bind)}. ` +
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
     },
