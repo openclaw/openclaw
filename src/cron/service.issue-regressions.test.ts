@@ -599,7 +599,7 @@ describe("Cron issue regressions", () => {
     await runStarted.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(120);
+    await vi.advanceTimersByTimeAsync(105);
     await Promise.resolve();
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
