@@ -3,27 +3,6 @@ import Testing
 @testable import OpenClawKit
 import OpenClawProtocol
 
-private struct TimeoutError: Error, CustomStringConvertible {
-    let label: String
-    var description: String { "Timeout waiting for: \(self.label)" }
-}
-
-private func waitUntil(
-    _ label: String,
-    timeoutSeconds: Double = 3.0,
-    pollMs: UInt64 = 10,
-    _ condition: @escaping @Sendable () async -> Bool) async throws
-{
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
-        if await condition() {
-            return
-        }
-        try await Task.sleep(nanoseconds: pollMs * 1_000_000)
-    }
-    throw TimeoutError(label: label)
-}
-
 private extension NSLock {
     func withLock<T>(_ body: () -> T) -> T {
         self.lock()

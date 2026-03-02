@@ -3,33 +3,126 @@ import Foundation
 import Testing
 @testable import OpenClawChatUI
 
-private struct TimeoutError: Error, CustomStringConvertible {
-    let label: String
-    var description: String { "Timeout waiting for: \(self.label)" }
-}
-
-private func waitUntil(
-    _ label: String,
-    timeoutSeconds: Double = 2.0,
-    pollMs: UInt64 = 10,
-    _ condition: @escaping @Sendable () async -> Bool) async throws
-{
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
-        if await condition() {
-            return
-        }
-        try await Task.sleep(nanoseconds: pollMs * 1_000_000)
-    }
-    throw TimeoutError(label: label)
-}
-
 private func chatTextMessage(role: String, text: String, timestamp: Double) -> AnyCodable {
     AnyCodable([
         "role": role,
         "content": [["type": "text", "text": text]],
         "timestamp": timestamp,
     ])
+}
+
+private func historyPayload(
+    sessionKey: String = "main",
+    sessionId: String? = "sess-main",
+    messages: [AnyCodable] = []) -> OpenClawChatHistoryPayload
+{
+    OpenClawChatHistoryPayload(
+        sessionKey: sessionKey,
+        sessionId: sessionId,
+        messages: messages,
+        thinkingLevel: "off")
+}
+
+private func sessionEntry(key: String, updatedAt: Double) -> OpenClawChatSessionEntry {
+    OpenClawChatSessionEntry(
+        key: key,
+        kind: nil,
+        displayName: nil,
+        surface: nil,
+        subject: nil,
+        room: nil,
+        space: nil,
+        updatedAt: updatedAt,
+        sessionId: nil,
+        systemSent: nil,
+        abortedLastRun: nil,
+        thinkingLevel: nil,
+        verboseLevel: nil,
+        inputTokens: nil,
+        outputTokens: nil,
+        totalTokens: nil,
+        model: nil,
+        contextTokens: nil)
+}
+
+private func makeViewModel(
+    sessionKey: String = "main",
+    historyResponses: [OpenClawChatHistoryPayload],
+    sessionsResponses: [OpenClawChatSessionsListResponse] = []) async -> (TestChatTransport, OpenClawChatViewModel)
+{
+    let transport = TestChatTransport(historyResponses: historyResponses, sessionsResponses: sessionsResponses)
+    let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: sessionKey, transport: transport) }
+    return (transport, vm)
+}
+
+private func loadAndWaitBootstrap(
+    vm: OpenClawChatViewModel,
+    sessionId: String? = nil) async throws
+{
+    await MainActor.run { vm.load() }
+    try await waitUntil("bootstrap") {
+        await MainActor.run {
+            vm.healthOK && (sessionId == nil || vm.sessionId == sessionId)
+        }
+    }
+}
+
+private func sendUserMessage(_ vm: OpenClawChatViewModel, text: String = "hi") async {
+    await MainActor.run {
+        vm.input = text
+        vm.send()
+    }
+}
+
+private func emitAssistantText(
+    transport: TestChatTransport,
+    runId: String,
+    text: String,
+    seq: Int = 1)
+{
+    transport.emit(
+        .agent(
+            OpenClawAgentEventPayload(
+                runId: runId,
+                seq: seq,
+                stream: "assistant",
+                ts: Int(Date().timeIntervalSince1970 * 1000),
+                data: ["text": AnyCodable(text)])))
+}
+
+private func emitToolStart(
+    transport: TestChatTransport,
+    runId: String,
+    seq: Int = 2)
+{
+    transport.emit(
+        .agent(
+            OpenClawAgentEventPayload(
+                runId: runId,
+                seq: seq,
+                stream: "tool",
+                ts: Int(Date().timeIntervalSince1970 * 1000),
+                data: [
+                    "phase": AnyCodable("start"),
+                    "name": AnyCodable("demo"),
+                    "toolCallId": AnyCodable("t1"),
+                    "args": AnyCodable(["x": 1]),
+                ])))
+}
+
+private func emitExternalFinal(
+    transport: TestChatTransport,
+    runId: String = "other-run",
+    sessionKey: String = "main")
+{
+    transport.emit(
+        .chat(
+            OpenClawChatEventPayload(
+                runId: runId,
+                sessionKey: sessionKey,
+                state: "final",
+                message: nil,
+                errorMessage: nil)))
 }
 
 private actor TestChatTransportState {
@@ -147,60 +240,28 @@ extension TestChatTransportState {
 @Suite struct ChatViewModelTests {
     @Test func streamsAssistantAndClearsOnFinal() async throws {
         let sessionId = "sess-main"
-        let history1 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: sessionId,
-            messages: [],
-            thinkingLevel: "off")
-        let history2 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(
             sessionId: sessionId,
             messages: [
                 chatTextMessage(
                     role: "assistant",
                     text: "final answer",
                     timestamp: Date().timeIntervalSince1970 * 1000),
-            ],
-            thinkingLevel: "off")
+            ])
 
-        let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
-
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
-
-        await MainActor.run {
-            vm.input = "hi"
-            vm.send()
-        }
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
 
-        transport.emit(
-            .agent(
-                OpenClawAgentEventPayload(
-                    runId: sessionId,
-                    seq: 1,
-                    stream: "assistant",
-                    ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: ["text": AnyCodable("streaming…")])))
+        emitAssistantText(transport: transport, runId: sessionId, text: "streaming…")
 
         try await waitUntil("assistant stream visible") {
             await MainActor.run { vm.streamingAssistantText == "streaming…" }
         }
 
-        transport.emit(
-            .agent(
-                OpenClawAgentEventPayload(
-                    runId: sessionId,
-                    seq: 2,
-                    stream: "tool",
-                    ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: [
-                        "phase": AnyCodable("start"),
-                        "name": AnyCodable("demo"),
-                        "toolCallId": AnyCodable("t1"),
-                        "args": AnyCodable(["x": 1]),
-                    ])))
+        emitToolStart(transport: transport, runId: sessionId)
 
         try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
 
@@ -223,32 +284,18 @@ extension TestChatTransportState {
     }
 
     @Test func acceptsCanonicalSessionKeyEventsForOwnPendingRun() async throws {
-        let history1 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "off")
-        let history2 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
+        let history1 = historyPayload()
+        let history2 = historyPayload(
             messages: [
                 chatTextMessage(
                     role: "assistant",
                     text: "from history",
                     timestamp: Date().timeIntervalSince1970 * 1000),
-            ],
-            thinkingLevel: "off")
+            ])
 
-        let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
-
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
-
-        await MainActor.run {
-            vm.input = "hi"
-            vm.send()
-        }
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
 
         let runId = try #require(await transport.lastSentRunId())
@@ -269,27 +316,17 @@ extension TestChatTransportState {
 
     @Test func acceptsCanonicalSessionKeyEventsForExternalRuns() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let history1 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [
-                chatTextMessage(role: "user", text: "first", timestamp: now),
-            ],
-            thinkingLevel: "off")
-        let history2 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
+        let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "first", timestamp: now)])
+        let history2 = historyPayload(
             messages: [
                 chatTextMessage(role: "user", text: "first", timestamp: now),
                 chatTextMessage(role: "assistant", text: "from external run", timestamp: now + 1),
-            ],
-            thinkingLevel: "off")
+            ])
 
-        let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.messages.count == 1 } }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.count == 1 } }
 
         transport.emit(
             .chat(
@@ -307,37 +344,20 @@ extension TestChatTransportState {
 
     @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let history1 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [
-                chatTextMessage(role: "user", text: "hello", timestamp: now),
-            ],
-            thinkingLevel: "off")
-        let history2 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
+        let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "hello", timestamp: now)])
+        let history2 = historyPayload(
             messages: [
                 chatTextMessage(role: "user", text: "hello", timestamp: now),
                 chatTextMessage(role: "assistant", text: "world", timestamp: now + 1),
-            ],
-            thinkingLevel: "off")
+            ])
 
-        let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.messages.count == 1 } }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.count == 1 } }
         let firstIdBefore = try #require(await MainActor.run { vm.messages.first?.id })
 
-        transport.emit(
-            .chat(
-                OpenClawChatEventPayload(
-                    runId: "other-run",
-                    sessionKey: "main",
-                    state: "final",
-                    message: nil,
-                    errorMessage: nil)))
+        emitExternalFinal(transport: transport)
 
         try await waitUntil("history refresh") { await MainActor.run { vm.messages.count == 2 } }
         let firstIdAfter = try #require(await MainActor.run { vm.messages.first?.id })
@@ -346,53 +366,19 @@ extension TestChatTransportState {
 
     @Test func clearsStreamingOnExternalFinalEvent() async throws {
         let sessionId = "sess-main"
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: sessionId,
-            messages: [],
-            thinkingLevel: "off")
-        let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
-
-        transport.emit(
-            .agent(
-                OpenClawAgentEventPayload(
-                    runId: sessionId,
-                    seq: 1,
-                    stream: "assistant",
-                    ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: ["text": AnyCodable("external stream")])))
-
-        transport.emit(
-            .agent(
-                OpenClawAgentEventPayload(
-                    runId: sessionId,
-                    seq: 2,
-                    stream: "tool",
-                    ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: [
-                        "phase": AnyCodable("start"),
-                        "name": AnyCodable("demo"),
-                        "toolCallId": AnyCodable("t1"),
-                        "args": AnyCodable(["x": 1]),
-                    ])))
+        emitAssistantText(transport: transport, runId: sessionId, text: "external stream")
+        emitToolStart(transport: transport, runId: sessionId)
 
         try await waitUntil("streaming active") {
             await MainActor.run { vm.streamingAssistantText == "external stream" }
         }
         try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
 
-        transport.emit(
-            .chat(
-                OpenClawChatEventPayload(
-                    runId: "other-run",
-                    sessionKey: "main",
-                    state: "final",
-                    message: nil,
-                    errorMessage: nil)))
+        emitExternalFinal(transport: transport)
 
         try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
@@ -400,29 +386,14 @@ extension TestChatTransportState {
 
     @Test func seqGapClearsPendingRunsAndAutoRefreshesHistory() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let history1 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "off")
-        let history2 = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [
-                chatTextMessage(role: "assistant", text: "resynced after gap", timestamp: now),
-            ],
-            thinkingLevel: "off")
+        let history1 = historyPayload()
+        let history2 = historyPayload(messages: [chatTextMessage(role: "assistant", text: "resynced after gap", timestamp: now)])
 
-        let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK } }
+        try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.input = "hello"
-            vm.send()
-        }
+        await sendUserMessage(vm, text: "hello")
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
 
         transport.emit(.seqGap)
@@ -441,99 +412,20 @@ extension TestChatTransportState {
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
         let stale = now - (26 * 60 * 60 * 1000)
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "off")
+        let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
             path: nil,
             count: 4,
             defaults: nil,
             sessions: [
-                OpenClawChatSessionEntry(
-                    key: "recent-1",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recent,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    model: nil,
-                    contextTokens: nil),
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: stale,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    model: nil,
-                    contextTokens: nil),
-                OpenClawChatSessionEntry(
-                    key: "recent-2",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recentOlder,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    model: nil,
-                    contextTokens: nil),
-                OpenClawChatSessionEntry(
-                    key: "old-1",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: stale,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    model: nil,
-                    contextTokens: nil),
+                sessionEntry(key: "recent-1", updatedAt: recent),
+                sessionEntry(key: "main", updatedAt: stale),
+                sessionEntry(key: "recent-2", updatedAt: recentOlder),
+                sessionEntry(key: "old-1", updatedAt: stale),
             ])
 
-        let transport = TestChatTransport(
-            historyResponses: [history],
-            sessionsResponses: [sessions])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let (_, vm) = await makeViewModel(historyResponses: [history], sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
         try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
 
@@ -544,42 +436,20 @@ extension TestChatTransportState {
     @Test func sessionChoicesIncludeCurrentWhenMissing() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "custom",
-            sessionId: "sess-custom",
-            messages: [],
-            thinkingLevel: "off")
+        let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
             path: nil,
             count: 1,
             defaults: nil,
             sessions: [
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recent,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    model: nil,
-                    contextTokens: nil),
+                sessionEntry(key: "main", updatedAt: recent),
             ])
 
-        let transport = TestChatTransport(
+        let (_, vm) = await makeViewModel(
+            sessionKey: "custom",
             historyResponses: [history],
             sessionsResponses: [sessions])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "custom", transport: transport) }
         await MainActor.run { vm.load() }
         try await waitUntil("sessions loaded") { await MainActor.run { !vm.sessions.isEmpty } }
 
@@ -589,25 +459,11 @@ extension TestChatTransportState {
 
     @Test func clearsStreamingOnExternalErrorEvent() async throws {
         let sessionId = "sess-main"
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: sessionId,
-            messages: [],
-            thinkingLevel: "off")
-        let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
-
-        transport.emit(
-            .agent(
-                OpenClawAgentEventPayload(
-                    runId: sessionId,
-                    seq: 1,
-                    stream: "assistant",
-                    ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: ["text": AnyCodable("external stream")])))
+        emitAssistantText(transport: transport, runId: sessionId, text: "external stream")
 
         try await waitUntil("streaming active") {
             await MainActor.run { vm.streamingAssistantText == "external stream" }
@@ -656,21 +512,11 @@ Hello?
 
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
         let sessionId = "sess-main"
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: sessionId,
-            messages: [],
-            thinkingLevel: "off")
-        let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
-        await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
-
-        await MainActor.run {
-            vm.input = "hi"
-            vm.send()
-        }
+        await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
 
         let runId = try #require(await transport.lastSentRunId())
