@@ -279,6 +279,7 @@ function createProfileContext(
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
     const isExtension = profile.driver === "extension";
+    const isBrowserUse = profile.driver === "browser-use";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
 
@@ -307,6 +308,27 @@ function createProfileContext(
       throw new Error(
         `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
       );
+    }
+
+    if (isBrowserUse) {
+      if (!httpReachable) {
+        if (opts.onEnsureAttachTarget) {
+          await opts.onEnsureAttachTarget(profile);
+          if (await isHttpReachable(1200)) {
+            return;
+          }
+        }
+        throw new Error(
+          `browser-use CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}. ` +
+            "Start Chrome with --remote-debugging-port (for example 9222) and set browser.profiles.<name>.cdpUrl.",
+        );
+      }
+      if (!(await isReachable(1200))) {
+        throw new Error(
+          `browser-use CDP websocket for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
+        );
+      }
+      return;
     }
 
     if (!httpReachable) {
@@ -496,6 +518,9 @@ function createProfileContext(
       });
       return { stopped };
     }
+    if (profile.driver === "browser-use") {
+      return { stopped: false };
+    }
     const profileState = getProfileState();
     if (!profileState.running) {
       return { stopped: false };
@@ -508,6 +533,9 @@ function createProfileContext(
   const resetProfile = async () => {
     if (profile.driver === "extension") {
       await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(() => {});
+      return { moved: false, from: profile.cdpUrl };
+    }
+    if (profile.driver === "browser-use") {
       return { moved: false, from: profile.cdpUrl };
     }
     if (!profile.cdpIsLoopback) {

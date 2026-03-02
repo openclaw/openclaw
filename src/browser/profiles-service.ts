@@ -20,7 +20,7 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "browser-use";
 };
 
 export type CreateProfileResult = {
@@ -48,10 +48,19 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const driver = params.driver === "extension" ? "extension" : undefined;
+    const driver =
+      params.driver === "extension"
+        ? "extension"
+        : params.driver === "browser-use"
+          ? "browser-use"
+          : undefined;
 
     if (!isValidProfileName(name)) {
       throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
+    }
+
+    if (driver === "browser-use" && !rawCdpUrl) {
+      throw new Error("browser-use profiles require cdpUrl");
     }
 
     const state = ctx.state();
