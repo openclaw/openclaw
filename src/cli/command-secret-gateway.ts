@@ -4,6 +4,8 @@ import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { collectCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { setPathExistingStrict } from "../secrets/path-utils.js";
+import { collectConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import { createResolverContext } from "../secrets/runtime-shared.js";
 import { describeUnknownError } from "../secrets/shared.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -24,11 +26,12 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-function isConfiguredSecretRefTarget(params: {
+function collectConfiguredTargetRefPaths(params: {
   config: OpenClawConfig;
   targetIds: Set<string>;
-}): boolean {
+}): Set<string> {
   const defaults = params.config.secrets?.defaults;
+  const configuredTargetRefPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
     const { ref } = resolveSecretInputRef({
       value: target.value,
@@ -36,10 +39,67 @@ function isConfiguredSecretRefTarget(params: {
       defaults,
     });
     if (ref) {
-      return true;
+      configuredTargetRefPaths.add(target.path);
     }
   }
-  return false;
+  return configuredTargetRefPaths;
+}
+
+function classifyConfiguredTargetRefs(params: {
+  config: OpenClawConfig;
+  configuredTargetRefPaths: Set<string>;
+}): {
+  hasActiveConfiguredRef: boolean;
+  hasUnknownConfiguredRef: boolean;
+  diagnostics: string[];
+} {
+  if (params.configuredTargetRefPaths.size === 0) {
+    return {
+      hasActiveConfiguredRef: false,
+      hasUnknownConfiguredRef: false,
+      diagnostics: [],
+    };
+  }
+  const context = createResolverContext({
+    sourceConfig: params.config,
+    env: process.env,
+  });
+  collectConfigAssignments({
+    config: structuredClone(params.config),
+    context,
+  });
+
+  const activePaths = new Set(context.assignments.map((assignment) => assignment.path));
+  const inactiveWarningsByPath = new Map<string, string>();
+  for (const warning of context.warnings) {
+    if (warning.code !== "SECRETS_REF_IGNORED_INACTIVE_SURFACE") {
+      continue;
+    }
+    inactiveWarningsByPath.set(warning.path, warning.message);
+  }
+
+  const diagnostics = new Set<string>();
+  let hasActiveConfiguredRef = false;
+  let hasUnknownConfiguredRef = false;
+
+  for (const path of params.configuredTargetRefPaths) {
+    if (activePaths.has(path)) {
+      hasActiveConfiguredRef = true;
+      continue;
+    }
+    const inactiveWarning = inactiveWarningsByPath.get(path);
+    if (inactiveWarning) {
+      diagnostics.add(inactiveWarning);
+      continue;
+    }
+    hasUnknownConfiguredRef = true;
+  }
+
+  return {
+    hasActiveConfiguredRef,
+    hasUnknownConfiguredRef,
+    diagnostics: [...diagnostics],
+  };
 }
 
 function parseGatewaySecretsResolveResult(payload: unknown): {
@@ -91,8 +151,22 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   commandName: string;
   targetIds: Set<string>;
 }): Promise<ResolveCommandSecretsResult> {
-  if (!isConfiguredSecretRefTarget({ config: params.config, targetIds: params.targetIds })) {
+  const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
+    config: params.config,
+    targetIds: params.targetIds,
+  });
+  if (configuredTargetRefPaths.size === 0) {
     return { resolvedConfig: params.config, diagnostics: [] };
+  }
+  const preflight = classifyConfiguredTargetRefs({
+    config: params.config,
+    configuredTargetRefPaths,
+  });
+  if (!preflight.hasActiveConfiguredRef && !preflight.hasUnknownConfiguredRef) {
+    return {
+      resolvedConfig: params.config,
+      diagnostics: preflight.diagnostics,
+    };
   }
 
   let payload: GatewaySecretsResolveResult;

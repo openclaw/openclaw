@@ -25,6 +25,36 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("skips gateway resolution when all configured target refs are inactive", async () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            memorySearch: {
+              enabled: false,
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "AGENT_MEMORY_API_KEY" },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "status",
+      targetIds: new Set(["agents.list[].memorySearch.remote.apiKey"]),
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(result.resolvedConfig).toEqual(config);
+    expect(result.diagnostics).toEqual([
+      "agents.list.0.memorySearch.remote.apiKey: agent or memorySearch override is disabled.",
+    ]);
+  });
+
   it("hydrates requested SecretRef targets from gateway snapshot assignments", async () => {
     callGateway.mockResolvedValueOnce({
       assignments: [
