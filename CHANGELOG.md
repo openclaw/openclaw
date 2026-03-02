@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/Ollama autodiscovery: add a short negative-failure cache for implicit local probes so repeated unreachable `127.0.0.1:11434` discovery attempts are throttled instead of hammering proxy/network stacks on every provider rebuild. (#31846)
 - Zalo/Pairing auth tests: add webhook regression coverage asserting DM pairing-store reads/writes remain account-scoped, preventing cross-account authorization bleed in multi-account setups. (#26121) Thanks @bmendonca3.
 - Zalouser/Pairing auth tests: add account-scoped DM pairing-store regression coverage (`monitor.account-scope.test.ts`) to prevent cross-account allowlist bleed in multi-account setups. (#26672) Thanks @bmendonca3.
 - Agents/Sessions list transcript paths: handle missing/non-string/relative `sessions.list.path` values and per-agent `{agentId}` templates when deriving `transcriptPath`, so cross-agent session listings resolve to concrete agent session files instead of workspace-relative paths. (#24775) Thanks @martinfrancois.

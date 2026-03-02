@@ -2,7 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import {
+  resetOllamaDiscoveryFailureCacheForTests,
+  resolveImplicitProviders,
+} from "./models-config.providers.js";
 
 describe("Ollama auto-discovery", () => {
   let originalVitest: string | undefined;
@@ -22,6 +25,7 @@ describe("Ollama auto-discovery", () => {
     }
     globalThis.fetch = originalFetch;
     delete process.env.OLLAMA_API_KEY;
+    resetOllamaDiscoveryFailureCacheForTests();
   });
 
   function setupDiscoveryEnv() {
@@ -105,5 +109,21 @@ describe("Ollama auto-discovery", () => {
     );
     expect(ollamaWarnings.length).toBeGreaterThan(0);
     warnSpy.mockRestore();
+  });
+
+  it("negative-caches implicit unreachable discovery failures", async () => {
+    setupDiscoveryEnv();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
+      ) as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
+
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await resolveImplicitProviders({ agentDir });
+    await resolveImplicitProviders({ agentDir });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

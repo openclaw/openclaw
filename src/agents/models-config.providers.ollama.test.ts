@@ -3,11 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { resolveImplicitProviders, resolveOllamaApiBase } from "./models-config.providers.js";
+import {
+  resetOllamaDiscoveryFailureCacheForTests,
+  resolveImplicitProviders,
+  resolveOllamaApiBase,
+} from "./models-config.providers.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  resetOllamaDiscoveryFailureCacheForTests();
 });
 
 describe("resolveOllamaApiBase", () => {

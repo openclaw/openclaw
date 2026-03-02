@@ -146,6 +146,7 @@ const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
+const OLLAMA_DISCOVERY_FAILURE_TTL_MS = 5 * 60 * 1000;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
@@ -154,6 +155,7 @@ const OLLAMA_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const ollamaDiscoveryFailureCacheUntilByApiBase = new Map<string, number>();
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_DEFAULT_MODEL_ID = "auto";
@@ -238,6 +240,33 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
+export function resetOllamaDiscoveryFailureCacheForTests(): void {
+  ollamaDiscoveryFailureCacheUntilByApiBase.clear();
+}
+
+function hasRecentOllamaDiscoveryFailure(apiBase: string): boolean {
+  const expiresAt = ollamaDiscoveryFailureCacheUntilByApiBase.get(apiBase);
+  if (!expiresAt) {
+    return false;
+  }
+  if (expiresAt <= Date.now()) {
+    ollamaDiscoveryFailureCacheUntilByApiBase.delete(apiBase);
+    return false;
+  }
+  return true;
+}
+
+function noteOllamaDiscoveryFailure(apiBase: string): void {
+  ollamaDiscoveryFailureCacheUntilByApiBase.set(
+    apiBase,
+    Date.now() + OLLAMA_DISCOVERY_FAILURE_TTL_MS,
+  );
+}
+
+function clearOllamaDiscoveryFailure(apiBase: string): void {
+  ollamaDiscoveryFailureCacheUntilByApiBase.delete(apiBase);
+}
+
 async function queryOllamaContextWindow(
   apiBase: string,
   modelName: string,
@@ -278,17 +307,24 @@ async function discoverOllamaModels(
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
   }
+  const apiBase = resolveOllamaApiBase(baseUrl);
+  if (opts?.quiet && hasRecentOllamaDiscoveryFailure(apiBase)) {
+    return [];
+  }
   try {
-    const apiBase = resolveOllamaApiBase(baseUrl);
     const response = await fetch(`${apiBase}/api/tags`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
+      if (opts?.quiet) {
+        noteOllamaDiscoveryFailure(apiBase);
+      }
       if (!opts?.quiet) {
         log.warn(`Failed to discover Ollama models: ${response.status}`);
       }
       return [];
     }
+    clearOllamaDiscoveryFailure(apiBase);
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
       log.debug("No Ollama models found on local instance");
@@ -324,6 +360,9 @@ async function discoverOllamaModels(
     }
     return discovered;
   } catch (error) {
+    if (opts?.quiet) {
+      noteOllamaDiscoveryFailure(apiBase);
+    }
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
     }
