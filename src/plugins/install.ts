@@ -44,6 +44,9 @@ type PackageManifest = {
   dependencies?: Record<string, string>;
 } & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
 
+const MISSING_EXTENSIONS_ERROR =
+  'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
+
 export type InstallPluginResult =
   | {
       ok: true;
@@ -82,10 +85,10 @@ function validatePluginId(pluginId: string): string | null {
   return null;
 }
 
-async function ensureOpenClawExtensions(manifest: PackageManifest) {
-  const extensions = manifest[MANIFEST_KEY]?.extensions;
+function ensureOpenClawExtensions(params: { manifest: PackageManifest }): string[] {
+  const extensions = params.manifest[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
-    throw new Error("package.json missing openclaw.extensions");
+    throw new Error(MISSING_EXTENSIONS_ERROR);
   }
   const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
   if (list.length === 0) {
@@ -149,7 +152,9 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureOpenClawExtensions(manifest);
+    extensions = ensureOpenClawExtensions({
+      manifest,
+    });
   } catch (err) {
     return { ok: false, error: String(err) };
   }
