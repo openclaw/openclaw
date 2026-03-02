@@ -4,6 +4,9 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
 const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
+// High-water mark: if context exceeds this ratio after tool-result compaction,
+// trigger full session compaction via the existing overflow recovery cascade.
+const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
@@ -12,6 +15,9 @@ const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
 
 export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
   "[compacted: tool output removed to free context]";
+
+export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
+  "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -309,6 +315,10 @@ export function installToolResultContextGuard(params: {
       contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
     ),
   );
+  const preemptiveOverflowChars = Math.max(
+    contextBudgetChars,
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
+  );
 
   // Agent.transformContext is private in pi-coding-agent, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.
@@ -326,6 +336,15 @@ export function installToolResultContextGuard(params: {
       contextBudgetChars,
       maxSingleToolResultChars,
     });
+
+    // After tool-result compaction, check if context still exceeds the high-water mark.
+    // If it does, non-tool-result content dominates and only full LLM-based session
+    // compaction can reduce context size. Throwing a context overflow error triggers
+    // the existing overflow recovery cascade in run.ts.
+    const postEnforcementChars = estimateContextChars(contextMessages);
+    if (postEnforcementChars > preemptiveOverflowChars) {
+      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    }
 
     return contextMessages;
   }) as GuardableTransformContext;

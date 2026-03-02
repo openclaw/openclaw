@@ -264,7 +264,12 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
 
 export function hasBotMention(msg: Message, botUsername: string) {
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) {
+  const mention = `@${botUsername}`;
+  const idx = text.indexOf(mention);
+  if (
+    idx !== -1 &&
+    (idx + mention.length >= text.length || !/\w/.test(text[idx + mention.length]))
+  ) {
     return true;
   }
   const entities = msg.entities ?? msg.caption_entities ?? [];

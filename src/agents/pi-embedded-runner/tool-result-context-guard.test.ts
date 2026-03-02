@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
   PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
   installToolResultContextGuard,
 } from "./tool-result-context-guard.js";
@@ -267,5 +268,64 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
+  });
+
+  it("throws preemptive context overflow when context exceeds 90% after tool-result compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      // contextBudgetChars = 1000 * 4 * 0.75 = 3000
+      // preemptiveOverflowChars = 1000 * 4 * 0.9 = 3600
+      contextWindowTokens: 1_000,
+    });
+
+    // Large user message (non-compactable) pushes context past 90% threshold.
+    const contextForNextCall = [makeUser("u".repeat(3_700)), makeToolResult("call_1", "small")];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+  });
+
+  it("does not throw when context is under 90% after tool-result compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Context well under the 3600-char preemptive threshold.
+    const contextForNextCall = [makeUser("u".repeat(1_000)), makeToolResult("call_1", "small")];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).resolves.not.toThrow();
+  });
+
+  it("compacts tool results before checking the preemptive overflow threshold", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Large user message + large tool result. The guard should compact the tool
+    // result first, then check the overflow threshold. Even after compaction the
+    // user content alone pushes past 90%, so the overflow error fires.
+    const contextForNextCall = [
+      makeUser("u".repeat(3_700)),
+      makeToolResult("call_old", "x".repeat(2_000)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+
+    // Tool result should have been compacted before the overflow check.
+    const toolResultText = getToolResultText(contextForNextCall[1]);
+    expect(toolResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 });
