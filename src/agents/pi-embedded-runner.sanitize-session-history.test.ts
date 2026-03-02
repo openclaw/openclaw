@@ -191,6 +191,29 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
+  it("sanitizes tool call ids for openai-completions", async () => {
+    setNonGoogleModelApi();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "openai-completions",
+      provider: "openai",
+      modelId: "gpt-5.2",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+      }),
+    );
+  });
+
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 
