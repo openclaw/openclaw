@@ -193,6 +193,8 @@ For a gateway install, put it in `~/.openclaw/.env`.
 
 - Citation URLs from Gemini grounding are automatically resolved from Google's
   redirect URLs to direct URLs.
+- Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
+- Redirect resolution uses strict SSRF defaults, so redirects to private/internal targets are blocked.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 

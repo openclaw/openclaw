@@ -43,6 +43,18 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.requested).toBe(false);
   });
 
+  it("resolves mode=none with requested=false and no channel (#21808)", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "none", to: "telegram:123" },
+      }),
+    );
+    expect(plan.mode).toBe("none");
+    expect(plan.requested).toBe(false);
+    expect(plan.channel).toBeUndefined();
+    expect(plan.to).toBe("telegram:123");
+  });
+
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({
@@ -53,5 +65,23 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.requested).toBe(false);
     expect(plan.channel).toBeUndefined();
     expect(plan.to).toBe("https://example.invalid/cron");
+  });
+
+  it("threads delivery.accountId when explicitly configured", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          accountId: " bot-a ",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("123");
+    expect(plan.accountId).toBe("bot-a");
   });
 });

@@ -25,11 +25,11 @@ extension CanvasWindowController {
     }
 
     static func _testParseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
-        CanvasA2UIActionMessageHandler.parseIPv4(host)
+        LoopbackHost.parseIPv4(host)
     }
 
     static func _testIsLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
-        CanvasA2UIActionMessageHandler.isLocalNetworkIPv4(ip)
+        LoopbackHost.isLocalNetworkIPv4(ip)
     }
 
     static func _testIsLocalNetworkCanvasURL(_ url: URL) -> Bool {

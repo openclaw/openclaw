@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
@@ -210,11 +211,6 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   res.end(body);
 }
 
-function isContainedPath(baseDir: string, targetPath: string): boolean {
-  const relative = path.relative(baseDir, targetPath);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -237,25 +233,20 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
 ): { path: string; fd: number } | null {
-  try {
-    const fileReal = fs.realpathSync(filePath);
-    if (!isContainedPath(rootReal, fileReal)) {
-      return null;
+  const opened = openBoundaryFileSync({
+    absolutePath: filePath,
+    rootPath: rootReal,
+    rootRealPath: rootReal,
+    boundaryLabel: "control ui root",
+    skipLexicalRootCheck: true,
+  });
+  if (!opened.ok) {
+    if (opened.reason === "io") {
+      throw opened.error;
     }
-    const opened = openVerifiedFileSync({ filePath: fileReal, resolvedPath: fileReal });
-    if (!opened.ok) {
-      if (opened.reason === "io") {
-        throw opened.error;
-      }
-      return null;
-    }
-    return { path: opened.path, fd: opened.fd };
-  } catch (error) {
-    if (isExpectedSafePathError(error)) {
-      return null;
-    }
-    throw error;
+    return null;
   }
+  return { path: opened.path, fd: opened.fd };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -284,13 +275,6 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
-
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
@@ -300,6 +284,14 @@ export function handleControlUiHttpRequest(
       applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
+    }
+    // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
+    // fallback so untrusted plugins cannot claim arbitrary UI paths.
+    if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
+      return false;
+    }
+    if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return false;
     }
   }
 
@@ -314,6 +306,19 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
+  }
+
+  // Method guard must run AFTER path checks so that POST requests to non-UI
+  // paths (channel webhooks etc.) fall through to later handlers.  When no
+  // basePath is configured the SPA catch-all would otherwise 405 every POST.
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    if (!basePath) {
+      return false;
+    }
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
   }
 
   applyControlUiSecurityHeaders(res);

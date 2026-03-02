@@ -9,6 +9,7 @@
   gap: 0;
   height: calc(100vh - 160px);
   margin: -16px;
+  margin-top: 0;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
   background: var(--panel);

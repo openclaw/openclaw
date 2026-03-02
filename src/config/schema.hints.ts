@@ -109,7 +109,13 @@ const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFF
   suffix.toLowerCase(),
 );
 
-const SENSITIVE_PATTERNS = [/token$/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_PATTERNS = [
+  /token$/i,
+  /password/i,
+  /secret/i,
+  /api.?key/i,
+  /serviceaccount(?:ref)?$/i,
+];
 
 function isWhitelistedSensitivePath(path: string): boolean {
   const lowerPath = path.toLowerCase();
@@ -208,6 +214,11 @@ export function mapSensitivePaths(
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
       next = mapSensitivePaths(shape[key], nextPath, next);
+    }
+    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
+      const nextPath = path ? `${path}.*` : "*";
+      next = mapSensitivePaths(catchallSchema, nextPath, next);
     }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";

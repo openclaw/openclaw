@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,16 +17,25 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-const tempDirs: string[] = [];
 let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
 let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
 let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
+let suiteTempRoot = "";
+let tempDirCounter = 0;
+
+function ensureSuiteTempRoot() {
+  if (suiteTempRoot) {
+    return suiteTempRoot;
+  }
+  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
+  return suiteTempRoot;
+}
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugin-install-${randomUUID()}`);
+  const dir = path.join(ensureSuiteTempRoot(), `case-${String(tempDirCounter)}`);
+  tempDirCounter += 1;
   fs.mkdirSync(dir, { recursive: true });
-  tempDirs.push(dir);
   return dir;
 }
 
@@ -158,6 +166,19 @@ function expectPluginFiles(result: { targetDir: string }, stateDir: string, plug
   expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
 }
 
+function expectSuccessfulArchiveInstall(params: {
+  result: Awaited<ReturnType<typeof installPluginFromArchive>>;
+  stateDir: string;
+  pluginId: string;
+}) {
+  expect(params.result.ok).toBe(true);
+  if (!params.result.ok) {
+    return;
+  }
+  expect(params.result.pluginId).toBe(params.pluginId);
+  expectPluginFiles(params.result, params.stateDir, params.pluginId);
+}
+
 function setupPluginInstallDirs() {
   const tmpDir = makeTempDir();
   const pluginDir = path.join(tmpDir, "plugin-src");
@@ -198,6 +219,30 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
     },
   });
   return { result, warnings };
+}
+
+function setupManifestInstallFixture(params: { manifestId: string }) {
+  const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/cognee-openclaw",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.manifestId,
+      configSchema: { type: "object", properties: {} },
+    }),
+    "utf-8",
+  );
+  return { pluginDir, extensionsDir };
 }
 
 async function expectArchiveInstallReservedSegmentRejection(params: {
@@ -251,12 +296,14 @@ async function installArchivePackageAndReturnResult(params: {
 }
 
 afterAll(() => {
-  for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures
-    }
+  if (!suiteTempRoot) {
+    return;
+  }
+  try {
+    fs.rmSync(suiteTempRoot, { recursive: true, force: true });
+  } finally {
+    suiteTempRoot = "";
+    tempDirCounter = 0;
   }
 });
 
@@ -281,12 +328,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("voice-call");
-    expectPluginFiles(result, stateDir, "voice-call");
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "voice-call" });
   });
 
   it("rejects installing when plugin already exists", async () => {
@@ -324,13 +366,7 @@ describe("installPluginFromArchive", () => {
       archivePath,
       extensionsDir,
     });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("zipper");
-    expectPluginFiles(result, stateDir, "zipper");
+    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "zipper" });
   });
 
   it("allows updates when mode is update", async () => {
@@ -512,6 +548,53 @@ describe("installPluginFromDir", () => {
     };
     expect(manifest.devDependencies?.openclaw).toBeUndefined();
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
+  });
+
+  it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "memory-cognee",
+    });
+
+    const infoMessages: string[] = [];
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expect(
+      infoMessages.some((msg) =>
+        msg.includes(
+          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
+      manifestId: "@team/memory-cognee",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      expectedPluginId: "memory-cognee",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
   });
 });
 

@@ -3,6 +3,7 @@ import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
@@ -12,6 +13,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -41,6 +43,7 @@ export function createOpenClawTools(options?: {
   agentDir?: string;
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -78,7 +81,20 @@ export function createOpenClawTools(options?: {
           options?.sandboxRoot && options?.sandboxFsBridge
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
             : undefined,
+        fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
+      })
+    : null;
+  const pdfTool = options?.agentDir?.trim()
+    ? createPdfTool({
+        config: options?.config,
+        agentDir: options.agentDir,
+        workspaceDir,
+        sandbox:
+          options?.sandboxRoot && options?.sandboxFsBridge
+            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+            : undefined,
+        fsPolicy: options?.fsPolicy,
       })
     : null;
   const webSearchTool = createWebSearchTool({
@@ -113,6 +129,10 @@ export function createOpenClawTools(options?: {
     createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
       config: options?.config,
     }),
     createCronTool({
@@ -166,6 +186,7 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(pdfTool ? [pdfTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({
@@ -180,6 +201,8 @@ export function createOpenClawTools(options?: {
       sessionKey: options?.agentSessionKey,
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
+      requesterSenderId: options?.requesterSenderId ?? undefined,
+      senderIsOwner: options?.senderIsOwner ?? undefined,
       sandboxed: options?.sandboxed,
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),

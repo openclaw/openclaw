@@ -101,15 +101,23 @@ const TARGET_KEYS = [
   "models.providers.*.auth",
   "models.providers.*.authHeader",
   "gateway.reload.mode",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
   "cron",
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.retry",
+  "cron.retry.maxAttempts",
+  "cron.retry.backoffMs",
+  "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
+  "cron.runLog",
+  "cron.runLog.maxBytes",
+  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -143,13 +151,17 @@ const TARGET_KEYS = [
   "session.agentToAgent.maxPingPongTurns",
   "session.threadBindings",
   "session.threadBindings.enabled",
-  "session.threadBindings.ttlHours",
+  "session.threadBindings.idleHours",
+  "session.threadBindings.maxAgeHours",
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
   "session.maintenance.rotateBytes",
+  "session.maintenance.resetArchiveRetention",
+  "session.maintenance.maxDiskBytes",
+  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -253,6 +265,7 @@ const TARGET_KEYS = [
   "browser.noSandbox",
   "browser.profiles",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
@@ -353,6 +366,8 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
   "agents.defaults.compaction.maxHistoryShare",
+  "agents.defaults.compaction.identifierPolicy",
+  "agents.defaults.compaction.identifierInstructions",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -407,6 +422,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.redactSensitive": ['"off"', '"tools"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
 const TOOLS_HOOKS_TARGET_KEYS = [
@@ -513,6 +529,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",
@@ -663,6 +680,27 @@ describe("config help copy quality", () => {
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
+
+    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    expect(resetRetention.includes(".reset.")).toBe(true);
+    expect(/false/i.test(resetRetention)).toBe(true);
+
+    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    expect(maxDisk.includes("500mb")).toBe(true);
+
+    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    expect(highWater.includes("80%")).toBe(true);
+  });
+
+  it("documents cron run-log retention controls", () => {
+    const runLog = FIELD_HELP["cron.runLog"];
+    expect(runLog.includes("cron/runs")).toBe(true);
+
+    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
+    expect(maxBytes.includes("2mb")).toBe(true);
+
+    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
+    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {
@@ -746,6 +784,11 @@ describe("config help copy quality", () => {
 
     const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
+
+    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    expect(identifierPolicy.includes('"strict"')).toBe(true);
+    expect(identifierPolicy.includes('"off"')).toBe(true);
+    expect(identifierPolicy.includes('"custom"')).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

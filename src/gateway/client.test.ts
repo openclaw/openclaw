@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -132,8 +133,27 @@ function createClientWithIdentity(
   });
 }
 
+function expectSecurityConnectError(
+  onConnectError: ReturnType<typeof vi.fn>,
+  params?: { expectTailscaleHint?: boolean },
+) {
+  expect(onConnectError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringContaining("SECURITY ERROR"),
+    }),
+  );
+  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  expect(error.message).toContain("openclaw doctor --fix");
+  if (params?.expectTailscaleHint) {
+    expect(error.message).toContain("Tailscale Serve/Funnel");
+  }
+}
+
 describe("GatewayClient security checks", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+
   beforeEach(() => {
+    envSnapshot.restore();
     wsInstances.length = 0;
   });
 
@@ -146,14 +166,7 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("SECURITY ERROR"),
-      }),
-    );
-    const error = onConnectError.mock.calls[0]?.[0] as Error;
-    expect(error.message).toContain("openclaw doctor --fix");
-    expect(error.message).toContain("Tailscale Serve/Funnel");
+    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -168,13 +181,7 @@ describe("GatewayClient security checks", () => {
     // Should not throw
     expect(() => client.start()).not.toThrow();
 
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("SECURITY ERROR"),
-      }),
-    );
-    const error = onConnectError.mock.calls[0]?.[0] as Error;
-    expect(error.message).toContain("openclaw doctor --fix");
+    expectSecurityConnectError(onConnectError);
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -204,6 +211,21 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+
+  it("allows ws:// to private addresses only with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://192.168.1.100:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
     client.stop();
   });
 });

@@ -54,8 +54,25 @@ describe("irc policy", () => {
       resolveIrcGroupSenderAllowed({
         groupPolicy: "allowlist",
         message,
+        outerAllowFrom: ["alice!ident@example.org"],
+        innerAllowFrom: [],
+      }),
+    ).toBe(true);
+    expect(
+      resolveIrcGroupSenderAllowed({
+        groupPolicy: "allowlist",
+        message,
         outerAllowFrom: ["alice"],
         innerAllowFrom: [],
+      }),
+    ).toBe(false);
+    expect(
+      resolveIrcGroupSenderAllowed({
+        groupPolicy: "allowlist",
+        message,
+        outerAllowFrom: ["alice"],
+        innerAllowFrom: [],
+        allowNameMatching: true,
       }),
     ).toBe(true);
   });

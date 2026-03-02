@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -431,6 +431,43 @@ describe("/compact command", () => {
   });
 });
 
+describe("abort trigger command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects unauthorized natural-language abort triggers", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("stop", cfg);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      abortedLastRun: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [params.sessionKey]: sessionEntry,
+    };
+
+    const result = await handleCommands({
+      ...params,
+      sessionEntry,
+      sessionStore,
+      command: {
+        ...params.command,
+        isAuthorizedSender: false,
+        senderId: "unauthorized",
+      },
+    });
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(sessionStore[params.sessionKey]?.abortedLastRun).toBe(false);
+    expect(vi.mocked(abortEmbeddedPiRun)).not.toHaveBeenCalled();
+  });
+});
+
 describe("buildCommandsPaginationKeyboard", () => {
   it("adds agent id to callback data when provided", () => {
     const keyboard = buildCommandsPaginationKeyboard(2, 3, "agent-main");
@@ -645,6 +682,22 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("DM allowlist added");
   });
 
+  it("rejects blocked account ids and keeps Object.prototype clean", async () => {
+    delete (Object.prototype as Record<string, unknown>).allowFrom;
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm --account __proto__ 789", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Invalid account id");
+    expect((Object.prototype as Record<string, unknown>).allowFrom).toBeUndefined();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("removes DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {
     const cases = [
       {
@@ -721,6 +774,19 @@ describe("/models command", () => {
     expect(result.reply?.text).toContain("Providers:");
     expect(result.reply?.text).toContain("anthropic");
     expect(result.reply?.text).toContain("Use: /models <provider>");
+  });
+
+  it("rejects unauthorized /models commands", async () => {
+    const params = buildPolicyParams("/models", cfg, { Provider: "discord", Surface: "discord" });
+    const result = await handleCommands({
+      ...params,
+      command: {
+        ...params.command,
+        isAuthorizedSender: false,
+        senderId: "unauthorized",
+      },
+    });
+    expect(result).toEqual({ shouldContinue: false });
   });
 
   it("lists providers on telegram (buttons)", async () => {
@@ -872,6 +938,37 @@ describe("handleCommands hooks", () => {
     await handleCommands(params);
 
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "command", action: "new" }));
+    spy.mockRestore();
+  });
+
+  it("triggers hooks for native /new routed to target sessions", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:main:telegram:direct:123",
+      SessionKey: "telegram:slash:123",
+      SenderId: "123",
+      From: "telegram:123",
+      To: "slash:123",
+      CommandAuthorized: true,
+    });
+    params.sessionKey = "agent:main:telegram:direct:123";
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "command",
+        action: "new",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
     spy.mockRestore();
   });
 });
