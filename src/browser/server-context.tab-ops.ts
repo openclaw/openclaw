@@ -1,24 +1,25 @@
+import type { ResolvedBrowserProfile } from "./config.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import type {
+  BrowserServerState,
+  BrowserTab,
+  ProfileRuntimeState,
+} from "./server-context.types.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
-import type {
-  BrowserServerState,
-  BrowserTab,
-  ProfileRuntimeState,
-} from "./server-context.types.js";
+import { getTabRegistry, registerTab } from "./server-context.tab-registry.js";
 
 type TabOpsDeps = {
   profile: ResolvedBrowserProfile;
@@ -28,7 +29,7 @@ type TabOpsDeps = {
 
 type ProfileTabOps = {
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, ownerId?: string) => Promise<BrowserTab>;
 };
 
 /**
@@ -112,12 +113,20 @@ export function createProfileTabOps({
       return;
     }
 
+    const registry = getTabRegistry(profileState);
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
+    // Sort by least-recently-accessed first so we evict the stalest tabs.
+    candidates.sort((a, b) => {
+      const metaA = registry.get(a.targetId);
+      const metaB = registry.get(b.targetId);
+      return (metaA?.lastAccessedAt ?? 0) - (metaB?.lastAccessedAt ?? 0);
+    });
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       void fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
         // best-effort cleanup only
       });
+      registry.delete(tab.targetId);
     }
   };
 
@@ -127,7 +136,7 @@ export function createProfileTabOps({
     });
   };
 
-  const openTab = async (url: string): Promise<BrowserTab> => {
+  const openTab = async (url: string, ownerId?: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
     // For remote profiles, use Playwright's persistent connection to create tabs
@@ -143,6 +152,7 @@ export function createProfileTabOps({
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
+        registerTab(profileState, page.targetId, page.url, ownerId);
         triggerManagedTabLimit(page.targetId);
         return {
           targetId: page.targetId,
@@ -164,6 +174,7 @@ export function createProfileTabOps({
     if (createdViaCdp) {
       const profileState = getProfileState();
       profileState.lastTargetId = createdViaCdp;
+      registerTab(profileState, createdViaCdp, url, ownerId);
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
@@ -203,6 +214,7 @@ export function createProfileTabOps({
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
+    registerTab(profileState, created.id, resolvedUrl, ownerId);
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     triggerManagedTabLimit(created.id);
     return {

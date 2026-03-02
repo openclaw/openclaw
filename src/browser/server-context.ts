@@ -1,6 +1,16 @@
+import type { ResolvedBrowserProfile } from "./config.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+  TabMeta,
+} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
@@ -11,15 +21,11 @@ import { createProfileAvailability } from "./server-context.availability.js";
 import { createProfileResetOps } from "./server-context.reset.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
+import {
+  getTabRegistry as getTabRegistryFromState,
+  startIdleTabSweep,
+  touchTab as touchTabInRegistry,
+} from "./server-context.tab-registry.js";
 
 export type {
   BrowserRouteContext,
@@ -28,6 +34,7 @@ export type {
   ProfileContext,
   ProfileRuntimeState,
   ProfileStatus,
+  TabMeta,
 } from "./server-context.types.js";
 
 export function listKnownProfileNames(state: BrowserServerState): string[] {
@@ -83,7 +90,7 @@ function createProfileContext(
       setProfileRunning,
     });
 
-  const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
+  const { ensureTabAvailable, focusTab, closeTab, closeTabsByOwner } = createProfileSelectionOps({
     profile,
     getProfileState,
     ensureBrowserAvailable,
@@ -99,6 +106,14 @@ function createProfileContext(
     resolveOpenClawUserDataDir,
   });
 
+  const getTabRegistry = (): Map<string, TabMeta> => getTabRegistryFromState(getProfileState());
+
+  const touchTab = (targetId: string, accessedBy?: string): void =>
+    touchTabInRegistry(getProfileState(), targetId, accessedBy);
+
+  // Start idle-tab sweep (no-op on repeated calls for the same profile).
+  startIdleTabSweep(getProfileState(), closeTab);
+
   return {
     profile,
     ensureBrowserAvailable,
@@ -109,8 +124,11 @@ function createProfileContext(
     openTab,
     focusTab,
     closeTab,
+    closeTabsByOwner,
     stopRunningBrowser,
     resetProfile,
+    getTabRegistry,
+    touchTab,
   };
 }
 
@@ -232,11 +250,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url) => getDefaultContext().openTab(url),
+    openTab: (url, ownerId) => getDefaultContext().openTab(url, ownerId),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),
+    closeTabsByOwner: (ownerId) => getDefaultContext().closeTabsByOwner(ownerId),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
     resetProfile: () => getDefaultContext().resetProfile(),
+    getTabRegistry: () => getDefaultContext().getTabRegistry(),
+    touchTab: (targetId, accessedBy) => getDefaultContext().touchTab(targetId, accessedBy),
     mapTabError,
   };
 }
