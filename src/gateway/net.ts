@@ -362,18 +362,19 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   }
   // Handle bracketed IPv6 addresses like [::1]
   const unbracket = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
-  if (!isPrivateOrLoopbackAddress(unbracket)) {
+  const normalized = normalizeIp(unbracket);
+  if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
     return false;
   }
   // isPrivateOrLoopbackAddress reuses SSRF-blocking ranges for IPv6, which
   // include unspecified (::) and multicast (ff00::/8). Exclude these —
   // they are not private/loopback unicast endpoints. (Multicast is UDP-only
   // so TCP/WebSocket connections would fail regardless.)
-  if (net.isIP(unbracket) === 6) {
-    if (/^ff/i.test(unbracket)) {
+  if (net.isIP(normalized) === 6) {
+    if (normalized.startsWith("ff")) {
       return false;
     }
-    if (unbracket === "::" || /^0{1,4}(:0{1,4}){7}$/.test(unbracket)) {
+    if (normalized === "::") {
       return false;
     }
   }
