@@ -78,6 +78,13 @@ export function resolveDefaultAgentBoundAccountId(
     ) {
       continue;
     }
+    // Skip scoped bindings (peer, guildId, teamId, roles) — those apply only
+    // within a specific context and should not influence the global default
+    // account used by onboarding, CLI, status, and other unscoped paths.
+    const match = binding.match;
+    if (match.peer || match.guildId || match.teamId || (match.roles && match.roles.length > 0)) {
+      continue;
+    }
     return resolved.accountId;
   }
   return null;
