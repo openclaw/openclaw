@@ -20,7 +20,7 @@ describe("acpx plugin config parsing", () => {
     expect(resolved.expectedVersion).toBe(ACPX_PINNED_VERSION);
     expect(resolved.allowPluginLocalInstall).toBe(true);
     expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
-    expect(resolved.strictWindowsCmdWrapper).toBe(false);
+    expect(resolved.strictWindowsCmdWrapper).toBe(true);
   });
 
   it("accepts command override and disables plugin-local auto-install", () => {
