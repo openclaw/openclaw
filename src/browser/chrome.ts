@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ensurePortAvailable } from "../infra/ports.js";
+import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -124,7 +125,7 @@ export async function getChromeWebSocketUrl(
   return normalizeCdpWsUrl(wsUrl, cdpUrl);
 }
 
-async function canOpenWebSocket(
+async function canRunCdpHealthCommand(
   wsUrl: string,
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
 ): Promise<boolean> {
@@ -132,6 +133,20 @@ async function canOpenWebSocket(
     const ws = openCdpWebSocket(wsUrl, {
       handshakeTimeoutMs: timeoutMs,
     });
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      resolve(value);
+    };
     const timer = setTimeout(
       () => {
         try {
@@ -139,22 +154,45 @@ async function canOpenWebSocket(
         } catch {
           // ignore
         }
-        resolve(false);
+        finish(false);
       },
       Math.max(50, timeoutMs + 25),
     );
+
     ws.once("open", () => {
-      clearTimeout(timer);
       try {
-        ws.close();
+        ws.send(
+          JSON.stringify({
+            id: 1,
+            method: "Browser.getVersion",
+          }),
+        );
       } catch {
-        // ignore
+        finish(false);
       }
-      resolve(true);
     });
+
+    ws.on("message", (raw) => {
+      if (settled) {
+        return;
+      }
+      let parsed: { id?: unknown; result?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
+      } catch {
+        return;
+      }
+      if (parsed?.id !== 1) {
+        return;
+      }
+      finish(Boolean(parsed.result && typeof parsed.result === "object"));
+    });
+
     ws.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
+      finish(false);
+    });
+    ws.once("close", () => {
+      finish(false);
     });
   });
 }
@@ -168,7 +206,7 @@ export async function isChromeCdpReady(
   if (!wsUrl) {
     return false;
   }
-  return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
+  return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
 }
 
 export async function launchOpenClawChrome(
