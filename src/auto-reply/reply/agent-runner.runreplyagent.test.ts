@@ -8,7 +8,12 @@ import type { TypingMode } from "../../config/types.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -87,6 +92,7 @@ beforeEach(() => {
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
+  vi.mocked(scheduleFollowupDrain).mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -310,6 +316,25 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("drains followup queue when an unexpected exception escapes the run path", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+
+    try {
+      const { run } = createMinimalRun();
+      await expect(run()).rejects.toThrow("persist exploded");
+      expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
+    } finally {
+      persistSpy.mockRestore();
+    }
   });
 });
 
@@ -1658,6 +1683,68 @@ describe("runReplyAgent memory flush", () => {
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
       expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+    });
+  });
+
+  it("forces memory flush when transcript file exceeds configured byte threshold", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "oversized-session.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "x".repeat(3_000), "utf-8");
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: {
+                  forceFlushTranscriptBytes: 256,
+                },
+              },
+            },
+          },
+        },
+        runOverrides: { sessionFile },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[1]?.prompt).toBe("hello");
     });
   });
 
