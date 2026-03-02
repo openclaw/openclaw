@@ -20,7 +20,7 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
 
 describe("ui i18n locale registry", () => {
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "bn-IN"]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
 
@@ -29,6 +29,7 @@ describe("ui i18n locale registry", () => {
     expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
     expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(resolveNavigatorLocale("en-US")).toBe("en");
+    expect(resolveNavigatorLocale("bn-IN")).toBe("bn-IN");
   });
 
   it("loads lazy locale translations from the registry", async () => {
