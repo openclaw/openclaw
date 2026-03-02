@@ -26,6 +26,8 @@ import {
   writeTrustedProxyControlUiConfig,
 } from "./server.auth.shared.js";
 
+let controlUiIdentityPathSeq = 0;
+
 export function registerControlUiAndPairingSuite(): void {
   const trustedProxyControlUiCases: Array<{
     name: string;
@@ -195,7 +197,6 @@ export function registerControlUiAndPairingSuite(): void {
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
-        const { randomUUID } = await import("node:crypto");
         const os = await import("node:os");
         const path = await import("node:path");
         const scopes = [
@@ -210,7 +211,10 @@ export function registerControlUiAndPairingSuite(): void {
           scopes,
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          identityPath: path.join(os.tmpdir(), `openclaw-controlui-device-${randomUUID()}.json`),
+          identityPath: path.join(
+            os.tmpdir(),
+            `openclaw-controlui-device-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${controlUiIdentityPathSeq++}.json`,
+          ),
           nonce: String(nonce),
         });
         const res = await connectReq(ws, {
