@@ -137,6 +137,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.media.audio.attachments": "Audio Understanding Attachment Policy",
   "tools.media.audio.models": "Audio Understanding Models",
   "tools.media.audio.scope": "Audio Understanding Scope",
+  "tools.media.audio.echoTranscript": "Echo Transcript to Chat",
+  "tools.media.audio.echoFormat": "Transcript Echo Format",
   "tools.media.video.enabled": "Enable Video Understanding",
   "tools.media.video.maxBytes": "Video Understanding Max Bytes",
   "tools.media.video.maxChars": "Video Understanding Max Chars",
