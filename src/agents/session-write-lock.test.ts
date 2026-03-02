@@ -320,6 +320,29 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("does not treat malformed starttime as recycled", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          starttime: 123.5,
+        }),
+        "utf8",
+      );
+
+      await expect(acquireSessionWriteLock({ sessionFile, timeoutMs: 50 })).rejects.toThrow(
+        /session file locked/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
     expect(__testing.cleanupSignals).toContain("SIGQUIT");
     expect(__testing.cleanupSignals).toContain("SIGABRT");
