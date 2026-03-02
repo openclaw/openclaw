@@ -19,11 +19,17 @@ export function buildSandboxEnv(params: {
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
   containerWorkdir: string;
+  /** Skill-level env overrides to forward into the container. */
+  skillEnv?: Record<string, string>;
 }) {
   const env: Record<string, string> = {
     PATH: params.defaultPath,
     HOME: params.containerWorkdir,
   };
+  // Skill env vars are applied first so that sandbox/params can override if needed.
+  for (const [key, value] of Object.entries(params.skillEnv ?? {})) {
+    env[key] = value;
+  }
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
     env[key] = value;
   }

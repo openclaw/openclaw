@@ -331,13 +331,14 @@ export async function compactEmbeddedPiSessionDirect(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
+  let appliedSkillEnv: Record<string, string> = {};
   process.chdir(effectiveWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
-    restoreSkillEnv = params.skillsSnapshot
+    const skillEnvResult = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
@@ -346,6 +347,8 @@ export async function compactEmbeddedPiSessionDirect(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    restoreSkillEnv = skillEnvResult.revert;
+    appliedSkillEnv = skillEnvResult.appliedEnv;
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
@@ -383,6 +386,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelId,
       modelContextWindowTokens: model.contextWindow,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      skillEnv: appliedSkillEnv,
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
     const allowedToolNames = collectAllowedToolNames({ tools });

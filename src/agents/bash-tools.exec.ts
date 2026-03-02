@@ -371,12 +371,20 @@ export function createExecTool(
 
       const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
 
+      // Skill-level env vars (skills.entries.<skill>.env) must be forwarded to child
+      // processes.  For gateway/node hosts they are already on process.env and flow
+      // through `coerceEnv`, but sandbox (Docker) builds a fresh env via
+      // `buildSandboxEnv` which does not include process.env.  Merge them explicitly
+      // so both paths receive the overrides.
+      const skillEnv = defaults?.skillEnv;
+
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
             paramsEnv: params.env,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            skillEnv,
           })
         : mergedEnv;
 

@@ -14,6 +14,7 @@ export {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
 } from "./skills/env-overrides.js";
+export type { SkillEnvResult } from "./skills/env-overrides.js";
 export type {
   OpenClawSkillMetadata,
   SkillEligibilityContext,

@@ -509,13 +509,14 @@ export async function runEmbeddedAttempt(
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
   let restoreSkillEnv: (() => void) | undefined;
+  let appliedSkillEnv: Record<string, string> = {};
   process.chdir(effectiveWorkspace);
   try {
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
       : [];
-    restoreSkillEnv = params.skillsSnapshot
+    const skillEnvResult = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
@@ -524,6 +525,8 @@ export async function runEmbeddedAttempt(
           skills: skillEntries ?? [],
           config: params.config,
         });
+    restoreSkillEnv = skillEnvResult.revert;
+    appliedSkillEnv = skillEnvResult.appliedEnv;
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
@@ -602,6 +605,7 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          skillEnv: appliedSkillEnv,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     const allowedToolNames = collectAllowedToolNames({

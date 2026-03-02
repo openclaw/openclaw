@@ -133,19 +133,38 @@ function applySkillConfigEnvOverrides(params: {
   }
 }
 
-function createEnvReverter(updates: EnvUpdate[]) {
-  return () => {
-    for (const update of updates) {
-      if (update.prev === undefined) {
-        delete process.env[update.key];
-      } else {
-        process.env[update.key] = update.prev;
-      }
+export type SkillEnvResult = {
+  revert: () => void;
+  /** The env vars that were applied to process.env (key -> value). */
+  appliedEnv: Record<string, string>;
+};
+
+function createEnvResult(updates: EnvUpdate[]): SkillEnvResult {
+  const appliedEnv: Record<string, string> = {};
+  for (const update of updates) {
+    const value = process.env[update.key];
+    if (typeof value === "string") {
+      appliedEnv[update.key] = value;
     }
+  }
+  return {
+    revert: () => {
+      for (const update of updates) {
+        if (update.prev === undefined) {
+          delete process.env[update.key];
+        } else {
+          process.env[update.key] = update.prev;
+        }
+      }
+    },
+    appliedEnv,
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+}): SkillEnvResult {
   const { skills, config } = params;
   const updates: EnvUpdate[] = [];
 
@@ -165,16 +184,16 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
     });
   }
 
-  return createEnvReverter(updates);
+  return createEnvResult(updates);
 }
 
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
-}) {
+}): SkillEnvResult {
   const { snapshot, config } = params;
   if (!snapshot) {
-    return () => {};
+    return { revert: () => {}, appliedEnv: {} };
   }
   const updates: EnvUpdate[] = [];
 
@@ -193,5 +212,5 @@ export function applySkillEnvOverridesFromSnapshot(params: {
     });
   }
 
-  return createEnvReverter(updates);
+  return createEnvResult(updates);
 }

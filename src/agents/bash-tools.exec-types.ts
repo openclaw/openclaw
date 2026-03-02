@@ -27,6 +27,13 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /**
+   * Skill-level env vars (from skills.entries.<skill>.env) to inject into
+   * child processes. These are merged into the subprocess environment so that
+   * sandboxed (Docker) executions also receive them -- process.env alone is
+   * not forwarded into the container.
+   */
+  skillEnv?: Record<string, string>;
 };
 
 export type ExecElevatedDefaults = {

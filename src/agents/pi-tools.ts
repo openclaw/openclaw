@@ -236,6 +236,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Skill-level env vars to inject into exec child processes. */
+  skillEnv?: Record<string, string>;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -406,6 +408,7 @@ export function createOpenClawCodingTools(options?: {
           env: sandbox.docker.env,
         }
       : undefined,
+    skillEnv: options?.skillEnv,
   });
   const processTool = createProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
