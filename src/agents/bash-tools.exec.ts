@@ -190,7 +190,7 @@ export function createExecTool(
       `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
     );
   }
-  const notifyOnExit = defaults?.notifyOnExit !== false;
+  const defaultNotifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
@@ -220,6 +220,7 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        wakeOnExit?: boolean;
       };
 
       if (!params.command) {
@@ -229,6 +230,15 @@ export function createExecTool(
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
+      const wakeOnExit = params.wakeOnExit === true;
+      let notifyOnExit = defaultNotifyOnExit;
+      if (wakeOnExit && !notifyOnExit) {
+        notifyOnExit = true;
+        const warning =
+          "Warning: wakeOnExit=true requires notifyOnExit=true; forcing notifyOnExit for this exec run.";
+        warnings.push(warning);
+        logInfo(`exec: wakeOnExit requested while notifyOnExit disabled; forcing notifyOnExit.`);
+      }
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
@@ -419,6 +429,7 @@ export function createExecTool(
           approvalRunningNoticeMs,
           warnings,
           notifySessionKey,
+          wakeOnExit,
           trustedSafeBinDirs,
         });
       }
@@ -444,6 +455,7 @@ export function createExecTool(
           scopeKey: defaults?.scopeKey,
           warnings,
           notifySessionKey,
+          wakeOnExit,
           approvalRunningNoticeMs,
           maxOutput,
           pendingMaxOutput,
@@ -480,9 +492,11 @@ export function createExecTool(
         maxOutput,
         pendingMaxOutput,
         notifyOnExit,
+        wakeOnExit,
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        agentId,
         timeoutSec: effectiveTimeout,
         onUpdate,
       });

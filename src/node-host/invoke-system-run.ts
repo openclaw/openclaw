@@ -49,6 +49,7 @@ type SystemRunExecutionContext = {
   sessionKey: string;
   runId: string;
   cmdText: string;
+  wakeOnExit: boolean;
 };
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
@@ -133,6 +134,7 @@ export type HandleSystemRunInvokeOptions = {
     sessionKey: string;
     runId: string;
     cmdText: string;
+    wakeOnExit: boolean;
     result: {
       stdout?: string;
       stderr?: string;
@@ -164,6 +166,7 @@ async function sendSystemRunDenied(
       runId: execution.runId,
       host: "node",
       command: execution.cmdText,
+      ...(execution.wakeOnExit ? { wakeOnExit: true } : {}),
       reason: params.reason,
     }),
   );
@@ -203,6 +206,7 @@ async function parseSystemRunPhase(
   const agentId = opts.params.agentId?.trim() || undefined;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const wakeOnExit = opts.params.wakeOnExit === true;
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellCommand !== null,
@@ -214,7 +218,7 @@ async function parseSystemRunPhase(
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, cmdText },
+    execution: { sessionKey, runId, cmdText, wakeOnExit },
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
@@ -382,6 +386,7 @@ async function executeSystemRunPhase(
         sessionKey: phase.sessionKey,
         runId: phase.runId,
         cmdText: phase.cmdText,
+        wakeOnExit: phase.execution.wakeOnExit,
         result,
       });
       await opts.sendInvokeResult({
@@ -449,6 +454,7 @@ async function executeSystemRunPhase(
     sessionKey: phase.sessionKey,
     runId: phase.runId,
     cmdText: phase.cmdText,
+    wakeOnExit: phase.execution.wakeOnExit,
     result,
   });
 

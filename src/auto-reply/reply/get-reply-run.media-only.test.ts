@@ -207,6 +207,31 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("allows system-event-only runs when empty-body override is enabled", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+        },
+        opts: {
+          allowEmptyBodyForSystemEvent: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.prompt).toContain("[System event update]");
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({

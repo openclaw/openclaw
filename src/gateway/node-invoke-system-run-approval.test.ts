@@ -229,6 +229,53 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
+  test("preserves wakeOnExit on normal forwarded system.run params", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        wakeOnExit: true,
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE")),
+      nowMs: now,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const params = result.params as Record<string, unknown>;
+    expect(params.wakeOnExit).toBe(true);
+    expect(params.approved).toBeUndefined();
+    expect(params.approvalDecision).toBeUndefined();
+  });
+
+  test("preserves wakeOnExit when forwarding approved allow-once params", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+        wakeOnExit: true,
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE", ["echo", "SAFE"])),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const params = result.params as Record<string, unknown>;
+    expect(params.wakeOnExit).toBe(true);
+  });
+
   test("uses systemRunPlan for forwarded command context and ignores caller tampering", () => {
     const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
     record.request.systemRunPlan = {
