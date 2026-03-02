@@ -1,10 +1,12 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 type CronSessionEntry = {
   sessionId: string;
   updatedAt: number;
   systemSent: boolean;
   skillsSnapshot: unknown;
+  model?: string;
+  modelProvider?: string;
   [key: string]: unknown;
 };
 
@@ -17,23 +19,27 @@ type CronSession = {
   [key: string]: unknown;
 };
 
-export const buildWorkspaceSkillSnapshotMock = vi.fn();
-export const resolveAgentConfigMock = vi.fn();
-export const resolveAgentModelFallbacksOverrideMock = vi.fn();
-export const resolveAgentSkillsFilterMock = vi.fn();
-export const getModelRefStatusMock = vi.fn();
-export const isCliProviderMock = vi.fn();
-export const resolveAllowedModelRefMock = vi.fn();
-export const resolveConfiguredModelRefMock = vi.fn();
-export const resolveHooksGmailModelMock = vi.fn();
-export const resolveThinkingDefaultMock = vi.fn();
-export const runWithModelFallbackMock = vi.fn();
-export const runEmbeddedPiAgentMock = vi.fn();
-export const runCliAgentMock = vi.fn();
-export const getCliSessionIdMock = vi.fn();
-export const updateSessionStoreMock = vi.fn();
-export const resolveCronSessionMock = vi.fn();
-export const logWarnMock = vi.fn();
+function createMock(): Mock {
+  return vi.fn();
+}
+
+export const buildWorkspaceSkillSnapshotMock = createMock();
+export const resolveAgentConfigMock = createMock();
+export const resolveAgentModelFallbacksOverrideMock = createMock();
+export const resolveAgentSkillsFilterMock = createMock();
+export const getModelRefStatusMock = createMock();
+export const isCliProviderMock = createMock();
+export const resolveAllowedModelRefMock = createMock();
+export const resolveConfiguredModelRefMock = createMock();
+export const resolveHooksGmailModelMock = createMock();
+export const resolveThinkingDefaultMock = createMock();
+export const runWithModelFallbackMock = createMock();
+export const runEmbeddedPiAgentMock = createMock();
+export const runCliAgentMock = createMock();
+export const getCliSessionIdMock = createMock();
+export const updateSessionStoreMock = createMock();
+export const resolveCronSessionMock = createMock();
+export const logWarnMock = createMock();
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,

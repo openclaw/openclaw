@@ -9,7 +9,6 @@ function applySubagentTimeoutDefault(seconds: number) {
   sessionsHarness.setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
     agents: { defaults: { subagents: { runTimeoutSeconds: seconds } } },
-    routing: { sessions: { mainKey: MAIN_SESSION_KEY } },
   });
 }
 

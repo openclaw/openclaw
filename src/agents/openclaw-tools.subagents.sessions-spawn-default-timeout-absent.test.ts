@@ -15,7 +15,6 @@ function configureDefaultsWithoutTimeout() {
   setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
     agents: { defaults: { subagents: { maxConcurrent: 8 } } },
-    routing: { sessions: { mainKey: MAIN_SESSION_KEY } },
   });
 }
 

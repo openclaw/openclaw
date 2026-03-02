@@ -11,7 +11,6 @@ function applyThinkingDefault(thinking: ThinkingLevel) {
   harness.setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
     agents: { defaults: { subagents: { thinking } } },
-    routing: { sessions: { mainKey: MAIN_SESSION_KEY } },
   });
 }
 

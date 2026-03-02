@@ -16,15 +16,15 @@ async function withFakeTimers(run: () => Promise<void>) {
 }
 
 function createTypingHarness(overrides: Partial<Parameters<typeof createTypingCallbacks>[0]> = {}) {
-  const start = overrides.start ?? vi.fn().mockResolvedValue(undefined);
-  const stop = overrides.stop ?? vi.fn().mockResolvedValue(undefined);
-  const onStartError = overrides.onStartError ?? vi.fn();
-  const onStopError = overrides.onStopError ?? vi.fn();
+  const start = vi.fn(overrides.start ?? (async () => {}));
+  const stop = vi.fn(overrides.stop ?? (async () => {}));
+  const onStartError = vi.fn(overrides.onStartError ?? (() => {}));
+  const onStopError = vi.fn(overrides.onStopError ?? (() => {}));
   const callbacks = createTypingCallbacks({
     start,
     stop,
     onStartError,
-    ...(onStopError ? { onStopError } : {}),
+    onStopError,
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
       : {}),

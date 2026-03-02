@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { validateConfigObject } from "../config/validation.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -41,7 +42,7 @@ async function writeAgentModelsJson(content: unknown): Promise<void> {
 }
 
 function createMergeConfigProvider() {
-  return {
+  const provider: ModelProviderConfig = {
     baseUrl: "https://config.example/v1",
     apiKey: "CONFIG_KEY",
     api: "openai-responses",
@@ -56,7 +57,8 @@ function createMergeConfigProvider() {
         maxTokens: 2048,
       },
     ],
-  } as const;
+  };
+  return provider;
 }
 
 async function runCustomProviderMergeTest(seedProvider: {
