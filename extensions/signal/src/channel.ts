@@ -68,7 +68,7 @@ async function sendSignalOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
-  accountId?: string;
+  accountId?: string | null;
   deps?: { sendSignal?: SignalSendFn };
 }) {
   const send = params.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;

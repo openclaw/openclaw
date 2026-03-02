@@ -34,7 +34,7 @@ const meta = getChatChannelMeta("imessage");
 function buildIMessageSetupPatch(input: {
   cliPath?: string;
   dbPath?: string;
-  service?: string;
+  service?: "imessage" | "sms" | "auto";
   region?: string;
 }) {
   return {
@@ -54,9 +54,9 @@ async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
-  accountId?: string;
+  accountId?: string | null;
   deps?: { sendIMessage?: IMessageSendFn };
-  replyToId?: string;
+  replyToId?: string | null;
 }) {
   const send =
     params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
@@ -299,8 +299,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       lastStartAt: runtime?.lastStartAt ?? null,
       lastStopAt: runtime?.lastStopAt ?? null,
       lastError: runtime?.lastError ?? null,
-      cliPath: runtime?.cliPath ?? account.config.cliPath ?? null,
-      dbPath: runtime?.dbPath ?? account.config.dbPath ?? null,
+      cliPath: (runtime?.cliPath ?? account.config.cliPath ?? null) as string | null,
+      dbPath: (runtime?.dbPath ?? account.config.dbPath ?? null) as string | null,
       probe,
       lastInboundAt: runtime?.lastInboundAt ?? null,
       lastOutboundAt: runtime?.lastOutboundAt ?? null,
