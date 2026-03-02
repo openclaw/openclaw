@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-const resolvePluginToolsMock = vi.fn(() => []);
+const resolvePluginToolsMock = vi.fn((params?: unknown) => {
+  void params;
+  return [];
+});
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: (params: unknown) => resolvePluginToolsMock(params),
