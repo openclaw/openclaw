@@ -12,7 +12,6 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -327,7 +326,6 @@ export function createPdfTool(options?: {
       ? Math.floor(maxPagesDefault)
       : DEFAULT_MAX_PAGES;
 
-<<<<<<< HEAD
   const localRoots = (() => {
     const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
     if (options?.fsPolicy?.workspaceOnly) {
@@ -339,18 +337,6 @@ export function createPdfTool(options?: {
     }
     return Array.from(new Set([...roots, workspaceDir]));
   })();
-||||||| parent of 4a741746c (refactor: dedupe agent and reply runtimes)
-  const localRoots = (() => {
-    const roots = getDefaultLocalRoots();
-    const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir);
-    if (!workspaceDir) {
-      return roots;
-    }
-    return Array.from(new Set([...roots, workspaceDir]));
-  })();
-=======
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir);
->>>>>>> 4a741746c (refactor: dedupe agent and reply runtimes)
 
   const description =
     "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
