@@ -194,7 +194,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       deliver: async (payload: ReplyPayload, info) => {
         // FIX: Filter out internal 'block' reasoning chunks immediately to prevent
         // data leak and race conditions with streaming state initialization.
-        if (info?.kind === 'block') {
+        if (info?.kind === "block") {
           return;
         }
 
