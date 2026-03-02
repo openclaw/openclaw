@@ -127,6 +127,31 @@ describe("config schema", () => {
     expect(listHint?.help).toContain("bluebubbles");
   });
 
+  it("caches merged schemas for identical plugin/channel metadata", () => {
+    const params = {
+      plugins: [
+        {
+          id: "voice-call",
+          name: "Voice Call",
+          configSchema: { type: "object", properties: { provider: { type: "string" } } },
+        },
+      ],
+      channels: [
+        {
+          id: "matrix",
+          label: "Matrix",
+          configSchema: { type: "object", properties: { accessToken: { type: "string" } } },
+        },
+      ],
+    };
+    const first = buildConfigSchema(params);
+    const second = buildConfigSchema({
+      plugins: [{ ...params.plugins[0] }],
+      channels: [{ ...params.channels[0] }],
+    });
+    expect(second).toBe(first);
+  });
+
   it("derives security/auth tags for credential paths", () => {
     const tags = deriveTagsForPath("gateway.auth.token");
     expect(tags).toContain("security");
