@@ -280,7 +280,11 @@ describe("gateway session utils", () => {
 });
 
 describe("resolveSessionModelRef", () => {
-  test("prefers runtime model/provider from session entry", () => {
+  test("prefers override over runtime model/provider", () => {
+    // When the user sets a model override via /model, it should take precedence
+    // over the runtime model recorded from a previous run. This ensures the
+    // status bar reflects the user's intent immediately after switching models,
+    // without requiring a new agent run to update the display.
     const cfg = {
       agents: {
         defaults: {
@@ -298,7 +302,7 @@ describe("resolveSessionModelRef", () => {
       providerOverride: "anthropic",
     });
 
-    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
   });
 
   test("preserves openrouter provider when model contains vendor prefix", () => {
@@ -323,7 +327,7 @@ describe("resolveSessionModelRef", () => {
     });
   });
 
-  test("falls back to override when runtime model is not recorded yet", () => {
+  test("uses override when runtime model is not recorded yet", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -336,6 +340,27 @@ describe("resolveSessionModelRef", () => {
       sessionId: "s2",
       updatedAt: Date.now(),
       modelOverride: "openai-codex/gpt-5.3-codex",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
+  });
+
+  test("falls back to runtime model when no override is set", () => {
+    // When there is no modelOverride (e.g. session using the default model),
+    // the runtime model from the last run should be used.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-runtime",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.3-codex",
     });
 
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.3-codex" });
