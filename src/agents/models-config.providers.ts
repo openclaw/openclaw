@@ -533,11 +533,13 @@ export function normalizeProviders(params: {
         normalizedProvider = { ...normalizedProvider, apiKey };
       } else {
         const fromEnv = resolveEnvApiKeyVarName(normalizedKey);
-        const fromProfiles = resolveApiKeyFromProfiles({
+        const hasProfile = resolveApiKeyFromProfiles({
           provider: normalizedKey,
           store: authStore,
         });
-        const apiKey = fromEnv ?? fromProfiles;
+        // Use env var name if available, otherwise use placeholder if profile exists
+        // (actual secret resolved at runtime; placeholder satisfies ModelRegistry)
+        const apiKey = fromEnv ?? (hasProfile ? "profile-auth" : undefined);
         if (apiKey?.trim()) {
           mutated = true;
           normalizedProvider = { ...normalizedProvider, apiKey };
