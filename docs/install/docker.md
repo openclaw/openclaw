@@ -33,6 +33,12 @@ Sandboxing details: [Sandboxing](/gateway/sandboxing)
 
 ### Quick start (recommended)
 
+<Note>
+Docker defaults here assume bind modes (`lan`/`loopback`), not host aliases. Use bind
+mode values in `gateway.bind` (for example `lan` or `loopback`), not host aliases like
+`0.0.0.0` or `localhost`.
+</Note>
+
 From repo root:
 
 ```bash
@@ -41,7 +47,7 @@ From repo root:
 
 This script:
 
-- builds the gateway image
+- builds the gateway image locally (or pulls a remote image if `OPENCLAW_IMAGE` is set)
 - runs the onboarding wizard
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
@@ -49,6 +55,7 @@ This script:
 
 Optional env vars:
 
+- `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
@@ -90,6 +97,62 @@ It writes config/workspace on the host:
 - `~/.openclaw/workspace`
 
 Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
+
+### Use a remote image (skip local build)
+
+Official pre-built images are published at:
+
+- [GitHub Container Registry package](https://github.com/openclaw/openclaw/pkgs/container/openclaw)
+
+Use image name `ghcr.io/openclaw/openclaw` (not similarly named Docker Hub
+images).
+
+Common tags:
+
+- `main` — latest build from `main`
+- `<version>` — release tag builds (for example `2026.2.26`)
+- `latest` — latest stable release tag
+
+### Base image metadata
+
+The main Docker image currently uses:
+
+- `node:22-bookworm`
+
+The docker image now publishes OCI base-image annotations (sha256 is an example):
+
+- `org.opencontainers.image.base.name=docker.io/library/node:22-bookworm`
+- `org.opencontainers.image.base.digest=sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935`
+- `org.opencontainers.image.source=https://github.com/openclaw/openclaw`
+- `org.opencontainers.image.url=https://openclaw.ai`
+- `org.opencontainers.image.documentation=https://docs.openclaw.ai/install/docker`
+- `org.opencontainers.image.licenses=MIT`
+- `org.opencontainers.image.title=OpenClaw`
+- `org.opencontainers.image.description=OpenClaw gateway and CLI runtime container image`
+- `org.opencontainers.image.revision=<git-sha>`
+- `org.opencontainers.image.version=<tag-or-main>`
+- `org.opencontainers.image.created=<rfc3339 timestamp>`
+
+Reference: [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+
+Release context: this repository's tagged history already uses Bookworm in
+`v2026.2.22` and earlier 2026 tags (for example `v2026.2.21`, `v2026.2.9`).
+
+By default the setup script builds the image from source. To pull a pre-built
+image instead, set `OPENCLAW_IMAGE` before running the script:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+./docker-setup.sh
+```
+
+The script detects that `OPENCLAW_IMAGE` is not the default `openclaw:local` and
+runs `docker pull` instead of `docker build`. Everything else (onboarding,
+gateway start, token generation) works the same way.
+
+`docker-setup.sh` still runs from the repository root because it uses the local
+`docker-compose.yml` and helper files. `OPENCLAW_IMAGE` skips local image build
+time; it does not replace the compose/setup workflow.
 
 ### Shell Helpers (optional)
 
@@ -358,6 +421,10 @@ pnpm test:docker:qr
 
 The setup script also pins `gateway.mode=local` after onboarding so Docker CLI
 commands default to local loopback targeting.
+
+Legacy config note: use bind mode values in `gateway.bind` (`lan` / `loopback` /
+`custom` / `tailnet` / `auto`), not host aliases (`0.0.0.0`, `127.0.0.1`,
+`localhost`, `::`, `::1`).
 
 If you see `Gateway target: ws://172.x.x.x:18789` or repeated `pairing required`
 errors from Docker CLI commands, run:

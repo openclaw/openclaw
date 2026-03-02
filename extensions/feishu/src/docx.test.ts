@@ -340,7 +340,7 @@ describe("feishu_doc image fetch hardening", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("reports owner permission details when grant succeeds", async () => {
+  it("create grants permission only to trusted Feishu requester", async () => {
     const registerTool = vi.fn();
     registerFeishuDocTools({
       config: {
@@ -357,27 +357,35 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = registerTool.mock.calls
       .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .map((tool) =>
+        typeof tool === "function"
+          ? tool({ messageChannel: "feishu", requesterSenderId: "ou_123" })
+          : tool,
+      )
       .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
       action: "create",
       title: "Demo",
-      owner_open_id: "ou_123",
-      owner_perm_type: "edit",
     });
 
-    expect(permissionMemberCreateMock).toHaveBeenCalled();
-    expect(result.details.owner_permission_added).toBe(true);
-    expect(result.details.owner_open_id).toBe("ou_123");
-    expect(result.details.owner_perm_type).toBe("edit");
+    expect(result.details.document_id).toBe("doc_created");
+    expect(result.details.requester_permission_added).toBe(true);
+    expect(result.details.requester_open_id).toBe("ou_123");
+    expect(result.details.requester_perm_type).toBe("edit");
+    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          member_type: "openid",
+          member_id: "ou_123",
+          perm: "edit",
+        }),
+      }),
+    );
   });
 
-  it("does not report owner permission details when grant fails", async () => {
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    permissionMemberCreateMock.mockRejectedValueOnce(new Error("permission denied"));
-
+  it("create skips requester grant when trusted requester identity is unavailable", async () => {
     const registerTool = vi.fn();
     registerFeishuDocTools({
       config: {
@@ -394,43 +402,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = registerTool.mock.calls
       .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
-    expect(feishuDocTool).toBeDefined();
-
-    const result = await feishuDocTool.execute("tool-call", {
-      action: "create",
-      title: "Demo",
-      owner_open_id: "ou_123",
-      owner_perm_type: "edit",
-    });
-
-    expect(permissionMemberCreateMock).toHaveBeenCalled();
-    expect(result.details.owner_permission_added).toBeUndefined();
-    expect(result.details.owner_open_id).toBeUndefined();
-    expect(result.details.owner_perm_type).toBeUndefined();
-    expect(consoleWarnSpy).toHaveBeenCalled();
-    consoleWarnSpy.mockRestore();
-  });
-
-  it("skips permission grant when owner_open_id is omitted", async () => {
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .map((tool) => (typeof tool === "function" ? tool({ messageChannel: "feishu" }) : tool))
       .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
@@ -440,7 +412,43 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     expect(permissionMemberCreateMock).not.toHaveBeenCalled();
-    expect(result.details.owner_permission_added).toBeUndefined();
+    expect(result.details.requester_permission_added).toBe(false);
+    expect(result.details.requester_permission_skipped_reason).toContain("trusted requester");
+  });
+
+  it("create never grants permissions when grant_to_requester is false", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: {
+            appId: "app_id",
+            appSecret: "app_secret",
+          },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) =>
+        typeof tool === "function"
+          ? tool({ messageChannel: "feishu", requesterSenderId: "ou_123" })
+          : tool,
+      )
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "create",
+      title: "Demo",
+      grant_to_requester: false,
+    });
+
+    expect(permissionMemberCreateMock).not.toHaveBeenCalled();
+    expect(result.details.requester_permission_added).toBeUndefined();
   });
 
   it("returns an error when create response omits document_id", async () => {

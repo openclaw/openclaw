@@ -1474,13 +1474,50 @@ describe("initSessionState internal channel routing preservation", () => {
         Body: "internal follow-up",
         SessionKey: sessionKey,
         OriginatingChannel: "webchat",
+        OriginatingTo: "session:dashboard",
       },
       cfg,
       commandAuthorized: true,
     });
 
     expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.lastTo).toBe("group:12345");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
+  });
+
+  it("keeps persisted external route when OriginatingChannel is non-deliverable", async () => {
+    const storePath = await createStorePath("preserve-nondeliverable-route-");
+    const sessionKey = "agent:main:discord:channel:24680";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        lastChannel: "discord",
+        lastTo: "channel:24680",
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:24680",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "internal handoff",
+        SessionKey: sessionKey,
+        OriginatingChannel: "sessions_send",
+        OriginatingTo: "session:handoff",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("discord");
+    expect(result.sessionEntry.lastTo).toBe("channel:24680");
+    expect(result.sessionEntry.deliveryContext?.channel).toBe("discord");
+    expect(result.sessionEntry.deliveryContext?.to).toBe("channel:24680");
   });
 
   it("uses session key channel hint when first turn is internal webchat", async () => {
@@ -1500,6 +1537,25 @@ describe("initSessionState internal channel routing preservation", () => {
 
     expect(result.sessionEntry.lastChannel).toBe("telegram");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
+  });
+
+  it("keeps internal route when there is no persisted external fallback", async () => {
+    const storePath = await createStorePath("no-external-fallback-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "handoff only",
+        SessionKey: "agent:main:main",
+        OriginatingChannel: "sessions_send",
+        OriginatingTo: "session:handoff",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("sessions_send");
+    expect(result.sessionEntry.lastTo).toBe("session:handoff");
   });
 
   it("keeps webchat channel for webchat/main sessions", async () => {
