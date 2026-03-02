@@ -1,5 +1,6 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../../../src/utils/directive-tags.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -13,7 +14,7 @@ export function extractText(message: unknown): string | null {
   if (typeof content === "string") {
     const processed =
       role === "assistant"
-        ? stripThinkingTags(content)
+        ? stripInlineDirectiveTagsForDisplay(stripThinkingTags(content)).text
         : shouldStripInboundMetadata
           ? stripInboundMetadata(stripEnvelope(content))
           : stripEnvelope(content);
@@ -33,7 +34,7 @@ export function extractText(message: unknown): string | null {
       const joined = parts.join("\n");
       const processed =
         role === "assistant"
-          ? stripThinkingTags(joined)
+          ? stripInlineDirectiveTagsForDisplay(stripThinkingTags(joined)).text
           : shouldStripInboundMetadata
             ? stripInboundMetadata(stripEnvelope(joined))
             : stripEnvelope(joined);
@@ -43,7 +44,7 @@ export function extractText(message: unknown): string | null {
   if (typeof m.text === "string") {
     const processed =
       role === "assistant"
-        ? stripThinkingTags(m.text)
+        ? stripInlineDirectiveTagsForDisplay(stripThinkingTags(m.text)).text
         : shouldStripInboundMetadata
           ? stripInboundMetadata(stripEnvelope(m.text))
           : stripEnvelope(m.text);
