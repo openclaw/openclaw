@@ -1616,10 +1616,17 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     replyOptions: {
       skillFilter: channelConfig?.skills,
-      disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
-          : undefined,
+      disableBlockStreaming: (() => {
+        const bs =
+          channelConfig?.blockStreaming ??
+          guildInfo?.blockStreaming ??
+          discordConfig?.blockStreaming;
+        return typeof bs === "boolean" ? !bs : undefined;
+      })(),
+      blockStreamingBreak:
+        channelConfig?.blockStreamingBreak ??
+        guildInfo?.blockStreamingBreak ??
+        discordConfig?.blockStreamingBreak,
       onModelSelected,
     },
   });

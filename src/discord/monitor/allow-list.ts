@@ -35,8 +35,12 @@ export type DiscordGuildEntryResolved = {
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
+      blockStreaming?: boolean;
+      blockStreamingBreak?: "text_end" | "message_end";
     }
   >;
+  blockStreaming?: boolean;
+  blockStreamingBreak?: "text_end" | "message_end";
 };
 
 export type DiscordChannelConfigResolved = {
@@ -49,6 +53,8 @@ export type DiscordChannelConfigResolved = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  blockStreaming?: boolean;
+  blockStreamingBreak?: "text_end" | "message_end";
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -368,6 +374,8 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    blockStreaming: entry.blockStreaming,
+    blockStreamingBreak: entry.blockStreamingBreak,
   };
   return resolved;
 }

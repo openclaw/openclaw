@@ -431,9 +431,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   // --- Discord draft stream (edit-based preview streaming) ---
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
   const draftMaxChars = Math.min(textLimit, 2000);
+  // Resolve blockStreaming with priority: channel > guild > account > global default.
+  const resolvedBlockStreaming: boolean | undefined =
+    channelConfig?.blockStreaming ?? guildInfo?.blockStreaming ?? discordConfig?.blockStreaming;
+  const resolvedBlockStreamingBreak: "text_end" | "message_end" | undefined =
+    channelConfig?.blockStreamingBreak ??
+    guildInfo?.blockStreamingBreak ??
+    discordConfig?.blockStreamingBreak;
   const accountBlockStreamingEnabled =
-    typeof discordConfig?.blockStreaming === "boolean"
-      ? discordConfig.blockStreaming
+    typeof resolvedBlockStreaming === "boolean"
+      ? resolvedBlockStreaming
       : cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.use();
@@ -689,9 +696,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         skillFilter: channelConfig?.skills,
         disableBlockStreaming:
           disableBlockStreamingForDraft ??
-          (typeof discordConfig?.blockStreaming === "boolean"
-            ? !discordConfig.blockStreaming
-            : undefined),
+          (typeof resolvedBlockStreaming === "boolean" ? !resolvedBlockStreaming : undefined),
+        blockStreamingBreak: resolvedBlockStreamingBreak,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
           ? () => {

@@ -46,6 +46,10 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** Override block streaming for this channel. */
+  blockStreaming?: boolean;
+  /** Override block streaming break mode for this channel. */
+  blockStreamingBreak?: "text_end" | "message_end";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -63,6 +67,10 @@ export type DiscordGuildEntry = {
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
   channels?: Record<string, DiscordGuildChannelConfig>;
+  /** Override block streaming for this guild. */
+  blockStreaming?: boolean;
+  /** Override block streaming break mode for this guild. */
+  blockStreamingBreak?: "text_end" | "message_end";
 };
 
 export type DiscordActionConfig = {
@@ -216,6 +224,8 @@ export type DiscordAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** Override block streaming break mode for this account. */
+  blockStreamingBreak?: "text_end" | "message_end";
   /**
    * Live stream preview mode:
    * - "off": disable preview updates

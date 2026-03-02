@@ -373,6 +373,8 @@ export const DiscordGuildChannelSchema = z
     systemPrompt: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
   })
   .strict();
 
@@ -386,6 +388,8 @@ export const DiscordGuildSchema = z
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
   })
   .strict();
 
@@ -438,6 +442,7 @@ export const DiscordAccountSchema = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
