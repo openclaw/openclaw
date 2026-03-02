@@ -53,6 +53,12 @@ type ParentCronJobCreate = {
     message: string;
     timeoutSeconds?: number;
   };
+  delivery?: {
+    mode: "announce" | "none" | "webhook";
+    channel?: string;
+    to?: string;
+    bestEffort?: boolean;
+  };
 };
 
 /** Parent CronJob (subset returned by cron.add). */
@@ -185,7 +191,19 @@ function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
   const workflowLabel = job.workflowId ? ` for workflow ${job.workflowId}` : "";
   const stepLabel = job.stepId ? ` (step ${job.stepId})` : "";
 
-  return {
+  // Use custom message if provided, otherwise build default.
+  const message =
+    typeof job.message === "string" && job.message
+      ? job.message
+      : [
+          `Execute MABOS tool action: ${actionLabel}${workflowLabel}${stepLabel}.`,
+          `This is an automated cron task from the MABOS workflow scheduler.`,
+          job.action
+            ? `Call the "${job.action}" tool with business_id and appropriate parameters.`
+            : `Run the scheduled workflow step.`,
+        ].join("\n");
+
+  const result: ParentCronJobCreate = {
     agentId: job.agentId || undefined,
     name: `[mabos] ${job.name}`,
     description: `MABOS bridge: ${job.id}${workflowLabel}`,
@@ -199,16 +217,26 @@ function mapToParentCreate(job: MabosCronJob): ParentCronJobCreate {
     wakeMode: "next-heartbeat",
     payload: {
       kind: "agentTurn",
-      message: [
-        `Execute MABOS tool action: ${actionLabel}${workflowLabel}${stepLabel}.`,
-        `This is an automated cron task from the MABOS workflow scheduler.`,
-        job.action
-          ? `Call the "${job.action}" tool with business_id and appropriate parameters.`
-          : `Run the scheduled workflow step.`,
-      ].join("\n"),
-      timeoutSeconds: 120,
+      message,
+      timeoutSeconds: typeof job.timeoutSeconds === "number" ? job.timeoutSeconds : 120,
     },
   };
+
+  // Pass through delivery config if present.
+  const delivery = job.delivery;
+  if (delivery && typeof delivery === "object" && !Array.isArray(delivery)) {
+    const d = delivery as Record<string, unknown>;
+    if (typeof d.mode === "string") {
+      result.delivery = {
+        mode: d.mode as "announce" | "none" | "webhook",
+        channel: typeof d.channel === "string" ? d.channel : undefined,
+        to: typeof d.to === "string" ? d.to : undefined,
+        bestEffort: typeof d.bestEffort === "boolean" ? d.bestEffort : undefined,
+      };
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,13 +297,13 @@ export class CronBridge {
 
   /**
    * Sync all MABOS cron jobs for a business to the parent CronService.
-   * - Jobs with `workflowId` and no `parentCronId` → `cron.add`
-   * - Jobs with `parentCronId` → `cron.update` (enabled/schedule sync)
+   * - Jobs with `workflowId` or a custom `message` and no `parentCronId` → `cron.add`
+   * - Jobs with `parentCronId` → `cron.update` (enabled/schedule/payload/delivery sync)
    * - Parent jobs whose MABOS source was removed → `cron.remove`
    */
   async syncAll(businessId: string): Promise<{ added: number; updated: number; removed: number }> {
     const jobs = await this.readJobs(businessId);
-    const workflowJobs = jobs.filter((j) => j.workflowId);
+    const workflowJobs = jobs.filter((j) => j.workflowId || typeof j.message === "string");
     let added = 0;
     let updated = 0;
     let removed = 0;
@@ -349,14 +377,15 @@ export class CronBridge {
   private async updateInParent(job: MabosCronJob): Promise<void> {
     if (!job.parentCronId) return;
 
+    const create = mapToParentCreate(job);
     const patch: Record<string, unknown> = {
       enabled: job.enabled,
-      schedule: {
-        kind: "cron",
-        expr: job.schedule,
-        tz: job.timezone,
-      },
+      schedule: create.schedule,
+      payload: create.payload,
     };
+    if (create.delivery) {
+      patch.delivery = create.delivery;
+    }
 
     await callGatewayRpc(this.gatewayUrl, "cron.update", {
       id: job.parentCronId,
