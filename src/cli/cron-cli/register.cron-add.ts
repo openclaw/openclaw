@@ -9,6 +9,7 @@ import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
   parseAt,
+  parseCronStaggerMs,
   parseDurationMs,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -129,19 +130,7 @@ export function registerCronAddCommand(cron: Command) {
               }
               return { kind: "every" as const, everyMs };
             }
-            const staggerMs = (() => {
-              if (useExact) {
-                return 0;
-              }
-              if (!staggerRaw) {
-                return undefined;
-              }
-              const parsed = parseDurationMs(staggerRaw);
-              if (!parsed) {
-                throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
-              }
-              return parsed;
-            })();
+            const staggerMs = parseCronStaggerMs({ staggerRaw, useExact });
             return {
               kind: "cron" as const,
               expr: cronExpr,

@@ -35,13 +35,7 @@ vi.mock("./cli-utils.js", () => ({
     _runtime: unknown,
     action: () => Promise<void>,
     onError: (err: unknown) => void,
-  ) => {
-    try {
-      await action();
-    } catch (err) {
-      onError(err);
-    }
-  },
+  ) => await action().catch(onError),
 }));
 
 vi.mock("../runtime.js", () => ({

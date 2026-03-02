@@ -1,53 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  clearFastTestEnv,
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+import {
   loadRunCronIsolatedAgentTurn,
-  makeCronSession,
   resolveAgentModelFallbacksOverrideMock,
-  resolveCronSessionMock,
-  resetRunCronIsolatedAgentTurnHarness,
-  restoreFastTestEnv,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-function makePayloadJob(overrides?: Record<string, unknown>) {
-  return {
-    id: "test-job",
-    name: "Test Job",
-    schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "test" },
-    ...overrides,
-  } as never;
-}
-
-function makePayloadParams(overrides?: Record<string, unknown>) {
-  return {
-    cfg: {},
-    deps: {} as never,
-    job: makePayloadJob(overrides?.job as Record<string, unknown> | undefined),
-    message: "test",
-    sessionKey: "cron:test",
-    ...overrides,
-  };
-}
-
 // ---------- tests ----------
 
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
-  let previousFastTestEnv: string | undefined;
-
-  beforeEach(() => {
-    previousFastTestEnv = clearFastTestEnv();
-    resetRunCronIsolatedAgentTurnHarness();
-    resolveCronSessionMock.mockReturnValue(makeCronSession());
-  });
-
-  afterEach(() => {
-    restoreFastTestEnv(previousFastTestEnv);
-  });
+  setupRunCronIsolatedAgentTurnSuite();
 
   it.each([
     {
@@ -77,8 +45,8 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     }
 
     const result = await runCronIsolatedAgentTurn(
-      makePayloadParams({
-        job: makePayloadJob({ payload }),
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({ payload }),
       }),
     );
 
