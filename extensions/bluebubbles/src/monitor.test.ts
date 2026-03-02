@@ -103,6 +103,9 @@ function createMockRuntime(): PluginRuntime {
     system: {
       enqueueSystemEvent:
         mockEnqueueSystemEvent as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
+      resolveMainSessionKey: vi.fn(
+        () => "agent:main:main",
+      ) as unknown as PluginRuntime["system"]["resolveMainSessionKey"],
       runCommandWithTimeout: vi.fn() as unknown as PluginRuntime["system"]["runCommandWithTimeout"],
       formatNativeDependencyHint: vi.fn(
         () => "",
