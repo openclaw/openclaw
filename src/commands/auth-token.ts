@@ -23,15 +23,24 @@ export function buildTokenProfileId(params: { provider: string; name: string }):
   return `${provider}:${name}`;
 }
 
+/**
+ * Strip all whitespace (including newlines) from a pasted token.
+ * `claude setup-token` may output tokens that wrap across lines,
+ * and terminal paste can introduce newlines that silently truncate the value.
+ */
+export function normalizeSetupToken(raw: string): string {
+  return raw.replace(/\s+/g, "");
+}
+
 export function validateAnthropicSetupToken(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  const normalized = normalizeSetupToken(raw);
+  if (!normalized) {
     return "Required";
   }
-  if (!trimmed.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
+  if (!normalized.startsWith(ANTHROPIC_SETUP_TOKEN_PREFIX)) {
     return `Expected token starting with ${ANTHROPIC_SETUP_TOKEN_PREFIX}`;
   }
-  if (trimmed.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
+  if (normalized.length < ANTHROPIC_SETUP_TOKEN_MIN_LENGTH) {
     return "Token looks too short; paste the full setup-token";
   }
   return undefined;
