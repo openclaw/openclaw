@@ -28,6 +28,18 @@ function takeValue(
 }
 
 const ARBITRARY_ARG_COMMAND_PATHS = [["nodes", "run"], ["docs"]] as const;
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+
+function isRootOptionValueToken(arg: string | undefined): boolean {
+  if (!arg || arg === "--") {
+    return false;
+  }
+  if (!arg.startsWith("-")) {
+    return true;
+  }
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+}
 
 function shouldGuardTrailingArgsFromProfileParsing(args: string[]): boolean {
   const commandTokens: string[] = [];
@@ -38,12 +50,17 @@ function shouldGuardTrailingArgsFromProfileParsing(args: string[]): boolean {
       break;
     }
 
-    if (arg === "--dev") {
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
 
-    if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (arg === "--profile") {
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isRootOptionValueToken(next)) {
         i += 1;
       }
       continue;
@@ -105,6 +122,18 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     if (arg === "--") {
       sawTerminator = true;
       out.push(arg);
+      continue;
+    }
+
+    if (arg === "--log-level" || arg.startsWith("--log-level=")) {
+      out.push(arg);
+      if (arg === "--log-level") {
+        const next = args[i + 1];
+        if (isRootOptionValueToken(next)) {
+          out.push(next);
+          i += 1;
+        }
+      }
       continue;
     }
 
