@@ -251,6 +251,77 @@ export function resolveEffectiveModelFallbacks(
   return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
 }
 
+function addModelId(target: Set<string>, value: unknown) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return;
+  }
+  target.add(trimmed);
+}
+
+function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
+  if (!modelConfig) {
+    return;
+  }
+  if (typeof modelConfig === "string") {
+    addModelId(target, modelConfig);
+    return;
+  }
+  if (typeof modelConfig !== "object") {
+    return;
+  }
+  const record = modelConfig as Record<string, unknown>;
+  addModelId(target, record.primary);
+  addModelId(target, record.model);
+  addModelId(target, record.id);
+  addModelId(target, record.value);
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
+      : [];
+  for (const fallback of fallbacks) {
+    addModelId(target, fallback);
+  }
+}
+
+export function resolveConfiguredCronModelSuggestions(
+  configForm: Record<string, unknown> | null,
+): string[] {
+  if (!configForm || typeof configForm !== "object") {
+    return [];
+  }
+  const agents = (configForm as { agents?: unknown }).agents;
+  if (!agents || typeof agents !== "object") {
+    return [];
+  }
+  const out = new Set<string>();
+  const defaults = (agents as { defaults?: unknown }).defaults;
+  if (defaults && typeof defaults === "object") {
+    const defaultsRecord = defaults as Record<string, unknown>;
+    addModelConfigIds(out, defaultsRecord.model);
+    const defaultsModels = defaultsRecord.models;
+    if (defaultsModels && typeof defaultsModels === "object") {
+      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
+        addModelId(out, modelId);
+      }
+    }
+  }
+  const list = (agents as { list?: unknown }).list;
+  if (list && typeof list === "object") {
+    for (const entry of Object.values(list as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      addModelConfigIds(out, (entry as Record<string, unknown>).model);
+    }
+  }
+  return [...out].toSorted((a, b) => a.localeCompare(b));
+}
+
 export function parseFallbackList(value: string): string[] {
   return value
     .split(",")

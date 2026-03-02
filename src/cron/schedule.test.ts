@@ -13,6 +13,20 @@ describe("cron schedule", () => {
     expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
+  it("does not roll back year for Asia/Shanghai daily cron schedules (#30351)", () => {
+    // 2026-03-01 08:00:00 in Asia/Shanghai
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+
+    // Next 08:00 local should be the following day, not a past year.
+    expect(next).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    expect(next).toBeGreaterThan(nowMs);
+    expect(new Date(next ?? 0).getUTCFullYear()).toBe(2026);
+  });
+
   it("throws a clear error when cron expr is missing at runtime", () => {
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     expect(() =>
@@ -23,6 +37,19 @@ describe("cron schedule", () => {
         nowMs,
       ),
     ).toThrow("invalid cron schedule: expr is required");
+  });
+
+  it("supports legacy cron field when expr is missing", () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      {
+        kind: "cron",
+        cron: "0 9 * * 3",
+        tz: "America/Los_Angeles",
+      } as unknown as { kind: "cron"; expr: string; tz?: string },
+      nowMs,
+    );
+    expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
   it("computes next run for every schedule", () => {
