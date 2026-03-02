@@ -51,18 +51,24 @@ export function registerSlackMessageEvents(params: {
   });
   // Slack may dispatch channel/group message subscriptions under typed event
   // names. Register explicit handlers so both delivery styles are supported.
-  ctx.app.event(
-    "message.channels",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.channels">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
-  ctx.app.event(
-    "message.groups",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.groups">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
+  // Bolt >=4.6.0 may reject these event names; fall back to "message" only.
+  try {
+    ctx.app.event(
+      "message.channels",
+      async ({ event, body }: SlackEventMiddlewareArgs<"message.channels">) => {
+        await handleIncomingMessageEvent({ event, body });
+      },
+    );
+    ctx.app.event(
+      "message.groups",
+      async ({ event, body }: SlackEventMiddlewareArgs<"message.groups">) => {
+        await handleIncomingMessageEvent({ event, body });
+      },
+    );
+  } catch {
+    // Bolt version does not support typed message subtypes; the generic
+    // "message" handler above covers all channel/group messages.
+  }
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
