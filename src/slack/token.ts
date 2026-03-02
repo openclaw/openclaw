@@ -10,3 +10,7 @@ export function resolveSlackBotToken(raw?: string): string | undefined {
 export function resolveSlackAppToken(raw?: string): string | undefined {
   return normalizeSlackToken(raw);
 }
+
+export function resolveSlackUserToken(raw?: string): string | undefined {
+  return normalizeSlackToken(raw);
+}

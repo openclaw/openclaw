@@ -2,7 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  isRegisteredPluginHttpRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./plugins-http.js";
 
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
@@ -69,6 +73,35 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
+  it("matches canonicalized route variants before generic handlers", async () => {
+    const routeHandler = vi.fn(async (_req, res: ServerResponse) => {
+      res.statusCode = 200;
+    });
+    const fallback = vi.fn(async () => true);
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "route",
+            path: "/api/demo",
+            handler: routeHandler,
+            source: "route",
+          },
+        ],
+        httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/API//demo" } as IncomingMessage, res);
+    expect(handled).toBe(true);
+    expect(routeHandler).toHaveBeenCalledTimes(1);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
   it("logs and responds with 500 when a handler throws", async () => {
     const log = { warn: vi.fn() } as unknown as Parameters<
       typeof createGatewayPluginRequestHandler
@@ -95,5 +128,54 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
+  });
+});
+
+describe("plugin HTTP registry helpers", () => {
+  it("detects registered route paths", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "route",
+          path: "/demo",
+          handler: () => {},
+          source: "route",
+        },
+      ],
+    });
+    expect(isRegisteredPluginHttpRoutePath(registry, "/demo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/missing")).toBe(false);
+  });
+
+  it("matches canonicalized variants of registered route paths", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "route",
+          path: "/api/demo",
+          handler: () => {},
+          source: "route",
+        },
+      ],
+    });
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
+  });
+
+  it("enforces auth for protected and registered plugin routes", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "route",
+          path: "/api/demo",
+          handler: () => {},
+          source: "route",
+        },
+      ],
+    });
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });
 });

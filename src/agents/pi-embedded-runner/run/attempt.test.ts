@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
+  resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -177,6 +178,50 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(result).toBe(finalMessage);
     expect(baseFn).toHaveBeenCalledTimes(1);
   });
+  it("normalizes common tool aliases when the canonical name is allowed", async () => {
+    const finalToolCall = { type: "toolCall", name: " BASH " };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["exec"]));
+    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
+      ReturnType<typeof wrappedFn>
+    >;
+    const result = await stream.result();
+
+    expect(finalToolCall.name).toBe("exec");
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not collapse whitespace-only tool names to empty strings", async () => {
+    const partialToolCall = { type: "toolCall", name: "   " };
+    const finalToolCall = { type: "toolCall", name: "\t  " };
+    const event = {
+      type: "toolcall_delta",
+      partial: { role: "assistant", content: [partialToolCall] },
+    };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() => createFakeStream({ events: [event], resultMessage: finalMessage }));
+
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never);
+    const stream = wrappedFn({} as never, {} as never, {} as never) as Awaited<
+      ReturnType<typeof wrappedFn>
+    >;
+
+    for await (const _item of stream) {
+      // drain
+    }
+    await stream.result();
+
+    expect(partialToolCall.name).toBe("   ");
+    expect(finalToolCall.name).toBe("\t  ");
+    expect(baseFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("isOllamaCompatProvider", () => {
@@ -238,6 +283,29 @@ describe("isOllamaCompatProvider", () => {
         baseUrl: "http://example.com:11434/v1",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveOllamaBaseUrlForRun", () => {
+  it("prefers provider baseUrl over model baseUrl", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+        providerBaseUrl: "http://provider-host:11434",
+      }),
+    ).toBe("http://provider-host:11434");
+  });
+
+  it("falls back to model baseUrl when provider baseUrl is missing", () => {
+    expect(
+      resolveOllamaBaseUrlForRun({
+        modelBaseUrl: "http://model-host:11434",
+      }),
+    ).toBe("http://model-host:11434");
+  });
+
+  it("falls back to native default when neither baseUrl is configured", () => {
+    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
   });
 });
 

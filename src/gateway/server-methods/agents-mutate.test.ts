@@ -217,6 +217,7 @@ beforeEach(() => {
       ({
         stat: async () => makeFileStat(),
         readFile: async () => Buffer.from(""),
+        truncate: async () => {},
         writeFile: async () => {},
         close: async () => {},
       }) as unknown,
@@ -621,6 +622,7 @@ describe("agents.files.get/set symlink safety", () => {
         ({
           stat: async () => targetStat,
           readFile: async () => Buffer.from("inside\n"),
+          truncate: async () => {},
           writeFile: async () => {},
           close: async () => {},
         }) as unknown,
