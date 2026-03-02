@@ -10,10 +10,14 @@ const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
 };
 
-type WebToolGuardedFetchOptions = Omit<GuardedFetchOptions, "proxy"> & {
+type WebToolGuardedFetchOptions = Omit<
+  GuardedFetchOptions,
+  "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
+> & {
   timeoutSeconds?: number;
+  useEnvProxy?: boolean;
 };
-type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy">;
+type WebToolEndpointFetchOptions = Omit<WebToolGuardedFetchOptions, "policy" | "useEnvProxy">;
 
 function resolveTimeoutMs(params: {
   timeoutMs?: number;
@@ -31,11 +35,16 @@ function resolveTimeoutMs(params: {
 export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
-  const { timeoutSeconds, ...rest } = params;
+  const { timeoutSeconds, useEnvProxy, ...rest } = params;
   return fetchWithSsrFGuard({
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
-    proxy: "env",
+    ...(useEnvProxy
+      ? {
+          proxy: "env",
+          dangerouslyAllowEnvProxyWithoutPinnedDns: true,
+        }
+      : {}),
   });
 }
 
@@ -59,6 +68,7 @@ export async function withTrustedWebToolsEndpoint<T>(
     {
       ...params,
       policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      useEnvProxy: true,
     },
     run,
   );

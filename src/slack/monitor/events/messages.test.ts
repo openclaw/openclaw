@@ -33,6 +33,8 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
+    channelHandler: harness.getHandler("message.channels") as MessageHandler | null,
+    groupHandler: harness.getHandler("message.groups") as MessageHandler | null,
     handleSlackMessage,
   };
 }
@@ -155,5 +157,61 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
     expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("registers and forwards message.channels and message.groups events", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { channelHandler, groupHandler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(channelHandler).toBeTruthy();
+    expect(groupHandler).toBeTruthy();
+
+    const channelMessage = {
+      type: "message",
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello channel",
+      ts: "123.100",
+    };
+    await channelHandler!({ event: channelMessage, body: {} });
+    await groupHandler!({
+      event: {
+        ...channelMessage,
+        channel_type: "group",
+        channel: "G1",
+        ts: "123.200",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(2);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("applies subtype system-event handling for message.channels events", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { channelHandler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(channelHandler).toBeTruthy();
+
+    await channelHandler!({
+      event: {
+        ...makeChangedEvent({ channel: "C1", user: "U1" }),
+        channel_type: "channel",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
   });
 });

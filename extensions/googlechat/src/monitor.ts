@@ -2,15 +2,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createInboundEnvelopeBuilder,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
+  registerPluginHttpRoute,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -100,7 +101,24 @@ function warnDeprecatedUsersEmailEntries(
 }
 
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+  return registerWebhookTarget(webhookTargets, target, {
+    onFirstPathTarget: ({ path }) =>
+      registerPluginHttpRoute({
+        path,
+        pluginId: "googlechat",
+        source: "googlechat-webhook",
+        accountId: target.account.accountId,
+        log: target.runtime.log,
+        handler: async (req, res) => {
+          const handled = await handleGoogleChatWebhookRequest(req, res);
+          if (!handled && !res.headersSent) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+          }
+        },
+      }),
+  }).unregister;
 }
 
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
@@ -638,23 +656,16 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: spaceId,
     },
-  });
-  const buildEnvelope = createInboundEnvelopeBuilder({
-    cfg: config,
-    route,
+    runtime: core.channel,
     sessionStore: config.session?.store,
-    resolveStorePath: core.channel.session.resolveStorePath,
-    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
-    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
-    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
   });
 
   let mediaPath: string | undefined;

@@ -267,11 +267,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+        // Some platforms cannot open directories via openSync(O_RDONLY), even when
+        // the path is a valid in-boundary directory. Allow mkdirp to proceed in that
+        // narrow case by verifying the host path is an existing directory.
+        const canFallbackToDirectoryStat =
+          options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
+        if (!canFallbackToDirectoryStat) {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
       }
     } else {
       fs.closeSync(guarded.fd);
@@ -291,6 +298,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
+    }
+  }
+
+  private pathIsExistingDirectory(hostPath: string): boolean {
+    try {
+      return fs.statSync(hostPath).isDirectory();
+    } catch {
+      return false;
     }
   }
 
