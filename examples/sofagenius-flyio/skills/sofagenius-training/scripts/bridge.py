@@ -4,6 +4,9 @@
 All ML logic lives in SofaGenius. This script just forwards requests
 to the SofaGenius FastAPI backend running on localhost:8000.
 
+Execution telemetry is auto-captured to the feedback store so SofaGenius
+can learn from operational patterns over time.
+
 Usage:
     python3 bridge.py training-status --run-id <run_id>
     python3 bridge.py training-anomalies --run-id <run_id>
@@ -13,49 +16,67 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
+import time
 import urllib.request
 import urllib.error
 
+# Auto-capture execution telemetry when the feedback store is available
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "shared"))
+try:
+    import feedback_store as _fb
+except ImportError:
+    _fb = None
+
 SOFAGENIUS_URL = "http://127.0.0.1:8000"
+SKILL_NAME = "sofagenius-training"
 
 
-def api_call(endpoint: str, payload: dict) -> dict:
-    """POST to SofaGenius API and return JSON response."""
+def api_call(endpoint: str, payload: dict, action: str = "") -> dict:
+    """POST to SofaGenius API and return JSON response. Auto-logs to feedback store."""
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{SOFAGENIUS_URL}{endpoint}",
         data=data,
         headers={"Content-Type": "application/json"},
     )
+    start = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
-            return json.loads(resp.read().decode())
+            result = json.loads(resp.read().decode())
+        duration = round((time.monotonic() - start) * 1000)
+        if _fb:
+            _fb.log_execution(SKILL_NAME, action or endpoint, payload, result, True, duration)
+        return result
     except urllib.error.URLError as e:
+        duration = round((time.monotonic() - start) * 1000)
+        if _fb:
+            _fb.log_execution(SKILL_NAME, action or endpoint, payload, {}, False, duration, str(e))
         print(f"Error connecting to SofaGenius at {SOFAGENIUS_URL}: {e}", file=sys.stderr)
         print("Make sure the SofaGenius backend is running (uvicorn on port 8000).", file=sys.stderr)
         sys.exit(1)
 
 
 def training_status(run_id: str) -> None:
-    result = api_call("/api/training/status", {"run_id": run_id})
+    result = api_call("/api/training/status", {"run_id": run_id}, "training-status")
     print(json.dumps(result, indent=2))
 
 
 def training_anomalies(run_id: str) -> None:
-    result = api_call("/api/training/anomalies", {"run_id": run_id})
+    result = api_call("/api/training/anomalies", {"run_id": run_id}, "training-anomalies")
     print(json.dumps(result, indent=2))
 
 
 def training_compare(run_ids: str) -> None:
     ids = [r.strip() for r in run_ids.split(",")]
-    result = api_call("/api/training/compare", {"run_ids": ids})
+    result = api_call("/api/training/compare", {"run_ids": ids}, "training-compare")
     print(json.dumps(result, indent=2))
 
 
 def training_check_active() -> None:
     """Check all active runs for anomalies. Used by proactive cron."""
-    result = api_call("/api/training/check-active", {})
+    result = api_call("/api/training/check-active", {}, "training-check-active")
     if result.get("anomalies"):
         print("ALERT: Anomalies detected in active training runs!")
         for anomaly in result["anomalies"]:
