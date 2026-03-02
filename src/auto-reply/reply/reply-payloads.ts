@@ -1,5 +1,6 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -144,13 +145,30 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
+const PROVIDER_ALIAS_MAP: Record<string, string> = {
+  lark: "feishu",
+};
+
+function normalizeProviderForComparison(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  const normalizedChannel = normalizeChannelId(trimmed);
+  if (normalizedChannel) {
+    return normalizedChannel;
+  }
+  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
+}
+
 export function shouldSuppressMessagingToolReplies(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
 }): boolean {
-  const provider = params.messageProvider?.trim().toLowerCase();
+  const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
     return false;
   }
@@ -164,13 +182,16 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
-    if (!target?.provider) {
+    const targetProvider = normalizeProviderForComparison(target?.provider);
+    if (!targetProvider) {
       return false;
     }
-    if (target.provider.trim().toLowerCase() !== provider) {
+    const isGenericMessageProvider = targetProvider === "message";
+    if (!isGenericMessageProvider && targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(provider, target.to);
+    const targetNormalizationProvider = isGenericMessageProvider ? provider : targetProvider;
+    const targetKey = normalizeTargetForProvider(targetNormalizationProvider, target.to);
     if (!targetKey) {
       return false;
     }
