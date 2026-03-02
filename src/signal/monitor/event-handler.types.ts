@@ -35,6 +35,9 @@ export type SignalDataMessage = {
   } | null;
   quote?: { text?: string | null } | null;
   reaction?: SignalReactionMessage | null;
+  expiresInSeconds?: number | null;
+  groupV2Change?: Record<string, unknown> | null;
+  isExpirationUpdate?: boolean | null;
 };
 
 export type SignalReactionMessage = {
