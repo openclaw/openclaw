@@ -282,17 +282,20 @@ function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep channel/group sessions thread-scoped to avoid cross-thread context bleed.
+  // Keep true thread replies thread-scoped, but preserve channel-level sessions
+  // for top-level room turns when replyToMode is off.
   // For DMs, preserve existing auto-thread behavior when replyToMode="all".
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  const canonicalThreadId = isRoomish
-    ? (threadContext.incomingThreadTs ?? message.ts)
-    : isThreadReply
+  const roomThreadId =
+    isThreadReply && threadTs
       ? threadTs
-      : autoThreadId;
+      : replyToMode === "off"
+        ? undefined
+        : threadContext.messageTs;
+  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
