@@ -91,6 +91,6 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).toContain(
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
-    expect(logs).toContain("discord users resolved: 387→387 (name:Peter)");
+    expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
   });
 });
