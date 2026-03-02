@@ -7,7 +7,7 @@ import type {
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -22,8 +22,6 @@ import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
-const SESSION_FILTER_REGEX_MAX_INPUT = 2048;
-
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
@@ -57,28 +55,12 @@ function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
 }
 
 function matchSessionFilter(sessionKey: string, patterns: string[]): boolean {
-  const head = sessionKey.slice(0, SESSION_FILTER_REGEX_MAX_INPUT);
-  const tail =
-    sessionKey.length > SESSION_FILTER_REGEX_MAX_INPUT
-      ? sessionKey.slice(-SESSION_FILTER_REGEX_MAX_INPUT)
-      : "";
   return patterns.some((pattern) => {
     if (sessionKey.includes(pattern)) {
       return true;
     }
     const regex = compileSafeRegex(pattern);
-    if (!regex) {
-      return false;
-    }
-    regex.lastIndex = 0;
-    if (regex.test(head)) {
-      return true;
-    }
-    if (tail) {
-      regex.lastIndex = 0;
-      return regex.test(tail);
-    }
-    return false;
+    return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
   });
 }
 
