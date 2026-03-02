@@ -13,26 +13,29 @@ final class PeekabooBridgeHostCoordinator {
 
     private var host: PeekabooBridgeHost?
     private var services: OpenClawPeekabooBridgeServices?
+
+    private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
+
     private static var openclawSocketPath: String {
         let fileManager = FileManager.default
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let directory = base.appendingPathComponent("OpenClaw", isDirectory: true)
-        return directory.appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false).path
+        return Self.makeSocketPath(for: "OpenClaw", in: base)
+    }
+
+    private static func makeSocketPath(for directoryName: String, in baseDirectory: URL) -> String {
+        baseDirectory
+            .appendingPathComponent(directoryName, isDirectory: true)
+            .appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false)
+            .path
     }
 
     private static var legacySocketPaths: [String] {
         let fileManager = FileManager.default
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let legacyDirectories = ["clawdbot", "clawdis"]
-        return legacyDirectories.map { name in
-            base.appendingPathComponent(name, isDirectory: true)
-                .appendingPathComponent(PeekabooBridgeConstants.socketName, isDirectory: false)
-                .path
-        }
+        return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
     }
-
     func setEnabled(_ enabled: Bool) async {
         if enabled {
             await self.startIfNeeded()
