@@ -200,11 +200,9 @@ Notes:
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
 headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
-solving, anti-bot stealth mode, and residential proxies.
-
-Unlike Browserless (which exposes a static CDP endpoint), Browserbase requires
-you to **create a session** first via their API — each session returns a unique
-`connectUrl` that you then set as the `cdpUrl` in your OpenClaw profile.
+solving, anti-bot stealth mode, and residential proxies. You can point an
+OpenClaw browser profile at Browserbase's connect endpoint and authenticate
+with your API key.
 
 ### Getting started
 
@@ -213,26 +211,11 @@ you to **create a session** first via their API — each session returns a uniqu
    monthly usage.
 2. **Find your credentials** on the
    [Overview dashboard](https://www.browserbase.com/overview) — copy your
-   **API Key** and **Project ID** from the right-hand panel.
-
-### Creating a session
-
-Create a session via the Browserbase API to get a CDP connect URL:
-
-```bash
-curl --request POST \
-  --url "https://api.browserbase.com/v1/sessions" \
-  --header "Content-Type: application/json" \
-  --header "x-bb-api-key: $BROWSERBASE_API_KEY" \
-  --data '{ "projectId": "'$BROWSERBASE_PROJECT_ID'" }'
-```
-
-The response includes a `connectUrl` field — a WebSocket CDP endpoint for that
-session. You must connect within **5 minutes** or the session will time out.
+   **API Key** from the right-hand panel.
 
 ### Profile setup
 
-Set the `connectUrl` from the session response as `cdpUrl` in your profile:
+Point a profile at Browserbase's connect endpoint with your API key:
 
 ```json5
 {
@@ -243,7 +226,7 @@ Set the `connectUrl` from the session response as `cdpUrl` in your profile:
     remoteCdpHandshakeTimeoutMs: 5000,
     profiles: {
       browserbase: {
-        cdpUrl: "<CONNECT_URL_FROM_SESSION_RESPONSE>",
+        cdpUrl: "wss://connect.browserbase.com?apiKey=<BROWSERBASE_API_KEY>",
         color: "#F97316",
       },
     },
@@ -251,27 +234,13 @@ Set the `connectUrl` from the session response as `cdpUrl` in your profile:
 }
 ```
 
-Since each session produces a new `connectUrl`, you will need to update the
-`cdpUrl` value each time you create a new session.
-
-### Environment variables
-
-Store your credentials in environment variables instead of committing them to
-config:
-
-```bash
-export BROWSERBASE_API_KEY="your-api-key"
-export BROWSERBASE_PROJECT_ID="your-project-id"
-```
-
 ### Notes
 
+- Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
 - The free tier allows one concurrent session and 60 minutes per month. Paid
   plans offer higher concurrency and usage limits.
 - Browserbase sessions include automatic CAPTCHA solving and anti-bot stealth
   by default — no extra configuration needed.
-- Sessions can be monitored live at
-  `https://www.browserbase.com/sessions/<SESSION_ID>`.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
