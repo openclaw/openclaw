@@ -13,7 +13,6 @@ import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
   formatUnknownError,
-  isRevokedProxyError,
 } from "./errors.js";
 import {
   buildConversationReference,
@@ -22,6 +21,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -53,23 +53,24 @@ export function createMSTeamsReplyDispatcher(params: {
    * the stored conversation reference so the user still sees the "…" bubble.
    */
   const sendTypingIndicator = async () => {
-    try {
-      await params.context.sendActivity({ type: "typing" });
-    } catch (err) {
-      if (!isRevokedProxyError(err)) {
-        throw err;
-      }
-      // Turn context revoked — fall back to proactive typing.
-      params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      const baseRef = buildConversationReference(params.conversationRef);
-      await params.adapter.continueConversation(
-        params.appId,
-        { ...baseRef, activityId: undefined },
-        async (ctx) => {
-          await ctx.sendActivity({ type: "typing" });
-        },
-      );
-    }
+    await withRevokedProxyFallback({
+      run: async () => {
+        await params.context.sendActivity({ type: "typing" });
+      },
+      onRevoked: async () => {
+        const baseRef = buildConversationReference(params.conversationRef);
+        await params.adapter.continueConversation(
+          params.appId,
+          { ...baseRef, activityId: undefined },
+          async (ctx) => {
+            await ctx.sendActivity({ type: "typing" });
+          },
+        );
+      },
+      onRevokedLog: () => {
+        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+      },
+    });
   };
 
   const typingCallbacks = createTypingCallbacks({

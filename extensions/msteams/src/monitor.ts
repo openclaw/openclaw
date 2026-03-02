@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
   type OpenClawConfig,
@@ -333,25 +334,12 @@ export async function monitorMSTeamsProvider(
     });
   };
 
-  // Handle abort signal
-  const onAbort = () => {
-    void shutdown();
-  };
-  if (opts.abortSignal) {
-    if (opts.abortSignal.aborted) {
-      onAbort();
-    } else {
-      opts.abortSignal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-
-  // Keep this task alive until shutdown/close so gateway runtime does not treat startup as exit.
-  await new Promise<void>((resolve) => {
-    httpServer.once("close", () => {
-      resolve();
-    });
+  // Keep this task alive until close so gateway runtime does not treat startup as exit.
+  await keepHttpServerTaskAlive({
+    server: httpServer,
+    abortSignal: opts.abortSignal,
+    onAbort: shutdown,
   });
-  opts.abortSignal?.removeEventListener("abort", onAbort);
 
   return { app: expressApp, shutdown };
 }
