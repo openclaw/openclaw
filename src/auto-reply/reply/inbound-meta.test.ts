@@ -111,14 +111,42 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct chats", () => {
+  it("hides message identifiers for direct webchat chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
+      OriginatingChannel: "webchat",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
     expect(text).toBe("");
+  });
+
+  it("includes message identifiers for direct external-channel chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      MessageSid: "short-id",
+      MessageSidFull: "provider-full-id",
+      SenderE164: " +15551234567 ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBeUndefined();
+    expect(conversationInfo["sender"]).toBe("+15551234567");
+    expect(conversationInfo["conversation_label"]).toBeUndefined();
+  });
+
+  it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      Provider: "whatsapp",
+      MessageSid: "provider-only-id",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("provider-only-id");
   });
 
   it("does not treat group chats as direct based on sender id", () => {
