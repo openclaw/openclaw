@@ -367,6 +367,70 @@ export async function ensureChromeExtensionRelayServer(opts: {
       ws.send(JSON.stringify(res));
     };
 
+    const dropConnectedTargetSession = (sessionId: string): ConnectedTarget | undefined => {
+      const existing = connectedTargets.get(sessionId);
+      if (!existing) {
+        return undefined;
+      }
+      connectedTargets.delete(sessionId);
+      return existing;
+    };
+
+    const dropConnectedTargetsByTargetId = (targetId: string): ConnectedTarget[] => {
+      const removed: ConnectedTarget[] = [];
+      for (const [sessionId, target] of connectedTargets) {
+        if (target.targetId !== targetId) {
+          continue;
+        }
+        connectedTargets.delete(sessionId);
+        removed.push(target);
+      }
+      return removed;
+    };
+
+    const broadcastDetachedTarget = (target: ConnectedTarget, targetId?: string) => {
+      broadcastToCdpClients({
+        method: "Target.detachedFromTarget",
+        params: {
+          sessionId: target.sessionId,
+          targetId: targetId ?? target.targetId,
+        },
+        sessionId: target.sessionId,
+      });
+    };
+
+    const isMissingTargetError = (err: unknown) => {
+      const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+      return (
+        message.includes("target not found") ||
+        message.includes("no target with given id") ||
+        message.includes("session not found") ||
+        message.includes("cannot find session")
+      );
+    };
+
+    const pruneStaleTargetsFromCommandFailure = (cmd: CdpCommand, err: unknown) => {
+      if (!isMissingTargetError(err)) {
+        return;
+      }
+      if (cmd.sessionId) {
+        const removed = dropConnectedTargetSession(cmd.sessionId);
+        if (removed) {
+          broadcastDetachedTarget(removed);
+          return;
+        }
+      }
+      const params = (cmd.params ?? {}) as { targetId?: unknown };
+      const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
+      if (!targetId) {
+        return;
+      }
+      const removedTargets = dropConnectedTargetsByTargetId(targetId);
+      for (const removed of removedTargets) {
+        broadcastDetachedTarget(removed, targetId);
+      }
+    };
+
     const ensureTargetEventsForClient = (ws: WebSocket, mode: "autoAttach" | "discover") => {
       for (const target of connectedTargets.values()) {
         if (mode === "autoAttach") {
@@ -762,7 +826,18 @@ export async function ensureChromeExtensionRelayServer(opts: {
           if (method === "Target.detachedFromTarget") {
             const detached = (params ?? {}) as DetachedFromTargetEvent;
             if (detached?.sessionId) {
-              connectedTargets.delete(detached.sessionId);
+              dropConnectedTargetSession(detached.sessionId);
+            } else if (detached?.targetId) {
+              dropConnectedTargetsByTargetId(detached.targetId);
+            }
+            broadcastToCdpClients({ method, params, sessionId });
+            return;
+          }
+
+          if (method === "Target.targetDestroyed" || method === "Target.targetCrashed") {
+            const targetEvent = (params ?? {}) as { targetId?: string };
+            if (targetEvent.targetId) {
+              dropConnectedTargetsByTargetId(targetEvent.targetId);
             }
             broadcastToCdpClients({ method, params, sessionId });
             return;
@@ -871,6 +946,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
           sendResponseToCdp(ws, { id: cmd.id, sessionId: cmd.sessionId, result });
         } catch (err) {
+          pruneStaleTargetsFromCommandFailure(cmd, err);
           sendResponseToCdp(ws, {
             id: cmd.id,
             sessionId: cmd.sessionId,
