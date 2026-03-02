@@ -461,6 +461,43 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("respects fsPolicy.workspaceOnly for non-sandbox image paths", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+      try {
+        const cfg = createMinimaxImageConfig();
+
+        const tool = requireImageTool(
+          createImageTool({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true },
+          }),
+        );
+
+        // File inside workspace is allowed.
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+
+        // File outside workspace is rejected even without sandbox.
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-outside-"));
+        const outsideImage = path.join(outsideDir, "secret.png");
+        await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+        try {
+          await expect(
+            tool.execute("t2", { prompt: "Describe.", image: outsideImage }),
+          ).rejects.toThrow(/not under an allowed directory/i);
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows workspace images via createOpenClawCodingTools default workspace root", async () => {
     await withTempWorkspacePng(async ({ imagePath }) => {
       const fetch = stubMinimaxOkFetch();
