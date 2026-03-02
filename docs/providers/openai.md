@@ -73,8 +73,8 @@ default (`openaiWsWarmup: true`) when WebSocket transport is used.
 
 Related OpenAI docs:
 
-- Realtime API with WebSocket: https://platform.openai.com/docs/guides/realtime-websocket
-- Streaming API responses (SSE): https://platform.openai.com/docs/guides/streaming-responses
+- [Realtime API with WebSocket](https://platform.openai.com/docs/guides/realtime-websocket)
+- [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
 
 ```json5
 {
