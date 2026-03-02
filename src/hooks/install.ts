@@ -3,11 +3,15 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { installFromValidatedNpmSpecArchive } from "../infra/install-from-npm-spec.js";
 import {
   resolveInstallModeOptions,
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
+import {
+  installPackageDir,
+  installPackageDirWithManifestDeps,
+} from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
@@ -18,11 +22,6 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
-import {
-  finalizeNpmSpecArchiveInstall,
-  installFromNpmSpecArchiveWithInstaller,
-} from "../infra/npm-pack-install.js";
-import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
@@ -231,17 +230,15 @@ async function installHookPackageFromDir(params: {
     };
   }
 
-  const deps = manifest.dependencies ?? {};
-  const hasDeps = Object.keys(deps).length > 0;
-  const installRes = await installPackageDir({
+  const installRes = await installPackageDirWithManifestDeps({
     sourceDir: params.packageDir,
     targetDir,
     mode,
     timeoutMs,
     logger,
     copyErrorPrefix: "failed to copy hook pack",
-    hasDeps,
     depsLogMessage: "Installing hook pack dependencies…",
+    manifestDependencies: manifest.dependencies,
   });
   if (!installRes.ok) {
     return installRes;
@@ -376,14 +373,10 @@ export async function installHooksFromNpmSpec(params: {
 }): Promise<InstallHooksResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
   const expectedHookPackId = params.expectedHookPackId;
-  const spec = params.spec.trim();
-  const specError = validateRegistryNpmSpec(spec);
-  if (specError) {
-    return { ok: false, error: specError };
-  }
+  const spec = params.spec;
 
-  logger.info?.(`Downloading ${spec}…`);
-  const flowResult = await installFromNpmSpecArchiveWithInstaller({
+  logger.info?.(`Downloading ${spec.trim()}…`);
+  return await installFromValidatedNpmSpecArchive({
     tempDirPrefix: "openclaw-hook-pack-",
     spec,
     timeoutMs,
@@ -402,7 +395,6 @@ export async function installHooksFromNpmSpec(params: {
       expectedHookPackId,
     },
   });
-  return finalizeNpmSpecArchiveInstall(flowResult);
 }
 
 export async function installHooksFromPath(params: {

@@ -27,6 +27,11 @@ function createStartedCron(storePath: string) {
   };
 }
 
+async function listJobById(cron: CronService, jobId: string) {
+  const jobs = await cron.list({ includeDisabled: true });
+  return jobs.find((entry) => entry.id === jobId);
+}
+
 describe("CronService store migrations", () => {
   it("migrates legacy top-level agentTurn fields and initializes missing state", async () => {
     const store = await makeStorePath();
@@ -69,8 +74,7 @@ describe("CronService store migrations", () => {
     const status = await cron.status();
     expect(status.enabled).toBe(true);
 
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((entry) => entry.id === "legacy-agentturn-job");
+    const job = await listJobById(cron, "legacy-agentturn-job");
     expect(job).toBeDefined();
     expect(job?.state).toBeDefined();
     expect(job?.sessionTarget).toBe("isolated");
@@ -137,8 +141,7 @@ describe("CronService store migrations", () => {
 
     const cron = await createStartedCron(store.storePath).start();
 
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((entry) => entry.id === "legacy-agentturn-no-timeout");
+    const job = await listJobById(cron, "legacy-agentturn-no-timeout");
     expect(job).toBeDefined();
     expect(job?.payload.kind).toBe("agentTurn");
     if (job?.payload.kind === "agentTurn") {
@@ -177,8 +180,7 @@ describe("CronService store migrations", () => {
     );
 
     const cron = await createStartedCron(store.storePath).start();
-    const jobs = await cron.list({ includeDisabled: true });
-    const job = jobs.find((entry) => entry.id === "legacy-cron-field-job");
+    const job = await listJobById(cron, "legacy-cron-field-job");
     expect(job).toBeDefined();
     expect(job?.wakeMode).toBe("now");
     expect(job?.schedule.kind).toBe("cron");
