@@ -12,8 +12,8 @@ read_when:
 
 This review covers the OpenClaw core repository. The Canvas LMS integration is a community plugin hosted externally at:
 
-- npm: @kansodata/openclaw-canvas-lms
-- repo: https://github.com/Kansodata/openclaw-canvas-lms
+- npm: `@kansodata/openclaw-canvas-lms`
+- repo: [Kansodata/openclaw-canvas-lms](https://github.com/Kansodata/openclaw-canvas-lms)
 
 This repo only lists the plugin in community docs. There is no Canvas LMS integration code in this repository, so code level verification must occur in the plugin repository.
 
