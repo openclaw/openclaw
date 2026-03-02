@@ -54,7 +54,7 @@ describe("registerPluginHttpRoute", () => {
     expect(() => unregister()).not.toThrow();
   });
 
-  it("replaces stale route on same path and keeps latest registration", () => {
+  it("reuses shared same-plugin webhook routes until the last unregister", () => {
     const registry = createEmptyPluginRegistry();
     const logs: string[] = [];
     const firstHandler = vi.fn();
@@ -81,16 +81,15 @@ describe("registerPluginHttpRoute", () => {
     });
 
     expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.handler).toBe(secondHandler);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
     expect(registry.httpRoutes[0]?.kind).toBe("webhook");
     expect(logs).toContain(
-      'plugin: replacing stale webhook path /synology-webhook for account "default" (synology-chat)',
+      'plugin: reusing shared webhook path /synology-webhook for account "default" (synology-chat)',
     );
 
-    // Old unregister must not remove the replacement route.
     unregisterFirst();
     expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]?.handler).toBe(secondHandler);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
 
     unregisterSecond();
     expect(registry.httpRoutes).toHaveLength(0);

@@ -147,11 +147,15 @@ describe("plugin HTTP registry helpers", () => {
     expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
   });
 
-  it("enforces auth for protected and registered plugin routes", () => {
+  it("enforces auth for protected and default exact plugin routes, but not webhook exact routes", () => {
     const registry = createTestRegistry({
-      httpRoutes: [createRoute({ path: "/api/demo" })],
+      httpRoutes: [
+        createRoute({ path: "/demo" }),
+        createRoute({ path: "/bluebubbles-webhook", kind: "webhook" }),
+      ],
     });
-    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/demo")).toBe(true);
+    expect(shouldEnforceGatewayAuthForPluginPath(registry, "/bluebubbles-webhook")).toBe(false);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
   });

@@ -5,6 +5,11 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
+import { createTestRegistry } from "./server/__tests__/test-utils.js";
+import {
+  createGatewayPluginRequestHandler,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type GatewayHttpServer = ReturnType<typeof createGatewayHttpServer>;
@@ -522,6 +527,69 @@ describe("gateway plugin HTTP auth boundary", () => {
         });
         expect(authenticatedChannel.res.statusCode).toBe(200);
         expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
+      },
+    });
+  });
+
+  test("keeps exact webhook routes ungated while still enforcing auth on default exact routes", async () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "bluebubbles",
+          path: "/bluebubbles-webhook",
+          handler: (_req: IncomingMessage, res: ServerResponse) => {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("webhook-ok");
+          },
+          kind: "webhook",
+          source: "bluebubbles",
+        },
+        {
+          pluginId: "route",
+          path: "/plugin/default",
+          handler: (_req: IncomingMessage, res: ServerResponse) => {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("default-ok");
+          },
+          kind: "default",
+          source: "route",
+        },
+      ],
+    });
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry,
+      log: {
+        warn: vi.fn(),
+      } as unknown as ReturnType<typeof createSubsystemLogger>,
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-auth-webhook-exact-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: (requestPath) =>
+          shouldEnforceGatewayAuthForPluginPath(registry, requestPath),
+      },
+      run: async (server) => {
+        const webhookResponse = await sendRequest(server, {
+          path: "/bluebubbles-webhook",
+          method: "POST",
+        });
+        expect(webhookResponse.res.statusCode).toBe(200);
+        expect(webhookResponse.getBody()).toBe("webhook-ok");
+
+        const defaultResponse = await sendRequest(server, { path: "/plugin/default" });
+        expectUnauthorizedResponse(defaultResponse);
+
+        const authenticatedDefaultResponse = await sendRequest(server, {
+          path: "/plugin/default",
+          authorization: "Bearer test-token",
+        });
+        expect(authenticatedDefaultResponse.res.statusCode).toBe(200);
+        expect(authenticatedDefaultResponse.getBody()).toBe("default-ok");
       },
     });
   });

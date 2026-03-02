@@ -31,8 +31,8 @@ export function findRegisteredPluginHttpRoute(
 }
 
 // Only checks specific routes registered via registerHttpRoute, not wildcard handlers
-// registered via registerHttpHandler. Wildcard handlers (e.g., webhooks) implement
-// their own signature-based auth and are handled separately in the auth enforcement logic.
+// registered via registerHttpHandler. Exact webhook routes are intentionally excluded
+// from gateway auth enforcement because they keep their plugin-level auth model.
 export function isRegisteredPluginHttpRoutePath(
   registry: PluginRegistry,
   pathname: string,
@@ -44,9 +44,11 @@ export function shouldEnforceGatewayAuthForPluginPath(
   registry: PluginRegistry,
   pathname: string,
 ): boolean {
-  return (
-    isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
-  );
+  if (isProtectedPluginRoutePath(pathname)) {
+    return true;
+  }
+  const route = findRegisteredPluginHttpRoute(registry, pathname);
+  return route !== undefined && route.kind !== "webhook";
 }
 
 export function shouldBypassControlUiSpaForPluginPath(

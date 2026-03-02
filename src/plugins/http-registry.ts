@@ -10,6 +10,22 @@ export type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<void> | void;
 
+const sharedWebhookRouteRefCounts = new WeakMap<
+  PluginRegistry,
+  Map<PluginHttpRouteRegistration, number>
+>();
+
+function getSharedWebhookRouteRefCounts(
+  registry: PluginRegistry,
+): Map<PluginHttpRouteRegistration, number> {
+  let counts = sharedWebhookRouteRefCounts.get(registry);
+  if (!counts) {
+    counts = new Map<PluginHttpRouteRegistration, number>();
+    sharedWebhookRouteRefCounts.set(registry, counts);
+  }
+  return counts;
+}
+
 export function registerPluginHttpRoute(params: {
   path?: string | null;
   fallbackPath?: string | null;
@@ -55,8 +71,21 @@ export function registerPluginHttpRoute(params: {
       existing.pluginId === params.pluginId
     ) {
       const pluginHint = params.pluginId ? ` (${params.pluginId})` : "";
-      params.log?.(`plugin: replacing stale webhook path ${normalizedPath}${suffix}${pluginHint}`);
-      routes.splice(existingIndex, 1);
+      const counts = getSharedWebhookRouteRefCounts(registry);
+      counts.set(existing, (counts.get(existing) ?? 1) + 1);
+      params.log?.(`plugin: reusing shared webhook path ${normalizedPath}${suffix}${pluginHint}`);
+      return () => {
+        const current = counts.get(existing) ?? 1;
+        if (current > 1) {
+          counts.set(existing, current - 1);
+          return;
+        }
+        counts.delete(existing);
+        const index = routes.indexOf(existing);
+        if (index >= 0) {
+          routes.splice(index, 1);
+        }
+      };
     } else {
       registry.diagnostics.push({
         level: "error",
@@ -77,8 +106,20 @@ export function registerPluginHttpRoute(params: {
     source: params.source,
   };
   routes.push(entry);
+  if (kind === "webhook") {
+    getSharedWebhookRouteRefCounts(registry).set(entry, 1);
+  }
 
   return () => {
+    if (kind === "webhook") {
+      const counts = getSharedWebhookRouteRefCounts(registry);
+      const current = counts.get(entry) ?? 1;
+      if (current > 1) {
+        counts.set(entry, current - 1);
+        return;
+      }
+      counts.delete(entry);
+    }
     const index = routes.indexOf(entry);
     if (index >= 0) {
       routes.splice(index, 1);
