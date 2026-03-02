@@ -8,6 +8,7 @@ import {
   buildModelAliasIndex,
   normalizeModelSelection,
   normalizeProviderId,
+  normalizeProviderIdForAuth,
   modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -61,6 +62,14 @@ describe("model-selection", () => {
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
+    });
+  });
+
+  describe("normalizeProviderIdForAuth", () => {
+    it("maps coding-plan variants to base provider for auth lookup", () => {
+      expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
+      expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
+      expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });
 
