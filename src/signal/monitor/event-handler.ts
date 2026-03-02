@@ -499,7 +499,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderIdLine = formatSignalPairingIdLine(sender);
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
+    const groupInfoType = dataMessage.groupInfo?.type?.trim().toUpperCase();
     const isGroup = Boolean(groupId);
+    if (isGroup && groupInfoType === "UPDATE") {
+      logVerbose(`Ignored signal group system update from ${senderDisplay}`);
+      return;
+    }
 
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
