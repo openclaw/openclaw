@@ -6,6 +6,8 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
+  createInboundEnvelopeBuilder,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
   mergeAllowlist,
@@ -177,6 +179,11 @@ async function processMessage(
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
 ): Promise<void> {
   const { threadId, content, timestamp, metadata } = message;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "zalouser",
+    accountId: account.accountId,
+  });
   if (!content?.trim()) {
     return;
   }
@@ -225,7 +232,7 @@ async function processMessage(
     configuredAllowFrom: configAllowFrom,
     senderId,
     isSenderAllowed,
-    readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalouser"),
+    readAllowFromStore: pairing.readAllowFromStore,
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
     resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -243,8 +250,7 @@ async function processMessage(
 
       if (!allowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "zalouser",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName || undefined },
           });
@@ -309,22 +315,21 @@ async function processMessage(
       id: peer.id,
     },
   });
+  const buildEnvelope = createInboundEnvelopeBuilder({
+    cfg: config,
+    route,
+    sessionStore: config.session?.store,
+    resolveStorePath: core.channel.session.resolveStorePath,
+    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
+    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
+    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
+  });
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: timestamp ? timestamp * 1000 : undefined,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 

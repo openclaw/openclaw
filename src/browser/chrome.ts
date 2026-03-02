@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
 import { appendCdpPath } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -83,10 +84,13 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
-      signal: ctrl.signal,
-      headers: getHeadersWithAuth(versionUrl),
-    });
+    // Bypass proxy for loopback CDP connections (#31219)
+    const res = await withNoProxyForLocalhost(() =>
+      fetch(versionUrl, {
+        signal: ctrl.signal,
+        headers: getHeadersWithAuth(versionUrl),
+      }),
+    );
     if (!res.ok) {
       return null;
     }
@@ -117,9 +121,12 @@ export async function getChromeWebSocketUrl(
 async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const headers = getHeadersWithAuth(wsUrl);
+    // Bypass proxy for loopback CDP connections (#31219)
+    const wsAgent = getDirectAgentForCdp(wsUrl);
     const ws = new WebSocket(wsUrl, {
       handshakeTimeout: timeoutMs,
       ...(Object.keys(headers).length ? { headers } : {}),
+      ...(wsAgent ? { agent: wsAgent } : {}),
     });
     const timer = setTimeout(
       () => {
@@ -285,6 +292,16 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Collect stderr for diagnostics in case Chrome fails to start.
+  // The listener is removed on success to avoid unbounded memory growth
+  // from a long-lived Chrome process that emits periodic warnings.
+  const stderrChunks: Buffer[] = [];
+  const onStderr = (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+  };
+  proc.stderr?.on("data", onStderr);
+
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
@@ -295,15 +312,25 @@ export async function launchOpenClawChrome(
   }
 
   if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+    const stderrHint = stderrOutput ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}` : "";
+    const sandboxHint =
+      process.platform === "linux" && !resolved.noSandbox
+        ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
+        : "";
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
     );
   }
+
+  // Chrome started successfully — detach the stderr listener and release the buffer.
+  proc.stderr?.off("data", onStderr);
+  stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
   log.info(

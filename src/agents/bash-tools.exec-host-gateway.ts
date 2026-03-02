@@ -18,7 +18,9 @@ import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
-  registerExecApprovalRequestForHost,
+  buildExecApprovalRequesterContext,
+  buildExecApprovalTurnSourceContext,
+  registerExecApprovalRequestForHostOrThrow,
   waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -44,6 +46,10 @@ export type ProcessGatewayAllowlistParams = {
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   agentId?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   scopeKey?: string;
   warnings: string[];
   notifySessionKey?: string;
@@ -147,24 +153,23 @@ export async function processGatewayAllowlist(
     let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     let preResolvedDecision: string | null | undefined;
 
-    try {
-      // Register first so the returned approval ID is actionable immediately.
-      const registration = await registerExecApprovalRequestForHost({
-        approvalId,
-        command: params.command,
-        workdir: params.workdir,
-        host: "gateway",
-        security: hostSecurity,
-        ask: hostAsk,
+    // Register first so the returned approval ID is actionable immediately.
+    const registration = await registerExecApprovalRequestForHostOrThrow({
+      approvalId,
+      command: params.command,
+      workdir: params.workdir,
+      host: "gateway",
+      security: hostSecurity,
+      ask: hostAsk,
+      ...buildExecApprovalRequesterContext({
         agentId: params.agentId,
-        resolvedPath,
         sessionKey: params.sessionKey,
-      });
-      expiresAtMs = registration.expiresAtMs;
-      preResolvedDecision = registration.finalDecision;
-    } catch (err) {
-      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
-    }
+      }),
+      resolvedPath,
+      ...buildExecApprovalTurnSourceContext(params),
+    });
+    expiresAtMs = registration.expiresAtMs;
+    preResolvedDecision = registration.finalDecision;
 
     void (async () => {
       let decision: string | null = preResolvedDecision ?? null;

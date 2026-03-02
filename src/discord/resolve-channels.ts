@@ -61,6 +61,9 @@ function parseDiscordChannelInput(raw: string): {
       return guild ? { guild: guild.trim(), guildOnly: true } : {};
     }
     if (guild && /^\d+$/.test(guild)) {
+      if (/^\d+$/.test(channel)) {
+        return { guildId: guild, channelId: channel };
+      }
       return { guildId: guild, channel };
     }
     return { guild, channel };
@@ -191,6 +194,22 @@ export async function resolveDiscordChannelAllowlist(params: {
     if (parsed.channelId) {
       const channel = await fetchChannel(token, fetcher, parsed.channelId);
       if (channel?.guildId) {
+        if (parsed.guildId && parsed.guildId !== channel.guildId) {
+          const expectedGuild = guilds.find((entry) => entry.id === parsed.guildId);
+          const actualGuild = guilds.find((entry) => entry.id === channel.guildId);
+          results.push({
+            input,
+            resolved: false,
+            guildId: parsed.guildId,
+            guildName: expectedGuild?.name,
+            channelId: parsed.channelId,
+            channelName: channel.name,
+            note: actualGuild?.name
+              ? `channel belongs to guild ${actualGuild.name}`
+              : "channel belongs to a different guild",
+          });
+          continue;
+        }
         const guild = guilds.find((entry) => entry.id === channel.guildId);
         results.push({
           input,

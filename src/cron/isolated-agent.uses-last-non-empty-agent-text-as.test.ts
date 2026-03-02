@@ -46,7 +46,7 @@ function mockEmbeddedOk() {
 }
 
 function expectEmbeddedProviderModel(expected: { provider: string; model: string }) {
-  const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+  const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
     provider?: string;
     model?: string;
   };
@@ -197,6 +197,50 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedPayloads([
+        {
+          text: "⚠️ ✍️ Write: failed",
+          isError: true,
+        },
+        {
+          text: "Write completed successfully.",
+          isError: false,
+        },
+      ]);
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.summary).toBe("Write completed successfully.");
+    });
+  });
+
+  it("keeps error status when run-level error accompanies post-error text", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [
+          { text: "Model context overflow", isError: true },
+          { text: "Partial assistant text before error" },
+        ],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          error: { kind: "context_overflow", message: "exceeded context window" },
+        },
+      });
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+    });
+  });
+
   it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
@@ -277,71 +321,65 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("uses model override when provided", async () => {
+  it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        jobPayload: {
+      let res = (
+        await runCronTurn(home, {
+          jobPayload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        })
+      ).res;
+      expect(res.status).toBe("ok");
+      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+
+      vi.clearAllMocks();
+      res = (
+        await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
-          model: "openai/gpt-4.1-mini",
-        },
-      });
-
+          deliver: false,
+        })
+      ).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
-    });
-  });
 
-  it("uses stored session override when no job model override is provided", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        deliver: false,
-      });
-
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
-    });
-  });
-
-  it("prefers job model override over stored session override", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runTurnWithStoredModelOverride(home, {
-        kind: "agentTurn",
-        message: DEFAULT_MESSAGE,
-        model: "anthropic/claude-opus-4-5",
-        deliver: false,
-      });
-
+      vi.clearAllMocks();
+      res = (
+        await runTurnWithStoredModelOverride(home, {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "anthropic/claude-opus-4-5",
+          deliver: false,
+        })
+      ).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
     });
   });
 
-  it("uses hooks.gmail.model for Gmail hook sessions", async () => {
+  it("uses hooks.gmail.model and keeps precedence over stored session override", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home);
-
+      let res = (await runGmailHookTurn(home)).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
         model: GMAIL_MODEL.replace("openrouter/", ""),
       });
-    });
-  });
 
-  it("keeps hooks.gmail.model precedence over stored session override", async () => {
-    await withTempHome(async (home) => {
-      const { res } = await runGmailHookTurn(home, {
-        "agent:main:hook:gmail:msg-1": {
-          sessionId: "existing-gmail-session",
-          updatedAt: Date.now(),
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-5",
-        },
-      });
-
+      vi.clearAllMocks();
+      res = (
+        await runGmailHookTurn(home, {
+          "agent:main:hook:gmail:msg-1": {
+            sessionId: "existing-gmail-session",
+            updatedAt: Date.now(),
+            providerOverride: "anthropic",
+            modelOverride: "claude-opus-4-5",
+          },
+        })
+      ).res;
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({
         provider: "openrouter",
