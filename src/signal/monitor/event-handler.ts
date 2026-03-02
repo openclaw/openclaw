@@ -178,14 +178,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
-      updateLastRoute: !entry.isGroup
-        ? {
-            sessionKey: route.mainSessionKey,
-            channel: "signal",
-            to: entry.senderRecipient,
-            accountId: route.accountId,
-          }
-        : undefined,
+      // Only update main-session last route when the DM session actually is main.
+      // Isolated DM scopes (for example per-channel-peer) must not overwrite
+      // delivery metadata for agent:main:main.
+      updateLastRoute:
+        !entry.isGroup && route.sessionKey === route.mainSessionKey
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "signal",
+              to: entry.senderRecipient,
+              accountId: route.accountId,
+            }
+          : undefined,
       onRecordError: (err) => {
         logVerbose(`signal: failed updating session meta: ${String(err)}`);
       },

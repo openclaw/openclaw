@@ -464,6 +464,24 @@ describe("monitorSignalProvider tool results", () => {
     expect(updateLastRouteMock).toHaveBeenCalled();
   });
 
+  it("does not overwrite main session routing for isolated DM scopes", async () => {
+    replyMock.mockResolvedValue({ text: "pong" });
+    setSignalToolResultTestConfig({
+      ...createSignalConfig({ autoStart: false, dmPolicy: "open", allowFrom: ["*"] }),
+      session: { dmScope: "per-channel-peer" },
+    });
+
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      dataMessage: {
+        message: "ping",
+      },
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
+
   it("does not resend pairing code when a request is already pending", async () => {
     setSignalToolResultTestConfig(
       createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
