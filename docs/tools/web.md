@@ -1,9 +1,10 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, Gemini Google Search grounding)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, SearXNG, Gemini Google Search grounding)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
   - You want to use Perplexity Sonar for web search
+  - You want to use a self-hosted SearXNG instance
   - You want to use Gemini with Google Search grounding
 title: "Web Tools"
 ---
@@ -12,7 +13,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, or Gemini with Google Search grounding.
+- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, Gemini with Google Search grounding or SearXNG (self-hosted).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -23,6 +24,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 - `web_search` calls your configured provider and returns results.
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
+  - **SearXNG**: returns structured results from your self-hosted instance (no API key required).
   - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
@@ -35,6 +37,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | ------------------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
 | **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **SearXNG**         | Self-hosted, no API key, privacy-focused     | Requires hosting your own instance       | None required                                |
 | **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
@@ -59,7 +62,7 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave", // or "perplexity" or "gemini"
+        provider: "brave", // or "perplexity", "searxng" or "gemini"
       },
     },
   },
@@ -155,6 +158,84 @@ If no base URL is set, OpenClaw chooses a default based on the API key source:
 | `perplexity/sonar-pro` (default) | Multi-step reasoning with web search | Complex questions |
 | `perplexity/sonar-reasoning-pro` | Chain-of-thought analysis            | Deep research     |
 
+## Using SearXNG (self-hosted)
+
+SearXNG is a free, self-hosted metasearch engine that aggregates results from multiple sources. It requires no API key and offers full privacy control.
+
+### Basic setup
+
+1. Set up your SearXNG instance (see [SearXNG documentation](https://docs.searxng.org/))
+2. Enable JSON format in your SearXNG `settings.yml`:
+
+   ```yaml
+   search:
+     formats:
+       - html
+       - json
+   ```
+
+3. Configure OpenClaw to use SearXNG:
+
+   ```json5
+   {
+     tools: {
+       web: {
+         search: {
+           enabled: true,
+           provider: "searxng",
+           searxng: {
+             baseUrl: "http://searxng:8080",
+           },
+         },
+       },
+     },
+   }
+   ```
+
+### Docker networking (same host)
+
+If you run SearXNG and OpenClaw in Docker containers on the same host, you need to connect them via a shared network.
+
+**Step 1: Update SearXNG's `settings.yml`** to enable JSON format:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+**Step 2: Run SearXNG container** joining the OpenClaw network:
+
+```bash
+docker run --name searxng -d \
+  -p 127.0.0.1:8888:8080 \
+  --network openclaw_default \
+  -v "./config/:/etc/searxng/" \
+  -v "./data/:/var/cache/searxng/" \
+  docker.io/searxng/searxng:latest
+```
+
+**Step 3:** Configure OpenClaw to use the SearXNG container name as hostname:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "searxng",
+        searxng: {
+          // Use the SearXNG container name as hostname
+          baseUrl: "http://searxng:8080",
+        },
+      },
+    },
+  },
+}
+```
+
+The `--network openclaw_default` flag joins an externally created network. Once both containers are on the same network, they can communicate using their container names as hostnames.
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -208,6 +289,7 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **SearXNG**: No API key required; configure `tools.web.search.searxng.baseUrl`
 
 ### Config
 
