@@ -7,8 +7,7 @@ import {
   parseCameraClipPayload,
   parseCameraSnapPayload,
   writeCameraClipPayloadToFile,
-  writeBase64ToFile,
-  writeUrlToFile,
+  writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
@@ -295,16 +294,12 @@ export function createNodesTool(options?: {
                 facing,
                 ext: isJpeg ? "jpg" : "png",
               });
-              if (payload.url) {
-                if (!resolvedNode.remoteIp) {
-                  throw new Error("camera URL payload requires node remoteIp");
-                }
-                await writeUrlToFile(filePath, payload.url, {
-                  expectedHost: resolvedNode.remoteIp,
-                });
-              } else if (payload.base64) {
-                await writeBase64ToFile(filePath, payload.base64);
-              }
+              await writeCameraPayloadToFile({
+                filePath,
+                payload,
+                expectedHost: resolvedNode.remoteIp,
+                invalidPayloadMessage: "invalid camera.snap payload",
+              });
               content.push({ type: "text", text: `MEDIA:${filePath}` });
               if (payload.base64) {
                 content.push({
