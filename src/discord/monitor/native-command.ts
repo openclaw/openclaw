@@ -1578,7 +1578,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
 
   let didReply = false;
-  await dispatchReplyWithDispatcher({
+  const dispatchResult = await dispatchReplyWithDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
@@ -1623,6 +1623,29 @@ async function dispatchDiscordCommandInteraction(params: {
       onModelSelected,
     },
   });
+
+  // Fallback: if the agent turn produced no deliverable replies (for example,
+  // a skill only used message.send side effects), close the interaction with
+  // a minimal acknowledgment so Discord does not stay in a pending state.
+  if (
+    !suppressReplies &&
+    !didReply &&
+    dispatchResult.counts.final === 0 &&
+    dispatchResult.counts.block === 0 &&
+    dispatchResult.counts.tool === 0
+  ) {
+    await safeDiscordInteractionCall("interaction empty fallback", async () => {
+      const payload = {
+        content: "✅ Done.",
+        ephemeral: true,
+      };
+      if (preferFollowUp) {
+        await interaction.followUp(payload);
+        return;
+      }
+      await interaction.reply(payload);
+    });
+  }
 }
 
 async function deliverDiscordInteractionReply(params: {
