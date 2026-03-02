@@ -32,6 +32,7 @@ import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import {
   clearSubagentRunSteerRestart,
   listSubagentRunsForRequester,
+  listDescendantRunsForRequester,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
@@ -41,7 +42,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-const SUBAGENT_ACTIONS = ["list", "kill", "steer"] as const;
+const SUBAGENT_ACTIONS = ["list", "tree", "kill", "steer"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
 
 const DEFAULT_RECENT_MINUTES = 30;
@@ -344,7 +345,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     label: "Subagents",
     name: "subagents",
     description:
-      "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+      "List, tree, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -414,6 +415,98 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           total: runs.length,
           active: active.map((entry) => entry.view),
           recent: recent.map((entry) => entry.view),
+          text,
+        });
+      }
+
+      if (action === "tree") {
+        const now = Date.now();
+        const cache = new Map<string, Record<string, SessionEntry>>();
+
+        // Get all descendants recursively
+        const allDescendants = listDescendantRunsForRequester(requester.requesterSessionKey);
+
+        // Build a map: parentSessionKey → children
+        const childrenMap = new Map<string, SubagentRunRecord[]>();
+        for (const run of allDescendants) {
+          const parentKey = run.requesterSessionKey;
+          if (!childrenMap.has(parentKey)) {
+            childrenMap.set(parentKey, []);
+          }
+          childrenMap.get(parentKey)!.push(run);
+        }
+
+        // Recursive tree renderer
+        const treeLines: string[] = [];
+        const treeNodes: Array<{
+          runId: string;
+          sessionKey: string;
+          label: string;
+          status: string;
+          runtime: string;
+          model: string | undefined;
+          depth: number;
+          children: number;
+        }> = [];
+
+        function renderNode(parentKey: string, depth: number, prefix: string) {
+          const children = sortSubagentRuns(childrenMap.get(parentKey) ?? []);
+          for (let i = 0; i < children.length; i++) {
+            const entry = children[i];
+            const isLast = i === children.length - 1;
+            const connector = depth === 0 ? "" : isLast ? "└─ " : "├─ ";
+            const childPrefix = depth === 0 ? "" : isLast ? "   " : "│  ";
+
+            const sessionEntry = resolveSessionEntryForKey({
+              cfg,
+              key: entry.childSessionKey,
+              cache,
+            }).entry;
+            const status = resolveRunStatus(entry);
+            const runtimeMs = (entry.endedAt ?? now) - (entry.startedAt ?? entry.createdAt);
+            const runtime = formatDurationCompact(runtimeMs);
+            const label = truncateLine(resolveSubagentLabel(entry), 40);
+            const model = resolveModelDisplay(sessionEntry, entry.model);
+            const usageText = formatTokenUsageDisplay(sessionEntry);
+            const grandchildren = childrenMap.get(entry.childSessionKey) ?? [];
+
+            const line = `${prefix}${connector}${label} (${model}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}`;
+            treeLines.push(line);
+            treeNodes.push({
+              runId: entry.runId,
+              sessionKey: entry.childSessionKey,
+              label,
+              status,
+              runtime,
+              model: resolveModelRef(sessionEntry) || entry.model,
+              depth,
+              children: grandchildren.filter((c) => !c.endedAt).length,
+            });
+
+            // Recurse into children
+            renderNode(entry.childSessionKey, depth + 1, prefix + childPrefix);
+          }
+        }
+
+        renderNode(requester.requesterSessionKey, 0, "");
+
+        const activeCount = allDescendants.filter((r) => !r.endedAt).length;
+        const totalCount = allDescendants.length;
+        const maxDepth = treeNodes.length > 0 ? Math.max(...treeNodes.map((n) => n.depth)) + 1 : 0;
+
+        const header = `subagent tree: ${activeCount} active, ${totalCount} total, depth ${maxDepth}`;
+        const text =
+          treeLines.length > 0 ? `${header}\n${treeLines.join("\n")}` : `${header}\n(empty)`;
+
+        return jsonResult({
+          status: "ok",
+          action: "tree",
+          requesterSessionKey: requester.requesterSessionKey,
+          callerSessionKey: requester.callerSessionKey,
+          activeCount,
+          totalCount,
+          maxDepth,
+          nodes: treeNodes,
           text,
         });
       }
