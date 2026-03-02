@@ -11,13 +11,28 @@ import {
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 
 let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
+let missingCommandRuntime: AcpxRuntime | null = null;
 
 beforeAll(async () => {
   sharedFixture = await createMockRuntimeFixture();
+  missingCommandRuntime = new AcpxRuntime(
+    {
+      command: "/definitely/missing/acpx",
+      allowPluginLocalInstall: false,
+      installCommand: "n/a",
+      cwd: process.cwd(),
+      permissionMode: "approve-reads",
+      nonInteractivePermissions: "fail",
+      strictWindowsCmdWrapper: true,
+      queueOwnerTtlSeconds: 0.1,
+    },
+    { logger: NOOP_LOGGER },
+  );
 });
 
 afterAll(async () => {
   sharedFixture = null;
+  missingCommandRuntime = null;
   await cleanupMockRuntimeFixtures();
 });
 
@@ -319,22 +334,12 @@ describe("AcpxRuntime", () => {
   });
 
   it("marks runtime unhealthy when command is missing", async () => {
-    const runtime = new AcpxRuntime(
-      {
-        command: "/definitely/missing/acpx",
-        allowPluginLocalInstall: false,
-        installCommand: "n/a",
-        cwd: process.cwd(),
-        permissionMode: "approve-reads",
-        nonInteractivePermissions: "fail",
-        strictWindowsCmdWrapper: true,
-        queueOwnerTtlSeconds: 0.1,
-      },
-      { logger: NOOP_LOGGER },
-    );
-
-    await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(false);
+    expect(missingCommandRuntime).toBeDefined();
+    if (!missingCommandRuntime) {
+      throw new Error("missing-command runtime fixture missing");
+    }
+    await missingCommandRuntime.probeAvailability();
+    expect(missingCommandRuntime.isHealthy()).toBe(false);
   });
 
   it("logs ACPX spawn resolution once per command policy", async () => {
@@ -363,21 +368,11 @@ describe("AcpxRuntime", () => {
   });
 
   it("returns doctor report for missing command", async () => {
-    const runtime = new AcpxRuntime(
-      {
-        command: "/definitely/missing/acpx",
-        allowPluginLocalInstall: false,
-        installCommand: "n/a",
-        cwd: process.cwd(),
-        permissionMode: "approve-reads",
-        nonInteractivePermissions: "fail",
-        strictWindowsCmdWrapper: true,
-        queueOwnerTtlSeconds: 0.1,
-      },
-      { logger: NOOP_LOGGER },
-    );
-
-    const report = await runtime.doctor();
+    expect(missingCommandRuntime).toBeDefined();
+    if (!missingCommandRuntime) {
+      throw new Error("missing-command runtime fixture missing");
+    }
+    const report = await missingCommandRuntime.doctor();
     expect(report.ok).toBe(false);
     expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
     expect(report.installCommand).toContain("acpx");
