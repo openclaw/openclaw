@@ -518,32 +518,42 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
   return entries;
 }
 
-function resolveModalSessionRouting(params: {
-  ctx: SlackMonitorContext;
-  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
-}): { sessionKey: string; channelId?: string; channelType?: string } {
-  const metadata = params.metadata;
-  if (metadata.sessionKey) {
-    return {
-      sessionKey: metadata.sessionKey,
-      channelId: metadata.channelId,
-      channelType: metadata.channelType,
-    };
-  }
-  if (metadata.channelId) {
-    return {
-      sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
-        channelId: metadata.channelId,
-        channelType: metadata.channelType,
-      }),
-      channelId: metadata.channelId,
-      channelType: metadata.channelType,
-    };
-  }
-  return {
-    sessionKey: params.ctx.resolveSlackSystemEventSessionKey({}),
-  };
-}
+    function resolveModalSessionRouting(params: {
+      ctx: SlackMonitorContext;
+      metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
+    }): { sessionKey: string; channelId?: string; channelType?: string } {
+      const metadata = params.metadata;
+      // Determine 'ground truth' type from ID structure to override incorrect external metadata
+      let finalChannelType: string | undefined = metadata.channelType;
+      if (metadata.channelId) {
+        // D-prefix implies a DM. If metadata claims otherwise, trust the ID prefix.
+        if (metadata.channelId.startsWith('D') && finalChannelType !== 'im') {
+          finalChannelType = 'im';
+        }
+        // Add other structural checks (G -> 'group', C -> 'channel') if necessary.
+      }
+
+      if (metadata.sessionKey) {
+        return {
+          sessionKey: metadata.sessionKey,
+          channelId: metadata.channelId,
+          channelType: finalChannelType,
+        };
+      }
+      if (metadata.channelId) {
+        return {
+          sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
+            channelId: metadata.channelId,
+            channelType: finalChannelType,
+          }),
+          channelId: metadata.channelId,
+          channelType: finalChannelType,
+        };
+      }
+      return {
+        sessionKey: params.ctx.resolveSlackSystemEventSessionKey({}),
+      };
+    }
 
 function summarizeSlackViewLifecycleContext(view: {
   root_view_id?: string;
