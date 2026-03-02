@@ -291,7 +291,7 @@ describe("Cron issue regressions", () => {
 
   it("repairs missing nextRunAtMs on non-schedule updates without touching other jobs", async () => {
     const store = await makeStorePath();
-    const cron = await startCronForStore({ storePath: store.storePath });
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const created = await cron.add({
       name: "repair-target",
@@ -383,7 +383,7 @@ describe("Cron issue regressions", () => {
       "utf-8",
     );
 
-    const cron = await startCronForStore({ storePath: store.storePath });
+    const cron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
 
     const listed = await cron.list();
     expect(listed.some((job) => job.id === "missing-enabled-update")).toBe(true);
@@ -670,6 +670,7 @@ describe("Cron issue regressions", () => {
 
     const cron = await startCronForStore({
       storePath: store.storePath,
+      cronEnabled: false,
       runIsolatedAgentJob,
     });
     const job = await cron.add({
@@ -1252,6 +1253,7 @@ describe("Cron issue regressions", () => {
 
     const cron = await startCronForStore({
       storePath: store.storePath,
+      cronEnabled: false,
       runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
     });
 
