@@ -128,7 +128,7 @@ export async function sendRequest(
     authorization?: string;
     method?: string;
   },
-) {
+): Promise<{ res: ServerResponse; setHeader: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; getBody: () => string }> {
   const response = createResponse();
   await dispatchRequest(server, createRequest(params), response.res);
   return response;

@@ -69,7 +69,7 @@ export function isBotMentionedFromTargets(
     const selfDigits = targets.selfE164.replace(/\D/g, "");
     if (selfDigits) {
       const bodyDigits = (bodyClean ?? "").replace(/[^\d]/g, "");
-      if (bodyDigits?.includes(selfDigits)) {
+      if (bodyDigits.includes(selfDigits)) {
         return true;
       }
       const bodyNoSpace = (msg.body ?? "").replace(/[\s-]/g, "");
