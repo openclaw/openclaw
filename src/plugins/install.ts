@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
 import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
@@ -31,18 +30,20 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import * as skillScanner from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { loadPluginManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  resolvePackageExtensionEntries,
+  type PackageManifest as PluginPackageManifest,
+} from "./manifest.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
-type PackageManifest = {
-  name?: string;
-  version?: string;
+type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
-} & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
+};
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
@@ -86,15 +87,14 @@ function validatePluginId(pluginId: string): string | null {
 }
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }): string[] {
-  const extensions = params.manifest[MANIFEST_KEY]?.extensions;
-  if (!Array.isArray(extensions)) {
+  const resolved = resolvePackageExtensionEntries(params.manifest);
+  if (resolved.status === "missing") {
     throw new Error(MISSING_EXTENSIONS_ERROR);
   }
-  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
-  if (list.length === 0) {
+  if (resolved.status === "empty") {
     throw new Error("package.json openclaw.extensions is empty");
   }
-  return list;
+  return resolved.entries;
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
