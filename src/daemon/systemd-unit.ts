@@ -117,6 +117,42 @@ function envOptionConsumesNextValue(token: string): boolean {
   );
 }
 
+// GNU env short-option characters: flags take no argument, value-opts consume one.
+const ENV_SHORT_FLAGS = "i0v";
+const ENV_SHORT_VALUE_OPTS = "uCS";
+
+/**
+ * Parses a clustered short-option token (e.g. "-iu", "-i0S") used with env.
+ * Returns null when the token is not a recognised cluster (length < 3 or
+ * contains unknown characters).  Otherwise returns whether the cluster
+ * consumes the next argument, whether the consuming option is -S (split-string),
+ * and any inline value attached to the consuming option.
+ */
+function parseEnvShortOptionCluster(
+  token: string,
+): { consumesNext: boolean; isSplitString: boolean; inlineValue: string | null } | null {
+  // Single-char options (-u, -S …) are handled by existing exact-match code.
+  if (!token.startsWith("-") || token.startsWith("--") || token.length < 3) {
+    return null;
+  }
+  for (let i = 1; i < token.length; i++) {
+    const ch = token[i];
+    if (ENV_SHORT_FLAGS.includes(ch)) {
+      continue;
+    }
+    if (ENV_SHORT_VALUE_OPTS.includes(ch)) {
+      const rest = token.slice(i + 1);
+      return rest
+        ? { consumesNext: false, isSplitString: ch === "S", inlineValue: rest }
+        : { consumesNext: true, isSplitString: ch === "S", inlineValue: null };
+    }
+    // Unknown character — not a recognised cluster.
+    return null;
+  }
+  // All flag characters, no value consumed.
+  return { consumesNext: false, isSplitString: false, inlineValue: null };
+}
+
 function extractEnvInlineSplitStringValue(token: string): string | null {
   if (token.startsWith("--split-string=")) {
     return token.slice("--split-string=".length);
@@ -251,6 +287,28 @@ export function resolveExecStartCommand(execStartValue: string): ResolvedExecSta
       const optionValue = pending.shift();
       if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
         const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
+        const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+        if (expanded.length > 0) {
+          pending.unshift(...expanded);
+        }
+      }
+      continue;
+    }
+
+    // Handle clustered short options (e.g. -iu VAR, -i0C DIR, -iS "cmd").
+    const cluster = parseEnvShortOptionCluster(envToken);
+    if (cluster) {
+      if (cluster.consumesNext) {
+        const optionValue = pending.shift();
+        if (cluster.isSplitString && optionValue) {
+          const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
+          const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+          if (expanded.length > 0) {
+            pending.unshift(...expanded);
+          }
+        }
+      } else if (cluster.inlineValue && cluster.isSplitString) {
+        const splitStringValue = consumePossiblyQuotedValue(cluster.inlineValue, pending);
         const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
         if (expanded.length > 0) {
           pending.unshift(...expanded);

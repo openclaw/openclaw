@@ -149,4 +149,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("extracts executable token when env uses clustered short options", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env -iu LD_PRELOAD /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });
