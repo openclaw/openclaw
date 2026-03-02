@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -10,8 +11,6 @@ const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
-const REDACT_REGEX_CHUNK_THRESHOLD = 32_768;
-const REDACT_REGEX_CHUNK_SIZE = 16_384;
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
@@ -96,26 +95,12 @@ function redactMatch(match: string, groups: string[]): string {
   return match.replace(token, masked);
 }
 
-function replacePatternWithBounds(text: string, pattern: RegExp): string {
-  const apply = (value: string) =>
-    value.replace(pattern, (...args: string[]) =>
-      redactMatch(args[0], args.slice(1, args.length - 2)),
-    );
-  if (text.length <= REDACT_REGEX_CHUNK_THRESHOLD) {
-    return apply(text);
-  }
-
-  let output = "";
-  for (let index = 0; index < text.length; index += REDACT_REGEX_CHUNK_SIZE) {
-    output += apply(text.slice(index, index + REDACT_REGEX_CHUNK_SIZE));
-  }
-  return output;
-}
-
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = replacePatternWithBounds(next, pattern);
+    next = replacePatternBounded(next, pattern, (...args: string[]) =>
+      redactMatch(args[0], args.slice(1, args.length - 2)),
+    );
   }
   return next;
 }
