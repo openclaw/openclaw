@@ -230,7 +230,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {
-        await deps.deliverReplies({
+        const result = await deps.deliverReplies({
           replies: [payload],
           target: ctxPayload.To,
           baseUrl: deps.baseUrl,
@@ -240,7 +240,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
         });
-        return { delivered: true };
+        return {
+          delivered: result?.delivered ?? true,
+          messageId: result?.messageId,
+        };
       },
       onDelivery: (payload, info) => {
         const target = ctxPayload.To;

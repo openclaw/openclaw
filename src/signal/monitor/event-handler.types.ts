@@ -105,7 +105,7 @@ export type SignalEventHandlerDeps = {
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;
-  }) => Promise<void>;
+  }) => Promise<{ delivered: boolean; messageId?: string } | void>;
   resolveSignalReactionTargets: (reaction: SignalReactionMessage) => SignalReactionTarget[];
   isSignalReactionMessage: (
     reaction: SignalReactionMessage | null | undefined,

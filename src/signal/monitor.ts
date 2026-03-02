@@ -288,9 +288,11 @@ async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
-}) {
+}): Promise<{ delivered: boolean; messageId?: string }> {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
+  let delivered = false;
+  let lastMessageId: string | undefined;
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -299,29 +301,41 @@ async function deliverReplies(params: {
     }
     if (mediaList.length === 0) {
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageSignal(target, chunk, {
+        const result = await sendMessageSignal(target, chunk, {
           baseUrl,
           account,
           maxBytes,
           accountId,
         });
+        delivered = true;
+        if (result.messageId && result.messageId !== "unknown") {
+          lastMessageId = result.messageId;
+        }
       }
     } else {
       let first = true;
       for (const url of mediaList) {
         const caption = first ? text : "";
         first = false;
-        await sendMessageSignal(target, caption, {
+        const result = await sendMessageSignal(target, caption, {
           baseUrl,
           account,
           mediaUrl: url,
           maxBytes,
           accountId,
         });
+        delivered = true;
+        if (result.messageId && result.messageId !== "unknown") {
+          lastMessageId = result.messageId;
+        }
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
   }
+  return {
+    delivered,
+    messageId: lastMessageId,
+  };
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
