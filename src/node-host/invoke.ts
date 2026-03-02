@@ -20,7 +20,7 @@ import {
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
-import { buildSystemRunApprovalPlanV2, handleSystemRunInvoke } from "./invoke-system-run.js";
+import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   RunResult,
@@ -429,7 +429,7 @@ export async function handleInvoke(
         agentId?: unknown;
         sessionKey?: unknown;
       }>(frame.paramsJSON);
-      const prepared = buildSystemRunApprovalPlanV2(params);
+      const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;
