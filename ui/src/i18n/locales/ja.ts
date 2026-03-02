@@ -71,7 +71,8 @@ export const ja: TranslationMap = {
       uptime: "稼働時間",
       tickInterval: "Tickインターバル",
       lastChannelsRefresh: "前回のチャンネル更新",
-      channelsHint: "WhatsApp、Telegram、Discord、Signal、iMessageを連携するには「チャンネル」を使用します。",
+      channelsHint:
+        "WhatsApp、Telegram、Discord、Signal、iMessageを連携するには「チャンネル」を使用します。",
     },
     stats: {
       instances: "インスタンス",
@@ -85,14 +86,16 @@ export const ja: TranslationMap = {
       title: "ノート",
       subtitle: "リモートコントロール設定のための簡単なリマインダーです。",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText: "tailnet認証を使用してゲートウェイをループバック上に維持するには、serveモードを推奨します。",
+      tailscaleText:
+        "tailnet認証を使用してゲートウェイをループバック上に維持するには、serveモードを推奨します。",
       sessionTitle: "セッションの衛生管理",
       sessionText: "コンテキストをリセットするには /new または sessions.patch を使用します。",
       cronTitle: "Cronリマインダー",
       cronText: "定期的な実行には独立したセッションを使用してください。",
     },
     auth: {
-      required: "このゲートウェイは認証が必要です。トークンまたはパスワードを追加して、「接続」をクリックしてください。",
+      required:
+        "このゲートウェイは認証が必要です。トークンまたはパスワードを追加して、「接続」をクリックしてください。",
       failed:
         "認証に失敗しました。トークン付きのURLを {command} で再コピーするか、トークンを更新してから「接続」をクリックしてください。",
     },
@@ -216,25 +219,30 @@ export const ja: TranslationMap = {
       timezoneOptional: "タイムゾーン (任意)",
       timezonePlaceholder: "Asia/Tokyo",
       timezoneHelp: "一般的なタイムゾーンを選択するか、有効なIANAタイムゾーンを入力します。",
-      jitterHelp: "ジッター(分散)が必要ですか？詳細設定 → ジッターウィンドウ / ジッター単位を使用してください。",
+      jitterHelp:
+        "ジッター(分散)が必要ですか？詳細設定 → ジッターウィンドウ / ジッター単位を使用してください。",
       execution: "実行",
       executionSub: "起動するタイミングと、このジョブが実行する内容を選択します。",
       session: "セッション",
       main: "メイン",
       isolated: "分離",
-      sessionHelp: "メインはシステムイベントを投稿します。分離は専用のエージェントターンを実行します。",
+      sessionHelp:
+        "メインはシステムイベントを投稿します。分離は専用のエージェントターンを実行します。",
       wakeMode: "ウェイクモード",
       now: "今すぐ",
       nextHeartbeat: "次のハートビート",
-      wakeModeHelp: "「今すぐ」は即座にトリガーします。「次のハートビート」は次のサイクルまで待機します。",
+      wakeModeHelp:
+        "「今すぐ」は即座にトリガーします。「次のハートビート」は次のサイクルまで待機します。",
       payloadKind: "何を実行しますか？",
       systemEvent: "メインタイムラインにメッセージを投稿",
       agentTurn: "アシスタントタスクを実行 (分離)",
-      systemEventHelp: "テキストをゲートウェイのメインタイムラインに送信します (リマインダー/トリガーに最適です)。",
+      systemEventHelp:
+        "テキストをゲートウェイのメインタイムラインに送信します (リマインダー/トリガーに最適です)。",
       agentTurnHelp: "プロンプトを使用して、独自セッションでアシスタントの実行を開始します。",
       timeoutSeconds: "タイムアウト (秒)",
       timeoutPlaceholder: "任意、例: 90",
-      timeoutHelp: "任意。この実行にゲートウェイのデフォルトタイムアウト動作を使用する場合は空白のままにします。",
+      timeoutHelp:
+        "任意。この実行にゲートウェイのデフォルトタイムアウト動作を使用する場合は空白のままにします。",
       mainTimelineMessage: "メインタイムラインメッセージ",
       assistantTaskPrompt: "アシスタントタスクプロンプト",
       deliverySection: "配信",
@@ -257,7 +265,8 @@ export const ja: TranslationMap = {
       deleteAfterRun: "実行後に削除",
       deleteAfterRunHelp: "自動的にクリーンアップされるべき単発のリマインダーに最適です。",
       clearAgentOverride: "エージェントオーバーライドをクリア",
-      clearAgentHelp: "このジョブにゲートウェイのデフォルトアシスタントを使用するように強制します。",
+      clearAgentHelp:
+        "このジョブにゲートウェイのデフォルトアシスタントを使用するように強制します。",
       exactTiming: "正確なタイミング (ジッターなし)",
       exactTimingHelp: "分散なしで正確なcronの境界で実行します。",
       staggerWindow: "ジッターウィンドウ",

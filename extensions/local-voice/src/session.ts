@@ -1,7 +1,19 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { getOSCClient, type OSCConfig } from "./osc.js";
-import { OpenAIRealtimeSTT, LocalWhisperSTT, type STTConfig, type STTEventHandlers, type STTSession } from "./stt.js";
-import { getTTSConfig, synthesizeSpeech, playAudio, playAudioData, mapPhonemeToViseme } from "./tts.js";
+import {
+  OpenAIRealtimeSTT,
+  LocalWhisperSTT,
+  type STTConfig,
+  type STTEventHandlers,
+  type STTSession,
+} from "./stt.js";
+import {
+  getTTSConfig,
+  synthesizeSpeech,
+  playAudio,
+  playAudioData,
+  mapPhonemeToViseme,
+} from "./tts.js";
 
 export type VoiceSessionState =
   | "idle"
@@ -165,8 +177,8 @@ export class VoiceSession {
 
       if (result.success) {
         // Start Lip-Sync Sequence if phonemes are available
-        const visemePromise = result.phonemes 
-          ? this.runVisemeSequence(result.phonemes) 
+        const visemePromise = result.phonemes
+          ? this.runVisemeSequence(result.phonemes)
           : Promise.resolve();
 
         if (result.audioUrl) {
@@ -174,7 +186,7 @@ export class VoiceSession {
         } else if (result.audioData) {
           await playAudioData(result.audioData);
         }
-        
+
         await visemePromise;
       } else {
         this.api.logger.error(`TTS failed: ${result.error}`);
@@ -190,7 +202,7 @@ export class VoiceSession {
     for (const p of phonemes) {
       const viseme = mapPhonemeToViseme(p.phoneme);
       oscClient.sendViseme(viseme);
-      await new Promise(resolve => setTimeout(resolve, p.duration * 1000));
+      await new Promise((resolve) => setTimeout(resolve, p.duration * 1000));
     }
     oscClient.sendViseme(0);
   }

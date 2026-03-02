@@ -115,7 +115,10 @@ describe("/session idle", () => {
       { ...binding, boundAt: Date.now(), idleTimeoutMs: 0 },
     ]);
 
-    const result = await handleSessionCommand(createDiscordCommandParams("/session idle off"), true);
+    const result = await handleSessionCommand(
+      createDiscordCommandParams("/session idle off"),
+      true,
+    );
 
     expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:child",

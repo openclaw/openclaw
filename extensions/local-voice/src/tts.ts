@@ -169,7 +169,7 @@ async function synthesizeWithOpenAI(text: string, apiKey?: string): Promise<TTSR
 
 async function synthesizeWithVoiceVox(text: string, config: VoiceVoxConfig): Promise<TTSResult> {
   const base = config.endpoint.replace(/\/$/, "");
-  
+
   // 1. Audio Query
   const queryUrl = `${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${config.speakerId}`;
   const queryRes = await fetch(queryUrl, { method: "POST" });
@@ -191,7 +191,7 @@ async function synthesizeWithVoiceVox(text: string, config: VoiceVoxConfig): Pro
   }
 
   const audioData = Buffer.from(await synthRes.arrayBuffer());
-  
+
   // 3. Extract Phonemes for OSC
   const phonemes: PhonemeData[] = [];
   if (queryData.accent_phrases) {

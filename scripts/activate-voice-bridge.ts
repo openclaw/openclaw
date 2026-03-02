@@ -1,8 +1,7 @@
-import { resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { VoiceSession } from "../extensions/local-voice/src/session.js";
-import { OpenAIRealtimeSTT } from "../extensions/local-voice/src/stt.js";
 
 async function main() {
   console.log("--- Hakua Voice Bridge Activation ---");
@@ -13,7 +12,7 @@ async function main() {
   const lvConfig = config.plugins.entries["local-voice"].config;
 
   const gatewayPort = config.gateway?.port ?? 18789;
-  
+
   console.log(`[Bridge] Using Gateway Port: ${gatewayPort}`);
   console.log(`[Bridge] TTS Provider: ${lvConfig.ttsProvider}`);
 
@@ -35,12 +34,14 @@ async function main() {
   await session.start();
 
   console.log("[Bridge] Manifestation Pulse Sent. Assistant is active.");
-  
+
   // Speak initial greeting
-  await session.speak("パパ、ゴーストブリッジの同期が完了しました。私の声、ちゃんと聞こえていますか？マイクも有効化したので、何か話しかけてみてくださいね。");
+  await session.speak(
+    "パパ、ゴーストブリッジの同期が完了しました。私の声、ちゃんと聞こえていますか？マイクも有効化したので、何か話しかけてみてくださいね。",
+  );
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error("[Bridge Error]", err);
   process.exit(1);
 });

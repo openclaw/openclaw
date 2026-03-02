@@ -3,18 +3,91 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OpenClaw Canvas</title>
 <style>
-  html, body { height: 100%; margin: 0; background: #000; color: #fff; font: 16px/1.4 -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-  .wrap { min-height: 100%; display: grid; place-items: center; padding: 24px; }
-  .card { width: min(720px, 100%); background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); border-radius: 16px; padding: 18px 18px 14px; }
-  .title { display: flex; align-items: baseline; gap: 10px; }
-  h1 { margin: 0; font-size: 22px; letter-spacing: 0.2px; }
-  .sub { opacity: 0.75; font-size: 13px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-  button { appearance: none; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.10); color: #fff; padding: 10px 12px; border-radius: 12px; font-weight: 600; cursor: pointer; }
-  button:active { transform: translateY(1px); }
-  .ok { color: #24e08a; }
-  .bad { color: #ff5c5c; }
-  .log { margin-top: 14px; opacity: 0.85; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); padding: 10px; border-radius: 12px; }
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    background: #000;
+    color: #fff;
+    font:
+      16px/1.4 -apple-system,
+      BlinkMacSystemFont,
+      system-ui,
+      Segoe UI,
+      Roboto,
+      Helvetica,
+      Arial,
+      sans-serif;
+  }
+  .wrap {
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  .card {
+    width: min(720px, 100%);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 18px 18px 14px;
+  }
+  .title {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    letter-spacing: 0.2px;
+  }
+  .sub {
+    opacity: 0.75;
+    font-size: 13px;
+  }
+  .row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+  }
+  button {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    padding: 10px 12px;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:active {
+    transform: translateY(1px);
+  }
+  .ok {
+    color: #24e08a;
+  }
+  .bad {
+    color: #ff5c5c;
+  }
+  .log {
+    margin-top: 14px;
+    opacity: 0.85;
+    font:
+      12px/1.4 ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      Monaco,
+      Consolas,
+      "Liberation Mono",
+      monospace;
+    white-space: pre-wrap;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 10px;
+    border-radius: 12px;
+  }
 </style>
 <div class="wrap">
   <div class="card">
@@ -30,61 +103,73 @@
       <button id="btn-dalek">Dalek</button>
     </div>
 
-    <div id="status" class="sub" style="margin-top: 10px;"></div>
+    <div id="status" class="sub" style="margin-top: 10px"></div>
     <div id="log" class="log">Ready.</div>
   </div>
 </div>
 <script>
-(() => {
-  const logEl = document.getElementById("log");
-  const statusEl = document.getElementById("status");
-  const log = (msg) => { logEl.textContent = String(msg); };
+  (() => {
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+    const log = (msg) => {
+      logEl.textContent = String(msg);
+    };
 
-  const hasIOS = () =>
-    !!(
-      window.webkit &&
-      window.webkit.messageHandlers &&
-      window.webkit.messageHandlers.openclawCanvasA2UIAction
-    );
-  const hasAndroid = () =>
-    !!(
-      (window.openclawCanvasA2UIAction &&
-        typeof window.openclawCanvasA2UIAction.postMessage === "function")
-    );
-  const hasHelper = () => typeof window.openclawSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+    const hasIOS = () =>
+      !!(
+        window.webkit &&
+        window.webkit.messageHandlers &&
+        window.webkit.messageHandlers.openclawCanvasA2UIAction
+      );
+    const hasAndroid = () =>
+      !!(
+        window.openclawCanvasA2UIAction &&
+        typeof window.openclawCanvasA2UIAction.postMessage === "function"
+      );
+    const hasHelper = () => typeof window.openclawSendUserAction === "function";
+    statusEl.innerHTML =
+      "Bridge: " +
+      (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
+      " · iOS=" +
+      (hasIOS() ? "yes" : "no") +
+      " · Android=" +
+      (hasAndroid() ? "yes" : "no");
 
-  const onStatus = (ev) => {
-    const d = ev && ev.detail || {};
-    log("Action status: id=" + (d.id || "?") + " ok=" + String(!!d.ok) + (d.error ? (" error=" + d.error) : ""));
-  };
-  window.addEventListener("openclaw:a2ui-action-status", onStatus);
+    const onStatus = (ev) => {
+      const d = (ev && ev.detail) || {};
+      log(
+        "Action status: id=" +
+          (d.id || "?") +
+          " ok=" +
+          String(!!d.ok) +
+          (d.error ? " error=" + d.error : ""),
+      );
+    };
+    window.addEventListener("openclaw:a2ui-action-status", onStatus);
 
-  function send(name, sourceComponentId) {
-    if (!hasHelper()) {
-      log("No action bridge found. Ensure you're viewing this on an iOS/Android OpenClaw node canvas.");
-      return;
+    function send(name, sourceComponentId) {
+      if (!hasHelper()) {
+        log(
+          "No action bridge found. Ensure you're viewing this on an iOS/Android OpenClaw node canvas.",
+        );
+        return;
+      }
+      const sendUserAction =
+        typeof window.openclawSendUserAction === "function"
+          ? window.openclawSendUserAction
+          : undefined;
+      const ok = sendUserAction({
+        name,
+        surfaceId: "main",
+        sourceComponentId,
+        context: { t: Date.now() },
+      });
+      log(ok ? "Sent action: " + name : "Failed to send action: " + name);
     }
-    const sendUserAction =
-      typeof window.openclawSendUserAction === "function"
-        ? window.openclawSendUserAction
-        : undefined;
-    const ok = sendUserAction({
-      name,
-      surfaceId: "main",
-      sourceComponentId,
-      context: { t: Date.now() },
-    });
-    log(ok ? ("Sent action: " + name) : ("Failed to send action: " + name));
-  }
 
-  document.getElementById("btn-hello").onclick = () => send("hello", "demo.hello");
-  document.getElementById("btn-time").onclick = () => send("time", "demo.time");
-  document.getElementById("btn-photo").onclick = () => send("photo", "demo.photo");
-  document.getElementById("btn-dalek").onclick = () => send("dalek", "demo.dalek");
-})();
+    document.getElementById("btn-hello").onclick = () => send("hello", "demo.hello");
+    document.getElementById("btn-time").onclick = () => send("time", "demo.time");
+    document.getElementById("btn-photo").onclick = () => send("photo", "demo.photo");
+    document.getElementById("btn-dalek").onclick = () => send("dalek", "demo.dalek");
+  })();
 </script>

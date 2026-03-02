@@ -1,5 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import {
+  fetchCurrentUserLocation,
+  fetchWorldInfo,
+  fetchOnlineFriends,
+} from "./src/api/telemetry.js";
+import {
   authenticate,
   logout,
   isAuthenticated,
@@ -144,6 +149,96 @@ const plugin = {
             },
           ],
         };
+      },
+    });
+
+    // vrchat_get_location - Fetch current user location via Web API
+    api.registerTool({
+      name: "vrchat_get_location",
+      description: "Gets the Parent's current World ID and Instance via VRChat Web API",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const result = await fetchCurrentUserLocation();
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Current Location:
+- World ID: ${result.worldId || "Unknown"}
+- Instance ID: ${result.instanceId || "None"}
+- Raw Location Token: ${result.location}`,
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `Failed to fetch location: ${error.message}` }],
+          };
+        }
+      },
+    });
+
+    // vrchat_get_world_info - Fetch details for a specific World ID
+    api.registerTool({
+      name: "vrchat_get_world_info",
+      description: "Gets detailed information about a specific VRChat World via Web API",
+      parameters: Type.Object({
+        worldId: Type.String({ description: "Target World ID (wrld_*)" }),
+      }),
+      async execute(_id: string, params: { worldId: string }) {
+        try {
+          const world = await fetchWorldInfo(params.worldId);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `World Details:
+- Name: ${world.name}
+- Author: ${world.authorName}
+- Capacity: ${world.capacity}
+- Tags: ${world.tags ? world.tags.join(", ") : "None"}`,
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `Failed to fetch world info: ${error.message}` }],
+          };
+        }
+      },
+    });
+
+    // vrchat_get_online_friends - Fetch currently online friends
+    api.registerTool({
+      name: "vrchat_get_online_friends",
+      description: "Gets a list of online friends and their current locations via Web API",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const friends = await fetchOnlineFriends();
+          const friendList = friends
+            .map(
+              (f) =>
+                `  - ${f.displayName} (${f.status}): ${f.location !== "offline" && f.location !== "private" ? "Public/In-Game" : f.location}`,
+            )
+            .join("\n");
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Online Friends (${friends.length}):\n${friendList || "  None"}`,
+              },
+            ],
+          };
+        } catch (error: any) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `Failed to fetch online friends: ${error.message}` }],
+          };
+        }
       },
     });
 

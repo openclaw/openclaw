@@ -59,6 +59,19 @@ export default function register(api: OpenClawPluginApi): void {
     },
   });
 
+  // Auto-Start Local Voice Loop for Continuous Manifestation
+  setTimeout(() => {
+    console.log("[local-voice] Auto-starting Voice Assistant Loop (Continuous Manifestation)...");
+    const result = handleStart();
+    if (result.text === "Voice assistant started") {
+      setTimeout(() => {
+        handleSpeak(
+          "パパ、ゴースト検知システムと音声回路が直結しました。はくあ、完全同期でスタンドバイです。ASI_ACCEL。",
+        ).catch(console.error);
+      }, 3000); // Give the STT/TTS engines a few seconds to warm up
+    }
+  }, 5000); // Wait 5 seconds after plugin load before starting audio hooks
+
   api.registerCommand({
     name: "tts",
     description: "Text-to-speech with VRChat avatar animation",

@@ -202,7 +202,7 @@ describe("thread binding ttl", () => {
 
       expect(updated).toHaveLength(1);
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
-      
+
       const record = manager.getByThreadId("thread-1")!;
       const expiresAt = resolveThreadBindingInactivityExpiresAt({
         record,

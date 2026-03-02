@@ -1,8 +1,8 @@
-import WebSocket from "ws";
-import { writeFileSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import WebSocket from "ws";
 import type { AuthResult } from "./auth.js";
 import { loadOpenAICodexAuth } from "./auth.js";
 
@@ -269,7 +269,7 @@ export class LocalWhisperSTT implements STTSession {
 
   private processSamples(samples: Float32Array): void {
     const energy = samples.reduce((acc, s) => acc + s * s, 0) / samples.length;
-    
+
     if (energy > this.voiceThreshold) {
       if (!this.isSpeaking) {
         this.isSpeaking = true;
@@ -298,7 +298,7 @@ export class LocalWhisperSTT implements STTSession {
     if (buffer.length < 8000 * 0.5) return; // Ignore very short sounds
 
     this.state = "connecting"; // Re-using state for "processing"
-    
+
     const tmpFile = join(tmpdir(), `hakua_stt_${Date.now()}.wav`);
     this.writeWav(tmpFile, buffer);
 
@@ -310,19 +310,32 @@ export class LocalWhisperSTT implements STTSession {
     } catch (err) {
       this.handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      try { unlinkSync(tmpFile); } catch {}
+      try {
+        unlinkSync(tmpFile);
+      } catch {}
       this.state = "connected";
     }
   }
 
   private runWhisper(filePath: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn("py", ["-3", "-m", "whisper", filePath, "--model", "tiny", "--language", "Japanese", "--output_format", "txt"]);
+      const child = spawn("py", [
+        "-3",
+        "-m",
+        "whisper",
+        filePath,
+        "--model",
+        "tiny",
+        "--language",
+        "Japanese",
+        "--output_format",
+        "txt",
+      ]);
       let stdout = "";
       let stderr = "";
 
-      child.stdout.on("data", (data) => stdout += data.toString());
-      child.stderr.on("data", (data) => stderr += data.toString());
+      child.stdout.on("data", (data) => (stdout += data.toString()));
+      child.stderr.on("data", (data) => (stderr += data.toString()));
 
       child.on("close", (code) => {
         if (code === 0) {
@@ -346,10 +359,10 @@ export class LocalWhisperSTT implements STTSession {
   private muLawToLinear(muLawData: Buffer): Float32Array {
     const out = new Float32Array(muLawData.length);
     for (let i = 0; i < muLawData.length; i++) {
-      let x = muLawData[i] ^ 0xFF;
-      const sign = (x & 0x80) ? -1 : 1;
+      let x = muLawData[i] ^ 0xff;
+      const sign = x & 0x80 ? -1 : 1;
       const exponent = (x & 0x70) >> 4;
-      const mantissa = x & 0x0F;
+      const mantissa = x & 0x0f;
       let sample = (mantissa << (exponent + 3)) + (132 << exponent) - 132;
       out[i] = (sign * sample) / 32768.0;
     }
