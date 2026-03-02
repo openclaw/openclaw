@@ -307,10 +307,11 @@ function resolveTelegramSession(
     accountId: params.accountId,
     peer,
   });
-  // Use thread suffix for DM topics to match inbound session key format
+  // Use thread suffix for DM topics to match inbound session key format.
+  // Include chatId in the thread key so it matches the inbound format: thread:<chatId>:<topicId>.
   const threadKeys =
     resolvedThreadId && !isGroup
-      ? { sessionKey: `${baseSessionKey}:thread:${resolvedThreadId}` }
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${resolvedThreadId}` })
       : null;
   return {
     sessionKey: threadKeys?.sessionKey ?? baseSessionKey,
