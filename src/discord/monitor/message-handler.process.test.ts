@@ -387,6 +387,32 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("falls back to route session key when derived session key is empty", async () => {
+    const ctx = await createBaseContext({
+      baseSessionKey: "",
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:discord:channel:c1",
+    });
+    expect(getLastRouteUpdate()).toEqual({
+      sessionKey: "agent:main:discord:channel:c1",
+      channel: "discord",
+      to: "channel:c1",
+      accountId: "default",
+    });
+  });
+
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = createThreadBindingManager({
       accountId: "default",

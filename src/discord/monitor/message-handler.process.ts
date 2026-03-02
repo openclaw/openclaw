@@ -333,6 +333,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           timestamp: entry.timestamp,
         }))
       : undefined;
+  const inboundSessionKey = [
+    boundSessionKey,
+    autoThreadContext?.SessionKey,
+    threadKeys.sessionKey,
+    route.sessionKey,
+  ].find((value): value is string => typeof value === "string" && value.trim().length > 0);
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -342,7 +348,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     CommandBody: baseText,
     From: effectiveFrom,
     To: effectiveTo,
-    SessionKey: boundSessionKey ?? autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+    SessionKey: inboundSessionKey,
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
@@ -375,7 +381,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingChannel: "discord" as const,
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
-  const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  const persistedSessionKey = inboundSessionKey ?? route.sessionKey;
 
   await recordInboundSession({
     storePath,

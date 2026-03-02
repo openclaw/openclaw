@@ -1507,6 +1507,37 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("uses CommandTargetSessionKey for internal message:received hooks when SessionKey is missing", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: undefined,
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:main:discord:channel:c1",
+      CommandBody: "hello",
+      MessageSid: "msg-99",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:discord:channel:c1",
+      expect.objectContaining({
+        from: ctx.From,
+        content: "hello",
+        channelId: "discord",
+        messageId: "msg-99",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

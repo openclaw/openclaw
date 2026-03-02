@@ -176,6 +176,7 @@ export async function dispatchReplyFromConfig(params: {
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
   const { isGroup, groupId } = hookContext;
+  const hookSessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim() || undefined;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
@@ -189,10 +190,10 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
+  if (hookSessionKey) {
     fireAndForgetHook(
       triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
+        createInternalHookEvent("message", "received", hookSessionKey, {
           ...toInternalMessageReceivedContext(hookContext),
           timestamp,
         }),
