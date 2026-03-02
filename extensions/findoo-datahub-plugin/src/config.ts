@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export type PluginConfig = {
   datahubApiUrl: string;

@@ -11,6 +11,7 @@
     "stock"
   ],
   "homepage": "https://github.com/cryptoSUN2049/openFinclaw#readme",
+  "type": "module",
   "dependencies": {
     "yahoo-finance2": "^3.13.0"
   },
@@ -18,6 +19,14 @@
     "openfinclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openfinclaw": ">=2026.2.23"
+    "openclaw": ">=2026.1.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openfinclaw/findoo-datahub-plugin"
+    }
   }
 }

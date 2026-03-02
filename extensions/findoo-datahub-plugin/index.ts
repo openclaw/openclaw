@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { resolveConfig } from "./src/config.js";
 import { DataHubClient } from "./src/datahub-client.js";
 import { OHLCVCache } from "./src/ohlcv-cache.js";
