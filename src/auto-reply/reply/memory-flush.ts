@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -7,7 +9,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
-export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 8000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
@@ -55,6 +57,29 @@ export function resolveMemoryFlushPromptForRun(params: {
     return withDate;
   }
   return `${withDate}\n${timeLine}`;
+}
+
+const MAX_FLUSH_MD_CHARS = 4000;
+const FLUSH_MD_FILENAME = "FLUSH.md";
+
+export async function readFlushInstructions(workspaceDir: string): Promise<string | null> {
+  try {
+    const filePath = path.join(workspaceDir, FLUSH_MD_FILENAME);
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(path.resolve(workspaceDir))) {
+      return null;
+    }
+    const content = await fs.readFile(resolved, "utf-8");
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const limited =
+      trimmed.length > MAX_FLUSH_MD_CHARS ? trimmed.slice(0, MAX_FLUSH_MD_CHARS) : trimmed;
+    return `Workspace flush instructions (${FLUSH_MD_FILENAME}):\n${limited}`;
+  } catch {
+    return null;
+  }
 }
 
 export type MemoryFlushSettings = {

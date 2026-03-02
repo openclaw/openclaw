@@ -31,6 +31,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
+  readFlushInstructions,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushSettings,
@@ -457,9 +458,11 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  const flushInstructions = await readFlushInstructions(process.cwd());
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     memoryFlushSettings.systemPrompt,
+    flushInstructions,
   ]
     .filter(Boolean)
     .join("\n\n");
