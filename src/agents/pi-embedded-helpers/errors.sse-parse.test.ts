@@ -233,4 +233,20 @@ describe("isLikelySSEParseError", () => {
       ).toBe(false);
     });
   });
+
+  it("rejects stack containing 'sse' as substring of unrelated function name", () => {
+    const stack =
+      "SyntaxError: Unexpected end of JSON input\n" +
+      "    at JSON.parse (<anonymous>)\n" +
+      "    at processEvent (src/events/handler.js:30:10)";
+    expect(isLikelySSEParseError("SyntaxError: Unexpected end of JSON input", stack)).toBe(false);
+  });
+
+  it("rejects stack containing 'stream.' as substring of 'upstream.'", () => {
+    const stack =
+      "SyntaxError: Unexpected end of JSON input\n" +
+      "    at JSON.parse (<anonymous>)\n" +
+      "    at upstream.proxy.ts:42:10";
+    expect(isLikelySSEParseError("SyntaxError: Unexpected end of JSON input", stack)).toBe(false);
+  });
 });

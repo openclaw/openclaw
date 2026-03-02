@@ -891,8 +891,9 @@ export function isLikelySSEParseError(
     stackLower.includes("streaming") ||
     stackLower.includes("fromsse") ||
     stackLower.includes("from_sse") ||
-    stackLower.includes("sse") ||
-    stackLower.includes("stream.") ||
+    stackLower.includes("/sse") ||
+    stackLower.includes("_sse") ||
+    /\bstream\./.test(stackLower) ||
     stackLower.includes("_stream") ||
     stackLower.includes("anthropic/streaming") ||
     stackLower.includes("openai/streaming");
