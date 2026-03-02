@@ -15,6 +15,23 @@ vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
 }));
 
+vi.mock("../auto-reply/chunk.js", () => ({
+  chunkMarkdownText: vi.fn(),
+}));
+
+vi.mock("../auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
+}));
+
+vi.mock("../channels/reply-prefix.js", () => ({
+  createReplyPrefixOptions: vi.fn(() => ({})),
+}));
+
+vi.mock("../globals.js", () => ({
+  danger: (value: unknown) => String(value),
+  logVerbose: vi.fn(),
+}));
+
 vi.mock("../plugins/http-path.js", () => ({
   normalizePluginHttpPath: (_path: string | undefined, fallback: string) => fallback,
 }));
@@ -25,6 +42,36 @@ vi.mock("../plugins/http-registry.js", () => ({
 
 vi.mock("./webhook-node.js", () => ({
   createLineNodeWebhookHandler: vi.fn(() => vi.fn()),
+}));
+
+vi.mock("./auto-reply-delivery.js", () => ({
+  deliverLineAutoReply: vi.fn(),
+}));
+
+vi.mock("./markdown-to-line.js", () => ({
+  processLineMessage: vi.fn(),
+}));
+
+vi.mock("./reply-chunks.js", () => ({
+  sendLineReplyChunks: vi.fn(),
+}));
+
+vi.mock("./send.js", () => ({
+  createFlexMessage: vi.fn(),
+  createImageMessage: vi.fn(),
+  createLocationMessage: vi.fn(),
+  createQuickReplyItems: vi.fn(),
+  createTextMessageWithQuickReplies: vi.fn(),
+  getUserDisplayName: vi.fn(),
+  pushMessageLine: vi.fn(),
+  pushMessagesLine: vi.fn(),
+  pushTextMessageWithQuickReplies: vi.fn(),
+  replyMessageLine: vi.fn(),
+  showLoadingAnimation: vi.fn(),
+}));
+
+vi.mock("./template-messages.js", () => ({
+  buildTemplateMessageFromPayload: vi.fn(),
 }));
 
 describe("monitorLineProvider lifecycle", () => {

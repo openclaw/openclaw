@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
@@ -12,17 +12,28 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 }
 
 describe("secret ref resolver", () => {
-  const cleanupRoots: string[] = [];
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  const createCaseDir = async (label: string): Promise<string> => {
+    const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
+  });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    while (cleanupRoots.length > 0) {
-      const root = cleanupRoots.pop();
-      if (!root) {
-        continue;
-      }
-      await fs.rm(root, { recursive: true, force: true });
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
     }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("resolves env refs via implicit default env provider", async () => {
@@ -41,8 +52,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-file-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
@@ -78,8 +88,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec");
     const scriptPath = path.join(root, "resolver.mjs");
     await writeSecureFile(
       scriptPath,
@@ -116,8 +125,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-plain-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-plain");
     const scriptPath = path.join(root, "resolver-plain.mjs");
     await writeSecureFile(
       scriptPath,
@@ -149,8 +157,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-link-reject");
     const scriptPath = path.join(root, "resolver-target.mjs");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await writeSecureFile(
@@ -185,8 +192,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-link-allow");
     const scriptPath = path.join(root, "resolver-target.mjs");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await writeSecureFile(
@@ -224,8 +230,7 @@ describe("secret ref resolver", () => {
       return;
     }
 
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-homebrew-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("homebrew");
     const binDir = path.join(root, "opt", "homebrew", "bin");
     const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -293,10 +298,8 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-out-"));
-    cleanupRoots.push(root);
-    cleanupRoots.push(outside);
+    const root = await createCaseDir("exec-link-trusted");
+    const outside = await createCaseDir("exec-outside");
     const scriptPath = path.join(outside, "resolver-target.mjs");
     const symlinkPath = path.join(root, "resolver-link.mjs");
     await writeSecureFile(
@@ -333,10 +336,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-protocol-"),
-    );
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-protocol");
     const scriptPath = path.join(root, "resolver-protocol.mjs");
     await writeSecureFile(
       scriptPath,
@@ -371,8 +371,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-id-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-missing-id");
     const scriptPath = path.join(root, "resolver-missing-id.mjs");
     await writeSecureFile(
       scriptPath,
@@ -407,8 +406,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-json-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("exec-invalid-json");
     const scriptPath = path.join(root, "resolver-invalid-json.mjs");
     await writeSecureFile(
       scriptPath,
@@ -441,8 +439,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-single-value-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file-single-value");
     const filePath = path.join(root, "token.txt");
     await writeSecureFile(filePath, "raw-token-value\n");
 
@@ -469,8 +466,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-timeout-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file-timeout");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
