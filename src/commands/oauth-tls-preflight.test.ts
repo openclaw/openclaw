@@ -10,7 +10,9 @@ describe("runOpenAIOAuthTlsPreflight", () => {
   });
 
   it("returns ok when OpenAI auth endpoint is reachable", async () => {
-    const fetchImpl = vi.fn(async () => new Response("", { status: 400 }));
+    const fetchImpl = vi.fn(
+      async () => new Response("", { status: 400 }),
+    ) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
     expect(result).toEqual({ ok: true });
   });
@@ -22,7 +24,7 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       };
       cause.code = "UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
       throw new TypeError("fetch failed", { cause });
-    });
+    }) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl: tlsFetchImpl, timeoutMs: 20 });
     expect(result).toMatchObject({
       ok: false,
@@ -38,7 +40,7 @@ describe("runOpenAIOAuthTlsPreflight", () => {
           "Client network socket disconnected before secure TLS connection was established",
         ),
       });
-    });
+    }) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({
       fetchImpl: networkFetchImpl,
       timeoutMs: 20,

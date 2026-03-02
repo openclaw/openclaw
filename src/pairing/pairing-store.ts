@@ -365,6 +365,9 @@ async function readAllowFromStateForPathWithExists(
   if (cachedOrMissing) {
     return cachedOrMissing;
   }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
 
   const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
@@ -401,6 +404,9 @@ function readAllowFromStateForPathSyncWithExists(
   const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
   if (cachedOrMissing) {
     return cachedOrMissing;
+  }
+  if (!stat) {
+    return { entries: [], exists: false };
   }
 
   let raw = "";
