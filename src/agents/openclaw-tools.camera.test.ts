@@ -356,6 +356,21 @@ describe("nodes run", () => {
         return mockNodeList(["system.run"]);
       }
       if (method === "node.invoke") {
+        const command = (params as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          return {
+            payload: {
+              cmdText: "echo hi",
+              plan: {
+                argv: ["echo", "hi"],
+                cwd: "/tmp",
+                rawCommand: "echo hi",
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
         expect(params).toMatchObject({
           nodeId: NODE_ID,
           command: "system.run",
@@ -391,6 +406,21 @@ describe("nodes run", () => {
         return mockNodeList(["system.run"]);
       }
       if (method === "node.invoke") {
+        const command = (params as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          return {
+            payload: {
+              cmdText: "echo hi",
+              plan: {
+                argv: ["echo", "hi"],
+                cwd: null,
+                rawCommand: "echo hi",
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
         invokeCalls += 1;
         if (invokeCalls === 1) {
           throw new Error("SYSTEM_RUN_DENIED: approval required");
@@ -411,6 +441,10 @@ describe("nodes run", () => {
         expect(params).toMatchObject({
           id: expect.any(String),
           command: "echo hi",
+          commandArgv: ["echo", "hi"],
+          systemRunPlan: expect.objectContaining({
+            argv: ["echo", "hi"],
+          }),
           nodeId: NODE_ID,
           host: "node",
           timeoutMs: 120_000,
@@ -429,11 +463,26 @@ describe("nodes run", () => {
   });
 
   it("fails with user denied when approval decision is deny", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return mockNodeList(["system.run"]);
       }
       if (method === "node.invoke") {
+        const command = (params as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          return {
+            payload: {
+              cmdText: "echo hi",
+              plan: {
+                argv: ["echo", "hi"],
+                cwd: null,
+                rawCommand: "echo hi",
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {
@@ -446,11 +495,26 @@ describe("nodes run", () => {
   });
 
   it("fails closed for timeout and invalid approval decisions", async () => {
-    callGateway.mockImplementation(async ({ method }) => {
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return mockNodeList(["system.run"]);
       }
       if (method === "node.invoke") {
+        const command = (params as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          return {
+            payload: {
+              cmdText: "echo hi",
+              plan: {
+                argv: ["echo", "hi"],
+                cwd: null,
+                rawCommand: "echo hi",
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {
@@ -460,11 +524,26 @@ describe("nodes run", () => {
     });
     await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: approval timed out");
 
-    callGateway.mockImplementation(async ({ method }) => {
+    callGateway.mockImplementation(async ({ method, params }) => {
       if (method === "node.list") {
         return mockNodeList(["system.run"]);
       }
       if (method === "node.invoke") {
+        const command = (params as { command?: string } | undefined)?.command;
+        if (command === "system.run.prepare") {
+          return {
+            payload: {
+              cmdText: "echo hi",
+              plan: {
+                argv: ["echo", "hi"],
+                cwd: null,
+                rawCommand: "echo hi",
+                agentId: null,
+                sessionKey: null,
+              },
+            },
+          };
+        }
         throw new Error("SYSTEM_RUN_DENIED: approval required");
       }
       if (method === "exec.approval.request") {

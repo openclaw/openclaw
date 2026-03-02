@@ -92,6 +92,14 @@ ensure_control_ui_allowed_origins() {
   echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
 }
 
+sync_gateway_mode_and_bind() {
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.mode local >/dev/null
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+}
+
 contains_disallowed_chars() {
   local value="$1"
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
@@ -154,9 +162,11 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
-# Seed device-identity parent eagerly for Docker Desktop/Windows bind mounts
-# that reject creating new subdirectories from inside the container.
+# Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
+# where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -167,6 +177,7 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
+export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
@@ -321,7 +332,8 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES
+  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
@@ -338,16 +350,36 @@ else
   fi
 fi
 
+# Ensure bind-mounted data directories are writable by the container's `node`
+# user (uid 1000). Host-created dirs inherit the host user's uid which may
+# differ, causing EACCES when the container tries to mkdir/write.
+# Running a brief root container to chown is the portable Docker idiom --
+# it works regardless of the host uid and doesn't require host-side root.
+echo ""
+echo "==> Fixing data-directory permissions"
+# Use -xdev to restrict chown to the config-dir mount only — without it,
+# the recursive chown would cross into the workspace bind mount and rewrite
+# ownership of all user project files on Linux hosts.
+# After fixing the config dir, only the OpenClaw metadata subdirectory
+# (.openclaw/) inside the workspace gets chowned, not the user's project files.
+docker compose "${COMPOSE_ARGS[@]}" run --rm --user root --entrypoint sh openclaw-cli -c \
+  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+
 echo ""
 echo "==> Onboarding (interactive)"
-echo "When prompted:"
-echo "  - Gateway bind: lan"
-echo "  - Gateway auth: token"
-echo "  - Gateway token: $OPENCLAW_GATEWAY_TOKEN"
-echo "  - Tailscale exposure: Off"
-echo "  - Install Gateway daemon: No"
+echo "Docker setup pins Gateway mode to local."
+echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
+echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
+echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
-docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
+docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --mode local --no-install-daemon
+
+echo ""
+echo "==> Docker gateway defaults"
+sync_gateway_mode_and_bind
 
 echo ""
 echo "==> Control UI origin allowlist"

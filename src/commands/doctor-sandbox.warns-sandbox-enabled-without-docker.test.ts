@@ -11,6 +11,13 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+vi.mock("../agents/sandbox.js", () => ({
+  DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
+  DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
+  DEFAULT_SANDBOX_IMAGE: "default-image",
+  resolveSandboxScope: vi.fn(() => "shared"),
+}));
+
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
