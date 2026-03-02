@@ -16,6 +16,20 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
   return Boolean(actions?.has(ctx.action) && ctx.toolContext);
 }
 
+export function canDispatchChannelMessageAction(params: {
+  channel: ChannelMessageActionContext["channel"];
+  action: ChannelMessageActionName;
+}): boolean {
+  const plugin = getChannelPlugin(params.channel);
+  if (!plugin?.actions?.handleAction) {
+    return false;
+  }
+  if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: params.action })) {
+    return false;
+  }
+  return true;
+}
+
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
@@ -92,11 +106,11 @@ export async function dispatchChannelMessageAction(
       `Trusted sender identity is required for ${ctx.channel}:${ctx.action} in tool-driven contexts.`,
     );
   }
-  const plugin = getChannelPlugin(ctx.channel);
-  if (!plugin?.actions?.handleAction) {
+  if (!canDispatchChannelMessageAction({ channel: ctx.channel, action: ctx.action })) {
     return null;
   }
-  if (plugin.actions.supportsAction && !plugin.actions.supportsAction({ action: ctx.action })) {
+  const plugin = getChannelPlugin(ctx.channel);
+  if (!plugin?.actions?.handleAction) {
     return null;
   }
   return await plugin.actions.handleAction(ctx);

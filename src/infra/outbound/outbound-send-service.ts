@@ -1,9 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import {
+  canDispatchChannelMessageAction,
+  dispatchChannelMessageAction,
+} from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
@@ -47,13 +51,95 @@ type PluginHandledResult = {
   toolResult: AgentToolResult<unknown>;
 };
 
+type PluginSendAttempt = {
+  to: string;
+  content: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+};
+
+function applyHookContentToActionParams(params: Record<string, unknown>, content: string): void {
+  if (typeof params.message === "string" || !("caption" in params)) {
+    params.message = content;
+  }
+  if (typeof params.caption === "string") {
+    params.caption = content;
+  }
+  if (typeof params.content === "string") {
+    params.content = content;
+  }
+}
+
+function buildCancelledToolResult(): AgentToolResult<unknown> {
+  const details = { ok: true, cancelled: true };
+  return {
+    content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
+async function runMessageSendingHook(params: {
+  ctx: OutboundSendContext;
+  send: PluginSendAttempt;
+}): Promise<{ cancelled: boolean; content: string }> {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return { cancelled: false, content: params.send.content };
+  }
+  try {
+    const mediaUrls = params.send.mediaUrls ?? (params.send.mediaUrl ? [params.send.mediaUrl] : []);
+    const hookResult = await hookRunner.runMessageSending(
+      {
+        to: params.send.to,
+        content: params.send.content,
+        metadata: {
+          channel: params.ctx.channel,
+          accountId: params.ctx.accountId ?? undefined,
+          mediaUrls,
+        },
+      },
+      {
+        channelId: params.ctx.channel,
+        accountId: params.ctx.accountId ?? undefined,
+        conversationId: params.send.to,
+      },
+    );
+    if (hookResult?.cancel) {
+      return { cancelled: true, content: params.send.content };
+    }
+    return { cancelled: false, content: hookResult?.content ?? params.send.content };
+  } catch {
+    return { cancelled: false, content: params.send.content };
+  }
+}
+
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
+  send?: PluginSendAttempt;
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
+  }
+  if (!canDispatchChannelMessageAction({ channel: params.ctx.channel, action: params.action })) {
+    return null;
+  }
+  if (params.action === "send" && params.send) {
+    const hookResult = await runMessageSendingHook({
+      ctx: params.ctx,
+      send: params.send,
+    });
+    if (hookResult.cancelled) {
+      const toolResult = buildCancelledToolResult();
+      return {
+        handledBy: "plugin",
+        payload: extractToolPayload(toolResult),
+        toolResult,
+      };
+    }
+    params.send.content = hookResult.content;
+    applyHookContentToActionParams(params.ctx.params, hookResult.content);
   }
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     params.ctx.cfg,
@@ -98,14 +184,21 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  const pluginSendAttempt: PluginSendAttempt = {
+    to: params.to,
+    content: params.message,
+    mediaUrl: params.mediaUrl,
+    mediaUrls: params.mediaUrls,
+  };
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "send",
+    send: pluginSendAttempt,
     onHandled: async () => {
       if (!params.ctx.mirror) {
         return;
       }
-      const mirrorText = params.ctx.mirror.text ?? params.message;
+      const mirrorText = params.ctx.mirror.text ?? pluginSendAttempt.content;
       const mirrorMediaUrls =
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??

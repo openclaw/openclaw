@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  canDispatchChannelMessageAction: vi.fn(() => true),
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
   sendPoll: vi.fn(),
   getAgentScopedMediaLocalRoots: vi.fn(() => ["/tmp/agent-roots"]),
+  hookRunner: {
+    hasHooks: vi.fn(() => false),
+    runMessageSending: vi.fn(async () => undefined),
+  },
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
+  canDispatchChannelMessageAction: mocks.canDispatchChannelMessageAction,
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
@@ -20,14 +26,24 @@ vi.mock("../../media/local-roots.js", () => ({
   getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => mocks.hookRunner,
+}));
+
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 
 describe("executeSendAction", () => {
   beforeEach(() => {
+    mocks.canDispatchChannelMessageAction.mockClear();
+    mocks.canDispatchChannelMessageAction.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getAgentScopedMediaLocalRoots.mockClear();
+    mocks.hookRunner.hasHooks.mockClear();
+    mocks.hookRunner.hasHooks.mockReturnValue(false);
+    mocks.hookRunner.runMessageSending.mockClear();
+    mocks.hookRunner.runMessageSending.mockResolvedValue(undefined);
   });
 
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
@@ -118,6 +134,49 @@ describe("executeSendAction", () => {
         mediaLocalRoots: ["/tmp/agent-roots"],
       }),
     );
+  });
+
+  it("applies message_sending hook content overrides before plugin dispatch", async () => {
+    mocks.hookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "message_sending",
+    );
+    mocks.hookRunner.runMessageSending.mockResolvedValue({ content: "rewritten by hook" });
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      ok: true,
+      value: { messageId: "msg-plugin" },
+      continuePrompt: "",
+      output: "",
+      sessionId: "s1",
+      model: "gpt-5.2",
+      usage: {},
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello original" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello original",
+    });
+
+    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "channel:123",
+        content: "hello original",
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        conversationId: "channel:123",
+      }),
+    );
+    const dispatchArgs = mocks.dispatchChannelMessageAction.mock.calls[0]?.[0] as
+      | { params?: Record<string, unknown> }
+      | undefined;
+    expect(dispatchArgs?.params?.message).toBe("rewritten by hook");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
