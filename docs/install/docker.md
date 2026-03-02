@@ -392,7 +392,18 @@ to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
 headless setups that callback can show a browser error. Copy the full redirect
 URL you land on and paste it back into the wizard to finish auth.
 
-### Health check
+### Health checks
+
+Container probe endpoints (no auth required):
+
+```bash
+curl -fsS http://127.0.0.1:18789/healthz
+curl -fsS http://127.0.0.1:18789/readyz
+```
+
+Aliases: `/health` and `/ready`.
+
+Authenticated deep health snapshot (gateway + channels):
 
 ```bash
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
