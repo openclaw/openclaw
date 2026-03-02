@@ -71,7 +71,7 @@ function resolveChannelGroupConfig(
   const target = groupId.toLowerCase();
   const parentTarget = parentId?.toLowerCase();
   const matchedKey = Object.keys(groups).find((key) => {
-    if (key === "*") return false;
+    if (key === "*") {return false;}
     const lower = key.toLowerCase();
     return lower === target || (parentTarget != null && lower === parentTarget);
   });
