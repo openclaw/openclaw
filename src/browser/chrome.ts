@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { getDirectAgentForCdp, withNoProxyForLocalhost } from "./cdp-proxy-bypass.js";
 import { appendCdpPath } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -83,10 +84,13 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetch(versionUrl, {
-      signal: ctrl.signal,
-      headers: getHeadersWithAuth(versionUrl),
-    });
+    // Bypass proxy for loopback CDP connections (#31219)
+    const res = await withNoProxyForLocalhost(() =>
+      fetch(versionUrl, {
+        signal: ctrl.signal,
+        headers: getHeadersWithAuth(versionUrl),
+      }),
+    );
     if (!res.ok) {
       return null;
     }
@@ -117,9 +121,12 @@ export async function getChromeWebSocketUrl(
 async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const headers = getHeadersWithAuth(wsUrl);
+    // Bypass proxy for loopback CDP connections (#31219)
+    const wsAgent = getDirectAgentForCdp(wsUrl);
     const ws = new WebSocket(wsUrl, {
       handshakeTimeout: timeoutMs,
       ...(Object.keys(headers).length ? { headers } : {}),
+      ...(wsAgent ? { agent: wsAgent } : {}),
     });
     const timer = setTimeout(
       () => {
