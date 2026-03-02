@@ -319,6 +319,107 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
+  it("routes compact model callbacks by inferring provider", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        agents: {
+          defaults: {
+            model: `bedrock/${modelId}`,
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-compact-1",
+        data: `mdl_sel/${modelId}`,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 14,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0];
+    expect(payload?.Body).toContain(`/model amazon-bedrock/${modelId}`);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
+  });
+
+  it("rejects ambiguous compact model callbacks and returns provider list", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        agents: {
+          defaults: {
+            model: "anthropic/shared-model",
+            models: {
+              "anthropic/shared-model": {},
+              "openai/shared-model": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-compact-2",
+        data: "mdl_sel/shared-model",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 15,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+      'Could not resolve model "shared-model".',
+    );
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
+  });
+
   it("includes sender identity in group envelope headers", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
