@@ -10,6 +10,9 @@ const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn(async () => {}),
   removeReactionDiscord: vi.fn(async () => {}),
 }));
+const hookMocks = vi.hoisted(() => ({
+  emitMessageSentHooks: vi.fn(),
+}));
 function createMockDraftStream() {
   return {
     update: vi.fn<(text: string) => void>(() => {}),
@@ -59,6 +62,7 @@ const configSessionsMocks = vi.hoisted(() => ({
 }));
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
+const emitMessageSentHooks = hookMocks.emitMessageSentHooks;
 
 vi.mock("../send.js", () => ({
   reactMessageDiscord: sendMocks.reactMessageDiscord,
@@ -82,16 +86,61 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
 }));
 
 vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
+  // Match createReplyDispatcherWithTyping delivery semantics closely enough for hook assertions.
   createReplyDispatcherWithTyping: vi.fn(
-    (opts: { deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void }) => ({
+    (opts: {
+      deliver: (
+        payload: unknown,
+        info: { kind: "block" | "final" },
+      ) =>
+        | Promise<{ delivered: boolean; messageId?: string } | void>
+        | { delivered: boolean; messageId?: string }
+        | void;
+      onDelivery?: (
+        payload: unknown,
+        info:
+          | { kind: "block" | "final"; success: true; delivered: boolean; messageId?: string }
+          | { kind: "block" | "final"; success: false; delivered: false; error: unknown },
+      ) => void;
+    }) => ({
       dispatcher: {
         sendToolResult: vi.fn(() => true),
-        sendBlockReply: vi.fn((payload: unknown) => {
-          void opts.deliver(payload as never, { kind: "block" });
+        sendBlockReply: vi.fn(async (payload: unknown) => {
+          try {
+            const delivery = await opts.deliver(payload, { kind: "block" });
+            opts.onDelivery?.(payload, {
+              kind: "block",
+              success: true,
+              delivered: delivery?.delivered ?? true,
+              messageId: delivery?.messageId,
+            });
+          } catch (error) {
+            opts.onDelivery?.(payload, {
+              kind: "block",
+              success: false,
+              delivered: false,
+              error,
+            });
+          }
           return true;
         }),
-        sendFinalReply: vi.fn((payload: unknown) => {
-          void opts.deliver(payload as never, { kind: "final" });
+        sendFinalReply: vi.fn(async (payload: unknown) => {
+          try {
+            const delivery = await opts.deliver(payload, { kind: "final" });
+            opts.onDelivery?.(payload, {
+              kind: "final",
+              success: true,
+              delivered: delivery?.delivered ?? true,
+              messageId: delivery?.messageId,
+            });
+          } catch (error) {
+            opts.onDelivery?.(payload, {
+              kind: "final",
+              success: false,
+              delivered: false,
+              error,
+            });
+          }
           return true;
         }),
         waitForIdle: vi.fn(async () => {}),
@@ -106,6 +155,10 @@ vi.mock("../../auto-reply/reply/reply-dispatcher.js", () => ({
 
 vi.mock("../../channels/session.js", () => ({
   recordInboundSession,
+}));
+
+vi.mock("../../hooks/message-sent.js", () => ({
+  emitMessageSentHooks: hookMocks.emitMessageSentHooks,
 }));
 
 vi.mock("../../config/sessions.js", () => ({
@@ -126,6 +179,7 @@ beforeEach(() => {
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
+  emitMessageSentHooks.mockClear();
   readSessionUpdatedAt.mockClear();
   resolveStorePath.mockClear();
   dispatchInboundMessage.mockResolvedValue({
@@ -445,6 +499,34 @@ describe("processDiscordMessage draft streaming", () => {
       { rest: {} },
     );
     expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("emits hook content from finalized preview text", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld   " });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(editMessageDiscord).toHaveBeenCalledWith(
+      "c1",
+      "preview-1",
+      { content: "Hello\nWorld" },
+      { rest: {} },
+    );
+    expect(emitMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Hello\nWorld",
+        success: true,
+        channelId: "discord",
+      }),
+    );
   });
 
   it("accepts streaming=true alias for partial preview mode", async () => {

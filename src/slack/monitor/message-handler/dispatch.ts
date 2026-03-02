@@ -192,6 +192,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
   const deliverNormally = async (
     payload: ReplyPayload,
@@ -215,6 +216,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         usedReplyThreadTs ??= replyThreadTs;
       }
       replyPlan.markSent();
+      deliveredContentByPayload.set(payload, payload.text ?? "");
     }
     return delivery;
   };
@@ -250,6 +252,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
+        deliveredContentByPayload.set(payload, text);
         return { delivered: true };
       }
 
@@ -257,6 +260,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      deliveredContentByPayload.set(payload, text);
       return { delivered: true };
     } catch (err) {
       runtime.error?.(
@@ -272,6 +276,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload) => {
+      deliveredContentByPayload.delete(payload);
       if (useStreaming) {
         return await deliverWithStreaming(payload);
       }
@@ -299,6 +304,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: finalText.trim(),
           });
+          deliveredContentByPayload.set(payload, finalText.trim());
           return {
             delivered: true,
             messageId: draftMessageId,
@@ -332,13 +338,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onDelivery: (payload, info) => {
       const target = prepared.ctxPayload.To ?? message.channel;
+      const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+      deliveredContentByPayload.delete(payload);
       if (info.success) {
         if (!info.delivered) {
           return;
         }
         emitMessageSentHooks({
           to: target,
-          content: payload.text ?? "",
+          content: hookContent,
           success: true,
           channelId: "slack",
           accountId: route.accountId,
@@ -350,7 +358,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
       emitMessageSentHooks({
         to: target,
-        content: payload.text ?? "",
+        content: hookContent,
         success: false,
         error: info.error instanceof Error ? info.error.message : String(info.error),
         channelId: "slack",

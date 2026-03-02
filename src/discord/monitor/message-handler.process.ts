@@ -463,6 +463,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -577,6 +578,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (payload: ReplyPayload, info) => {
+      deliveredContentByPayload.delete(payload);
       const isFinal = info.kind === "final";
       if (payload.isReasoning) {
         // Reasoning/thinking payloads should not be delivered to Discord.
@@ -608,6 +610,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             );
             finalizedViaPreviewMessage = true;
             replyReference.markSent();
+            deliveredContentByPayload.set(payload, previewFinalText);
             return {
               delivered: true,
               messageId: previewMessageId,
@@ -638,6 +641,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
+              deliveredContentByPayload.set(payload, previewFinalText);
               return {
                 delivered: true,
                 messageId: messageIdAfterStop,
@@ -675,17 +679,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
       if (delivery.delivered) {
         replyReference.markSent();
+        deliveredContentByPayload.set(payload, payload.text ?? "");
       }
       return delivery;
     },
     onDelivery: (payload, deliveryInfo) => {
+      const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+      deliveredContentByPayload.delete(payload);
       if (deliveryInfo.success) {
         if (!deliveryInfo.delivered) {
           return;
         }
         emitMessageSentHooks({
           to: deliverChannelId,
-          content: payload.text ?? "",
+          content: hookContent,
           success: true,
           channelId: "discord",
           accountId,
@@ -697,7 +704,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       }
       emitMessageSentHooks({
         to: deliverChannelId,
-        content: payload.text ?? "",
+        content: hookContent,
         success: false,
         error:
           deliveryInfo.error instanceof Error
