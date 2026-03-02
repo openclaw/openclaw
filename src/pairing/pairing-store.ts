@@ -374,10 +374,11 @@ async function readAllowFromStateForPathWithExists(
     allowFrom: [],
   });
   const entries = normalizeAllowFromList(channel, value);
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   setAllowFromReadCache(filePath, {
     exists,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
+    mtimeMs: stat!.mtimeMs,
+    size: stat!.size,
     entries,
   });
   return { entries, exists };
@@ -419,13 +420,14 @@ function readAllowFromStateForPathSyncWithExists(
     }
     return { entries: [], exists: false };
   }
+  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
   try {
     const parsed = JSON.parse(raw) as AllowFromStore;
     const entries = normalizeAllowFromList(channel, parsed);
     setAllowFromReadCache(filePath, {
       exists: true,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
+      mtimeMs: stat!.mtimeMs,
+      size: stat!.size,
       entries,
     });
     return { entries, exists: true };
@@ -433,8 +435,8 @@ function readAllowFromStateForPathSyncWithExists(
     // Keep parity with async reads: malformed JSON still means the file exists.
     setAllowFromReadCache(filePath, {
       exists: true,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
+      mtimeMs: stat!.mtimeMs,
+      size: stat!.size,
       entries: [],
     });
     return { entries: [], exists: true };
