@@ -67,13 +67,13 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
-  // Cache the callback so enqueueFollowupRun can restart drain after the queue
-  // has been deleted and recreated (the post-drain idle window race condition).
-  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
   }
+  // Cache callback only when a drain actually starts. Avoid keeping stale
+  // callbacks around from finalize calls where no queue work is pending.
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
