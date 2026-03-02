@@ -178,7 +178,20 @@ export async function handleSlackMessageAction(params: {
 
   if (action === "download-file") {
     const fileId = readStringParam(actionParams, "fileId", { required: true });
-    return await invoke({ action: "downloadFile", fileId, accountId }, cfg);
+    const channelId =
+      readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
+    const threadId =
+      readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    return await invoke(
+      {
+        action: "downloadFile",
+        fileId,
+        channelId: channelId ?? undefined,
+        threadId: threadId ?? undefined,
+        accountId,
+      },
+      cfg,
+    );
   }
 
   throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
