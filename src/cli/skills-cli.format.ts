@@ -76,7 +76,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         name: s.name,
         description: s.description,
         // Strip ANSI codes from emoji for JSON output
-        emoji: s.emoji ? s.emoji.replace(ANSI_PATTERN, "") : null,
+        // Returns null if emoji becomes empty after stripping ANSI codes
+        emoji: s.emoji ? (s.emoji.replace(ANSI_PATTERN, "") || null) : null,
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
