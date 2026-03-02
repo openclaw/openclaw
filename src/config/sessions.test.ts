@@ -7,6 +7,7 @@ import {
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
+  recordSessionMetaFromInbound,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionKey,
@@ -321,6 +322,103 @@ describe("sessions", () => {
       to: "222",
     });
     expect(store[mainSessionKey]?.lastThreadId).toBeUndefined();
+  });
+
+  it("recordSessionMetaFromInbound clears stale origin threadId on top-level turns", async () => {
+    const sessionKey = "agent:main:slack:channel:C123";
+    const dir = await createCaseDir("recordSessionMetaFromInbound");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+        From: "slack:channel:C123",
+        To: "channel:C123",
+        SessionKey: sessionKey,
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        MessageThreadId: "1739142736.000100",
+      },
+    });
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+        From: "slack:channel:C123",
+        To: "channel:C123",
+        SessionKey: sessionKey,
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.origin?.threadId).toBeUndefined();
+  });
+
+  it("recordSessionMetaFromInbound clears stale persisted delivery threadId on top-level turns", async () => {
+    const sessionKey = "agent:main:slack:channel:C999";
+    const staleThreadId = "1739142736.000100";
+    const dir = await createCaseDir("recordSessionMetaFromInbound-route");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "sess-route-stale",
+            updatedAt: 1,
+            chatType: "channel",
+            channel: "slack",
+            deliveryContext: {
+              channel: "slack",
+              to: "channel:C999",
+              threadId: staleThreadId,
+            },
+            lastChannel: "slack",
+            lastTo: "channel:C999",
+            lastThreadId: staleThreadId,
+            origin: {
+              provider: "slack",
+              to: "channel:C999",
+              threadId: staleThreadId,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey,
+      ctx: {
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+        From: "slack:channel:C999",
+        To: "channel:C999",
+        SessionKey: sessionKey,
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C999",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.origin?.threadId).toBeUndefined();
+    expect(store[sessionKey]?.deliveryContext?.threadId).toBeUndefined();
+    expect(store[sessionKey]?.lastThreadId).toBeUndefined();
   });
 
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {

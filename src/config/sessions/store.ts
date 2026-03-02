@@ -75,7 +75,9 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    // Delivery routing must be sourced from explicit route fields only.
+    // origin.threadId is message metadata and can be stale for top-level turns.
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
@@ -1039,6 +1041,7 @@ export async function recordSessionMetaFromInbound(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
+  const hasInboundThreadId = ctx.MessageThreadId != null && ctx.MessageThreadId !== "";
   return await updateSessionStore(
     storePath,
     (store) => {
@@ -1050,7 +1053,30 @@ export async function recordSessionMetaFromInbound(params: {
         existing,
         groupResolution: params.groupResolution,
       });
-      if (!patch) {
+      const shouldClearPersistedThread =
+        !hasInboundThreadId &&
+        Boolean(existing?.lastThreadId != null || existing?.deliveryContext?.threadId != null);
+      const routePatch = shouldClearPersistedThread
+        ? (() => {
+            const cleared = normalizeSessionDeliveryFields({
+              channel: existing?.channel,
+              lastChannel: existing?.lastChannel,
+              lastTo: existing?.lastTo,
+              lastAccountId: existing?.lastAccountId,
+              deliveryContext: removeThreadFromDeliveryContext(existing?.deliveryContext),
+            });
+            return {
+              deliveryContext: cleared.deliveryContext,
+              lastChannel: cleared.lastChannel,
+              lastTo: cleared.lastTo,
+              lastAccountId: cleared.lastAccountId,
+              lastThreadId: cleared.lastThreadId,
+            } satisfies Partial<SessionEntry>;
+          })()
+        : null;
+      const combinedPatch = patch || routePatch ? { ...routePatch, ...patch } : null;
+
+      if (!combinedPatch) {
         if (existing && resolved.legacyKeys.length > 0) {
           store[resolved.normalizedKey] = existing;
           for (const legacyKey of resolved.legacyKeys) {
@@ -1062,7 +1088,7 @@ export async function recordSessionMetaFromInbound(params: {
       if (!existing && !createIfMissing) {
         return null;
       }
-      const next = mergeSessionEntry(existing, patch);
+      const next = mergeSessionEntry(existing, combinedPatch);
       store[resolved.normalizedKey] = next;
       for (const legacyKey of resolved.legacyKeys) {
         delete store[legacyKey];
