@@ -159,6 +159,19 @@ function isPackageNotFoundInstallError(message: string): boolean {
   );
 }
 
+/**
+ * True when npm downloaded a package successfully but it is not a valid
+ * OpenClaw plugin (e.g. `diffs` resolves to the unrelated npm package
+ * `diffs@0.1.1` instead of `@openclaw/diffs`).
+ * See: https://github.com/openclaw/openclaw/issues/32019
+ */
+function isNotAnOpenClawPluginError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("missing openclaw.extensions") || lower.includes("openclaw.extensions is empty")
+  );
+}
+
 export function registerPluginsCli(program: Command) {
   const plugins = program
     .command("plugins")
@@ -625,7 +638,9 @@ export function registerPluginsCli(program: Command) {
         logger: createPluginInstallLogger(),
       });
       if (!result.ok) {
-        const bundledFallback = isPackageNotFoundInstallError(result.error)
+        const shouldTryBundledFallback =
+          isPackageNotFoundInstallError(result.error) || isNotAnOpenClawPluginError(result.error);
+        const bundledFallback = shouldTryBundledFallback
           ? findBundledPluginByNpmSpec({ spec: raw })
           : undefined;
         if (!bundledFallback) {
