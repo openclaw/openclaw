@@ -32,6 +32,7 @@ import {
 } from "../infra/outbound/session-binding-service.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -43,6 +44,7 @@ export type SpawnAcpParams = {
   cwd?: string;
   mode?: SpawnAcpMode;
   thread?: boolean;
+  sandbox?: "inherit" | "require";
 };
 
 export type SpawnAcpContext = {
@@ -261,6 +263,33 @@ export async function spawnAcpDirect(
   }
 
   const sessionKey = `agent:${targetAgentId}:acp:${crypto.randomUUID()}`;
+
+  // Sandbox inheritance guard: mirror the subagent spawn check so sandboxed
+  // sessions cannot escape their isolation boundary via the ACP runtime path.
+  const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: ctx.agentSessionKey,
+  });
+  const childRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey,
+  });
+  if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
+    if (requesterRuntime.sandboxed) {
+      return {
+        status: "forbidden",
+        error:
+          "Sandboxed sessions cannot spawn unsandboxed ACP sessions. Set a sandboxed target agent or use the same agent runtime.",
+      };
+    }
+    return {
+      status: "forbidden",
+      error:
+        'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
+    };
+  }
+
   const runtimeMode = resolveAcpSessionMode(spawnMode);
 
   let preparedBinding: PreparedAcpThreadBinding | null = null;

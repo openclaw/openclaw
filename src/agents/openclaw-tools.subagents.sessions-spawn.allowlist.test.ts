@@ -223,4 +223,70 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(details.error).toContain('sandbox="require"');
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
+
+  // ACP sandbox inheritance guard (GHSA-p7gr-f84w-hqg5)
+  async function executeAcpSpawn(callId: string, agentId: string, sandbox?: "inherit" | "require") {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+    return tool.execute(callId, { task: "do thing", agentId, runtime: "acp", sandbox });
+  }
+
+  it("forbids sandboxed session from spawning unsandboxed ACP session (GHSA-p7gr-f84w-hqg5)", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+          },
+        },
+        list: [
+          {
+            id: "research",
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await executeAcpSpawn("call13", "research");
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("forbidden");
+    expect(details.error).toContain("Sandboxed sessions cannot spawn unsandboxed ACP sessions.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it('forbids ACP sandbox="require" when target ACP agent is unsandboxed', async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await executeAcpSpawn("call14", "research", "require");
+    const details = result.details as { status?: string; error?: string };
+
+    expect(details.status).toBe("forbidden");
+    expect(details.error).toContain('sandbox="require"');
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
 });
