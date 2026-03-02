@@ -119,4 +119,12 @@ describe("extractSystemdExecStartCommandToken", () => {
       ),
     ).toBe("/snap/bin/chromium");
   });
+
+  it("extracts executable token from env --split-string= single-quoted payload", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env --split-string='/snap/bin/chromium --headless --user-data-dir=/tmp/openclaw'",
+      ),
+    ).toBe("/snap/bin/chromium");
+  });
 });

@@ -127,6 +127,23 @@ function extractEnvInlineSplitStringValue(token: string): string | null {
   return null;
 }
 
+function consumePossiblyQuotedValue(initialValue: string, pending: string[]): string {
+  let value = initialValue;
+  const quote = value[0];
+  if ((quote !== "'" && quote !== '"') || value.endsWith(quote)) {
+    return value;
+  }
+
+  while (pending.length > 0) {
+    value = `${value} ${pending.shift() ?? ""}`;
+    if (value.endsWith(quote)) {
+      break;
+    }
+  }
+
+  return value;
+}
+
 export function collectSystemdExecStartValues(contents: string): string[] {
   const logicalLines: string[] = [];
   let currentLine = "";
@@ -192,7 +209,8 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
         }
         const inlineSplitValue = extractEnvInlineSplitStringValue(envToken);
         if (inlineSplitValue) {
-          const expanded = parseSystemdExecStart(inlineSplitValue);
+          const splitStringValue = consumePossiblyQuotedValue(inlineSplitValue, pending);
+          const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
           if (expanded.length > 0) {
             pending.unshift(...expanded);
           }
@@ -201,7 +219,8 @@ export function extractSystemdExecStartCommandToken(execStartValue: string): str
         if (envOptionConsumesNextValue(envToken)) {
           const optionValue = pending.shift();
           if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
-            const expanded = parseSystemdExecStart(stripSurroundingQuotes(optionValue));
+            const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
+            const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
             if (expanded.length > 0) {
               pending.unshift(...expanded);
             }
