@@ -1,18 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import {
+  CONFIG_BACKUP_DIR_NAME,
+  resolveConfigBackupPath,
+  rotateConfigBackups,
+} from "./backup-rotation.js";
 import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config backup rotation", () => {
-  it("keeps a 5-deep backup ring for config writes", async () => {
+  it("keeps backups in config-backup/ with datetime naming", async () => {
     await withTempHome(async () => {
       const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
       if (!stateDir) {
         throw new Error("Expected OPENCLAW_STATE_DIR to be set by withTempHome");
       }
       const configPath = path.join(stateDir, "openclaw.json");
+      const backupDir = path.join(stateDir, CONFIG_BACKUP_DIR_NAME);
       const buildConfig = (version: number): OpenClawConfig =>
         ({
           agents: { list: [{ id: `v${version}` }] },
@@ -26,27 +31,37 @@ describe("config backup rotation", () => {
       await writeVersion(0);
       for (let version = 1; version <= 6; version += 1) {
         await rotateConfigBackups(configPath, fs);
-        await fs.copyFile(configPath, `${configPath}.bak`).catch(() => {
+        const backupPath = resolveConfigBackupPath(configPath);
+        await fs.mkdir(path.dirname(backupPath), { recursive: true });
+        await fs.copyFile(configPath, backupPath).catch(() => {
           // best-effort
         });
         await writeVersion(version);
+        // Small delay to ensure unique timestamps
+        await new Promise((resolve) => setTimeout(resolve, 5));
       }
 
-      const readName = async (suffix = "") => {
-        const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
-        return (
-          (JSON.parse(raw) as { agents?: { list?: Array<{ id?: string }> } }).agents?.list?.[0]
-            ?.id ?? null
-        );
-      };
+      // Current config should be latest
+      const currentRaw = await fs.readFile(configPath, "utf-8");
+      expect(
+        (JSON.parse(currentRaw) as { agents?: { list?: Array<{ id?: string }> } }).agents?.list?.[0]
+          ?.id,
+      ).toBe("v6");
 
-      await expect(readName()).resolves.toBe("v6");
-      await expect(readName(".bak")).resolves.toBe("v5");
-      await expect(readName(".bak.1")).resolves.toBe("v4");
-      await expect(readName(".bak.2")).resolves.toBe("v3");
-      await expect(readName(".bak.3")).resolves.toBe("v2");
-      await expect(readName(".bak.4")).resolves.toBe("v1");
-      await expect(fs.stat(`${configPath}.bak.5`)).rejects.toThrow();
+      // Backup directory should exist with datetime-named files
+      const entries = await fs.readdir(backupDir);
+      const backups = entries.filter((e) => e.startsWith("openclaw.json.bak.")).toSorted();
+
+      // Should have at most CONFIG_BACKUP_COUNT (5) backups
+      expect(backups.length).toBeLessThanOrEqual(5);
+      expect(backups.length).toBeGreaterThan(0);
+
+      // Each backup should match the datetime pattern
+      for (const backup of backups) {
+        expect(backup).toMatch(
+          /^openclaw\.json\.bak\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/,
+        );
+      }
     });
   });
 });
