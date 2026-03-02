@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasWebCredsSync } from "./auth-store.js";
@@ -27,6 +27,7 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  reactionNotifications?: "off" | "own" | "all";
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -166,6 +167,7 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
     debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
+    reactionNotifications: accountCfg?.reactionNotifications ?? rootCfg?.reactionNotifications,
   };
 }
 
