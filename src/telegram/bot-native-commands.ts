@@ -13,7 +13,9 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import { createTypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -53,6 +55,7 @@ import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import {
+  buildTypingThreadParams,
   buildTelegramThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
@@ -68,6 +71,7 @@ import {
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -128,6 +132,7 @@ type RegisterTelegramNativeCommandsParams = {
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   nativeDisabledExplicit: boolean;
+  sendChatActionHandler: TelegramSendChatActionHandler;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
   resolveTelegramGroupConfig: (
     chatId: string | number,
@@ -315,6 +320,7 @@ export const registerTelegramNativeCommands = ({
   nativeEnabled,
   nativeSkillsEnabled,
   nativeDisabledExplicit,
+  sendChatActionHandler,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
@@ -641,6 +647,29 @@ export const registerTelegramNativeCommands = ({
             skippedNonSilent: 0,
           };
 
+          const typingCallbacks = createTypingCallbacks({
+            start: async () => {
+              await withTelegramApiErrorLogging({
+                operation: "sendChatAction",
+                runtime,
+                fn: () =>
+                  sendChatActionHandler.sendChatAction(
+                    chatId,
+                    "typing",
+                    buildTypingThreadParams(threadSpec.id),
+                  ),
+              });
+            },
+            onStartError: (err) => {
+              logTypingFailure({
+                log: logVerbose,
+                channel: "telegram",
+                target: String(chatId),
+                error: err,
+              });
+            },
+          });
+
           const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
             cfg,
             agentId: route.agentId,
@@ -653,6 +682,7 @@ export const registerTelegramNativeCommands = ({
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
+              typingCallbacks,
               deliver: async (payload, _info) => {
                 const result = await deliverReplies({
                   replies: [payload],

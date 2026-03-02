@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 type RegisterTelegramNativeCommandParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
@@ -19,6 +20,7 @@ export function createNativeCommandTestParams(params: {
   nativeEnabled?: boolean;
   nativeSkillsEnabled?: boolean;
   nativeDisabledExplicit?: boolean;
+  sendChatActionHandler?: TelegramSendChatActionHandler;
   opts?: RegisterTelegramNativeCommandParams["opts"];
 }): RegisterTelegramNativeCommandParams {
   return {
@@ -35,6 +37,11 @@ export function createNativeCommandTestParams(params: {
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? true,
     nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
+    sendChatActionHandler: params.sendChatActionHandler ?? {
+      sendChatAction: async () => undefined,
+      isSuspended: () => false,
+      reset: () => {},
+    },
     resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
     resolveTelegramGroupConfig: () => ({
       groupConfig: undefined,
