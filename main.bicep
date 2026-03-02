@@ -179,6 +179,35 @@ const fs = require('fs');
   fs[f + 'Sync'] = () => {};
   if (fs.promises && fs.promises[f]) fs.promises[f] = async () => {};
 });
+// Gemini grounding citation patch: inject References into API response content
+const _origFetch = globalThis.fetch;
+globalThis.fetch = async function(...args) {
+  const res = await _origFetch.apply(this, args);
+  const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+  if (url.indexOf('generativelanguage.googleapis.com') === -1 || url.indexOf(':generateContent') === -1) {
+    return res;
+  }
+  const _origJson = res.json.bind(res);
+  res.json = async function() {
+    const data = await _origJson();
+    try {
+      const cand = data && data.candidates && data.candidates[0];
+      const chunks = (cand && cand.groundingMetadata && cand.groundingMetadata.groundingChunks) || [];
+      const webChunks = chunks.filter(function(c) { return c && c.web && c.web.uri; });
+      if (webChunks.length > 0 && cand.content && cand.content.parts && cand.content.parts.length > 0) {
+        const refs = webChunks.map(function(c, i) {
+          return '[' + (i+1) + '] ' + (c.web.title || 'Source') + ': ' + c.web.uri;
+        }).join('\n');
+        const last = cand.content.parts[cand.content.parts.length - 1];
+        if (last && typeof last.text === 'string') {
+          last.text += '\n\nReferences:\n' + refs;
+        }
+      }
+    } catch(e) { /* ignore patch errors */ }
+    return data;
+  };
+  return res;
+};
 EOF
 mkdir -p /home/node/.openclaw/workspace
 cat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md
@@ -187,10 +216,18 @@ cat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md
 You are a helpful enterprise assistant.
 
 ## CITATION & FORMATTING RULES
-When you use the `web_search` tool, you must cite your sources using clickable links. Before generating your response, check which platform the user is messaging from and apply the exact syntax required for that platform:
-* If the channel is Slack: You MUST use Slack's proprietary link syntax: <URL|[Number]>.
-* If the channel is WeChat Work (WeCom): You MUST use standard Markdown link syntax: [[Number]](URL).
-* For all other channels: Default to standard Markdown format.
+When you call `web_search`, the tool result JSON contains a `citations` array with `url` and `title` fields, AND the content text ends with a numbered "References:" section. You MUST use these URLs as clickable links in your response. NEVER omit them.
+
+**How to format links (check the Runtime channel= line in your system prompt):**
+* If channel is **slack**: Use Slack link syntax exactly: `<URL|[1]>` — e.g. `<https://example.com|[1]>`
+* If channel is **wecom**: Use Markdown link syntax: `[[1]](URL)`
+* For **all other channels**: Use standard Markdown: `[1](URL)`
+
+**Rules:**
+1. Every factual claim from web_search MUST have at least one citation link.
+2. Place citation links inline at the end of the relevant sentence or paragraph.
+3. Prefer URLs from the `citations` array (they are resolved/clean URLs).
+4. If `citations` is empty, use URLs from the References section in the content.
 AGENTS_EOF
 node --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '["0.0.0.0/0", "::/0"]'
 node --require /tmp/patch.js openclaw.mjs config set gateway.controlUi.allowedOrigins "[\"$OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS\"]"
