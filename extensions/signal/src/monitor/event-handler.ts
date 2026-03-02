@@ -719,6 +719,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
+    // Send ACK reaction immediately — before any awaited I/O (attachment fetch, read receipt)
+    // so the user gets instant visual feedback that their message was received.
+    if (typeof envelope.timestamp === "number") {
+      maybeSendSignalAckReaction({
+        cfg: deps.cfg,
+        senderRecipient,
+        targetTimestamp: envelope.timestamp,
+        isGroup,
+        groupId,
+        wasMentioned: effectiveWasMentioned,
+        canDetectMention: mentionRegexes.length > 0,
+        requireMention: Boolean(requireMention),
+        baseUrl: deps.baseUrl,
+        account: deps.account,
+        accountId: deps.accountId,
+      });
+    }
+
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     const mediaPaths: string[] = [];
@@ -799,22 +817,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
-    if (typeof envelope.timestamp === "number") {
-      maybeSendSignalAckReaction({
-        cfg: deps.cfg,
-        senderRecipient,
-        targetTimestamp: envelope.timestamp,
-        isGroup,
-        groupId,
-        wasMentioned: effectiveWasMentioned,
-        canDetectMention: mentionRegexes.length > 0,
-        requireMention: Boolean(requireMention),
-        baseUrl: deps.baseUrl,
-        account: deps.account,
-        accountId: deps.accountId,
-      });
-    }
-
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
