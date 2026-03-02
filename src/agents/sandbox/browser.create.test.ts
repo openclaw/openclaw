@@ -184,4 +184,43 @@ describe("ensureSandboxBrowser create args", () => {
     );
     expect(result?.noVncUrl).toBeUndefined();
   });
+
+  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "none";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = dockerMocks.execDocker.mock.calls.find(
+      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
+    )?.[0] as string[] | undefined;
+
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
+  });
+
+  it("keeps the main workspace writable when workspaceAccess is rw", async () => {
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "rw";
+
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = dockerMocks.execDocker.mock.calls.find(
+      (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
+    )?.[0] as string[] | undefined;
+
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain("/tmp/workspace:/workspace");
+    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+  });
 });

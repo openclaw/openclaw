@@ -1142,10 +1142,10 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg) || undefined;
+        const agentId = paginationMatch[2]?.trim() || resolveDefaultAgentId(cfg);
         const skillCommands = listSkillCommandsForAgents({
           cfg,
-          agentIds: agentId ? [agentId] : undefined,
+          agentIds: [agentId],
         });
         const result = buildCommandsMessagePaginated(cfg, skillCommands, {
           page,
