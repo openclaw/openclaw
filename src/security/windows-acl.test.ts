@@ -174,6 +174,17 @@ Successfully processed 1 files`;
       expect(summary.untrustedGroup).toHaveLength(0);
     });
 
+    it("classifies localized NT AUTHORITY system account names as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        aclEntry({ principal: "AUTORITE NT\\Système" }),
+        aclEntry({ principal: "NT AUTHORITY\\СИСТЕМА" }),
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(2);
+      expect(summary.untrustedWorld).toHaveLength(0);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
     it("classifies world principals", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "Everyone", rights: ["R"], rawRights: "(R)", canWrite: false }),

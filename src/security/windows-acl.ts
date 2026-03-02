@@ -36,6 +36,8 @@ const TRUSTED_BASE = new Set([
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system"];
+const AUTHORITY_DOMAIN_ALIASES = new Set(["nt authority", "autorite nt", "nt autoritat"]);
+const SYSTEM_ACCOUNT_ALIASES = new Set(["system", "systeme", "система"]);
 
 const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
 const TRUSTED_SIDS = new Set([
@@ -51,6 +53,26 @@ const STATUS_PREFIXES = [
 ];
 
 const normalize = (value: string) => value.trim().toLowerCase();
+
+function normalizeAclToken(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isLocalizedSystemPrincipal(principal: string): boolean {
+  const idx = principal.lastIndexOf("\\");
+  if (idx === -1) {
+    return false;
+  }
+  const domain = normalizeAclToken(principal.slice(0, idx));
+  const account = normalizeAclToken(principal.slice(idx + 1));
+  return AUTHORITY_DOMAIN_ALIASES.has(domain) && SYSTEM_ACCOUNT_ALIASES.has(account);
+}
 
 export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
   const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
@@ -91,7 +113,8 @@ function classifyPrincipal(
 
   if (
     trustedPrincipals.has(normalized) ||
-    TRUSTED_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+    TRUSTED_SUFFIXES.some((suffix) => normalized.endsWith(suffix)) ||
+    isLocalizedSystemPrincipal(normalized)
   ) {
     return "trusted";
   }
