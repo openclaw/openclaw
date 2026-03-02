@@ -199,23 +199,12 @@ Notes:
 ## Browserbase (hosted remote CDP)
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
-headless browsers. It provides remote CDP endpoints with built-in CAPTCHA
-solving, anti-bot stealth mode, and residential proxies. You can point an
+headless browsers with remote CDP endpoints. Paid plans (Developer and above)
+add CAPTCHA solving, stealth mode, and residential proxies. You can point an
 OpenClaw browser profile at Browserbase's connect endpoint and authenticate
 with your API key.
 
-### Getting started
-
-1. **Sign up** at [browserbase.com/sign-up](https://www.browserbase.com/sign-up).
-   The free tier includes one concurrent browser session and 60 minutes of
-   monthly usage.
-2. **Find your credentials** on the
-   [Overview dashboard](https://www.browserbase.com/overview) — copy your
-   **API Key** from the right-hand panel.
-
-### Profile setup
-
-Point a profile at Browserbase's connect endpoint with your API key:
+Example:
 
 ```json5
 {
@@ -234,13 +223,16 @@ Point a profile at Browserbase's connect endpoint with your API key:
 }
 ```
 
-### Notes
+Notes:
 
+- [Sign up](https://www.browserbase.com/sign-up) and copy your **API Key**
+  from the [Overview dashboard](https://www.browserbase.com/overview).
 - Replace `<BROWSERBASE_API_KEY>` with your real Browserbase API key.
-- The free tier allows one concurrent session and 60 minutes per month. Paid
-  plans offer higher concurrency and usage limits.
-- Browserbase sessions include automatic CAPTCHA solving and anti-bot stealth
-  by default — no extra configuration needed.
+- The free tier allows one concurrent session, 15-minute session duration, and
+  one browser hour per month. See [pricing](https://www.browserbase.com/pricing)
+  for paid plan limits.
+- CAPTCHA solving, stealth mode, and proxies require the Developer plan
+  ($20/month) or above.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
