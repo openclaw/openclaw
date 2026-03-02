@@ -133,6 +133,25 @@ type RegisterEventHandlersContext = {
   fireAndForget?: boolean;
 };
 
+/**
+ * Per-chat serial queue that ensures messages from the same chat are processed
+ * in arrival order while allowing different chats to run concurrently.
+ */
+function createChatQueue() {
+  const queues = new Map<string, Promise<void>>();
+  return (chatId: string, task: () => Promise<void>): Promise<void> => {
+    const prev = queues.get(chatId) ?? Promise.resolve();
+    const next = prev.then(task, task);
+    queues.set(chatId, next);
+    void next.finally(() => {
+      if (queues.get(chatId) === next) {
+        queues.delete(chatId);
+      }
+    });
+    return next;
+  };
+}
+
 function mergeFeishuDebounceMentions(
   entries: FeishuMessageEvent[],
 ): FeishuMessageEvent["message"]["mentions"] | undefined {
@@ -219,15 +238,19 @@ function registerEventHandlers(
   });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
+  const enqueue = createChatQueue();
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
-    await handleFeishuMessage({
-      cfg,
-      event,
-      botOpenId: botOpenIds.get(accountId),
-      runtime,
-      chatHistories,
-      accountId,
-    });
+    const chatId = event.message.chat_id?.trim() || "unknown";
+    const task = () =>
+      handleFeishuMessage({
+        cfg,
+        event,
+        botOpenId: botOpenIds.get(accountId),
+        runtime,
+        chatHistories,
+        accountId,
+      });
+    await enqueue(chatId, task);
   };
   const resolveSenderDebounceId = (event: FeishuMessageEvent): string | undefined => {
     const senderId =
