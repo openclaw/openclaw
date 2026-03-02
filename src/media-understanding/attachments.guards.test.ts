@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MediaAttachment } from "./types.js";
 import { selectAttachments } from "./attachments.js";
+import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
   it("does not throw when attachments is undefined", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MediaUnderstandingDecision } from "./types.js";
 import { formatDecisionSummary } from "./runner.entries.js";
+import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
   it("does not throw when decision.attachments is undefined", () => {
