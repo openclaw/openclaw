@@ -241,6 +241,10 @@ function collectApiKeyProfileAssignment(params: {
   if (!resolvedKeyRef) {
     return;
   }
+  if (inlineKeyRef && !keyRef) {
+    params.profile.keyRef = inlineKeyRef;
+    delete (params.profile as unknown as Record<string, unknown>).key;
+  }
   if (keyRef && isNonEmptyString(params.profile.key)) {
     params.context.warnings.push({
       code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
@@ -270,6 +274,10 @@ function collectTokenProfileAssignment(params: {
   const resolvedTokenRef = tokenRef ?? inlineTokenRef;
   if (!resolvedTokenRef) {
     return;
+  }
+  if (inlineTokenRef && !tokenRef) {
+    params.profile.tokenRef = inlineTokenRef;
+    delete (params.profile as unknown as Record<string, unknown>).token;
   }
   if (tokenRef && isNonEmptyString(params.profile.token)) {
     params.context.warnings.push({
