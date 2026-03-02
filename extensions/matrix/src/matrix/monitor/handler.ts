@@ -74,6 +74,30 @@ export type MatrixMonitorHandlerParams = {
   accountId?: string | null;
 };
 
+export function resolveMatrixSessionKey(params: {
+  sessionScope?: "room" | "agent";
+  route: { agentId: string; sessionKey: string };
+  threadRootId?: string | null;
+  isDirectMessage?: boolean;
+}): { sessionKey: string; parentSessionKey?: string } {
+  if (params.isDirectMessage) {
+    return { sessionKey: params.route.sessionKey, parentSessionKey: undefined };
+  }
+
+  const baseSessionKey =
+    params.sessionScope === "agent"
+      ? `agent:${params.route.agentId.trim().toLowerCase() || "main"}:matrix:main`
+      : params.route.sessionKey;
+  const threadRootId = (params.threadRootId ?? "").trim();
+  if (!threadRootId) {
+    return { sessionKey: baseSessionKey, parentSessionKey: undefined };
+  }
+  return {
+    sessionKey: `${baseSessionKey}:thread:${threadRootId}`,
+    parentSessionKey: baseSessionKey,
+  };
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -433,30 +457,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           id: isDirectMessage ? senderId : roomId,
         },
       });
-
+      const sessionScope = cfg.channels?.matrix?.sessionScope ?? "room";
+      const { sessionKey, parentSessionKey: resolvedParentSessionKey } = resolveMatrixSessionKey({
+        sessionScope,
+        route: baseRoute,
+        threadRootId,
+        isDirectMessage,
+      });
       const route = {
         ...baseRoute,
-        sessionKey: threadRootId
-          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
-          : baseRoute.sessionKey,
+        sessionKey,
       };
 
       let threadStarterBody: string | undefined;
       let threadLabel: string | undefined;
-      let parentSessionKey: string | undefined;
+      const parentSessionKey = resolvedParentSessionKey;
 
-      if (threadRootId) {
+      if (threadRootId && parentSessionKey) {
         const existingSession = core.channel.session.readSessionUpdatedAt({
           storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
-            agentId: baseRoute.agentId,
+            agentId: route.agentId,
           }),
-          sessionKey: route.sessionKey,
+          sessionKey,
         });
 
         if (existingSession === undefined) {
           try {
             const rootEvent = await fetchEventSummary(client, roomId, threadRootId);
-            if (rootEvent?.body) {
+            if (!rootEvent) {
+              logVerboseMessage(
+                `matrix: thread root ${threadRootId} not found; continuing without thread starter`,
+              );
+            } else if (rootEvent.body) {
               const rootSenderName = rootEvent.sender
                 ? await getMemberDisplayName(roomId, rootEvent.sender)
                 : undefined;
@@ -470,11 +502,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               });
 
               threadLabel = `Matrix thread in ${roomName ?? roomId}`;
-              parentSessionKey = baseRoute.sessionKey;
             }
           } catch (err) {
             logVerboseMessage(
-              `matrix: failed to fetch thread root ${threadRootId}: ${String(err)}`,
+              `matrix: failed to fetch thread root ${threadRootId}; continuing without thread starter: ${String(err)}`,
             );
           }
         }
@@ -490,7 +521,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
       const previousTimestamp = core.channel.session.readSessionUpdatedAt({
         storePath,
-        sessionKey: route.sessionKey,
+        sessionKey,
       });
       const body = core.channel.reply.formatInboundEnvelope({
         channel: "Matrix",
@@ -515,7 +546,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
         To: `room:${roomId}`,
-        SessionKey: route.sessionKey,
+        SessionKey: sessionKey,
+        ParentSessionKey: parentSessionKey,
         AccountId: route.accountId,
         ChatType: threadRootId ? "thread" : isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
@@ -547,7 +579,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       await core.channel.session.recordInboundSession({
         storePath,
-        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        sessionKey: ctxPayload.SessionKey ?? sessionKey,
         ctx: ctxPayload,
         updateLastRoute: isDirectMessage
           ? {
@@ -561,7 +593,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           logger.warn("failed updating session meta", {
             error: String(err),
             storePath,
-            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            sessionKey: ctxPayload.SessionKey ?? sessionKey,
           });
         },
       });
@@ -683,7 +715,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (didSendReply) {
         const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
         core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {
-          sessionKey: route.sessionKey,
+          sessionKey,
           contextKey: `matrix:message:${roomId}:${messageId || "unknown"}`,
         });
       }

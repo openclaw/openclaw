@@ -1,0 +1,162 @@
+name: Rebase Sync PR (fork custom-main <- upstream/main)
+
+on:
+  schedule:
+    - cron: "20 2 * * *" # daily UTC; adjust as needed
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rebase-sync-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  # Official repository (upstream)
+  UPSTREAM_REPO: https://github.com/OpenClaw/OpenClaw.git
+  # Fork target branch that carries local customizations
+  TARGET_BRANCH: custom-main
+
+jobs:
+  rebase-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git identity + rerere
+        run: |
+          git config user.name "rebase-bot"
+          git config user.email "rebase-bot@users.noreply.github.com"
+          git config rerere.enabled true
+
+      - name: Setup Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Add upstream remote and fetch all
+        run: |
+          git remote add upstream "${UPSTREAM_REPO}" || true
+          git fetch --prune origin
+          git fetch --prune upstream
+
+      - name: Preflight checks
+        run: |
+          set -euo pipefail
+
+          git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}" || {
+            echo "ERROR: origin/${TARGET_BRANCH} not found. Create branch first.";
+            exit 1;
+          }
+
+          git show-ref --verify --quiet "refs/remotes/upstream/main" || {
+            echo "ERROR: upstream/main not found.";
+            exit 1;
+          }
+
+          echo "=== upstream/main ==="
+          git rev-parse upstream/main
+          echo "=== origin/${TARGET_BRANCH} ==="
+          git rev-parse "origin/${TARGET_BRANCH}"
+
+          echo "=== Diff overview (left=upstream, right=fork target) ==="
+          git log --oneline --left-right --cherry-pick --no-merges \
+            "upstream/main...origin/${TARGET_BRANCH}" | head -n 120 || true
+
+      - name: Create temp branch and rebase
+        id: rebase
+        run: |
+          set -euo pipefail
+          BRANCH="auto/rebase-sync-$(date +%Y%m%d)-${GITHUB_RUN_ID}"
+          echo "branch_name=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          git checkout -B "${BRANCH}"
+
+          # Rebase-only policy (no merge)
+          git rebase upstream/main
+
+          if git diff --quiet "origin/${TARGET_BRANCH}...HEAD"; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.rebase.outputs.has_changes == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build smoke check
+        if: steps.rebase.outputs.has_changes == 'true'
+        run: pnpm -s build
+
+      - name: Optional test smoke check
+        if: steps.rebase.outputs.has_changes == 'true'
+        run: |
+          if pnpm -s run | grep -q "test:smoke"; then
+            pnpm -s test:smoke
+          else
+            echo "No test:smoke script; skipping."
+          fi
+
+      - name: Push temp branch (safe)
+        if: steps.rebase.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          # Safety rule: NEVER push target branch directly from automation
+          git push --force-with-lease origin "${{ steps.rebase.outputs.branch_name }}"
+
+      - name: Create or update PR
+        if: steps.rebase.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          HEAD_BRANCH="${{ steps.rebase.outputs.branch_name }}"
+          BASE_BRANCH="${TARGET_BRANCH}"
+
+          PR_NUMBER=$(gh pr list \
+            --state open \
+            --base "$BASE_BRANCH" \
+            --head "$HEAD_BRANCH" \
+            --json number \
+            -q '.[0].number')
+
+          BODY_FILE=$(mktemp)
+          {
+            echo "Automated rebase sync PR."
+            echo
+            echo "Policy enforced:"
+            echo "- Rebase-only from \\`upstream/main\\`"
+            echo "- No direct force-push to target branch"
+            echo "- Temp branch push only"
+            echo "- Build smoke checks completed before PR creation"
+            echo
+            echo "If conflicts or failed checks happen, automation stops and requires human intervention."
+          } > "$BODY_FILE"
+
+          if [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != "null" ]; then
+            gh pr edit "$PR_NUMBER" \
+              --title "chore(sync): rebase ${BASE_BRANCH} onto upstream/main ($(date +%F))" \
+              --body-file "$BODY_FILE"
+          else
+            gh pr create \
+              --base "$BASE_BRANCH" \
+              --head "$HEAD_BRANCH" \
+              --title "chore(sync): rebase ${BASE_BRANCH} onto upstream/main ($(date +%F))" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: No-op (already up to date)
+        if: steps.rebase.outputs.has_changes != 'true'
+        run: echo "No upstream changes requiring sync."
