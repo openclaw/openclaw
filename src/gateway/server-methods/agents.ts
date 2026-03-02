@@ -344,6 +344,40 @@ async function moveToTrashBestEffort(pathname: string): Promise<void> {
   }
 }
 
+function respondWorkspaceFileInvalid(respond: RespondFn, name: string, reason: string): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}" (${reason})`),
+  );
+}
+
+function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`),
+  );
+}
+
+function respondWorkspaceFileMissing(params: {
+  respond: RespondFn;
+  agentId: string;
+  workspaceDir: string;
+  name: string;
+  filePath: string;
+}): void {
+  params.respond(
+    true,
+    {
+      agentId: params.agentId,
+      workspace: params.workspaceDir,
+      file: { name: params.name, path: params.filePath, missing: true },
+    },
+    undefined,
+  );
+}
+
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": ({ params, respond }) => {
     if (!validateAgentsListParams(params)) {
@@ -601,26 +635,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       allowMissing: true,
     });
     if (resolvedPath.kind === "invalid") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unsafe workspace file "${name}" (${resolvedPath.reason})`,
-        ),
-      );
+      respondWorkspaceFileInvalid(respond, name, resolvedPath.reason);
       return;
     }
     if (resolvedPath.kind === "missing") {
-      respond(
-        true,
-        {
-          agentId,
-          workspace: workspaceDir,
-          file: { name, path: filePath, missing: true },
-        },
-        undefined,
-      );
+      respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
       return;
     }
     let safeRead: Awaited<ReturnType<typeof readLocalFileSafely>>;
@@ -628,22 +647,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
       safeRead = await readLocalFileSafely({ filePath: resolvedPath.ioPath });
     } catch (err) {
       if (err instanceof SafeOpenError && err.code === "not-found") {
-        respond(
-          true,
-          {
-            agentId,
-            workspace: workspaceDir,
-            file: { name, path: filePath, missing: true },
-          },
-          undefined,
-        );
+        respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`),
-      );
+      respondWorkspaceFileUnsafe(respond, name);
       return;
     }
     respond(
@@ -690,14 +697,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       allowMissing: true,
     });
     if (resolvedPath.kind === "invalid") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unsafe workspace file "${name}" (${resolvedPath.reason})`,
-        ),
-      );
+      respondWorkspaceFileInvalid(respond, name, resolvedPath.reason);
       return;
     }
     const content = String(params.content ?? "");
@@ -709,11 +709,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         encoding: "utf8",
       });
     } catch {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsafe workspace file "${name}"`),
-      );
+      respondWorkspaceFileUnsafe(respond, name);
       return;
     }
     const meta = await statFileSafely(resolvedPath.ioPath);

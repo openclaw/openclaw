@@ -71,4 +71,15 @@ describe("matrix directory live", () => {
     expect(result).toEqual([]);
     expect(resolveMatrixAuth).not.toHaveBeenCalled();
   });
+
+  it("preserves original casing for room IDs without :server suffix", async () => {
+    const mixedCaseId = "!EonMPPbOuhntHEHgZ2dnBO-c_EglMaXlIh2kdo8cgiA";
+    const result = await listMatrixDirectoryGroupsLive({
+      cfg,
+      query: mixedCaseId,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe(mixedCaseId);
+  });
 });

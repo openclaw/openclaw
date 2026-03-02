@@ -181,10 +181,6 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
-      return undefined;
-    }
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
     // the migration hasn't run yet or was bypassed.
@@ -197,6 +193,14 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
           : typeof schedule.at === "string"
             ? parseAbsoluteTimeMs(schedule.at)
             : null;
+    // One-shot jobs stay due until they successfully finish, but if the
+    // schedule was updated to a time after the last run, re-arm the job.
+    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+      if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
+        return atMs;
+      }
+      return undefined;
+    }
     return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
   }
   const next = computeStaggeredCronNextRunAtMs(job, nowMs);
@@ -210,7 +214,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 /** Maximum consecutive schedule errors before auto-disabling a job. */
 const MAX_SCHEDULE_ERRORS = 3;
 
-function recordScheduleComputeError(params: {
+export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
@@ -560,6 +564,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
   }
+  if (typeof patch.lightContext === "boolean") {
+    next.lightContext = patch.lightContext;
+  }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
@@ -637,12 +644,18 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     model: patch.model,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
+    lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
     deliver: patch.deliver,
     channel: patch.channel,
     to: patch.to,
     bestEffortDeliver: patch.bestEffortDeliver,
   };
+}
+
+function normalizeOptionalTrimmedString(value: unknown): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed : undefined;
 }
 
 function mergeCronDelivery(
@@ -661,16 +674,13 @@ function mergeCronDelivery(
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
   }
   if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
+    next.channel = normalizeOptionalTrimmedString(patch.channel);
   }
   if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
+    next.to = normalizeOptionalTrimmedString(patch.to);
   }
   if ("accountId" in patch) {
-    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
-    next.accountId = accountId ? accountId : undefined;
+    next.accountId = normalizeOptionalTrimmedString(patch.accountId);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
@@ -697,12 +707,10 @@ function mergeCronFailureAlert(
     next.after = after > 0 ? Math.floor(after) : undefined;
   }
   if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
+    next.channel = normalizeOptionalTrimmedString(patch.channel);
   }
   if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
+    next.to = normalizeOptionalTrimmedString(patch.to);
   }
   if ("cooldownMs" in patch) {
     const cooldownMs =

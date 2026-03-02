@@ -8,11 +8,28 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
+type PluginHandlerLog = Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
+
+function createPluginLog(): PluginHandlerLog {
+  return { warn: vi.fn() } as unknown as PluginHandlerLog;
+}
+
+function createRoute(params: {
+  path: string;
+  pluginId?: string;
+  handler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
+}) {
+  return {
+    pluginId: params.pluginId ?? "route",
+    path: params.path,
+    handler: params.handler ?? (() => {}),
+    source: params.pluginId ?? "route",
+  };
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
-    const log = { warn: vi.fn() } as unknown as Parameters<
-      typeof createGatewayPluginRequestHandler
-    >[0]["log"];
+    const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry(),
       log,
@@ -32,9 +49,7 @@ describe("createGatewayPluginRequestHandler", () => {
           { pluginId: "second", handler: second, source: "second" },
         ],
       }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+      log: createPluginLog(),
     });
 
     const { res } = makeMockHttpResponse();
@@ -51,19 +66,10 @@ describe("createGatewayPluginRequestHandler", () => {
     const fallback = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
-        httpRoutes: [
-          {
-            pluginId: "route",
-            path: "/demo",
-            handler: routeHandler,
-            source: "route",
-          },
-        ],
+        httpRoutes: [createRoute({ path: "/demo", handler: routeHandler })],
         httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
       }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+      log: createPluginLog(),
     });
 
     const { res } = makeMockHttpResponse();
@@ -80,19 +86,10 @@ describe("createGatewayPluginRequestHandler", () => {
     const fallback = vi.fn(async () => true);
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
-        httpRoutes: [
-          {
-            pluginId: "route",
-            path: "/api/demo",
-            handler: routeHandler,
-            source: "route",
-          },
-        ],
+        httpRoutes: [createRoute({ path: "/api/demo", handler: routeHandler })],
         httpHandlers: [{ pluginId: "fallback", handler: fallback, source: "fallback" }],
       }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+      log: createPluginLog(),
     });
 
     const { res } = makeMockHttpResponse();
@@ -103,9 +100,7 @@ describe("createGatewayPluginRequestHandler", () => {
   });
 
   it("logs and responds with 500 when a handler throws", async () => {
-    const log = { warn: vi.fn() } as unknown as Parameters<
-      typeof createGatewayPluginRequestHandler
-    >[0]["log"];
+    const log = createPluginLog();
     const handler = createGatewayPluginRequestHandler({
       registry: createTestRegistry({
         httpHandlers: [
@@ -134,14 +129,7 @@ describe("createGatewayPluginRequestHandler", () => {
 describe("plugin HTTP registry helpers", () => {
   it("detects registered route paths", () => {
     const registry = createTestRegistry({
-      httpRoutes: [
-        {
-          pluginId: "route",
-          path: "/demo",
-          handler: () => {},
-          source: "route",
-        },
-      ],
+      httpRoutes: [createRoute({ path: "/demo" })],
     });
     expect(isRegisteredPluginHttpRoutePath(registry, "/demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/missing")).toBe(false);
@@ -149,14 +137,7 @@ describe("plugin HTTP registry helpers", () => {
 
   it("matches canonicalized variants of registered route paths", () => {
     const registry = createTestRegistry({
-      httpRoutes: [
-        {
-          pluginId: "route",
-          path: "/api/demo",
-          handler: () => {},
-          source: "route",
-        },
-      ],
+      httpRoutes: [createRoute({ path: "/api/demo" })],
     });
     expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
@@ -165,14 +146,7 @@ describe("plugin HTTP registry helpers", () => {
 
   it("enforces auth for protected and registered plugin routes", () => {
     const registry = createTestRegistry({
-      httpRoutes: [
-        {
-          pluginId: "route",
-          path: "/api/demo",
-          handler: () => {},
-          source: "route",
-        },
-      ],
+      httpRoutes: [createRoute({ path: "/api/demo" })],
     });
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);

@@ -15,6 +15,7 @@ import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
+  recordScheduleComputeError,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
@@ -356,7 +357,15 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      const normalNext = computeJobNextRunAtMs(job, result.endedAt);
+      let normalNext: number | undefined;
+      try {
+        normalNext = computeJobNextRunAtMs(job, result.endedAt);
+      } catch (err) {
+        // If the schedule expression/timezone throws (croner edge cases),
+        // record the schedule error (auto-disables after repeated failures)
+        // and fall back to backoff-only schedule so the state update is not lost.
+        recordScheduleComputeError({ state, job, err });
+      }
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
@@ -371,7 +380,15 @@ export function applyJobResult(
         "cron: applying error backoff",
       );
     } else if (job.enabled) {
-      const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+      let naturalNext: number | undefined;
+      try {
+        naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+      } catch (err) {
+        // If the schedule expression/timezone throws (croner edge cases),
+        // record the schedule error (auto-disables after repeated failures)
+        // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
+        recordScheduleComputeError({ state, job, err });
+      }
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
         // after the current run ended.  Prevents spin-loops when the
@@ -399,6 +416,10 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
+    state.deps.log.warn(
+      { jobId: result.jobId },
+      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+    );
     return;
   }
 
