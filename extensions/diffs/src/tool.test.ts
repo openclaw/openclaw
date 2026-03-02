@@ -41,14 +41,7 @@ describe("diffs tool", () => {
 
   it("returns an image artifact in image mode", async () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
+    const screenshotter = createScreenshotter();
 
     const tool = createDiffsTool({
       api: createApi(),
@@ -178,14 +171,7 @@ describe("diffs tool", () => {
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
+    const screenshotter = createScreenshotter();
     const tool = createDiffsTool({
       api: createApi(),
       store,
@@ -255,4 +241,15 @@ function readTextContent(result: unknown, index: number): string {
     ?.content;
   const entry = content?.[index];
   return entry?.type === "text" ? (entry.text ?? "") : "";
+}
+
+function createScreenshotter() {
+  return {
+    screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
+      expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.writeFile(outputPath, Buffer.from("png"));
+      return outputPath;
+    }),
+  };
 }
