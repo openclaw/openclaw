@@ -102,6 +102,11 @@ When validation fails:
     }
     ```
 
+    <Warning>
+    Multi-account note: if you use `channels.telegram.accounts`, define `channels.telegram.accounts.default` explicitly.
+    If you only add a named account (for example `accounts.news`) without a default, routing can be surprising.
+    </Warning>
+
   </Accordion>
 
   <Accordion title="Choose and configure models">

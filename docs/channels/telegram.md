@@ -72,6 +72,14 @@ openclaw pairing approve telegram <CODE>
 Token resolution order is account-aware. In practice, config values win over env fallback, and `TELEGRAM_BOT_TOKEN` only applies to the default account.
 </Note>
 
+<Warning>
+If you configure `channels.telegram.accounts` (multi-account), **always** define `channels.telegram.accounts.default` explicitly.
+
+If you only add a named account (for example `accounts.news`) without a `default` account, default inbound/outbound routing can become confusing.
+
+Recommendation: align `channels.telegram.botToken` with `channels.telegram.accounts.default.botToken` for clarity.
+</Warning>
+
 ## Telegram side settings
 
 <AccordionGroup>
