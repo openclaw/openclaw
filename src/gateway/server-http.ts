@@ -172,7 +172,6 @@ async function authorizeCanvasRequest(params: {
 }
 
 async function enforcePluginRouteGatewayAuth(params: {
-  requestPath: string;
   req: IncomingMessage;
   res: ServerResponse;
   auth: ResolvedGatewayAuth;
@@ -180,9 +179,6 @@ async function enforcePluginRouteGatewayAuth(params: {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
-  if (!isProtectedPluginRoutePath(params.requestPath)) {
-    return true;
-  }
   const token = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
@@ -460,6 +456,7 @@ export function createGatewayHttpServer(opts: {
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
+  shouldEnforcePluginGatewayAuth?: (requestPath: string) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -477,6 +474,7 @@ export function createGatewayHttpServer(opts: {
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
+    shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
   } = opts;
@@ -526,26 +524,6 @@ export function createGatewayHttpServer(opts: {
       }
       if (await handleSlackHttpRequest(req, res)) {
         return;
-      }
-      if (handlePluginRequest) {
-        // Protected plugin route prefixes are gateway-auth protected by default.
-        // Non-protected plugin routes remain plugin-owned and must enforce
-        // their own auth when exposing sensitive functionality.
-        const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-          requestPath,
-          req,
-          res,
-          auth: resolvedAuth,
-          trustedProxies,
-          allowRealIpFallback,
-          rateLimiter,
-        });
-        if (!pluginAuthOk) {
-          return;
-        }
-        if (await handlePluginRequest(req, res)) {
-          return;
-        }
       }
       if (openResponsesEnabled) {
         if (
@@ -612,6 +590,25 @@ export function createGatewayHttpServer(opts: {
             root: controlUiRoot,
           })
         ) {
+          return;
+        }
+      }
+      // Plugins run last so built-in gateway routes keep precedence on overlapping paths.
+      if (handlePluginRequest) {
+        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
+          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+            req,
+            res,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          });
+          if (!pluginAuthOk) {
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
           return;
         }
       }
