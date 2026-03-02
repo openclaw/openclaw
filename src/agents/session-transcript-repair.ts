@@ -219,6 +219,9 @@ export function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
 ): ToolCallInputRepairReport {
+  // Filters out invalid tool calls (missing input, id, or name) from assistant messages.
+  // CRITICAL: This function must preserve thinking/redacted_thinking blocks without modification.
+  // These blocks are pushed to nextContent unchanged (line below where we push all non-toolCall blocks).
   let droppedToolCalls = 0;
   let droppedAssistantMessages = 0;
   let changed = false;
@@ -346,6 +349,10 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  //
+  // CRITICAL: This function must preserve thinking/redacted_thinking blocks in assistant
+  // messages without any modification. Per Anthropic's API requirements, these blocks must
+  // remain byte-for-byte identical to how they were originally returned by the API.
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();

@@ -18,6 +18,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { containsThinkingBlocks } from "../thinking-block-guard.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -340,6 +341,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
+
+      // Check for thinking blocks in messages to be summarized
+      // These will be replaced with a summary, so their thinking blocks will be lost (acceptable)
+      const hasThinkingInSummary = containsThinkingBlocks(messagesToSummarize);
+      if (hasThinkingInSummary) {
+        log.warn(
+          `Compaction: summarizing ${messagesToSummarize.length} messages, some containing thinking blocks. ` +
+            `Thinking content will be incorporated into summary but original blocks will be replaced.`,
+        );
+      }
 
       const historySummary = await summarizeInStages({
         messages: messagesToSummarize,
