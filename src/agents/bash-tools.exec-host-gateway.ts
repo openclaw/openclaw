@@ -6,6 +6,7 @@ import {
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
+  getTrustWindow,
   maxAsk,
   minSecurity,
   recordAllowlistUse,
@@ -15,7 +16,9 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { summarizeTrustAudit, cleanupTrustAudit } from "../infra/trust-audit.js";
 import { logInfo } from "../logger.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -76,6 +79,27 @@ export async function processGatewayAllowlist(
   const askFallback = approvals.agent.askFallback;
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");
+  }
+
+  const agentKey = params.agentId?.trim() || DEFAULT_AGENT_ID;
+  const trustWindow = getTrustWindow(agentKey);
+  const now = Date.now();
+  const trustWindowActive =
+    trustWindow?.status === "active" &&
+    typeof trustWindow.expiresAt === "number" &&
+    now < trustWindow.expiresAt;
+  const trustWindowExpired =
+    trustWindow?.status === "active" &&
+    typeof trustWindow.expiresAt === "number" &&
+    now >= trustWindow.expiresAt;
+
+  if (trustWindowActive && trustWindow?.grantNotified !== true) {
+    const remainingMs = trustWindow.expiresAt - now;
+    const remainingMin = Math.max(1, Math.ceil(remainingMs / 60_000));
+    emitExecSystemEvent(`🔓 Trust window active · expires in ${remainingMin}m`, {
+      sessionKey: params.notifySessionKey,
+    });
+    trustWindow.grantNotified = true;
   }
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
@@ -139,6 +163,24 @@ export async function processGatewayAllowlist(
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
     );
+  }
+
+  if (trustWindowExpired && trustWindow?.expiredNotified !== true) {
+    emitExecSystemEvent("🔒 Trust window expired. Exec approval required for new commands.", {
+      sessionKey: params.notifySessionKey,
+    });
+    const summary = summarizeTrustAudit({
+      agentId: agentKey,
+      startedAt: trustWindow.grantedAt,
+      endedAt: trustWindow.expiresAt ?? now,
+    });
+    if (summary) {
+      emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey });
+    }
+    // TODO: Future enhancement — emit Discord buttons [Keep] / [Delete] for audit log
+    // retention on expiry, with delete-on-timeout default. For now, auto-delete.
+    cleanupTrustAudit(agentKey);
+    trustWindow.expiredNotified = true;
   }
 
   if (requiresAsk) {

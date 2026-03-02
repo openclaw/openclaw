@@ -59,6 +59,33 @@ export const ExecApprovalsSnapshotSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TrustWindowSchema = Type.Object(
+  {
+    status: Type.Literal("active"),
+    expiresAt: Type.Integer({ minimum: 0 }),
+    grantedAt: Type.Integer({ minimum: 0 }),
+    grantedBy: Type.Optional(Type.String()),
+    security: Type.String(),
+    ask: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsTrustStatusParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsTrustStatusResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    trustWindow: Type.Optional(Type.Union([TrustWindowSchema, Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
 export const ExecApprovalsGetParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ExecApprovalsSetParamsSchema = Type.Object(

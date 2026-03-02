@@ -78,6 +78,7 @@ import {
   reconcileAcpThreadBindingsOnStartup,
 } from "./thread-bindings.js";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
+import { createDiscordTrustCommand, createDiscordUntrustCommand } from "./trust-command.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -427,6 +428,21 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           ephemeralDefault,
         }),
       );
+    }
+
+    // Register trust/untrust commands in every configured guild
+    if (nativeEnabled && guildEntries) {
+      for (const guildId of Object.keys(guildEntries)) {
+        const trustCtx = {
+          cfg,
+          discordConfig: discordCfg,
+          accountId: account.accountId,
+          ephemeralDefault,
+          guildId,
+        };
+        commands.push(createDiscordTrustCommand(trustCtx));
+        commands.push(createDiscordUntrustCommand(trustCtx));
+      }
     }
 
     // Initialize exec approvals handler if enabled
