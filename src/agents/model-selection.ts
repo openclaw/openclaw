@@ -27,6 +27,7 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
 };
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
@@ -525,6 +526,8 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const modelLower = params.model.toLowerCase();
   const perModelThinking =
     params.cfg.agents?.defaults?.models?.[modelKey(params.provider, params.model)]?.params
       ?.thinking;
@@ -534,13 +537,22 @@ export function resolveThinkingDefault(params: {
     perModelThinking === "low" ||
     perModelThinking === "medium" ||
     perModelThinking === "high" ||
-    perModelThinking === "xhigh"
+    perModelThinking === "xhigh" ||
+    perModelThinking === "adaptive"
   ) {
     return perModelThinking;
   }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
+  }
+  const isAnthropicFamilyModel =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "amazon-bedrock" ||
+    modelLower.includes("anthropic/") ||
+    modelLower.includes(".anthropic.");
+  if (isAnthropicFamilyModel && CLAUDE_46_MODEL_RE.test(modelLower)) {
+    return "adaptive";
   }
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
