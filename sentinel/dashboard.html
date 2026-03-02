@@ -522,6 +522,120 @@
         gap: 12px;
       }
 
+      /* Agent health */
+      .agent-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 8px;
+      }
+      .agent-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        position: relative;
+      }
+      .agent-card.healthy {
+        border-color: rgba(63, 185, 80, 0.3);
+      }
+      .agent-card.warn {
+        border-color: rgba(210, 153, 34, 0.3);
+      }
+      .agent-card.crit {
+        border-color: rgba(248, 81, 73, 0.3);
+      }
+      .agent-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--bright);
+        margin-bottom: 4px;
+      }
+      .agent-score {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .agent-fixes {
+        margin-top: 4px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .fix-badge {
+        display: inline-block;
+        font-size: 9px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--green);
+        font-weight: 600;
+      }
+      .agent-meta {
+        font-size: 10px;
+        color: var(--dim);
+        margin-top: 8px;
+        display: flex;
+        gap: 12px;
+      }
+
+      /* Memory vault */
+      .mem-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 8px;
+      }
+      .mem-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        position: relative;
+      }
+      .mem-card.fresh {
+        border-color: rgba(63, 185, 80, 0.3);
+      }
+      .mem-card.aging {
+        border-color: rgba(210, 153, 34, 0.3);
+      }
+      .mem-card.stale {
+        border-color: rgba(248, 81, 73, 0.3);
+      }
+      .mem-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--bright);
+        margin-bottom: 2px;
+      }
+      .mem-agent {
+        font-size: 10px;
+        color: var(--dim);
+      }
+      .mem-count {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .mem-range {
+        font-size: 10px;
+        color: var(--dim);
+        margin-top: 4px;
+      }
+      .mem-fresh {
+        font-size: 10px;
+        margin-top: 2px;
+      }
+      .mem-meta {
+        font-size: 10px;
+        color: var(--dim);
+        margin-top: 8px;
+        display: flex;
+        gap: 12px;
+      }
+
       /* Stale */
       .stale-banner {
         background: rgba(248, 81, 73, 0.12);
@@ -576,6 +690,20 @@
       <div class="panel-title">對話脈搏</div>
       <div class="pulse-grid" id="pulseGrid"></div>
       <div class="pulse-meta" id="pulseMeta"></div>
+    </div>
+
+    <!-- Agent 健康度 -->
+    <div class="panel p-green">
+      <div class="panel-title">AGENT 健康度</div>
+      <div class="agent-grid" id="agentGrid"></div>
+      <div class="agent-meta" id="agentMeta"></div>
+    </div>
+
+    <!-- 記憶庫 -->
+    <div class="panel p-blue">
+      <div class="panel-title">記憶庫</div>
+      <div class="mem-grid" id="memGrid"></div>
+      <div class="mem-meta" id="memMeta"></div>
     </div>
 
     <!-- 裂隙 — active issues with depth -->
@@ -670,6 +798,8 @@
           document.getElementById("hRepairs").textContent = repairs;
 
           renderPulse(S);
+          renderAgentHealth(S);
+          renderMemoryVault(S);
           renderServices(S);
           renderRifts(S);
           renderThoughts(S);
@@ -800,6 +930,112 @@
             : "--";
           const dbSize = syncInfo.last_result?.db_size_mb || 0;
           meta.innerHTML = `<span>掃描 ${lastRun}</span><span>同步 ${syncRun}</span><span>DB ${dbSize}MB</span><span>${lastResult.issue_count || 0} 異常</span>`;
+        }
+
+        // ─── Agent 健康度 ───
+        function renderAgentHealth(S) {
+          const grid = document.getElementById("agentGrid");
+          const meta = document.getElementById("agentMeta");
+          const ah = S.agent_health || {};
+          const lastResult = ah.last_result || {};
+          const agents = lastResult.agents || {};
+
+          if (!ah.last_run) {
+            grid.innerHTML = '<div class="no-data">尚無 Agent 健康資料 — 等待首次掃描</div>';
+            meta.innerHTML = "";
+            return;
+          }
+
+          grid.innerHTML = Object.entries(agents)
+            .map(([id, info]) => {
+              const score = info.score || 0;
+              const max = info.max || 6;
+              const cardCls = score >= 8 ? "healthy" : score >= 5 ? "warn" : "crit";
+              const scoreColor =
+                score >= 8 ? "var(--green)" : score >= 5 ? "var(--orange)" : "var(--red)";
+              const fixes = info.fixes || [];
+              const fixHtml = fixes
+                .map(
+                  (f) =>
+                    `<span class="fix-badge">${f.length > 30 ? f.slice(0, 30) + "..." : f}</span>`,
+                )
+                .join("");
+              return `<div class="agent-card ${cardCls}">
+          <div class="agent-name">${id}</div>
+          <div class="agent-score" style="color:${scoreColor}">${score}/${max}</div>
+          ${fixHtml ? '<div class="agent-fixes">' + fixHtml + "</div>" : ""}
+        </div>`;
+            })
+            .join("");
+
+          const lastRun = ah.last_run
+            ? new Date(ah.last_run).toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "--";
+          meta.innerHTML = `<span>掃描 ${lastRun}</span><span>${lastResult.agents_checked || 0} agents</span><span>${lastResult.structure_fixes || 0} 修復</span><span>${lastResult.rule_injections || 0} 規則注入</span><span>${lastResult.p1_count || 0} P1</span>`;
+        }
+
+        // ─── 記憶庫 ───
+        function renderMemoryVault(S) {
+          const grid = document.getElementById("memGrid");
+          const meta = document.getElementById("memMeta");
+          const sync = S.conversation_sync || {};
+          const lastResult = sync.last_result || {};
+          const gs = lastResult.group_stats || {};
+
+          if (!sync.last_run || !Object.keys(gs).length) {
+            grid.innerHTML = '<div class="no-data">尚無記憶庫資料 — 等待首次同步</div>';
+            meta.innerHTML = "";
+            return;
+          }
+
+          // Sort by count descending
+          const entries = Object.entries(gs).sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+          let totalMsgs = 0;
+
+          grid.innerHTML = entries
+            .map(([chatId, info]) => {
+              const count = info.count || 0;
+              totalMsgs += count;
+              const freshH = info.fresh_h;
+              // fresh < 12h, aging < 72h, stale > 72h
+              let cardCls = "stale",
+                freshColor = "var(--red)",
+                freshText = "?";
+              if (freshH !== null && freshH !== undefined) {
+                if (freshH < 12) {
+                  cardCls = "fresh";
+                  freshColor = "var(--green)";
+                  freshText = freshH < 1 ? "<1h" : Math.round(freshH) + "h 前";
+                } else if (freshH < 72) {
+                  cardCls = "aging";
+                  freshColor = "var(--orange)";
+                  freshText = Math.round(freshH) + "h 前";
+                } else {
+                  freshText = Math.round(freshH / 24) + "d 前";
+                }
+              }
+              const agentTag = info.agent_id ? `<div class="mem-agent">${info.agent_id}</div>` : "";
+              const range = info.earliest && info.latest ? `${info.earliest} ~ ${info.latest}` : "";
+              return `<div class="mem-card ${cardCls}">
+          <div class="mem-name">${info.name || chatId}</div>${agentTag}
+          <div class="mem-count" style="color:${count >= 400 ? "var(--green)" : count >= 100 ? "var(--text)" : "var(--orange)"}">${count}</div>
+          <div class="mem-range">${range}</div>
+          <div class="mem-fresh" style="color:${freshColor}">最新: ${freshText}</div>
+        </div>`;
+            })
+            .join("");
+
+          const lastRun = sync.last_run
+            ? new Date(sync.last_run).toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "--";
+          const dbMb = lastResult.db_size_mb || 0;
+          meta.innerHTML = `<span>同步 ${lastRun}</span><span>${entries.length} 群組</span><span>${totalMsgs.toLocaleString()} 訊息</span><span>DB ${dbMb}MB</span>`;
         }
 
         // ─── 守護者 ───

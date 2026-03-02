@@ -38,7 +38,8 @@
     "-5191751304": {
       "name": "Mimi",
       "bridge": "dufu",
-      "priority": "medium"
+      "priority": "medium",
+      "agent_id": "flipflop"
     },
     "-1003853623705": {
       "name": "Andrew日報群",
@@ -49,11 +50,71 @@
       "name": "ThinkerNews",
       "bridge": "dufu",
       "priority": "low"
+    },
+    "-5210796129": {
+      "name": "美慧",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "meihui"
+    },
+    "-5236199765": {
+      "name": "XO",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "xo"
+    },
+    "-1003849990504": {
+      "name": "幣塔管理群",
+      "bridge": "dufu",
+      "priority": "high",
+      "agent_id": "bita"
+    },
+    "-5295280162": {
+      "name": "幣塔AI工作回報(周)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5030731997": {
+      "name": "幣塔AI工作回報(QQ)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5070604096": {
+      "name": "幣塔AI工作回報(子)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5159438640": {
+      "name": "幣塔AI工作回報(俊)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5148508655": {
+      "name": "幣塔AI工作回報(兔)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5023713246": {
+      "name": "幣塔AI工作回報(葦)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
+    },
+    "-5186655303": {
+      "name": "幣塔AI工作回報(茂)",
+      "bridge": "dufu",
+      "priority": "medium",
+      "agent_id": "bita"
     }
   },
   "sync": {
     "db_path": "data/conversations.db",
-    "incremental_limit": 100,
+    "incremental_limit": 500,
     "retention_days": 90
   },
   "detection": {

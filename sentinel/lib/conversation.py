@@ -54,13 +54,19 @@ def get_groups(config: dict) -> dict:
     return groups
 
 
-def fetch_messages(bridge_url: str, chat_id: str, limit: int = 30) -> list[dict]:
+def fetch_messages(bridge_url: str, chat_id: str, limit: int = 30,
+                   offset_id: int = 0) -> list[dict]:
     """GET /messages from bridge. Returns list of message dicts, empty on failure.
 
     Each message dict has: id, sender_id, sender_name, text, timestamp, has_media, etc.
     Sleeps 0.3s after each call to avoid rate limiting.
+
+    Args:
+        offset_id: Telethon pagination — fetch messages older than this message ID.
     """
     url = f"{bridge_url}/messages?chat={chat_id}&limit={limit}"
+    if offset_id:
+        url += f"&offset_id={offset_id}"
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
             data = json.loads(resp.read())

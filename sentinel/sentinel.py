@@ -795,6 +795,7 @@ class Sentinel:
             },
             "conversation_pulse": self.state["sentinel"].get("conversation_pulse", {}),
             "conversation_sync": self.state["sentinel"].get("conversation_sync", {}),
+            "agent_health": self.state["sentinel"].get("agent_health", {}),
             "observations_24h": self.state["sentinel"].get("observations", [])[-300:],
             "topology": {
                 "gateway": {"port": 18789},
