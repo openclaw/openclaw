@@ -281,5 +281,71 @@ describe("loader", () => {
       expect(count).toBe(0);
       expect(getRegisteredEventKeys()).not.toContain("command:new");
     });
+
+    it("rejects directory hook handlers that escape hook dir via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-handler-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const hookDir = path.join(tmpDir, "hooks", "hardlink-hook");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: hardlink-hook",
+          "description: hardlink test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Hardlink Hook",
+        ].join("\n"),
+        "utf-8",
+      );
+      try {
+        await fs.link(outsideHandlerPath, path.join(hookDir, "handler.js"));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const cfg = createEnabledHooksConfig();
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    });
+
+    it("rejects legacy handler modules that escape workspace via hardlink", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const outsideHandlerPath = path.join(fixtureRoot, `outside-legacy-hardlink-${caseId}.js`);
+      await fs.writeFile(outsideHandlerPath, "export default async function() {}", "utf-8");
+
+      const linkedHandlerPath = path.join(tmpDir, "legacy-handler.js");
+      try {
+        await fs.link(outsideHandlerPath, linkedHandlerPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: "legacy-handler.js",
+        },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(0);
+      expect(getRegisteredEventKeys()).not.toContain("command:new");
+    });
   });
 });

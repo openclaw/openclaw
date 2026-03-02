@@ -252,7 +252,9 @@ export async function resolveReplyDirectives(params: {
       }
     }
   }
-  let directives = commandAuthorized
+  // Use command.isAuthorizedSender (resolved authorization) instead of raw commandAuthorized
+  // to ensure inline directives work when commands.allowFrom grants access (e.g., LINE).
+  let directives = command.isAuthorizedSender
     ? parsedDirectives
     : {
         ...parsedDirectives,
@@ -337,9 +339,7 @@ export async function resolveReplyDirectives(params: {
   });
   const defaultActivation = defaultGroupActivation(requireMention);
   const resolvedThinkLevel =
-    directives.thinkLevel ??
-    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -388,6 +388,10 @@ export async function resolveReplyDirectives(params: {
   });
   provider = modelState.provider;
   model = modelState.model;
+  const resolvedThinkLevelWithDefault =
+    resolvedThinkLevel ??
+    (await modelState.resolveDefaultThinkingLevel()) ??
+    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
   // When neither directive nor session set reasoning, default to model capability
   // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
@@ -396,9 +400,7 @@ export async function resolveReplyDirectives(params: {
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
-  const effectiveThinkingForReasoning =
-    resolvedThinkLevel ?? (await modelState.resolveDefaultThinkingLevel());
-  const thinkingActive = effectiveThinkingForReasoning !== "off";
+  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
@@ -475,7 +477,7 @@ export async function resolveReplyDirectives(params: {
       elevatedAllowed,
       elevatedFailures,
       defaultActivation,
-      resolvedThinkLevel,
+      resolvedThinkLevel: resolvedThinkLevelWithDefault,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

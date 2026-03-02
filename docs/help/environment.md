@@ -56,6 +56,18 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
+## Runtime-injected env vars
+
+OpenClaw also injects context markers into spawned child processes:
+
+- `OPENCLAW_SHELL=exec`: set for commands run through the `exec` tool.
+- `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
+- `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
+- `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
+
+These are runtime markers (not required user config). They can be used in shell/profile logic
+to apply context-specific rules.
+
 ## Env var substitution in config
 
 You can reference env vars directly in config string values using `${VAR_NAME}` syntax:
@@ -73,6 +85,15 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 ```
 
 See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
+
+## Secret refs vs `${ENV}` strings
+
+OpenClaw supports two env-driven patterns:
+
+- `${VAR}` string substitution in config values.
+- SecretRef objects (`{ source: "env", provider: "default", id: "VAR" }`) for fields that support secrets references.
+
+Both resolve from process env at activation time. SecretRef details are documented in [Secrets Management](/gateway/secrets).
 
 ## Path-related env vars
 

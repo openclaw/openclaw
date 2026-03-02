@@ -19,9 +19,9 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   // so tag-based enforcement is unnecessary and causes all output to be
   // discarded as "(no output)" (#2279).
   if (
+    normalized === "google" ||
     normalized === "google-gemini-cli" ||
     normalized === "google-generative-ai" ||
-    normalized === "google" ||
     normalized === "xai"
   ) {
     return true;
