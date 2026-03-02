@@ -7,6 +7,7 @@ import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
+import { registerFeishuUrgentTools } from "./src/urgent-tool.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
@@ -31,6 +32,7 @@ export {
   listReactionsFeishu,
   FeishuEmoji,
 } from "./src/reactions.js";
+export { urgentMessageFeishu, type FeishuUrgentType } from "./src/urgent.js";
 export {
   extractMentionTargets,
   extractMessageBody,
@@ -59,6 +61,7 @@ const plugin = {
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
+    registerFeishuUrgentTools(api);
   },
 };
 
