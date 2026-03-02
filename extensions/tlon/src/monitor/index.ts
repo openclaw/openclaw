@@ -1095,7 +1095,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               extPayload.model ||
               extRoute.model ||
               (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
-              extPayload.metadata?.model ||
+            extPayload.metadata?.model ||
               extPayload.model ||
               extRoute.model ||
               (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
