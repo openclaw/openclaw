@@ -279,10 +279,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       });
       return { channel: "mattermost", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, replyToId }) => {
       const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,
         mediaUrl,
+        mediaLocalRoots,
         replyToId: replyToId ?? undefined,
       });
       return { channel: "mattermost", ...result };

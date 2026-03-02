@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
+  resolveBinaryVersion,
   resolveRuntimeServiceVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
@@ -92,6 +93,42 @@ describe("version resolution", () => {
     expect(readVersionFromPackageJsonForModuleUrl("not-a-valid-url")).toBeNull();
     expect(readVersionFromBuildInfoForModuleUrl("not-a-valid-url")).toBeNull();
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
+  });
+
+  it("resolves binary version with explicit precedence", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          injectedVersion: "9.9.9",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("9.9.9");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("2.3.4");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("8.8.8");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "   ",
+          fallback: "0.0.0",
+        }),
+      ).toBe("0.0.0");
+    });
   });
 
   it("prefers OPENCLAW_VERSION over service and package versions", () => {

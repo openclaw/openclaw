@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { loadWebMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -28,6 +28,7 @@ export type SendMSTeamsMessageParams = {
   text: string;
   /** Optional media URL */
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
 };
 
 export type SendMSTeamsMessageResult = {
@@ -93,7 +94,7 @@ export type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl } = params;
+  const { cfg, to, text, mediaUrl, mediaLocalRoots } = params;
   const tableMode = getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
@@ -120,12 +121,11 @@ export async function sendMessageMSTeams(
 
   // Handle media if present
   if (mediaUrl) {
-    const mediaMaxBytes =
-      resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-      }) ?? MSTEAMS_MAX_MEDIA_BYTES;
-    const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
+    const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
+    const media = await loadOutboundMediaFromUrl(mediaUrl, {
+      maxBytes: mediaMaxBytes,
+      mediaLocalRoots,
+    });
     const isLargeFile = media.buffer.length >= FILE_CONSENT_THRESHOLD_BYTES;
     const isImage = media.contentType?.startsWith("image/") ?? false;
     const fallbackFileName = await extractFilename(mediaUrl);

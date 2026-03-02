@@ -59,7 +59,7 @@ export type OutboundSendDeps = {
   sendMSTeams?: (
     to: string,
     text: string,
-    opts?: { mediaUrl?: string },
+    opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
   ) => Promise<{ messageId: string; conversationId: string }>;
 };
 
