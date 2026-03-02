@@ -21,6 +21,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import ai.openclaw.android.BuildConfig
+import java.net.URI
 import kotlin.coroutines.resume
 
 class CanvasController {
@@ -34,6 +35,7 @@ class CanvasController {
   @Volatile private var debugStatusEnabled: Boolean = false
   @Volatile private var debugStatusTitle: String? = null
   @Volatile private var debugStatusSubtitle: String? = null
+  @Volatile private var authHeadersResolver: ((String) -> Map<String, String>)? = null
   private val _currentUrl = MutableStateFlow<String?>(null)
   val currentUrl: StateFlow<String?> = _currentUrl.asStateFlow()
 
@@ -86,6 +88,10 @@ class CanvasController {
     applyDebugStatus()
   }
 
+  fun setAuthHeadersResolver(resolver: ((String) -> Map<String, String>)?) {
+    authHeadersResolver = resolver
+  }
+
   fun onPageFinished() {
     applyDebugStatus()
   }
@@ -111,7 +117,12 @@ class CanvasController {
         if (BuildConfig.DEBUG) {
           Log.d("OpenClawCanvas", "load url: $currentUrl")
         }
-        wv.loadUrl(currentUrl)
+        val authHeaders = authHeadersResolver?.invoke(currentUrl).orEmpty()
+        if (authHeaders.isEmpty()) {
+          wv.loadUrl(currentUrl)
+        } else {
+          wv.loadUrl(currentUrl, authHeaders)
+        }
       }
     }
   }
@@ -269,4 +280,43 @@ class CanvasController {
       return prim.content.toDoubleOrNull()
     }
   }
+}
+
+internal fun buildCanvasGatewayAuthHeaders(
+  targetUrl: String,
+  bearerToken: String?,
+  trustedCanvasOrigins: Set<String>,
+): Map<String, String> {
+  val token = bearerToken?.trim().orEmpty()
+  if (token.isEmpty()) return emptyMap()
+  if (trustedCanvasOrigins.isEmpty()) return emptyMap()
+  val targetUri = runCatching { URI(targetUrl) }.getOrNull() ?: return emptyMap()
+  val scheme = targetUri.scheme?.trim()?.lowercase().orEmpty()
+  if (scheme != "http" && scheme != "https") return emptyMap()
+  val path = targetUri.rawPath?.trim().orEmpty()
+  if (!path.startsWith("/__openclaw__/")) return emptyMap()
+  val targetOrigin = normalizeCanvasOrigin(targetUri) ?: return emptyMap()
+  if (!trustedCanvasOrigins.contains(targetOrigin)) return emptyMap()
+  return mapOf("Authorization" to "Bearer $token")
+}
+
+internal fun resolveCanvasOrigin(rawUrl: String?): String? {
+  val trimmed = rawUrl?.trim().orEmpty()
+  if (trimmed.isEmpty()) return null
+  val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
+  return normalizeCanvasOrigin(uri)
+}
+
+private fun normalizeCanvasOrigin(uri: URI): String? {
+  val scheme = uri.scheme?.trim()?.lowercase().orEmpty()
+  if (scheme != "http" && scheme != "https") return null
+  val host = uri.host?.trim().orEmpty()
+  if (host.isEmpty()) return null
+  val explicitPort = uri.port
+  val port = when {
+    explicitPort > 0 -> explicitPort
+    scheme == "https" -> 443
+    else -> 80
+  }
+  return "$scheme://${host.lowercase()}:$port"
 }

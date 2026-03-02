@@ -310,6 +310,7 @@ class NodeRuntime(context: Context) {
     )
 
   init {
+    canvas.setAuthHeadersResolver(::resolveCanvasAuthHeaders)
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
       scope.launch {
         nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
@@ -455,6 +456,20 @@ class NodeRuntime(context: Context) {
     _canvasRehydratePending.value = false
     _canvasRehydrateErrorText.value = null
     canvas.navigate("")
+  }
+
+  private fun resolveCanvasAuthHeaders(url: String): Map<String, String> {
+    val token = prefs.loadGatewayToken()?.trim().orEmpty()
+    val trustedOrigins =
+      listOfNotNull(
+        resolveCanvasOrigin(nodeSession.currentCanvasHostUrl()),
+        resolveCanvasOrigin(operatorSession.currentCanvasHostUrl()),
+      ).toSet()
+    return buildCanvasGatewayAuthHeaders(
+      targetUrl = url,
+      bearerToken = token,
+      trustedCanvasOrigins = trustedOrigins,
+    )
   }
 
   fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
