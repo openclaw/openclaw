@@ -166,6 +166,8 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  // Keep compat with older Chromium versions (for example legacy Windows 7 builds)
+  // where Array.prototype.toSorted is unavailable.
   const cronAgentSuggestions = Array.from(
     new Set(
       [
