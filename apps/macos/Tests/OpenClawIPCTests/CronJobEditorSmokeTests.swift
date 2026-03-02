@@ -5,20 +5,23 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CronJobEditorSmokeTests {
+    private func makeEditor(job: CronJob? = nil, channelsStore: ChannelsStore? = nil) -> CronJobEditor {
+        CronJobEditor(
+            job: job,
+            isSaving: .constant(false),
+            error: .constant(nil),
+            channelsStore: channelsStore ?? ChannelsStore(isPreview: true),
+            onCancel: {},
+            onSave: { _ in })
+    }
+
     @Test func statusPillBuildsBody() {
         _ = StatusPill(text: "ok", tint: .green).body
         _ = StatusPill(text: "disabled", tint: .secondary).body
     }
 
     @Test func cronJobEditorBuildsBodyForNewJob() {
-        let channelsStore = ChannelsStore(isPreview: true)
-        let view = CronJobEditor(
-            job: nil,
-            isSaving: .constant(false),
-            error: .constant(nil),
-            channelsStore: channelsStore,
-            onCancel: {},
-            onSave: { _ in })
+        let view = self.makeEditor()
         _ = view.body
     }
 
@@ -53,37 +56,17 @@ struct CronJobEditorSmokeTests {
                 lastError: nil,
                 lastDurationMs: 1000))
 
-        let view = CronJobEditor(
-            job: job,
-            isSaving: .constant(false),
-            error: .constant(nil),
-            channelsStore: channelsStore,
-            onCancel: {},
-            onSave: { _ in })
+        let view = self.makeEditor(job: job, channelsStore: channelsStore)
         _ = view.body
     }
 
     @Test func cronJobEditorExercisesBuilders() {
-        let channelsStore = ChannelsStore(isPreview: true)
-        var view = CronJobEditor(
-            job: nil,
-            isSaving: .constant(false),
-            error: .constant(nil),
-            channelsStore: channelsStore,
-            onCancel: {},
-            onSave: { _ in })
+        var view = self.makeEditor()
         view.exerciseForTesting()
     }
 
     @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() {
-        let channelsStore = ChannelsStore(isPreview: true)
-        let view = CronJobEditor(
-            job: nil,
-            isSaving: .constant(false),
-            error: .constant(nil),
-            channelsStore: channelsStore,
-            onCancel: {},
-            onSave: { _ in })
+        let view = self.makeEditor()
 
         var root: [String: Any] = [:]
         view.applyDeleteAfterRun(to: &root, scheduleKind: CronJobEditor.ScheduleKind.at, deleteAfterRun: true)
