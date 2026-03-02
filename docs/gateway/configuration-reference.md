@@ -920,6 +920,7 @@ Periodic heartbeat runs.
       heartbeat: {
         every: "30m", // 0m disables
         model: "openai/gpt-5.2-mini",
+        thinking: "medium", // override thinking level for heartbeat runs
         includeReasoning: false,
         session: "main",
         to: "+15555550123",
@@ -935,6 +936,7 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
+- `thinking`: thinking level override for heartbeat runs. Resolution: `heartbeat.thinking` > per-agent `thinkingDefault` > global `thinkingDefault`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
@@ -1189,6 +1191,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
+        thinkingDefault: "low", // per-agent thinking level
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1214,10 +1217,12 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `thinkingDefault`: per-agent thinking level override. Resolution: per-agent > global `agents.defaults.thinkingDefault` > fallback. Values: `off | minimal | low | medium | high | xhigh | adaptive`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
+- `memorySearch.qmd.extraCollections`: additional QMD collections for this agent's memory search. Useful for cross-agent session search (e.g., letting one agent search another's session transcripts). Each entry: `{ path, pattern?, name? }`.
 
 ---
 

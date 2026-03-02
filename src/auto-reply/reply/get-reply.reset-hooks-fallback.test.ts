@@ -13,6 +13,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveAgentSkillsFilter: vi.fn(() => undefined),
+  resolveAgentConfig: vi.fn(() => undefined),
 }));
 vi.mock("../../agents/model-selection.js", () => ({
   resolveModelRefFromString: vi.fn(() => null),

@@ -42,6 +42,8 @@ export type GetReplyOptions = {
   heartbeatModelOverride?: string;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /** Resolved heartbeat thinking override from merged per-agent/global heartbeat config. */
+  heartbeatThinkingOverride?: string;
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;

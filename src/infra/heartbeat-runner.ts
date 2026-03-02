@@ -742,17 +742,17 @@ export async function runHeartbeatOnce(opts: {
     });
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const heartbeatThinkingOverride = heartbeat?.thinking?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const replyOpts = {
+      isHeartbeat: true,
+      ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      ...(heartbeatThinkingOverride ? { heartbeatThinkingOverride } : {}),
+      suppressToolErrorWarnings,
+      bootstrapContextMode,
+    };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
