@@ -693,14 +693,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       messageText || dataMessage.attachments?.length || dataMessage.quote?.text?.trim(),
     );
 
+    // Resolve ACK timestamp — mirror the same fallback used for read receipts.
+    const ackTimestamp =
+      typeof envelope.timestamp === "number"
+        ? envelope.timestamp
+        : typeof dataMessage.timestamp === "number"
+          ? dataMessage.timestamp
+          : undefined;
+
     // Send ACK reaction immediately — before any awaited I/O (attachment fetch, read receipt)
     // so the user gets instant visual feedback that their message was received.
-    if (hasEarlyBody && typeof envelope.timestamp === "number") {
+    if (hasEarlyBody && ackTimestamp !== undefined) {
       maybeSendSignalAckReaction({
         cfg: deps.cfg,
         agentId: route.agentId,
         senderRecipient,
-        targetTimestamp: envelope.timestamp,
+        targetTimestamp: ackTimestamp,
         isGroup,
         groupId,
         wasMentioned: effectiveWasMentioned,
