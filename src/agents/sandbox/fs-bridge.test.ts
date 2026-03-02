@@ -36,6 +36,14 @@ function findCallByScriptFragment(fragment: string) {
   return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
 }
 
+function dockerExecResult(stdout: string) {
+  return {
+    stdout: Buffer.from(stdout),
+    stderr: Buffer.alloc(0),
+    code: 0,
+  };
+}
+
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
     overrides: {
@@ -58,38 +66,37 @@ async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise
   }
 }
 
+function installDockerReadMock(params?: { canonicalPath?: string }) {
+  const canonicalPath = params?.canonicalPath;
+  mockedExecDockerRaw.mockImplementation(async (args) => {
+    const script = getDockerScript(args);
+    if (script.includes('readlink -f -- "$cursor"')) {
+      return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
+    }
+    if (script.includes('stat -c "%F|%s|%Y"')) {
+      return dockerExecResult("regular file|1|2");
+    }
+    if (script.includes('cat -- "$1"')) {
+      return dockerExecResult("content");
+    }
+    return dockerExecResult("");
+  });
+}
+
+async function createHostEscapeFixture(stateDir: string) {
+  const workspaceDir = path.join(stateDir, "workspace");
+  const outsideDir = path.join(stateDir, "outside");
+  const outsideFile = path.join(outsideDir, "secret.txt");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.mkdir(outsideDir, { recursive: true });
+  await fs.writeFile(outsideFile, "classified");
+  return { workspaceDir, outsideFile };
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
-    mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = getDockerScript(args);
-      if (script.includes('readlink -f -- "$cursor"')) {
-        return {
-          stdout: Buffer.from(`${getDockerArg(args, 1)}\n`),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        };
-      }
-      if (script.includes('stat -c "%F|%s|%Y"')) {
-        return {
-          stdout: Buffer.from("regular file|1|2"),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        };
-      }
-      if (script.includes('cat -- "$1"')) {
-        return {
-          stdout: Buffer.from("content"),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        };
-      }
-      return {
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      };
-    });
+    installDockerReadMock();
   });
 
   it("uses POSIX-safe shell prologue in all bridge commands", async () => {
@@ -227,12 +234,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const outsideDir = path.join(stateDir, "outside");
-      const outsideFile = path.join(outsideDir, "secret.txt");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(outsideFile, "classified");
+      const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
       await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
       const bridge = createSandboxFsBridge({
@@ -252,12 +254,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       return;
     }
     await withTempDir("openclaw-fs-bridge-hardlink-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      const outsideDir = path.join(stateDir, "outside");
-      const outsideFile = path.join(outsideDir, "secret.txt");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(outsideFile, "classified");
+      const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
       const hardlinkPath = path.join(workspaceDir, "link.txt");
       try {
         await fs.link(outsideFile, hardlinkPath);
@@ -281,28 +278,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
-    mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = getDockerScript(args);
-      if (script.includes('readlink -f -- "$cursor"')) {
-        return {
-          stdout: Buffer.from("/etc/passwd\n"),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        };
-      }
-      if (script.includes('cat -- "$1"')) {
-        return {
-          stdout: Buffer.from("content"),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        };
-      }
-      return {
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        code: 0,
-      };
-    });
+    installDockerReadMock({ canonicalPath: "/etc/passwd" });
 
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);

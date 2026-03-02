@@ -239,6 +239,28 @@ describe("sanitizeToolUseResultPairing", () => {
 });
 
 describe("sanitizeToolCallInputs", () => {
+  function sanitizeAssistantContent(
+    content: unknown[],
+    options?: Parameters<typeof sanitizeToolCallInputs>[1],
+  ) {
+    return sanitizeToolCallInputs(
+      [
+        {
+          role: "assistant",
+          content,
+        },
+      ] as unknown as AgentMessage[],
+      options,
+    );
+  }
+
+  function sanitizeAssistantToolCalls(
+    content: unknown[],
+    options?: Parameters<typeof sanitizeToolCallInputs>[1],
+  ) {
+    return getAssistantToolCallBlocks(sanitizeAssistantContent(content, options));
+  }
+
   it("drops tool calls missing input or arguments", () => {
     const input = [
       {
@@ -252,71 +274,54 @@ describe("sanitizeToolCallInputs", () => {
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
 
-  it("drops tool calls with missing or blank name/id", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_empty_name", name: "", arguments: {} },
-          { type: "toolUse", id: "call_blank_name", name: "   ", input: {} },
-          { type: "functionCall", id: "", name: "exec", arguments: {} },
-        ],
-      },
-    ] as unknown as AgentMessage[];
+  it.each([
+    {
+      name: "drops tool calls with missing or blank name/id",
+      content: [
+        { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_empty_name", name: "", arguments: {} },
+        { type: "toolUse", id: "call_blank_name", name: "   ", input: {} },
+        { type: "functionCall", id: "", name: "exec", arguments: {} },
+      ],
+      options: undefined,
+      expectedIds: ["call_ok"],
+    },
+    {
+      name: "drops tool calls with malformed or overlong names",
+      content: [
+        { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+        {
+          type: "toolCall",
+          id: "call_bad_chars",
+          name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
+          arguments: {},
+        },
+        {
+          type: "toolUse",
+          id: "call_too_long",
+          name: `read_${"x".repeat(80)}`,
+          input: {},
+        },
+      ],
+      options: undefined,
+      expectedIds: ["call_ok"],
+    },
+    {
+      name: "drops unknown tool names when an allowlist is provided",
+      content: [
+        { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
+        { type: "toolCall", id: "call_unknown", name: "write", arguments: {} },
+      ],
+      options: { allowedToolNames: ["read"] },
+      expectedIds: ["call_ok"],
+    },
+  ])("$name", ({ content, options, expectedIds }) => {
+    const toolCalls = sanitizeAssistantToolCalls(content, options);
+    const ids = toolCalls
+      .map((toolCall) => (toolCall as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string");
 
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_ok");
-  });
-
-  it("drops tool calls with malformed or overlong names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
-          {
-            type: "toolCall",
-            id: "call_bad_chars",
-            name: 'toolu_01abc <|tool_call_argument_begin|> {"command"',
-            arguments: {},
-          },
-          {
-            type: "toolUse",
-            id: "call_too_long",
-            name: `read_${"x".repeat(80)}`,
-            input: {},
-          },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
-  });
-
-  it("drops unknown tool names when an allowlist is provided", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_ok", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_unknown", name: "write", arguments: {} },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+    expect(ids).toEqual(expectedIds);
   });
 
   it("keeps valid tool calls and preserves text blocks", () => {
@@ -339,71 +344,43 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
-  it("trims leading whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
-  });
-
-  it("trims trailing whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("exec");
-  });
-
-  it("trims both leading and trailing whitespace from tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-          { type: "toolUse", id: "call_2", name: "  exec  ", input: {} },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(2);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
-    expect((toolCalls[1] as { name?: unknown }).name).toBe("exec");
-  });
-
-  it("trims tool names and matches against allowlist", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
-          { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
-    const toolCalls = getAssistantToolCallBlocks(out);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
+  it.each([
+    {
+      name: "trims leading whitespace from tool names",
+      content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
+      options: undefined,
+      expectedNames: ["read"],
+    },
+    {
+      name: "trims trailing whitespace from tool names",
+      content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
+      options: undefined,
+      expectedNames: ["exec"],
+    },
+    {
+      name: "trims both leading and trailing whitespace from tool names",
+      content: [
+        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+        { type: "toolUse", id: "call_2", name: "  exec  ", input: {} },
+      ],
+      options: undefined,
+      expectedNames: ["read", "exec"],
+    },
+    {
+      name: "trims tool names and matches against allowlist",
+      content: [
+        { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
+        { type: "toolCall", id: "call_2", name: " write ", arguments: {} },
+      ],
+      options: { allowedToolNames: ["read"] },
+      expectedNames: ["read"],
+    },
+  ])("$name", ({ content, options, expectedNames }) => {
+    const toolCalls = sanitizeAssistantToolCalls(content, options);
+    const names = toolCalls
+      .map((toolCall) => (toolCall as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === "string");
+    expect(names).toEqual(expectedNames);
   });
 
   it("preserves toolUse input shape for sessions_spawn when no attachments are present", () => {
@@ -458,17 +435,9 @@ describe("sanitizeToolCallInputs", () => {
     expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
   });
   it("preserves other block properties when trimming tool names", () => {
-    const input = [
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
-        ],
-      },
-    ] as unknown as AgentMessage[];
-
-    const out = sanitizeToolCallInputs(input);
-    const toolCalls = getAssistantToolCallBlocks(out);
+    const toolCalls = sanitizeAssistantToolCalls([
+      { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
+    ]);
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
