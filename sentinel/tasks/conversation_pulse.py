@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Conversation pulse — heuristic detection of conversation anomalies.
 
-Runs every 15m. Zero AI cost. Five detection algorithms:
+Runs every 15m. Zero AI cost. Six detection algorithms:
   1. Bot unresponsive — human question with no bot reply within 5min
   2. Thought leak     — bot message matches thought_leak_patterns
   3. Consecutive msgs — bot sends ≥3 messages in 120s without human interleave
   4. Self evaluation   — bot message matches self_eval_patterns
-  5. Abnormal silence  — no messages for too long (priority-dependent)
+  5. Work avoidance   — bot offers menus/delegates instead of executing
+  6. Abnormal silence  — no messages for too long (priority-dependent)
 
 Usage:
     python3 sentinel/tasks/conversation_pulse.py --dry-run
@@ -183,6 +184,36 @@ def _detect_self_eval(messages: list[dict], config: dict) -> list[dict]:
     return issues
 
 
+def _detect_work_avoidance(messages: list[dict], config: dict) -> list[dict]:
+    """P1: Bot message shows work avoidance — offering menus / delegating instead of executing."""
+    detection = config.get("detection", {})
+    avoidance_patterns = detection.get("work_avoidance_patterns", [])
+    menu_patterns = detection.get("menu_patterns", [])
+    all_patterns = avoidance_patterns + menu_patterns
+    if not all_patterns:
+        return []
+
+    regex = re.compile("|".join(re.escape(p) for p in all_patterns))
+    issues = []
+
+    for msg in messages:
+        if not is_bot(msg):
+            continue
+        text = msg.get("text", "") or ""
+        match = regex.search(text)
+        if match:
+            snippet = text[:80].replace("\n", " ")
+            issues.append({
+                "type": "work_avoidance",
+                "severity": "P1",
+                "detail": f"逃避工作: 「{match.group()}」",
+                "snippet": snippet,
+                "message_id": msg.get("id"),
+            })
+
+    return issues
+
+
 def _detect_silence(messages: list[dict], group: dict, config: dict) -> list[dict]:
     """P2: No messages for longer than priority-based threshold."""
     priority = group.get("priority", "low")
@@ -293,6 +324,7 @@ def run(config: dict, state: dict) -> dict:
         issues.extend(_detect_thought_leak(messages, scan_cfg))
         issues.extend(_detect_consecutive(messages, scan_cfg))
         issues.extend(_detect_self_eval(messages, scan_cfg))
+        issues.extend(_detect_work_avoidance(messages, scan_cfg))
         issues.extend(_detect_silence(messages, group, scan_cfg))
 
         for issue in issues:
@@ -387,6 +419,7 @@ if __name__ == "__main__":
             issues.extend(_detect_thought_leak(messages, cfg))
             issues.extend(_detect_consecutive(messages, cfg))
             issues.extend(_detect_self_eval(messages, cfg))
+            issues.extend(_detect_work_avoidance(messages, cfg))
             issues.extend(_detect_silence(messages, group, cfg))
 
             if issues:

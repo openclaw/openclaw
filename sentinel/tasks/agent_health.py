@@ -7,7 +7,7 @@ Runs every 1h. Zero AI cost. Ten check items:
    3. AGENTS.md exists (auto-create minimal template if missing)
    4. memory/ directory exists (auto mkdir -p)
    5. .openclaw/ directory exists (auto mkdir -p)
-   6. Core rules inherited (inject _sentinel_rules.md if < 4 rules)
+   6. Core rules inherited (inject _sentinel_rules.md if < 5 rules)
    7. HEARTBEAT.md exists (auto-create template)
    8. TOOLS.md exists (auto-create template)
    9. _sentinel_rules.md version matches latest (auto-update if stale)
@@ -34,12 +34,13 @@ logger = logging.getLogger("sentinel.agent_health")
 
 OPENCLAW_CONFIG = Path.home() / ".openclaw" / "openclaw.json"
 
-# ── 4 core rules: regex patterns to detect in combined text ──
+# ── 5 core rules: regex patterns to detect in combined text ──
 RULE_PATTERNS = {
     "anti_thought_leak": re.compile(r"洩漏思考|思維洩漏|禁止洩漏|禁止.*思考過程"),
     "anti_consecutive":  re.compile(r"連續發|禁止連續|禁止.*多則"),
     "anti_auto_summary": re.compile(r"自動總結|禁止.*總結"),
     "anti_self_eval":    re.compile(r"自我評價|禁止.*評價"),
+    "anti_work_avoidance": re.compile(r"逃避工作|禁止逃避|收到指令.*執行|第一反應.*執行|列選項.*建議問"),
 }
 
 # Cooldown between notifications for the same alert (seconds)
@@ -48,13 +49,14 @@ NOTIFY_COOLDOWN = 3600  # 1 hour
 # ── _sentinel_rules.md content ──
 SENTINEL_RULES_CONTENT = """\
 <!-- SENTINEL_MANAGED — 此檔案由 Sentinel agent_health 自動維護，請勿手動編輯 -->
-<!-- version: 2 -->
+<!-- version: 3 -->
 # 核心行為規則（繼承自 workspace/SOUL.md）
 
 1. **禁止洩漏思考過程** — 工具調用和中間推理是內部的，只有最終結果才能發出去
 2. **禁止連續發多則** — 一個問題一個回覆
 3. **禁止自動總結** — 回完話就停
 4. **禁止自我評價** — 不要寫「展現了XX能力」「驗證了XX價值」
+5. **禁止逃避工作** — 收到指令就執行，不要列選項菜單、不要建議問別人、不要用分析代替動手。第一反應是調用工具，不是打字。
 """
 
 SENTINEL_RULES_HASH = hashlib.md5(SENTINEL_RULES_CONTENT.encode()).hexdigest()
@@ -230,19 +232,19 @@ def _check_agent(agent: dict, bindings: dict[str, int], dry_run: bool = False) -
         rules = _check_rules(ws_path)
         result["rules"] = rules
         matched = sum(1 for v in rules.values() if v)
-        if matched >= 4:
+        if matched >= 5:
             result["score"] += 1
         else:
             rules_file = ws_path / "_sentinel_rules.md"
             if not dry_run:
                 try:
                     rules_file.write_text(SENTINEL_RULES_CONTENT)
-                    result["fixes"].append(f"_sentinel_rules.md injected ({matched}/4 → 4/4)")
+                    result["fixes"].append(f"_sentinel_rules.md injected ({matched}/5 → 5/5)")
                     result["score"] += 1
                 except OSError as e:
                     result["issues"].append(f"{agent_id}: rule injection failed: {e}")
             else:
-                result["fixes"].append(f"_sentinel_rules.md would be injected ({matched}/4)")
+                result["fixes"].append(f"_sentinel_rules.md would be injected ({matched}/5)")
 
     # ── 7. HEARTBEAT.md exists (auto-create) ──
     hb = ws_path / "HEARTBEAT.md"
@@ -298,8 +300,8 @@ def _check_agent(agent: dict, bindings: dict[str, int], dry_run: bool = False) -
         elif any("injected" in f for f in result["fixes"]):
             # Just injected in check #6 — it's already latest
             result["score"] += 1
-        elif sum(1 for v in result["rules"].values() if v) >= 4:
-            # Agent natively has all 4 rules — no _sentinel_rules.md needed
+        elif sum(1 for v in result["rules"].values() if v) >= 5:
+            # Agent natively has all 5 rules — no _sentinel_rules.md needed
             result["score"] += 1
 
     # ── 10. openclaw.json binding exists ──
@@ -489,7 +491,7 @@ if __name__ == "__main__":
             if missing:
                 print(f"  [rules] missing: {', '.join(missing)}")
             else:
-                print(f"  [rules] 4/4 ✓")
+                print(f"  [rules] 5/5 ✓")
 
     prefix = "[dry-run] " if args.dry_run else ""
     print(f"\n{prefix}Total: {len(agents)} agents, {total_fixes} fixes, {total_issues} P1 issues")

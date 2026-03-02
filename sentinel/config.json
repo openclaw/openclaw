@@ -110,6 +110,54 @@
       "bridge": "dufu",
       "priority": "medium",
       "agent_id": "bita"
+    },
+    "-5299944691": {
+      "name": "24群",
+      "bridge": "dufu",
+      "priority": "high",
+      "agent_id": "24bet"
+    },
+    "-4835848224": {
+      "name": "G9-綜合-項目組",
+      "bridge": "andrew",
+      "priority": "medium",
+      "agent_id": "24bet"
+    },
+    "-4891959459": {
+      "name": "G9-需求/產品討論群",
+      "bridge": "andrew",
+      "priority": "medium",
+      "agent_id": "24bet"
+    },
+    "-4993518397": {
+      "name": "數據日報",
+      "bridge": "andrew",
+      "priority": "medium",
+      "agent_id": "24bet"
+    },
+    "-5258475090": {
+      "name": "report正式環境-16888",
+      "bridge": "andrew",
+      "priority": "medium",
+      "agent_id": "24bet"
+    },
+    "-1002783232949": {
+      "name": "G9-測試-發布群",
+      "bridge": "andrew",
+      "priority": "low",
+      "agent_id": "24bet"
+    },
+    "-1002860663272": {
+      "name": "G9-考勤群",
+      "bridge": "andrew",
+      "priority": "low",
+      "agent_id": "24bet"
+    },
+    "-1003275304229": {
+      "name": "G9-測試群",
+      "bridge": "andrew",
+      "priority": "low",
+      "agent_id": "24bet"
     }
   },
   "sync": {
@@ -135,13 +183,26 @@
     ],
     "self_eval_patterns": ["學習點", "展現的能力", "展現了", "驗證了", "展示了"],
     "menu_patterns": ["方案A", "方案B", "方案 A", "方案 B", "Option A", "Option B"],
+    "work_avoidance_patterns": [
+      "要不要問",
+      "要不要讓",
+      "可以請",
+      "建議先問",
+      "我先幫你分析",
+      "我先幫你整理",
+      "幫你列出選項",
+      "以下幾種方案",
+      "以下幾個方向",
+      "你可以選擇",
+      "你覺得哪個"
+    ],
     "consecutive_msg_window_sec": 120,
     "consecutive_msg_threshold": 3,
     "unresponsive_timeout_min": 5
   },
   "severity": {
     "P0": ["thought_leak", "unresponsive", "gateway_down", "repeated_message"],
-    "P1": ["consecutive_messages", "self_evaluation", "menu_listing"],
+    "P1": ["consecutive_messages", "self_evaluation", "menu_listing", "work_avoidance"],
     "P2": ["emoji_headers", "workspace_drift"]
   }
 }
