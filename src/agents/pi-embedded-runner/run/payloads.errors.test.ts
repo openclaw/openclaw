@@ -439,5 +439,24 @@ describe("buildEmbeddedRunPayloads", () => {
       expect(payloads[0]?.isError).toBe(true);
       expect(payloads[0]?.text).toContain("billing error");
     });
+
+    it("suppresses non-mutating tool error warnings when suppressApiErrors is true", () => {
+      const payloads = buildPayloads({
+        lastToolError: { toolName: "browser", error: "connection timeout" },
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(0);
+    });
+
+    it("still shows mutating tool errors even when suppressApiErrors is true", () => {
+      const payloads = buildPayloads({
+        lastToolError: { toolName: "edit", mutatingAction: true, error: "file not found" },
+        config: { messages: { suppressApiErrors: true } } as BuildPayloadParams["config"],
+      });
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.isError).toBe(true);
+    });
   });
 });

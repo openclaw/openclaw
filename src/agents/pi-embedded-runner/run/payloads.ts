@@ -9,6 +9,7 @@ import {
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
   getApiErrorPayloadFingerprint,
+  isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isRawApiErrorPayload,
@@ -155,10 +156,12 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
   // Suppress transient API errors (rate limit, overload) when configured.
-  // Billing/auth errors are never suppressed as they require user action.
+  // Billing errors are never suppressed even if they match rate-limit patterns
+  // (e.g. "exceeded your current quota") because they require user action.
   const rawMsgForSuppress = params.lastAssistant?.errorMessage?.trim() ?? "";
   const isTransientApiError =
-    isRateLimitErrorMessage(rawMsgForSuppress) || isOverloadedErrorMessage(rawMsgForSuppress);
+    !isBillingErrorMessage(rawMsgForSuppress) &&
+    (isRateLimitErrorMessage(rawMsgForSuppress) || isOverloadedErrorMessage(rawMsgForSuppress));
   const suppressApiError =
     Boolean(params.config?.messages?.suppressApiErrors) && isTransientApiError;
   if (errorText && !suppressApiError) {
@@ -288,7 +291,12 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
-      suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      // suppressApiErrors also silences tool-error warnings — both are noise
+      // for non-technical users in group chats. Mutating tool errors are still
+      // shown regardless (see resolveToolErrorWarningPolicy).
+      suppressToolErrors:
+        Boolean(params.config?.messages?.suppressToolErrors) ||
+        Boolean(params.config?.messages?.suppressApiErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       verboseLevel: params.verboseLevel,
     });
