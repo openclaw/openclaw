@@ -127,6 +127,10 @@ export const NormalizedEventSchema = z.discriminatedUnion("type", [
     error: z.string(),
     retryable: z.boolean().optional(),
   }),
+  BaseEventSchema.extend({
+    type: z.literal("call.bot-speech"),
+    transcript: z.string(),
+  }),
 ]);
 export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
 

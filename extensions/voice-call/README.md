@@ -172,10 +172,47 @@ Actions:
 - `voicecall.end` (callId)
 - `voicecall.status` (callId)
 
+## OpenAI Realtime Conversation Mode
+
+Set `streaming.sttProvider: "openai-realtime-conversation"` to enable full conversation mode.
+Instead of the STT → Pi agent → TTS pipeline, OpenAI's Realtime API handles everything in one
+persistent WebSocket connection (STT + LLM + TTS), achieving sub-second response latency.
+
+```json5
+{
+  streaming: {
+    enabled: true,
+    sttProvider: "openai-realtime-conversation",
+    realtimeModel: "gpt-4o-realtime-preview", // default
+    realtimeVoice: "alloy", // alloy | ash | ballad | coral | echo | sage | shimmer | verse
+    realtimeSystemPrompt: "You are a helpful assistant.",
+    silenceDurationMs: 800,
+    vadThreshold: 0.5,
+  },
+}
+```
+
+**How it works:**
+
+- Twilio audio (mu-law 8kHz) streams directly to OpenAI via the Realtime API
+- OpenAI performs STT, generates a response, and returns TTS audio (also mu-law)
+- Audio is forwarded directly back to Twilio — no conversion needed
+- Barge-in: when the caller speaks during AI playback, a `response.cancel` is sent to OpenAI
+  and Twilio's audio buffer is cleared immediately
+
+**Trade-offs vs STT mode:**
+
+- Lower latency (no Pi agent round-trip)
+- No access to OpenClaw tools or conversation history from the Pi agent
+- Voice/personality is controlled by `realtimeSystemPrompt` and `realtimeVoice`
+- Requires an OpenAI API key with Realtime API access
+
+The existing STT mode (`sttProvider: "openai-realtime"`, the default) is unaffected.
+
 ## Notes
 
 - Uses webhook signature verification for Twilio/Telnyx/Plivo.
 - Adds replay protection for Twilio and Plivo webhooks (valid duplicate callbacks are ignored safely).
 - Twilio speech turns include a per-turn token so stale/replayed callbacks cannot complete a newer turn.
-- `responseModel` / `responseSystemPrompt` control AI auto-responses.
+- `responseModel` / `responseSystemPrompt` control AI auto-responses (STT mode only).
 - Media streaming requires `ws` and OpenAI Realtime API key.

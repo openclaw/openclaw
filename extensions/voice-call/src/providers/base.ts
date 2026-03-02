@@ -57,6 +57,14 @@ export interface VoiceCallProvider {
   playTts(input: PlayTtsInput): Promise<void>;
 
   /**
+   * Play a stream of sentence-sized text chunks as sequential TTS audio.
+   * Providers that support it (e.g. Twilio with media streams) can start
+   * playing audio before the full response has been generated.
+   * Optional — callers fall back to playTts when absent.
+   */
+  playTtsStream?(textStream: AsyncIterable<string>, providerCallId: string): Promise<void>;
+
+  /**
    * Start listening for user speech (activate STT).
    */
   startListening(input: StartListeningInput): Promise<void>;

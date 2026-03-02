@@ -226,6 +226,55 @@ export async function speak(
   }
 }
 
+/**
+ * Speak a stream of sentence-sized text chunks to the caller.
+ *
+ * Transitions the call to "speaking" state once (before the first chunk) and
+ * delegates chunk playback to provider.playTtsStream when available.  Falls
+ * back to collecting all chunks and calling provider.playTts if the provider
+ * does not support streaming TTS.
+ *
+ * Does NOT add transcript entries — the caller is responsible for logging the
+ * full assembled text after all chunks have been generated.
+ */
+export async function speakStream(
+  ctx: SpeakContext,
+  callId: CallId,
+  textStream: AsyncIterable<string>,
+): Promise<{ success: boolean; error?: string }> {
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
+  }
+  const { call, providerCallId, provider } = connected;
+
+  try {
+    transitionState(call, "speaking");
+    persistCallRecord(ctx.storePath, call);
+
+    if (provider.playTtsStream) {
+      await provider.playTtsStream(textStream, providerCallId);
+    } else {
+      // Provider does not support streaming — buffer all chunks then speak at once.
+      const chunks: string[] = [];
+      for await (const chunk of textStream) {
+        if (chunk.trim()) {
+          chunks.push(chunk);
+        }
+      }
+      const fullText = chunks.join(" ").trim();
+      if (fullText) {
+        const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+        await provider.playTts({ callId, providerCallId, text: fullText, voice });
+      }
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function speakInitialMessage(
   ctx: ConversationContext,
   providerCallId: string,

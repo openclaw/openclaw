@@ -12,6 +12,7 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { OpenAIRealtimeConversationProvider } from "./providers/openai-realtime-conversation.js";
 import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
@@ -69,20 +70,23 @@ export class VoiceCallWebhookServer {
       return;
     }
 
-    const sttProvider = new OpenAIRealtimeSTTProvider({
-      apiKey,
-      model: this.config.streaming?.sttModel,
-      silenceDurationMs: this.config.streaming?.silenceDurationMs,
-      vadThreshold: this.config.streaming?.vadThreshold,
-    });
+    const isConversationMode =
+      this.config.streaming?.sttProvider === "openai-realtime-conversation";
 
-    const streamConfig: MediaStreamConfig = {
-      sttProvider,
+    // Shared callbacks used by both STT and conversation modes
+    const sharedCallbacks = {
       preStartTimeoutMs: this.config.streaming?.preStartTimeoutMs,
       maxPendingConnections: this.config.streaming?.maxPendingConnections,
       maxPendingConnectionsPerIp: this.config.streaming?.maxPendingConnectionsPerIp,
       maxConnections: this.config.streaming?.maxConnections,
-      shouldAcceptStream: ({ callId, token }) => {
+      shouldAcceptStream: ({
+        callId,
+        token,
+      }: {
+        callId: string;
+        streamSid: string;
+        token?: string;
+      }) => {
         const call = this.manager.getCallByProviderCallId(callId);
         if (!call) {
           return false;
@@ -96,11 +100,12 @@ export class VoiceCallWebhookServer {
         }
         return true;
       },
-      onTranscript: (providerCallId, transcript) => {
+      onTranscript: (providerCallId: string, transcript: string) => {
         console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
 
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio") {
+        // In STT mode, clear TTS queue on barge-in (user started speaking)
+        // Conversation mode handles barge-in via response.cancel + clearAudio directly
+        if (!isConversationMode && this.provider.name === "twilio") {
           (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
 
@@ -123,42 +128,62 @@ export class VoiceCallWebhookServer {
         };
         this.manager.processEvent(event);
 
-        // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
-        const callMode = call.metadata?.mode as string | undefined;
-        const shouldRespond = call.direction === "inbound" || callMode === "conversation";
-        if (shouldRespond) {
-          this.handleInboundResponse(call.callId, transcript).catch((err) => {
-            console.warn(`[voice-call] Failed to auto-respond:`, err);
-          });
+        // STT mode: auto-respond via Pi agent (conversation mode bypasses agent entirely)
+        if (!isConversationMode) {
+          const callMode = call.metadata?.mode as string | undefined;
+          const shouldRespond = call.direction === "inbound" || callMode === "conversation";
+          if (shouldRespond) {
+            this.handleInboundResponse(call.callId, transcript).catch((err) => {
+              console.warn(`[voice-call] Failed to auto-respond:`, err);
+            });
+          }
         }
       },
-      onSpeechStart: (providerCallId) => {
-        if (this.provider.name === "twilio") {
+      onResponseTranscript: (providerCallId: string, transcript: string) => {
+        console.log(`[voice-call] AI response for ${providerCallId}: ${transcript}`);
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (!call) return;
+        const event: NormalizedEvent = {
+          id: `stream-bot-transcript-${Date.now()}`,
+          type: "call.bot-speech",
+          callId: call.callId,
+          providerCallId,
+          timestamp: Date.now(),
+          transcript,
+        };
+        this.manager.processEvent(event);
+      },
+      onSpeechStart: (providerCallId: string) => {
+        // STT mode: clear TTS queue on barge-in
+        // Conversation mode: barge-in is handled inside the provider (response.cancel + clearAudio)
+        if (!isConversationMode && this.provider.name === "twilio") {
           (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
         }
       },
-      onPartialTranscript: (callId, partial) => {
+      onPartialTranscript: (callId: string, partial: string) => {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
       },
-      onConnect: (callId, streamSid) => {
+      onConnect: (callId: string, streamSid: string) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
-        // Register stream with provider for TTS routing
+        // Register stream with provider for TTS routing (needed in STT mode)
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
-        // Speak initial message if one was provided when call was initiated
-        // Use setTimeout to allow stream setup to complete
-        setTimeout(() => {
-          this.manager.speakInitialMessage(callId).catch((err) => {
-            console.warn(`[voice-call] Failed to speak initial message:`, err);
-          });
-        }, 500);
+        // STT mode only: speak initial message via telephony TTS.
+        // Conversation mode uses onConversationConnected to trigger the AI greeting
+        // via response.create, avoiding the TwiML <Say> fallback that breaks the stream.
+        if (!isConversationMode) {
+          setTimeout(() => {
+            this.manager.speakInitialMessage(callId).catch((err) => {
+              console.warn(`[voice-call] Failed to speak initial message:`, err);
+            });
+          }, 500);
+        }
       },
-      onDisconnect: (callId) => {
+      onDisconnect: (callId: string) => {
         console.log(`[voice-call] Media stream disconnected: ${callId}`);
-        // Auto-end call when media stream disconnects to prevent stuck calls.
-        // Without this, calls can remain active indefinitely after the stream closes.
+        // Auto-end call when media stream disconnects to prevent stuck calls
         const disconnectedCall = this.manager.getCallByProviderCallId(callId);
         if (disconnectedCall) {
           console.log(
@@ -173,6 +198,40 @@ export class VoiceCallWebhookServer {
         }
       },
     };
+
+    let streamConfig: MediaStreamConfig;
+
+    if (isConversationMode) {
+      const conversationProvider = new OpenAIRealtimeConversationProvider({
+        apiKey,
+        model: this.config.streaming?.realtimeModel,
+        voice: this.config.streaming?.realtimeVoice,
+        systemPrompt: this.config.streaming?.realtimeSystemPrompt,
+        silenceDurationMs: this.config.streaming?.silenceDurationMs,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
+      streamConfig = {
+        conversationProvider,
+        ...sharedCallbacks,
+        onConversationConnected: (callId: string, _streamSid: string, session) => {
+          // Get the initial message (if any) from call metadata and trigger AI greeting.
+          const call = this.manager.getCallByProviderCallId(callId);
+          const initialMessage = call?.metadata?.initialMessage as string | undefined;
+          if (call?.metadata?.initialMessage) {
+            delete call.metadata.initialMessage;
+          }
+          session.triggerGreeting(initialMessage);
+        },
+      };
+    } else {
+      const sttProvider = new OpenAIRealtimeSTTProvider({
+        apiKey,
+        model: this.config.streaming?.sttModel,
+        silenceDurationMs: this.config.streaming?.silenceDurationMs,
+        vadThreshold: this.config.streaming?.vadThreshold,
+      });
+      streamConfig = { sttProvider, ...sharedCallbacks };
+    }
 
     this.mediaStreamHandler = new MediaStreamHandler(streamConfig);
     console.log("[voice-call] Media streaming initialized");
@@ -366,6 +425,9 @@ export class VoiceCallWebhookServer {
   /**
    * Handle auto-response for inbound calls using the agent system.
    * Supports tool calling for richer voice interactions.
+   *
+   * Uses streaming TTS to begin playing audio as soon as the first sentence
+   * is ready, while Claude continues generating the rest of the response.
    */
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     console.log(`[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`);
@@ -383,16 +445,73 @@ export class VoiceCallWebhookServer {
     }
 
     try {
-      const { generateVoiceResponse } = await import("./response-generator.js");
+      const { generateVoiceResponseStream } = await import("./response-generator.js");
 
-      const result = await generateVoiceResponse({
-        voiceConfig: this.config,
-        coreConfig: this.coreConfig,
-        callId,
-        from: call.from,
-        transcript: call.transcript,
-        userMessage,
-      });
+      // Bridge the callback-based onSentenceChunk into an async iterable so
+      // speakStream can consume chunks as they arrive.  The queue holds pending
+      // chunks while speakStream is busy synthesizing the previous one, and
+      // signals completion via a sentinel (null) after generation finishes.
+      const chunkQueue: Array<string | null> = [];
+      let resolveWaiter: (() => void) | null = null;
+
+      // Async iterable consumed by speakStream; yields sentence chunks as they
+      // are pushed by onSentenceChunk, terminates when null is pushed.
+      async function* sentenceIterable(): AsyncIterable<string> {
+        for (;;) {
+          if (chunkQueue.length === 0) {
+            // Wait until a chunk (or the sentinel) is pushed.
+            await new Promise<void>((resolve) => {
+              resolveWaiter = resolve;
+            });
+          }
+          const item = chunkQueue.shift();
+          if (item === null) {
+            // Sentinel — generation is complete.
+            return;
+          }
+          if (item !== undefined) {
+            yield item;
+          }
+        }
+      }
+
+      const pushChunk = (text: string): void => {
+        chunkQueue.push(text);
+        if (resolveWaiter) {
+          const fn = resolveWaiter;
+          resolveWaiter = null;
+          fn();
+        }
+      };
+
+      const pushDone = (): void => {
+        chunkQueue.push(null);
+        if (resolveWaiter) {
+          const fn = resolveWaiter;
+          resolveWaiter = null;
+          fn();
+        }
+      };
+
+      // Run generation and stream speaking concurrently.
+      // speakStream consumes chunks as they arrive from onSentenceChunk.
+      const [result] = await Promise.all([
+        generateVoiceResponseStream({
+          voiceConfig: this.config,
+          coreConfig: this.coreConfig,
+          callId,
+          from: call.from,
+          transcript: call.transcript,
+          userMessage,
+          onSentenceChunk: async (text: string) => {
+            pushChunk(text);
+          },
+        }).finally(() => {
+          // Signal the iterable consumer that no more chunks are coming.
+          pushDone();
+        }),
+        this.manager.speakStream(callId, sentenceIterable()),
+      ]);
 
       if (result.error) {
         console.error(`[voice-call] Response generation error: ${result.error}`);
@@ -400,8 +519,19 @@ export class VoiceCallWebhookServer {
       }
 
       if (result.text) {
-        console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+        console.log(`[voice-call] AI response (streaming): "${result.text}"`);
+        // Add the complete bot response to the call transcript now that we have
+        // the full assembled text.  speakStream intentionally skips this because
+        // it only sees chunks, not the final text.
+        const liveCall = this.manager.getCall(callId);
+        if (liveCall) {
+          liveCall.transcript.push({
+            timestamp: Date.now(),
+            speaker: "bot",
+            text: result.text,
+            isFinal: true,
+          });
+        }
       }
     } catch (err) {
       console.error(`[voice-call] Auto-response error:`, err);

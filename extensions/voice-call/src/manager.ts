@@ -11,6 +11,7 @@ import {
   initiateCall as initiateCallWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  speakStream as speakStreamWithContext,
 } from "./manager/outbound.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -102,6 +103,18 @@ export class CallManager {
    */
   async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
     return speakWithContext(this.getContext(), callId, text);
+  }
+
+  /**
+   * Speak a stream of sentence-sized text chunks to the caller.
+   * Starts audio playback as soon as the first chunk is available while the
+   * rest of the response continues to be generated.
+   */
+  async speakStream(
+    callId: CallId,
+    textStream: AsyncIterable<string>,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakStreamWithContext(this.getContext(), callId, textStream);
   }
 
   /**

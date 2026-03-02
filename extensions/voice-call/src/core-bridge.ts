@@ -42,6 +42,8 @@ type CoreAgentDeps = {
     lane?: string;
     extraSystemPrompt?: string;
     agentDir?: string;
+    /** Called with each text delta as Claude generates output. */
+    onPartialReply?: (payload: { text: string }) => void | Promise<void>;
   }) => Promise<{
     payloads?: Array<{ text?: string; isError?: boolean }>;
     meta?: { aborted?: boolean };

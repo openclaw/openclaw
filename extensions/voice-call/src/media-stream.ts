@@ -11,16 +11,23 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
+  OpenAIRealtimeConversationProvider,
+  RealtimeConversationSession,
+} from "./providers/openai-realtime-conversation.js";
+import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
 } from "./providers/stt-openai-realtime.js";
 
 /**
  * Configuration for the media stream handler.
+ * Exactly one of sttProvider or conversationProvider must be set.
  */
 export interface MediaStreamConfig {
-  /** STT provider for transcription */
-  sttProvider: OpenAIRealtimeSTTProvider;
+  /** STT-only provider (transcription → Pi agent → TTS pipeline) */
+  sttProvider?: OpenAIRealtimeSTTProvider;
+  /** Full conversation provider (OpenAI handles STT + LLM + TTS in one round-trip) */
+  conversationProvider?: OpenAIRealtimeConversationProvider;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -31,26 +38,39 @@ export interface MediaStreamConfig {
   maxConnections?: number;
   /** Validate whether to accept a media stream for the given call ID */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
-  /** Callback when transcript is received */
+  /** Callback when user transcript is received (final) */
   onTranscript?: (callId: string, transcript: string) => void;
   /** Callback for partial transcripts (streaming UI) */
   onPartialTranscript?: (callId: string, partial: string) => void;
+  /** Callback when AI response transcript is received (conversation mode only) */
+  onResponseTranscript?: (callId: string, transcript: string) => void;
   /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
   /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
   onDisconnect?: (callId: string) => void;
+  /**
+   * Callback fired after the conversation session has connected to OpenAI Realtime.
+   * Use this to trigger an initial greeting via session.triggerGreeting().
+   */
+  onConversationConnected?: (
+    callId: string,
+    streamSid: string,
+    session: RealtimeConversationSession,
+  ) => void;
 }
 
 /**
  * Active media stream session.
+ * sttSession xor conversationSession is set depending on the configured mode.
  */
 interface StreamSession {
   callId: string;
   streamSid: string;
   ws: WebSocket;
-  sttSession: RealtimeSTTSession;
+  sttSession?: RealtimeSTTSession;
+  conversationSession?: RealtimeConversationSession;
 }
 
 type TtsQueueEntry = {
@@ -152,9 +172,10 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
-              // Forward audio to STT
+              // Forward audio to whichever session is active
               const audioBuffer = Buffer.from(message.media.payload, "base64");
-              session.sttSession.sendAudio(audioBuffer);
+              session.sttSession?.sendAudio(audioBuffer);
+              session.conversationSession?.sendAudio(audioBuffer);
             }
             break;
 
@@ -213,38 +234,85 @@ export class MediaStreamHandler {
       return null;
     }
 
-    // Create STT session
-    const sttSession = this.config.sttProvider.createSession();
-
-    // Set up transcript callbacks
-    sttSession.onPartial((partial) => {
-      this.config.onPartialTranscript?.(callSid, partial);
-    });
-
-    sttSession.onTranscript((transcript) => {
-      this.config.onTranscript?.(callSid, transcript);
-    });
-
-    sttSession.onSpeechStart(() => {
-      this.config.onSpeechStart?.(callSid);
-    });
-
     const session: StreamSession = {
       callId: callSid,
       streamSid,
       ws,
-      sttSession,
     };
 
-    this.sessions.set(streamSid, session);
+    if (this.config.conversationProvider) {
+      // Full conversation mode: OpenAI handles STT + LLM + TTS
+      const convSession = this.config.conversationProvider.createSession();
 
-    // Notify connection BEFORE STT connect so TTS can work even if STT fails
-    this.config.onConnect?.(callSid, streamSid);
+      // AI audio → send directly to Twilio (no TTS queue needed)
+      convSession.onAudioDelta((chunk) => {
+        this.sendAudio(streamSid, chunk);
+      });
 
-    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
-    sttSession.connect().catch((err) => {
-      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
-    });
+      // Barge-in: caller speech started → clear Twilio's audio buffer
+      convSession.onSpeechStart(() => {
+        this.clearAudio(streamSid);
+        this.config.onSpeechStart?.(callSid);
+      });
+
+      // Caller transcript callbacks
+      convSession.onTranscriptDelta((partial) => {
+        this.config.onPartialTranscript?.(callSid, partial);
+      });
+
+      convSession.onTranscriptDone((text) => {
+        this.config.onTranscript?.(callSid, text);
+      });
+
+      // AI response transcript (bot side of the conversation)
+      convSession.onResponseTranscriptDone((text) => {
+        this.config.onResponseTranscript?.(callSid, text);
+      });
+
+      session.conversationSession = convSession;
+
+      this.sessions.set(streamSid, session);
+      this.config.onConnect?.(callSid, streamSid);
+
+      convSession
+        .connect()
+        .then(() => {
+          this.config.onConversationConnected?.(callSid, streamSid, convSession);
+        })
+        .catch((err) => {
+          console.warn(`[MediaStream] Conversation connection failed:`, err.message);
+        });
+    } else if (this.config.sttProvider) {
+      // STT-only mode: transcription → Pi agent → TTS pipeline
+      const sttSession = this.config.sttProvider.createSession();
+
+      sttSession.onPartial((partial) => {
+        this.config.onPartialTranscript?.(callSid, partial);
+      });
+
+      sttSession.onTranscript((transcript) => {
+        this.config.onTranscript?.(callSid, transcript);
+      });
+
+      sttSession.onSpeechStart(() => {
+        this.config.onSpeechStart?.(callSid);
+      });
+
+      session.sttSession = sttSession;
+
+      this.sessions.set(streamSid, session);
+
+      // Notify connection BEFORE STT connect so TTS can work even if STT fails
+      this.config.onConnect?.(callSid, streamSid);
+
+      sttSession.connect().catch((err) => {
+        console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
+      });
+    } else {
+      console.warn("[MediaStream] No provider configured; closing stream");
+      ws.close(1011, "No provider");
+      return null;
+    }
 
     return session;
   }
@@ -256,7 +324,8 @@ export class MediaStreamHandler {
     console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
     this.clearTtsState(session.streamSid);
-    session.sttSession.close();
+    session.sttSession?.close();
+    session.conversationSession?.close();
     this.sessions.delete(session.streamSid);
     this.config.onDisconnect?.(session.callId);
   }
@@ -432,7 +501,8 @@ export class MediaStreamHandler {
   closeAll(): void {
     for (const session of this.sessions.values()) {
       this.clearTtsState(session.streamSid);
-      session.sttSession.close();
+      session.sttSession?.close();
+      session.conversationSession?.close();
       session.ws.close();
     }
     this.sessions.clear();

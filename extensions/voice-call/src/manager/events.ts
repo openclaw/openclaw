@@ -104,6 +104,29 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     callIdOrProviderCallId: event.callId,
   });
 
+  // Auto-register unrecognized outbound calls (e.g. initiated via Twilio REST API directly)
+  if (!call && event.direction === "outbound" && event.providerCallId) {
+    const callId = crypto.randomUUID();
+    const mode = ctx.config.outbound?.defaultMode ?? "conversation";
+    const callRecord: CallRecord = {
+      callId,
+      providerCallId: event.providerCallId,
+      provider: ctx.provider?.name || "twilio",
+      direction: "outbound",
+      state: "ringing",
+      from: event.from || ctx.config.fromNumber || "unknown",
+      to: event.to || "unknown",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: { mode },
+    };
+    ctx.activeCalls.set(callId, callRecord);
+    ctx.providerCallIdMap.set(event.providerCallId, callId);
+    event.callId = callId;
+    call = callRecord;
+  }
+
   if (!call && event.direction === "inbound" && event.providerCallId) {
     if (!shouldAcceptInbound(ctx.config, event.from)) {
       const pid = event.providerCallId;
@@ -209,6 +232,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         addTranscriptEntry(call, "user", event.transcript);
       }
       transitionState(call, "listening");
+      break;
+
+    case "call.bot-speech":
+      addTranscriptEntry(call, "bot", event.transcript);
       break;
 
     case "call.ended":

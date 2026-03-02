@@ -1,7 +1,39 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
+
+// On Linux systems where /tmp is mounted noexec (e.g. ZFS), tests that create
+// executable temp files will fail because the kernel refuses X_OK on noexec mounts.
+// Detect this and redirect TMPDIR to ~/tmp which is on an exec-capable filesystem.
+if (process.platform !== "win32" && !process.env.TMPDIR) {
+  const probe = path.join(os.tmpdir(), `.noexec-probe-${process.pid}`);
+  let noExec = false;
+  try {
+    fs.writeFileSync(probe, "#!/bin/sh\n", { mode: 0o755 });
+    try {
+      fs.accessSync(probe, fs.constants.X_OK);
+    } catch {
+      noExec = true;
+    }
+  } catch {
+    // can't probe — leave TMPDIR alone
+  } finally {
+    try {
+      fs.unlinkSync(probe);
+    } catch {
+      // ignore
+    }
+  }
+  if (noExec) {
+    const fallback = path.join(os.homedir(), "tmp");
+    fs.mkdirSync(fallback, { recursive: true });
+    process.env.TMPDIR = fallback;
+  }
+}
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
 // repeated filesystem discovery across suites/workers.
 process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";

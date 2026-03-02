@@ -207,12 +207,26 @@ export const VoiceCallStreamingConfigSchema = z
   .object({
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
-    /** STT provider for real-time transcription */
-    sttProvider: z.enum(["openai-realtime"]).default("openai-realtime"),
+    /**
+     * STT/conversation provider for real-time audio:
+     * - "openai-realtime": Transcription only (Pi agent LLM + TTS pipeline)
+     * - "openai-realtime-conversation": Full conversation (OpenAI handles STT + LLM + TTS)
+     */
+    sttProvider: z
+      .enum(["openai-realtime", "openai-realtime-conversation"])
+      .default("openai-realtime"),
     /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
     openaiApiKey: z.string().min(1).optional(),
     /** OpenAI transcription model (default: gpt-4o-transcribe) */
     sttModel: z.string().min(1).default("gpt-4o-transcribe"),
+    /** Realtime conversation model (default: gpt-4o-realtime-preview) */
+    realtimeModel: z.string().min(1).default("gpt-4o-realtime-preview"),
+    /** Voice for AI responses in conversation mode */
+    realtimeVoice: z
+      .enum(["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"])
+      .default("alloy"),
+    /** System prompt / instructions for conversation mode */
+    realtimeSystemPrompt: z.string().optional(),
     /** VAD silence duration in ms before considering speech ended */
     silenceDurationMs: z.number().int().positive().default(800),
     /** VAD threshold 0-1 (higher = less sensitive) */
@@ -236,6 +250,8 @@ export const VoiceCallStreamingConfigSchema = z
     enabled: false,
     sttProvider: "openai-realtime",
     sttModel: "gpt-4o-transcribe",
+    realtimeModel: "gpt-4o-realtime-preview",
+    realtimeVoice: "alloy",
     silenceDurationMs: 800,
     vadThreshold: 0.5,
     streamPath: "/voice/stream",

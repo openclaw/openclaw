@@ -640,6 +640,57 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   /**
+   * Play a stream of text chunks as sequential TTS audio.
+   *
+   * Each sentence chunk is synthesized and queued immediately so the caller
+   * starts hearing audio while the remainder of the response is still being
+   * generated.  Chunks play sequentially (FIFO via queueTts) so there are no
+   * audio gaps or overlaps.
+   *
+   * Falls back to a single playTts call if media-stream TTS is unavailable.
+   */
+  async playTtsStream(textStream: AsyncIterable<string>, providerCallId: string): Promise<void> {
+    const streamSid = this.callStreamMap.get(providerCallId);
+
+    if (!this.ttsProvider || !this.mediaStreamHandler || !streamSid) {
+      // No streaming capability — collect all chunks and fall back to playTts.
+      const chunks: string[] = [];
+      for await (const chunk of textStream) {
+        if (chunk.trim()) {
+          chunks.push(chunk);
+        }
+      }
+      const fullText = chunks.join(" ").trim();
+      if (fullText) {
+        await this.playTts({ callId: "", providerCallId, text: fullText });
+      }
+      return;
+    }
+
+    // Queue each chunk as an independent TTS job so audio flows as soon as
+    // each sentence is synthesized, without waiting for the full response.
+    const chunkPromises: Promise<void>[] = [];
+    for await (const chunk of textStream) {
+      const text = chunk.trim();
+      if (!text) {
+        continue;
+      }
+      // Fire-and-queue: errors are caught per-chunk so one failure does not
+      // prevent subsequent chunks from playing.
+      const p = this.playTtsViaStream(text, streamSid).catch((err) => {
+        console.error(
+          `[voice-call] Streaming TTS chunk error (continuing):`,
+          err instanceof Error ? err.message : err,
+        );
+      });
+      chunkPromises.push(p);
+    }
+
+    // Wait for all queued chunks to finish playing.
+    await Promise.all(chunkPromises);
+  }
+
+  /**
    * Start listening for speech via Twilio <Gather>.
    */
   async startListening(input: StartListeningInput): Promise<void> {

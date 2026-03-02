@@ -27,6 +27,8 @@ function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): Voi
       enabled: false,
       sttProvider: "openai-realtime",
       sttModel: "gpt-4o-transcribe",
+      realtimeModel: "gpt-4o-realtime-preview",
+      realtimeVoice: "alloy",
       silenceDurationMs: 800,
       vadThreshold: 0.5,
       streamPath: "/voice/stream",

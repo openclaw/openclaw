@@ -95,6 +95,18 @@
       "label": "Realtime STT Model",
       "advanced": true
     },
+    "streaming.realtimeModel": {
+      "label": "Realtime Conversation Model",
+      "advanced": true
+    },
+    "streaming.realtimeVoice": {
+      "label": "Realtime Voice",
+      "advanced": true
+    },
+    "streaming.realtimeSystemPrompt": {
+      "label": "Realtime System Prompt",
+      "advanced": true
+    },
     "streaming.streamPath": {
       "label": "Media Stream Path",
       "advanced": true
@@ -322,12 +334,22 @@
           },
           "sttProvider": {
             "type": "string",
-            "enum": ["openai-realtime"]
+            "enum": ["openai-realtime", "openai-realtime-conversation"]
           },
           "openaiApiKey": {
             "type": "string"
           },
           "sttModel": {
+            "type": "string"
+          },
+          "realtimeModel": {
+            "type": "string"
+          },
+          "realtimeVoice": {
+            "type": "string",
+            "enum": ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
+          },
+          "realtimeSystemPrompt": {
             "type": "string"
           },
           "silenceDurationMs": {
@@ -341,6 +363,22 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "preStartTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnections": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnectionsPerIp": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxConnections": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

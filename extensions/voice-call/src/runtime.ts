@@ -162,24 +162,33 @@ export async function createVoiceCallRuntime(params: {
 
   if (provider.name === "twilio" && config.streaming?.enabled) {
     const twilioProvider = provider as TwilioProvider;
-    if (ttsRuntime?.textToSpeechTelephony) {
-      try {
-        const ttsProvider = createTelephonyTtsProvider({
-          coreConfig,
-          ttsOverride: config.tts,
-          runtime: ttsRuntime,
-        });
-        twilioProvider.setTTSProvider(ttsProvider);
-        log.info("[voice-call] Telephony TTS provider configured");
-      } catch (err) {
-        log.warn(
-          `[voice-call] Failed to initialize telephony TTS: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+    const isConversationMode = config.streaming.sttProvider === "openai-realtime-conversation";
+
+    // In conversation mode OpenAI handles TTS directly; skip the telephony TTS provider
+    if (!isConversationMode) {
+      if (ttsRuntime?.textToSpeechTelephony) {
+        try {
+          const ttsProvider = createTelephonyTtsProvider({
+            coreConfig,
+            ttsOverride: config.tts,
+            runtime: ttsRuntime,
+          });
+          twilioProvider.setTTSProvider(ttsProvider);
+          log.info("[voice-call] Telephony TTS provider configured");
+        } catch (err) {
+          log.warn(
+            `[voice-call] Failed to initialize telephony TTS: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      } else {
+        log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
       }
     } else {
-      log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
+      log.info(
+        "[voice-call] Conversation mode: TTS handled by OpenAI Realtime; skipping telephony TTS",
+      );
     }
 
     const mediaHandler = webhookServer.getMediaStreamHandler();
