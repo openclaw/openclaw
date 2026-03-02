@@ -1,5 +1,6 @@
 import { html } from "lit";
 import { buildUsageAggregateTail } from "../../../../src/shared/usage-aggregates.js";
+import { toSortedCompat } from "../sort.ts";
 import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -57,19 +58,21 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }
   }
 
-  return hourMsgs
-    .map((msgs, hour) => {
-      const errors = hourErrors[hour];
-      const rate = msgs > 0 ? errors / msgs : 0;
-      return {
-        hour,
-        rate,
-        errors,
-        msgs,
-      };
-    })
-    .filter((entry) => entry.msgs > 0 && entry.errors > 0)
-    .toSorted((a, b) => b.rate - a.rate)
+  return toSortedCompat(
+    hourMsgs
+      .map((msgs, hour) => {
+        const errors = hourErrors[hour];
+        const rate = msgs > 0 ? errors / msgs : 0;
+        return {
+          hour,
+          rate,
+          errors,
+          msgs,
+        };
+      })
+      .filter((entry) => entry.msgs > 0 && entry.errors > 0),
+    (a, b) => b.rate - a.rate,
+  )
     .slice(0, 5)
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
@@ -508,19 +511,23 @@ const buildAggregatesFromSessions = (
     tools: {
       totalCalls: Array.from(toolMap.values()).reduce((sum, count) => sum + count, 0),
       uniqueTools: toolMap.size,
-      tools: Array.from(toolMap.entries())
-        .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
+      tools: toSortedCompat(
+        Array.from(toolMap.entries()).map(([name, count]) => ({ name, count })),
+        (a, b) => b.count - a.count,
+      ),
     },
-    byModel: Array.from(modelMap.values()).toSorted(
+    byModel: toSortedCompat(
+      Array.from(modelMap.values()),
       (a, b) => b.totals.totalCost - a.totals.totalCost,
     ),
-    byProvider: Array.from(providerMap.values()).toSorted(
+    byProvider: toSortedCompat(
+      Array.from(providerMap.values()),
       (a, b) => b.totals.totalCost - a.totals.totalCost,
     ),
-    byAgent: Array.from(agentMap.entries())
-      .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+    byAgent: toSortedCompat(
+      Array.from(agentMap.entries()).map(([agentId, totals]) => ({ agentId, totals })),
+      (a, b) => b.totals.totalCost - a.totals.totalCost,
+    ),
     ...tail,
   };
 };
@@ -559,15 +566,17 @@ const buildUsageInsightStats = (
   const errorRate = aggregates.messages.total
     ? aggregates.messages.errors / aggregates.messages.total
     : 0;
-  const peakErrorDay = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => ({
-      date: day.date,
-      errors: day.errors,
-      messages: day.messages,
-      rate: day.errors / day.messages,
-    }))
-    .toSorted((a, b) => b.rate - a.rate || b.errors - a.errors)[0];
+  const peakErrorDay = toSortedCompat(
+    aggregates.daily
+      .filter((day) => day.messages > 0 && day.errors > 0)
+      .map((day) => ({
+        date: day.date,
+        errors: day.errors,
+        messages: day.messages,
+        rate: day.errors / day.messages,
+      })),
+    (a, b) => b.rate - a.rate || b.errors - a.errors,
+  )[0];
 
   return {
     durationSumMs,

@@ -66,6 +66,7 @@ import {
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { toSortedCompat } from "./sort.ts";
 import { resolveConfiguredCronModelSuggestions } from "./views/agents-utils.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
@@ -166,32 +167,38 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
-  const cronAgentSuggestions = Array.from(
-    new Set(
-      [
-        ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
-        ...state.cronJobs
-          .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
-          .filter(Boolean),
-      ].filter(Boolean),
+  const cronAgentSuggestions = toSortedCompat(
+    Array.from(
+      new Set(
+        [
+          ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
+          ...state.cronJobs
+            .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
+            .filter(Boolean),
+        ].filter(Boolean),
+      ),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
-  const cronModelSuggestions = Array.from(
-    new Set(
-      [
-        ...state.cronModelSuggestions,
-        ...resolveConfiguredCronModelSuggestions(configValue),
-        ...state.cronJobs
-          .map((job) => {
-            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
-              return "";
-            }
-            return job.payload.model.trim();
-          })
-          .filter(Boolean),
-      ].filter(Boolean),
+    (a, b) => a.localeCompare(b),
+  );
+  const cronModelSuggestions = toSortedCompat(
+    Array.from(
+      new Set(
+        [
+          ...state.cronModelSuggestions,
+          ...resolveConfiguredCronModelSuggestions(configValue),
+          ...state.cronJobs
+            .map((job) => {
+              if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+                return "";
+              }
+              return job.payload.model.trim();
+            })
+            .filter(Boolean),
+        ].filter(Boolean),
+      ),
     ),
-  ).toSorted((a, b) => a.localeCompare(b));
+    (a, b) => a.localeCompare(b),
+  );
   const visibleCronJobs = getVisibleCronJobs(state);
   const selectedDeliveryChannel =
     state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()

@@ -1,5 +1,6 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { toSortedCompat } from "../sort.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
@@ -746,11 +747,16 @@ function renderContextPanel(
     }
   }
 
-  const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
-  const toolsList = contextWeight.tools.entries.toSorted(
+  const skillsList = toSortedCompat(
+    contextWeight.skills.entries,
+    (a, b) => b.blockChars - a.blockChars,
+  );
+  const toolsList = toSortedCompat(
+    contextWeight.tools.entries,
     (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
   );
-  const filesList = contextWeight.injectedWorkspaceFiles.toSorted(
+  const filesList = toSortedCompat(
+    contextWeight.injectedWorkspaceFiles,
     (a, b) => b.injectedChars - a.injectedChars,
   );
   const defaultLimit = 4;
@@ -920,9 +926,10 @@ function renderSessionLogsCompact(
     const cleanContent = toolInfo.cleanContent || log.content;
     return { log, toolInfo, cleanContent };
   });
-  const toolOptions = Array.from(
-    new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
-  ).toSorted((a, b) => a.localeCompare(b));
+  const toolOptions = toSortedCompat(
+    Array.from(new Set(entries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name)))),
+    (a, b) => a.localeCompare(b),
+  );
   const filteredEntries = entries.filter((entry) => {
     // Filter by cursor timeline range (only if logs cover the range)
     if (cursorStart != null && cursorEnd != null) {

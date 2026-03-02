@@ -2,6 +2,7 @@ import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { toSortedCompat } from "../sort.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -207,7 +208,9 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
         return typeof id === "string" ? id.trim() : "";
       })
       .filter(Boolean);
-    state.cronModelSuggestions = Array.from(new Set(ids)).toSorted((a, b) => a.localeCompare(b));
+    state.cronModelSuggestions = toSortedCompat(Array.from(new Set(ids)), (a, b) =>
+      a.localeCompare(b),
+    );
   } catch {
     state.cronModelSuggestions = [];
   }

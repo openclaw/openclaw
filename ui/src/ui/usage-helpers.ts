@@ -1,3 +1,5 @@
+import { toSortedCompat } from "./sort.ts";
+
 export type UsageQueryTerm = {
   key?: string;
   value: string;
@@ -305,7 +307,7 @@ export function parseToolSummary(content: string) {
     }
     nonToolLines.push(line);
   }
-  const sortedTools = Array.from(toolCounts.entries()).toSorted((a, b) => b[1] - a[1]);
+  const sortedTools = toSortedCompat(Array.from(toolCounts.entries()), (a, b) => b[1] - a[1]);
   const totalCalls = sortedTools.reduce((sum, [, count]) => sum + count, 0);
   const summary =
     sortedTools.length > 0

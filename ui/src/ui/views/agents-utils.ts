@@ -8,6 +8,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { toSortedCompat } from "../sort.ts";
 import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = listCoreToolSections();
@@ -319,7 +320,7 @@ export function resolveConfiguredCronModelSuggestions(
       addModelConfigIds(out, (entry as Record<string, unknown>).model);
     }
   }
-  return [...out].toSorted((a, b) => a.localeCompare(b));
+  return toSortedCompat([...out], (a, b) => a.localeCompare(b));
 }
 
 export function parseFallbackList(value: string): string[] {

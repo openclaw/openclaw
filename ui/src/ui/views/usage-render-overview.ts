@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
+import { toSortedCompat } from "../sort.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -405,18 +406,20 @@ function renderUsageInsights(
     ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
     : "Average cost per message when providers report costs.";
 
-  const errorDays = aggregates.daily
-    .filter((day) => day.messages > 0 && day.errors > 0)
-    .map((day) => {
-      const rate = day.errors / day.messages;
-      return {
-        label: formatDayLabel(day.date),
-        value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} errors · ${day.messages} msgs · ${formatTokens(day.tokens)}`,
-        rate,
-      };
-    })
-    .toSorted((a, b) => b.rate - a.rate)
+  const errorDays = toSortedCompat(
+    aggregates.daily
+      .filter((day) => day.messages > 0 && day.errors > 0)
+      .map((day) => {
+        const rate = day.errors / day.messages;
+        return {
+          label: formatDayLabel(day.date),
+          value: `${(rate * 100).toFixed(2)}%`,
+          sub: `${day.errors} errors · ${day.messages} msgs · ${formatTokens(day.tokens)}`,
+          rate,
+        };
+      }),
+    (a, b) => b.rate - a.rate,
+  )
     .slice(0, 5)
     .map(({ rate: _rate, ...rest }) => rest);
 
@@ -625,7 +628,7 @@ function renderSessionsCard(
     return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
   };
 
-  const sortedSessions = [...sessions].toSorted((a, b) => {
+  const sortedSessions = toSortedCompat([...sessions], (a, b) => {
     switch (sessionSort) {
       case "recent":
         return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);

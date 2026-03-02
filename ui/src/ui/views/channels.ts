@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
+import { toSortedCompat } from "../sort.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
@@ -37,18 +38,19 @@ export function renderChannels(props: ChannelsProps) {
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
-  const orderedChannels = channelOrder
-    .map((key, index) => ({
+  const orderedChannels = toSortedCompat(
+    channelOrder.map((key, index) => ({
       key,
       enabled: channelEnabled(key, props),
       order: index,
-    }))
-    .toSorted((a, b) => {
+    })),
+    (a, b) => {
       if (a.enabled !== b.enabled) {
         return a.enabled ? -1 : 1;
       }
       return a.order - b.order;
-    });
+    },
+  );
 
   return html`
     <section class="grid grid-cols-2">

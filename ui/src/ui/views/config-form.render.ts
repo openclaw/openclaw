@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
+import { toSortedCompat } from "../sort.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -336,7 +337,7 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
-  const entries = Object.entries(properties).toSorted((a, b) => {
+  const entries = toSortedCompat(Object.entries(properties), (a, b) => {
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
     const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
     if (orderA !== orderB) {
