@@ -901,6 +901,7 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
+                  "channels/telegram-userbot",
                   "channels/discord",
                   "channels/irc",
                   "channels/slack",
