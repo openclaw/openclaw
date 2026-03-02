@@ -54,14 +54,15 @@ export function buildPluginTelegramMenuCommands(params: {
   const pluginCommandNames = new Set<string>();
 
   for (const spec of specs) {
-    const normalized = normalizeTelegramCommandName(spec.name);
+    const rawName = typeof spec?.name === "string" ? spec.name : "";
+    const normalized = normalizeTelegramCommandName(rawName);
     if (!normalized || !TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
       issues.push(
-        `Plugin command "/${spec.name}" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).`,
+        `Plugin command "/${rawName}" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).`,
       );
       continue;
     }
-    const description = spec.description.trim();
+    const description = typeof spec?.description === "string" ? spec.description.trim() : "";
     if (!description) {
       issues.push(`Plugin command "/${normalized}" is missing a description.`);
       continue;

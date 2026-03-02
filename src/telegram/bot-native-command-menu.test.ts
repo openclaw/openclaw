@@ -60,6 +60,21 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toEqual([]);
   });
 
+  it("does not throw when plugin command specs are malformed", () => {
+    const result = buildPluginTelegramMenuCommands({
+      specs: [{ name: "missing-description" } as never, { description: "Missing name" } as never],
+      existingCommands: new Set<string>(),
+    });
+
+    expect(result.commands).toEqual([]);
+    expect(result.issues).toContain(
+      'Plugin command "/missing_description" is missing a description.',
+    );
+    expect(result.issues).toContain(
+      'Plugin command "/" is invalid for Telegram (use a-z, 0-9, underscore; max 32 chars).',
+    );
+  });
+
   it("deletes stale commands before setting new menu", async () => {
     const callOrder: string[] = [];
     const deleteMyCommands = vi.fn(async () => {
