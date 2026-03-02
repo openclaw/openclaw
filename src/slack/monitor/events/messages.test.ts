@@ -32,7 +32,7 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
     handleSlackMessage,
   });
   return {
-    handler: harness.getHandler("message") as MessageHandler | null,
+    getHandler: (name: string) => harness.getHandler(name) as MessageHandler | null,
     handleSlackMessage,
   };
 }
@@ -78,7 +78,8 @@ function makeThreadBroadcastEvent(overrides?: { channel?: string; user?: string 
 async function runMessageCase(input: MessageCase = {}): Promise<void> {
   messageQueueMock.mockClear();
   messageAllowMock.mockReset().mockResolvedValue([]);
-  const { handler } = createMessageHandlers(input.overrides);
+  const { getHandler } = createMessageHandlers(input.overrides);
+  const handler = getHandler("message");
   expect(handler).toBeTruthy();
   await handler!({
     event: (input.event ?? makeChangedEvent()) as Record<string, unknown>,
@@ -139,7 +140,8 @@ describe("registerSlackMessageEvents", () => {
   it("passes regular message events to the message handler", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { handler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const { getHandler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const handler = getHandler("message");
     expect(handler).toBeTruthy();
 
     await handler!({
@@ -155,5 +157,51 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
     expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("registers and handles message.channels events", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { getHandler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const handler = getHandler("message.channels");
+    expect(handler).toBeTruthy();
+
+    await handler!({
+      event: {
+        type: "message",
+        channel: "C1",
+        user: "U1",
+        text: "hello from channel",
+        ts: "123.456",
+      },
+      body: { event_id: "Ev123" },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates duplicated payloads delivered through multiple message handlers", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { getHandler, handleSlackMessage } = createMessageHandlers({ dmPolicy: "open" });
+    const generic = getHandler("message");
+    const channelScoped = getHandler("message.channels");
+    expect(generic).toBeTruthy();
+    expect(channelScoped).toBeTruthy();
+
+    const event = {
+      type: "message",
+      channel: "C1",
+      user: "U1",
+      text: "hello",
+      ts: "123.456",
+    };
+    const body = { event_id: "Ev-dup-1" };
+
+    await generic!({ event, body });
+    await channelScoped!({ event, body });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
   });
 });
