@@ -1,10 +1,10 @@
 ---
 title: "Diffs"
-summary: "Read-only diff viewer and PNG renderer for agents (optional plugin tool)"
-description: "Use the optional Diffs plugin to render before or after text or unified patches as a gateway-hosted diff view, a PNG image, or both."
+summary: "Read-only diff viewer and file renderer for agents (optional plugin tool)"
+description: "Use the optional Diffs plugin to render before and after text or unified patches as a gateway-hosted diff view, a file (PNG or PDF), or both."
 read_when:
   - You want agents to show code or markdown edits as diffs
-  - You want a canvas-ready viewer URL or a rendered diff PNG
+  - You want a canvas-ready viewer URL or a rendered diff file
   - You need controlled, temporary diff artifacts with secure defaults
 ---
 
@@ -20,14 +20,14 @@ It accepts either:
 It can return:
 
 - a gateway viewer URL for canvas presentation
-- a rendered PNG path for message delivery
+- a rendered file path (PNG or PDF) for message delivery
 - both outputs in one call
 
 ## Quick start
 
 1. Enable the plugin.
 2. Call `diffs` with `mode: "view"` for canvas-first flows.
-3. Call `diffs` with `mode: "image"` for chat/image-first flows.
+3. Call `diffs` with `mode: "file"` for chat file delivery flows.
 4. Call `diffs` with `mode: "both"` when you need both artifacts.
 
 ## Enable the plugin
@@ -50,7 +50,7 @@ It can return:
 2. Agent reads `details` fields.
 3. Agent either:
    - opens `details.viewerUrl` with `canvas present`
-   - sends `details.imagePath` with `message` using `path` or `filePath`
+   - sends `details.filePath` with `message` using `path` or `filePath`
    - does both
 
 ## Input examples
@@ -85,10 +85,14 @@ All fields are optional unless noted:
 - `path` (`string`): display filename for before and after mode.
 - `lang` (`string`): language override hint for before and after mode.
 - `title` (`string`): viewer title override.
-- `mode` (`"view" | "image" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
+- `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
 - `theme` (`"light" | "dark"`): viewer theme. Defaults to plugin default `defaults.theme`.
 - `layout` (`"unified" | "split"`): diff layout. Defaults to plugin default `defaults.layout`.
-- `expandUnchanged` (`boolean`): expand unchanged sections.
+- `expandUnchanged` (`boolean`): expand unchanged sections when full context is available. Per-call option only (not a plugin default key).
+- `fileFormat` (`"png" | "pdf"`): rendered file format. Defaults to plugin default `defaults.fileFormat`.
+- `fileQuality` (`"standard" | "hq" | "print"`): quality preset for PNG or PDF rendering.
+- `fileScale` (`number`): device scale override (`1`-`4`).
+- `fileMaxWidth` (`number`): max render width in CSS pixels (`640`-`2400`).
 - `ttlSeconds` (`number`): viewer artifact TTL in seconds. Default 1800, max 21600.
 - `baseUrl` (`string`): viewer URL origin override. Must be `http` or `https`, no query/hash.
 
@@ -117,17 +121,29 @@ Shared fields for modes that create a viewer:
 - `fileCount`
 - `mode`
 
-Image fields when PNG is rendered:
+File fields when PNG or PDF is rendered:
 
-- `imagePath`
-- `path` (same value as `imagePath`, for message tool compatibility)
-- `imageBytes`
+- `filePath`
+- `path` (same value as `filePath`, for message tool compatibility)
+- `fileBytes`
+- `fileFormat`
+- `fileQuality`
+- `fileScale`
+- `fileMaxWidth`
 
 Mode behavior summary:
 
 - `mode: "view"`: viewer fields only.
-- `mode: "image"`: image fields only, no viewer artifact.
-- `mode: "both"`: viewer fields plus image fields. If screenshot fails, viewer still returns with `imageError`.
+- `mode: "file"`: file fields only, no viewer artifact.
+- `mode: "both"`: viewer fields plus file fields. If file rendering fails, viewer still returns with `fileError`.
+
+## Collapsed unchanged sections
+
+- The viewer can show rows like `N unmodified lines`.
+- Expand controls on those rows are conditional and not guaranteed for every input kind.
+- Expand controls appear when the rendered diff has expandable context data, which is typical for before and after input.
+- For many unified patch inputs, omitted context bodies are not available in the parsed patch hunks, so the row can appear without expand controls. This is expected behavior.
+- `expandUnchanged` applies only when expandable context exists.
 
 ## Plugin defaults
 
@@ -150,6 +166,10 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             wordWrap: true,
             background: true,
             theme: "dark",
+            fileFormat: "png",
+            fileQuality: "standard",
+            fileScale: 2,
+            fileMaxWidth: 960,
             mode: "both",
           },
         },
@@ -170,6 +190,10 @@ Supported defaults:
 - `wordWrap`
 - `background`
 - `theme`
+- `fileFormat`
+- `fileQuality`
+- `fileScale`
+- `fileMaxWidth`
 - `mode`
 
 Explicit tool parameters override these defaults.
@@ -250,15 +274,15 @@ Viewer hardening:
   - 40 failures per 60 seconds
   - 60 second lockout (`429 Too Many Requests`)
 
-Image rendering hardening:
+File rendering hardening:
 
 - Screenshot browser request routing is deny-by-default.
 - Only local viewer assets from `http://127.0.0.1/plugins/diffs/assets/*` are allowed.
 - External network requests are blocked.
 
-## Browser requirements for image mode
+## Browser requirements for file mode
 
-`mode: "image"` and `mode: "both"` need a Chromium-compatible browser.
+`mode: "file"` and `mode: "both"` need a Chromium-compatible browser.
 
 Resolution order:
 
@@ -271,7 +295,7 @@ Resolution order:
 
 Common failure text:
 
-- `Diff image rendering requires a Chromium-compatible browser...`
+- `Diff PNG/PDF rendering requires a Chromium-compatible browser...`
 
 Fix by installing Chrome, Chromium, Edge, or Brave, or setting one of the executable path options above.
 
@@ -298,6 +322,11 @@ Viewer accessibility issues:
   - use `gateway.bind=custom` and `gateway.customBindHost`
 - Enable `security.allowRemoteViewer` only when you intend external viewer access.
 
+Unmodified-lines row has no expand button:
+
+- This can happen for patch input when the patch does not carry expandable context.
+- This is expected and does not indicate a viewer failure.
+
 Artifact not found:
 
 - Artifact expired due TTL.
@@ -307,10 +336,11 @@ Artifact not found:
 ## Operational guidance
 
 - Prefer `mode: "view"` for local interactive reviews in canvas.
-- Prefer `mode: "image"` for outbound chat channels that need an attachment.
+- Prefer `mode: "file"` for outbound chat channels that need an attachment.
 - Keep `allowRemoteViewer` disabled unless your deployment requires remote viewer URLs.
 - Set explicit short `ttlSeconds` for sensitive diffs.
 - Avoid sending secrets in diff input when not required.
+- If your channel compresses images aggressively (for example Telegram or WhatsApp), prefer PDF output (`fileFormat: "pdf"`).
 
 Diff rendering engine:
 
