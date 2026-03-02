@@ -776,6 +776,21 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    sessions_spawn: z
+      .object({
+        attachments: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxTotalBytes: z.number().optional(),
+            maxFiles: z.number().optional(),
+            maxFileBytes: z.number().optional(),
+            retainOnSessionKeep: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
