@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyAuthorizationHeaderForUrl,
   isPrivateOrReservedIP,
   isUrlAllowed,
   resolveAndValidateIP,
+  resolveAttachmentFetchPolicy,
   resolveAllowedHosts,
   resolveAuthAllowedHosts,
   resolveMediaSsrfPolicy,
   safeFetch,
+  safeFetchWithPolicy,
 } from "./shared.js";
 
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -32,6 +35,18 @@ describe("msteams attachment allowlists", () => {
   it("normalizes wildcard host lists", () => {
     expect(resolveAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
     expect(resolveAuthAllowedHosts(["*", "graph.microsoft.com"])).toEqual(["*"]);
+  });
+
+  it("resolves a normalized attachment fetch policy", () => {
+    expect(
+      resolveAttachmentFetchPolicy({
+        allowHosts: ["sharepoint.com"],
+        authAllowHosts: ["graph.microsoft.com"],
+      }),
+    ).toEqual({
+      allowHosts: ["sharepoint.com"],
+      authAllowHosts: ["graph.microsoft.com"],
+    });
   });
 
   it("requires https and host suffix match", () => {
@@ -293,5 +308,71 @@ describe("safeFetch", () => {
         resolveFn: publicResolve,
       }),
     ).rejects.toThrow("blocked by allowlist");
+  });
+
+  it("strips authorization across redirects outside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(`${url}|${auth}`);
+      if (url === "https://teams.sharepoint.com/file.pdf") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const headers = new Headers({ Authorization: "Bearer secret" });
+    const res = await safeFetch({
+      url: "https://teams.sharepoint.com/file.pdf",
+      allowHosts: ["sharepoint.com"],
+      authorizationAllowHosts: ["graph.microsoft.com"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers },
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    expect(seenAuth[0]).toContain("Bearer secret");
+    expect(seenAuth[1]).toMatch(/\|$/);
+  });
+});
+
+describe("attachment fetch auth helpers", () => {
+  it("sets and clears authorization header by auth allowlist", () => {
+    const headers = new Headers();
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url: "https://graph.microsoft.com/v1.0/me",
+      authAllowHosts: ["graph.microsoft.com"],
+      bearerToken: "token-1",
+    });
+    expect(headers.get("authorization")).toBe("Bearer token-1");
+
+    applyAuthorizationHeaderForUrl({
+      headers,
+      url: "https://evil.example.com/collect",
+      authAllowHosts: ["graph.microsoft.com"],
+      bearerToken: "token-1",
+    });
+    expect(headers.get("authorization")).toBeNull();
+  });
+
+  it("safeFetchWithPolicy forwards policy allowlists", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      return new Response("ok", { status: 200 });
+    });
+    const res = await safeFetchWithPolicy({
+      url: "https://teams.sharepoint.com/file.pdf",
+      policy: resolveAttachmentFetchPolicy({
+        allowHosts: ["sharepoint.com"],
+        authAllowHosts: ["graph.microsoft.com"],
+      }),
+      fetchFn: fetchMock as unknown as typeof fetch,
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

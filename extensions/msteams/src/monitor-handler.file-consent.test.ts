@@ -155,10 +155,7 @@ describe("msteams file consent invoke authz", () => {
       }),
     );
 
-    // Wait for async upload to complete
-    await vi.waitFor(() => {
-      expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
-    });
+    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
 
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -192,12 +189,9 @@ describe("msteams file consent invoke authz", () => {
       }),
     );
 
-    // Wait for async handler to complete
-    await vi.waitFor(() => {
-      expect(sendActivity).toHaveBeenCalledWith(
-        "The file upload request has expired. Please try sending the file again.",
-      );
-    });
+    expect(sendActivity).toHaveBeenCalledWith(
+      "The file upload request has expired. Please try sending the file again.",
+    );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();

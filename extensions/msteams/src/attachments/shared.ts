@@ -266,8 +266,40 @@ export function resolveAuthAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
 }
 
+export type MSTeamsAttachmentFetchPolicy = {
+  allowHosts: string[];
+  authAllowHosts: string[];
+};
+
+export function resolveAttachmentFetchPolicy(params?: {
+  allowHosts?: string[];
+  authAllowHosts?: string[];
+}): MSTeamsAttachmentFetchPolicy {
+  return {
+    allowHosts: resolveAllowedHosts(params?.allowHosts),
+    authAllowHosts: resolveAuthAllowedHosts(params?.authAllowHosts),
+  };
+}
+
 export function isUrlAllowed(url: string, allowlist: string[]): boolean {
   return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
+}
+
+export function applyAuthorizationHeaderForUrl(params: {
+  headers: Headers;
+  url: string;
+  authAllowHosts: string[];
+  bearerToken?: string;
+}): void {
+  if (!params.bearerToken) {
+    params.headers.delete("Authorization");
+    return;
+  }
+  if (isUrlAllowed(params.url, params.authAllowHosts)) {
+    params.headers.set("Authorization", `Bearer ${params.bearerToken}`);
+    return;
+  }
+  params.headers.delete("Authorization");
 }
 
 export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
@@ -407,4 +439,21 @@ export async function safeFetch(params: {
   }
 
   throw new Error(`Too many redirects (>${MAX_SAFE_REDIRECTS})`);
+}
+
+export async function safeFetchWithPolicy(params: {
+  url: string;
+  policy: MSTeamsAttachmentFetchPolicy;
+  fetchFn?: typeof fetch;
+  requestInit?: RequestInit;
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+}): Promise<Response> {
+  return await safeFetch({
+    url: params.url,
+    allowHosts: params.policy.allowHosts,
+    authorizationAllowHosts: params.policy.authAllowHosts,
+    fetchFn: params.fetchFn,
+    requestInit: params.requestInit,
+    resolveFn: params.resolveFn,
+  });
 }

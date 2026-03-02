@@ -6,12 +6,12 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
   resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
   resolveRequestUrl,
-  resolveAuthAllowedHosts,
-  resolveAllowedHosts,
-  safeFetch,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -95,12 +95,11 @@ async function fetchWithAuthFallback(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  allowHosts: string[];
-  authAllowHosts: string[];
+  policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
-  const firstAttempt = await safeFetch({
+  const firstAttempt = await safeFetchWithPolicy({
     url: params.url,
-    allowHosts: params.allowHosts,
+    policy: params.policy,
     fetchFn: params.fetchFn,
     requestInit: params.requestInit,
   });
@@ -113,7 +112,7 @@ async function fetchWithAuthFallback(params: {
   if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
     return firstAttempt;
   }
-  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
 
@@ -124,10 +123,9 @@ async function fetchWithAuthFallback(params: {
       const token = await params.tokenProvider.getAccessToken(scope);
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await safeFetch({
+      const authAttempt = await safeFetchWithPolicy({
         url: params.url,
-        allowHosts: params.allowHosts,
-        authorizationAllowHosts: params.authAllowHosts,
+        policy: params.policy,
         fetchFn,
         requestInit: {
           ...params.requestInit,
@@ -171,8 +169,11 @@ export async function downloadMSTeamsAttachments(params: {
   if (list.length === 0) {
     return [];
   }
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
-  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+  const policy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const allowHosts = policy.allowHosts;
   const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
@@ -249,8 +250,7 @@ export async function downloadMSTeamsAttachments(params: {
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
-            allowHosts,
-            authAllowHosts,
+            policy,
           }),
       });
       out.push(media);
