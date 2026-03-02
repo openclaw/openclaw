@@ -14,7 +14,7 @@ import {
   resolveSecretRefValues,
   type SecretRefResolveCache,
 } from "./resolve.js";
-import { isNonEmptyString, isRecord } from "./shared.js";
+import { isNonEmptyString, isRecord, parseEnvValue } from "./shared.js";
 
 export type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
@@ -114,17 +114,6 @@ function trackAuthProviderState(
 
 function parseDotPath(pathname: string): string[] {
   return pathname.split(".").filter(Boolean);
-}
-
-function parseEnvValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 function collectEnvPlaintext(params: { envPath: string; collector: AuditCollector }): void {
