@@ -656,7 +656,7 @@ const ERROR_PATTERNS = {
     "plans & billing",
     "insufficient balance",
     "exceeded_current_quota_error", // Moonshot: account suspended/quota exceeded
-    "suspended due to", // Moonshot: account suspension message
+    "suspended due to insufficient balance", // Moonshot: billing-specific suspension
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
