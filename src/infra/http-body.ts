@@ -79,10 +79,15 @@ export type ReadRequestBodyOptions = {
   encoding?: BufferEncoding;
 };
 
-export async function readRequestBodyWithLimit(
-  req: IncomingMessage,
-  options: ReadRequestBodyOptions,
-): Promise<string> {
+type RequestBodyLimitValues = {
+  maxBytes: number;
+  timeoutMs: number;
+};
+
+function resolveRequestBodyLimitValues(options: {
+  maxBytes: number;
+  timeoutMs?: number;
+}): RequestBodyLimitValues {
   const maxBytes = Number.isFinite(options.maxBytes)
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
@@ -90,6 +95,14 @@ export async function readRequestBodyWithLimit(
     typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
       ? Math.max(1, Math.floor(options.timeoutMs))
       : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+  return { maxBytes, timeoutMs };
+}
+
+export async function readRequestBodyWithLimit(
+  req: IncomingMessage,
+  options: ReadRequestBodyOptions,
+): Promise<string> {
+  const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const encoding = options.encoding ?? "utf-8";
 
   const declaredLength = parseContentLengthHeader(req);
@@ -241,13 +254,7 @@ export function installRequestBodyLimitGuard(
   res: ServerResponse,
   options: RequestBodyLimitGuardOptions,
 ): RequestBodyLimitGuard {
-  const maxBytes = Number.isFinite(options.maxBytes)
-    ? Math.max(1, Math.floor(options.maxBytes))
-    : 1;
-  const timeoutMs =
-    typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Math.max(1, Math.floor(options.timeoutMs))
-      : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+  const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const responseFormat = options.responseFormat ?? "json";
   const customText = options.responseText ?? {};
 

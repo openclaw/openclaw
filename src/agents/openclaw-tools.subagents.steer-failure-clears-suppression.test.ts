@@ -17,7 +17,7 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
 describe("openclaw-tools: subagents steer failure", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     const storePath = path.join(
       os.tmpdir(),
       `openclaw-subagents-steer-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,

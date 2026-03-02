@@ -14,3 +14,21 @@ export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   expect(argv).toEqual(["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"]);
   expect(opts?.cwd).toBe(params.expectedCwd);
 }
+
+export function expectSingleNpmPackIgnoreScriptsCall(params: {
+  calls: Array<[unknown, unknown]>;
+  expectedSpec: string;
+}) {
+  const packCalls = params.calls.filter(
+    (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "pack",
+  );
+  expect(packCalls.length).toBe(1);
+  const packCall = packCalls[0];
+  if (!packCall) {
+    throw new Error("expected npm pack call");
+  }
+  const [argv, options] = packCall;
+  expect(argv).toEqual(["npm", "pack", params.expectedSpec, "--ignore-scripts", "--json"]);
+  const commandOptions = typeof options === "number" ? undefined : options;
+  expect(commandOptions).toMatchObject({ env: { NPM_CONFIG_IGNORE_SCRIPTS: "true" } });
+}

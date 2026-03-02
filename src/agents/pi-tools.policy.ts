@@ -1,6 +1,8 @@
 import { getChannelDock } from "../channels/dock.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
@@ -83,12 +85,21 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
 
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
-  const maxSpawnDepth = cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
   const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
-  const deny = [...baseDeny, ...(Array.isArray(configured?.deny) ? configured.deny : [])];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
-  return { allow, deny };
+  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const explicitAllow = new Set(
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+  );
+  const deny = [
+    ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return { allow: mergedAllow, deny };
 }
 
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
@@ -188,10 +199,17 @@ function resolveProviderToolPolicy(params: {
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   modelProvider?: string;
   modelId?: string;
 }) {
-  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+  const explicitAgentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? normalizeAgentId(params.agentId)
+      : undefined;
+  const agentId =
+    explicitAgentId ??
+    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   const agentTools = agentConfig?.tools;

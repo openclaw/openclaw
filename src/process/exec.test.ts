@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import process from "node:process";
+import { describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
+import { attachChildProcessBridge } from "./child-process-bridge.js";
 import { runCommandWithTimeout, shouldSpawnWithShell } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
@@ -13,9 +17,7 @@ describe("runCommandWithTimeout", () => {
   });
 
   it("merges custom env with process.env", async () => {
-    const envSnapshot = captureEnv(["OPENCLAW_BASE_ENV"]);
-    process.env.OPENCLAW_BASE_ENV = "base";
-    try {
+    await withEnvAsync({ OPENCLAW_BASE_ENV: "base" }, async () => {
       const result = await runCommandWithTimeout(
         [
           process.execPath,
@@ -23,7 +25,7 @@ describe("runCommandWithTimeout", () => {
           'process.stdout.write((process.env.OPENCLAW_BASE_ENV ?? "") + "|" + (process.env.OPENCLAW_TEST_ENV ?? ""))',
         ],
         {
-          timeoutMs: 5_000,
+          timeoutMs: 400,
           env: { OPENCLAW_TEST_ENV: "ok" },
         },
       );
@@ -31,17 +33,15 @@ describe("runCommandWithTimeout", () => {
       expect(result.code).toBe(0);
       expect(result.stdout).toBe("base|ok");
       expect(result.termination).toBe("exit");
-    } finally {
-      envSnapshot.restore();
-    }
+    });
   });
 
   it("kills command when no output timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 30)"],
       {
-        timeoutMs: 1_000,
-        noOutputTimeoutMs: 35,
+        timeoutMs: 220,
+        noOutputTimeoutMs: 8,
       },
     );
 
@@ -55,31 +55,87 @@ describe("runCommandWithTimeout", () => {
       [
         process.execPath,
         "-e",
-        'let i=0; const t=setInterval(() => { process.stdout.write("."); i += 1; if (i >= 2) { clearInterval(t); process.exit(0); } }, 5);',
+        [
+          'process.stdout.write(".");',
+          "let count = 0;",
+          'const ticker = setInterval(() => { process.stdout.write(".");',
+          "count += 1;",
+          "if (count === 3) {",
+          "clearInterval(ticker);",
+          "process.exit(0);",
+          "}",
+          "}, 6);",
+        ].join(" "),
       ],
       {
-        timeoutMs: 1_000,
-        noOutputTimeoutMs: 120,
+        timeoutMs: 600,
+        // Keep a healthy margin above the emit interval while avoiding long idle waits.
+        noOutputTimeoutMs: 60,
       },
     );
 
-    expect(result.signal).toBeNull();
     expect(result.code ?? 0).toBe(0);
     expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout.length).toBeGreaterThanOrEqual(2);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(4);
   });
 
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "setTimeout(() => {}, 1_000)"],
+      [process.execPath, "-e", "setTimeout(() => {}, 20)"],
       {
-        timeoutMs: 15,
+        timeoutMs: 10,
       },
     );
 
     expect(result.termination).toBe("timeout");
     expect(result.noOutputTimedOut).toBe(false);
     expect(result.code).not.toBe(0);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
+    async () => {
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    },
+  );
+});
+
+describe("attachChildProcessBridge", () => {
+  function createFakeChild() {
+    const emitter = new EventEmitter() as EventEmitter & ChildProcess;
+    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
+    emitter.kill = kill as ChildProcess["kill"];
+    return { child: emitter, kill };
+  }
+
+  it("forwards SIGTERM to the wrapped child and detaches on exit", () => {
+    const beforeSigterm = new Set(process.listeners("SIGTERM"));
+    const { child, kill } = createFakeChild();
+    const observedSignals: NodeJS.Signals[] = [];
+
+    const { detach } = attachChildProcessBridge(child, {
+      signals: ["SIGTERM"],
+      onSignal: (signal) => observedSignals.push(signal),
+    });
+
+    const afterSigterm = process.listeners("SIGTERM");
+    const addedSigterm = afterSigterm.find((listener) => !beforeSigterm.has(listener));
+
+    if (!addedSigterm) {
+      throw new Error("expected SIGTERM listener");
+    }
+
+    addedSigterm("SIGTERM");
+    expect(observedSignals).toEqual(["SIGTERM"]);
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+
+    child.emit("exit");
+    expect(process.listeners("SIGTERM")).toHaveLength(beforeSigterm.size);
+
+    // Detached already via exit; should remain a safe no-op.
+    detach();
   });
 });

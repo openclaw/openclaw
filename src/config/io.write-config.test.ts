@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("config io write", () => {
   const silentLogger = {
@@ -14,6 +15,7 @@ describe("config io write", () => {
     home: string;
     initialConfig: Record<string, unknown>;
     env?: NodeJS.ProcessEnv;
+    logger?: { warn: (msg: string) => void; error: (msg: string) => void };
   }) {
     const configPath = path.join(params.home, ".openclaw", "openclaw.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -22,11 +24,89 @@ describe("config io write", () => {
     const io = createConfigIO({
       env: params.env ?? {},
       homedir: () => params.home,
-      logger: silentLogger,
+      logger: params.logger ?? silentLogger,
     });
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(true);
     return { configPath, io, snapshot };
+  }
+
+  async function writeTokenAuthAndReadConfig(params: {
+    io: { writeConfigFile: (config: Record<string, unknown>) => Promise<void> };
+    snapshot: { config: Record<string, unknown> };
+    configPath: string;
+  }) {
+    const next = structuredClone(params.snapshot.config);
+    const gateway =
+      next.gateway && typeof next.gateway === "object"
+        ? (next.gateway as Record<string, unknown>)
+        : {};
+    next.gateway = {
+      ...gateway,
+      auth: { mode: "token" },
+    };
+    await params.io.writeConfigFile(next);
+    return JSON.parse(await fs.readFile(params.configPath, "utf-8")) as Record<string, unknown>;
+  }
+
+  async function writeGatewayPatchAndReadLastAuditEntry(params: {
+    home: string;
+    initialConfig: Record<string, unknown>;
+    gatewayPatch: Record<string, unknown>;
+    env?: NodeJS.ProcessEnv;
+  }) {
+    const { io, snapshot, configPath } = await writeConfigAndCreateIo({
+      home: params.home,
+      initialConfig: params.initialConfig,
+      env: params.env,
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+    const auditPath = path.join(params.home, ".openclaw", "logs", "config-audit.jsonl");
+    const next = structuredClone(snapshot.config);
+    const gateway =
+      next.gateway && typeof next.gateway === "object"
+        ? (next.gateway as Record<string, unknown>)
+        : {};
+    next.gateway = {
+      ...gateway,
+      ...params.gatewayPatch,
+    };
+    await io.writeConfigFile(next);
+    const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+    const last = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
+    return { last, lines, configPath };
+  }
+
+  const createGatewayCommandsInput = (): Record<string, unknown> => ({
+    gateway: { mode: "local" },
+    commands: { ownerDisplay: "hash" },
+  });
+
+  const expectInputOwnerDisplayUnchanged = (input: Record<string, unknown>) => {
+    expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
+  };
+
+  const readPersistedCommands = async (configPath: string) => {
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      commands?: Record<string, unknown>;
+    };
+    return persisted.commands;
+  };
+
+  async function runUnsetNoopCase(params: { home: string; unsetPaths: string[][] }) {
+    const { configPath, io } = await writeConfigAndCreateIo({
+      home: params.home,
+      initialConfig: createGatewayCommandsInput(),
+    });
+
+    const input = createGatewayCommandsInput();
+    await io.writeConfigFile(input, { unsetPaths: params.unsetPaths });
+
+    expectInputOwnerDisplayUnchanged(input);
+    expect((await readPersistedCommands(configPath))?.ownerDisplay).toBe("hash");
   }
 
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
@@ -35,19 +115,7 @@ describe("config io write", () => {
         home,
         initialConfig: { gateway: { port: 18789 } },
       });
-
-      const next = structuredClone(snapshot.config);
-      next.gateway = {
-        ...next.gateway,
-        auth: { mode: "token" },
-      };
-
-      await io.writeConfigFile(next);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
-        string,
-        unknown
-      >;
+      const persisted = await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
       expect(persisted.gateway).toEqual({
         port: 18789,
         auth: { mode: "token" },
@@ -55,6 +123,146 @@ describe("config io write", () => {
       expect(persisted).not.toHaveProperty("agents.defaults");
       expect(persisted).not.toHaveProperty("messages.ackReaction");
       expect(persisted).not.toHaveProperty("sessions.persistence");
+    });
+  });
+
+  it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const invalidConfig: OpenClawConfig = {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: [],
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        "openclaw config set channels.telegram.allowFrom '[\"*\"]'",
+      );
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        'openclaw config set channels.telegram.dmPolicy "pairing"',
+      );
+    });
+  });
+
+  it("honors explicit unset paths when schema defaults would otherwise reappear", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { auth: { mode: "none" } },
+          commands: { ownerDisplay: "hash" },
+        },
+      });
+
+      const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+      if (
+        next.commands &&
+        typeof next.commands === "object" &&
+        "ownerDisplay" in (next.commands as Record<string, unknown>)
+      ) {
+        delete (next.commands as Record<string, unknown>).ownerDisplay;
+      }
+
+      await io.writeConfigFile(next, { unsetPaths: [["commands", "ownerDisplay"]] });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        commands?: Record<string, unknown>;
+      };
+      expect(persisted.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    });
+  });
+
+  it("does not mutate caller config when unsetPaths is applied on first write", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const input: Record<string, unknown> = {
+        gateway: { mode: "local" },
+        commands: { ownerDisplay: "hash" },
+      };
+
+      await io.writeConfigFile(input, { unsetPaths: [["commands", "ownerDisplay"]] });
+
+      expect(input).toEqual({
+        gateway: { mode: "local" },
+        commands: { ownerDisplay: "hash" },
+      });
+      expectInputOwnerDisplayUnchanged(input);
+      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
+    });
+  });
+
+  it("does not mutate caller config when unsetPaths is applied on existing files", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { mode: "local" },
+          commands: { ownerDisplay: "hash" },
+        },
+      });
+
+      const input = structuredClone(snapshot.config) as Record<string, unknown>;
+      await io.writeConfigFile(input, { unsetPaths: [["commands", "ownerDisplay"]] });
+
+      expectInputOwnerDisplayUnchanged(input);
+      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
+    });
+  });
+
+  it("keeps caller arrays immutable when unsetting array entries", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { mode: "local" },
+          tools: { alsoAllow: ["exec", "fetch", "read"] },
+        },
+      });
+
+      const input = structuredClone(snapshot.config) as Record<string, unknown>;
+      await io.writeConfigFile(input, { unsetPaths: [["tools", "alsoAllow", "1"]] });
+
+      expect((input.tools as { alsoAllow: string[] }).alsoAllow).toEqual(["exec", "fetch", "read"]);
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        tools?: { alsoAllow?: string[] };
+      };
+      expect(persisted.tools?.alsoAllow).toEqual(["exec", "read"]);
+    });
+  });
+
+  it("treats missing unset paths as no-op without mutating caller config", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      await runUnsetNoopCase({
+        home,
+        unsetPaths: [["commands", "missingKey"]],
+      });
+    });
+  });
+
+  it("ignores blocked prototype-key unset path segments", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      await runUnsetNoopCase({
+        home,
+        unsetPaths: [
+          ["commands", "__proto__"],
+          ["commands", "constructor"],
+          ["commands", "prototype"],
+        ],
+      });
     });
   });
 
@@ -79,16 +287,7 @@ describe("config io write", () => {
           gateway: { port: 18789 },
         },
       });
-
-      const next = structuredClone(snapshot.config);
-      next.gateway = {
-        ...next.gateway,
-        auth: { mode: "token" },
-      };
-
-      await io.writeConfigFile(next);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      const persisted = (await writeTokenAuthAndReadConfig({ io, snapshot, configPath })) as {
         agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
         gateway: { port: number; auth: { mode: string } };
       };
@@ -223,25 +422,16 @@ describe("config io write", () => {
 
   it("logs an overwrite audit entry when replacing an existing config file", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: 18789 } }, null, 2),
-        "utf-8",
-      );
       const warn = vi.fn();
-      const io = createConfigIO({
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { port: 18789 } },
         env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
         logger: {
-          warn,
-          error: vi.fn(),
+          warn: warn as (msg: string) => void,
+          error: vi.fn() as (msg: string) => void,
         },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
       const next = structuredClone(snapshot.config);
       next.gateway = {
         ...next.gateway,
@@ -285,38 +475,13 @@ describe("config io write", () => {
 
   it("appends config write audit JSONL entries with forensic metadata", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { port: 18789 } }, null, 2),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
+      const { configPath, lines, last } = await writeGatewayPatchAndReadLastAuditEntry({
+        home,
+        initialConfig: { gateway: { port: 18789 } },
+        gatewayPatch: { mode: "local" },
         env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: {
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-
-      const next = structuredClone(snapshot.config);
-      next.gateway = {
-        ...next.gateway,
-        mode: "local",
-      };
-
-      await io.writeConfigFile(next);
-
-      const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
       expect(lines.length).toBeGreaterThan(0);
-      const last = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
       expect(last.source).toBe("config-io");
       expect(last.event).toBe("config.write");
       expect(last.configPath).toBe(configPath);
@@ -330,40 +495,16 @@ describe("config io write", () => {
 
   it("records gateway watch session markers in config audit entries", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "local" } }, null, 2),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
+      const { last } = await writeGatewayPatchAndReadLastAuditEntry({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+        gatewayPatch: { bind: "loopback" },
         env: {
           OPENCLAW_WATCH_MODE: "1",
           OPENCLAW_WATCH_SESSION: "watch-session-1",
           OPENCLAW_WATCH_COMMAND: "gateway --force",
         } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: {
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
       });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-      const next = structuredClone(snapshot.config);
-      next.gateway = {
-        ...next.gateway,
-        bind: "loopback",
-      };
-
-      await io.writeConfigFile(next);
-
-      const lines = (await fs.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-      const last = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");

@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   no-tabs:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,3 +40,28 @@ jobs:
               print(f"- {path}")
             sys.exit(1)
           PY
+
+  actionlint:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIONLINT_VERSION="1.7.11"
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          grep " ${archive}\$" checksums.txt | sha256sum -c -
+          tar -xzf "${archive}" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+
+      - name: Lint workflows
+        run: actionlint
+
+      - name: Disallow direct inputs interpolation in composite run blocks
+        run: python3 scripts/check-composite-action-input-interpolation.py

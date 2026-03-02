@@ -1,5 +1,9 @@
 ---
 title: "Pi Development Workflow"
+summary: "Developer workflow for Pi integration: build, test, and live validation"
+read_when:
+  - Working on Pi integration code or tests
+  - Running Pi-specific lint, typecheck, and live test flows
 ---
 
 # Pi Development Workflow
@@ -15,19 +19,25 @@ This guide summarizes a sane workflow for working on the pi integration in OpenC
 
 ## Running Pi Tests
 
-Use the dedicated script for the pi integration test set:
+Run the Pi-focused test set directly with Vitest:
 
 ```bash
-scripts/pi/run-tests.sh
+pnpm test -- \
+  "src/agents/pi-*.test.ts" \
+  "src/agents/pi-embedded-*.test.ts" \
+  "src/agents/pi-tools*.test.ts" \
+  "src/agents/pi-settings.test.ts" \
+  "src/agents/pi-tool-definition-adapter*.test.ts" \
+  "src/agents/pi-extensions/**/*.test.ts"
 ```
 
-To include the live test that exercises real provider behavior:
+To include the live provider exercise:
 
 ```bash
-scripts/pi/run-tests.sh --live
+OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live.test.ts
 ```
 
-The script runs all pi related unit tests via these globs:
+This covers the main Pi unit suites:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`

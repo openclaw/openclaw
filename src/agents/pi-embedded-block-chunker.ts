@@ -44,6 +44,53 @@ function findSafeSentenceBreakIndex(
   return sentenceIdx >= minChars ? sentenceIdx : -1;
 }
 
+function findSafeParagraphBreakIndex(params: {
+  text: string;
+  fenceSpans: FenceSpan[];
+  minChars: number;
+  reverse: boolean;
+}): number {
+  const { text, fenceSpans, minChars, reverse } = params;
+  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
+  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
+    const candidates = [paragraphIdx, paragraphIdx + 1];
+    for (const candidate of candidates) {
+      if (candidate < minChars) {
+        continue;
+      }
+      if (candidate < 0 || candidate >= text.length) {
+        continue;
+      }
+      if (isSafeFenceBreak(fenceSpans, candidate)) {
+        return candidate;
+      }
+    }
+    paragraphIdx = reverse
+      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
+      : text.indexOf("\n\n", paragraphIdx + 2);
+  }
+  return -1;
+}
+
+function findSafeNewlineBreakIndex(params: {
+  text: string;
+  fenceSpans: FenceSpan[];
+  minChars: number;
+  reverse: boolean;
+}): number {
+  const { text, fenceSpans, minChars, reverse } = params;
+  let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
+  while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
+    if (newlineIdx >= minChars && isSafeFenceBreak(fenceSpans, newlineIdx)) {
+      return newlineIdx;
+    }
+    newlineIdx = reverse
+      ? text.lastIndexOf("\n", newlineIdx - 1)
+      : text.indexOf("\n", newlineIdx + 1);
+  }
+  return -1;
+}
+
 export class EmbeddedBlockChunker {
   #buffer = "";
   readonly #chunking: BlockReplyChunking;
@@ -202,31 +249,26 @@ export class EmbeddedBlockChunker {
     const preference = this.#chunking.breakPreference ?? "paragraph";
 
     if (preference === "paragraph") {
-      let paragraphIdx = buffer.indexOf("\n\n");
-      while (paragraphIdx !== -1) {
-        const candidates = [paragraphIdx, paragraphIdx + 1];
-        for (const candidate of candidates) {
-          if (candidate < minChars) {
-            continue;
-          }
-          if (candidate < 0 || candidate >= buffer.length) {
-            continue;
-          }
-          if (isSafeFenceBreak(fenceSpans, candidate)) {
-            return { index: candidate };
-          }
-        }
-        paragraphIdx = buffer.indexOf("\n\n", paragraphIdx + 2);
+      const paragraphIdx = findSafeParagraphBreakIndex({
+        text: buffer,
+        fenceSpans,
+        minChars,
+        reverse: false,
+      });
+      if (paragraphIdx !== -1) {
+        return { index: paragraphIdx };
       }
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      let newlineIdx = buffer.indexOf("\n");
-      while (newlineIdx !== -1) {
-        if (newlineIdx >= minChars && isSafeFenceBreak(fenceSpans, newlineIdx)) {
-          return { index: newlineIdx };
-        }
-        newlineIdx = buffer.indexOf("\n", newlineIdx + 1);
+      const newlineIdx = findSafeNewlineBreakIndex({
+        text: buffer,
+        fenceSpans,
+        minChars,
+        reverse: false,
+      });
+      if (newlineIdx !== -1) {
+        return { index: newlineIdx };
       }
     }
 
@@ -251,31 +293,26 @@ export class EmbeddedBlockChunker {
 
     const preference = this.#chunking.breakPreference ?? "paragraph";
     if (preference === "paragraph") {
-      let paragraphIdx = window.lastIndexOf("\n\n");
-      while (paragraphIdx >= minChars) {
-        const candidates = [paragraphIdx, paragraphIdx + 1];
-        for (const candidate of candidates) {
-          if (candidate < minChars) {
-            continue;
-          }
-          if (candidate < 0 || candidate >= buffer.length) {
-            continue;
-          }
-          if (isSafeFenceBreak(fenceSpans, candidate)) {
-            return { index: candidate };
-          }
-        }
-        paragraphIdx = window.lastIndexOf("\n\n", paragraphIdx - 1);
+      const paragraphIdx = findSafeParagraphBreakIndex({
+        text: window,
+        fenceSpans,
+        minChars,
+        reverse: true,
+      });
+      if (paragraphIdx !== -1) {
+        return { index: paragraphIdx };
       }
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      let newlineIdx = window.lastIndexOf("\n");
-      while (newlineIdx >= minChars) {
-        if (isSafeFenceBreak(fenceSpans, newlineIdx)) {
-          return { index: newlineIdx };
-        }
-        newlineIdx = window.lastIndexOf("\n", newlineIdx - 1);
+      const newlineIdx = findSafeNewlineBreakIndex({
+        text: window,
+        fenceSpans,
+        minChars,
+        reverse: true,
+      });
+      if (newlineIdx !== -1) {
+        return { index: newlineIdx };
       }
     }
 

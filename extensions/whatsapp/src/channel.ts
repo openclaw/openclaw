@@ -4,7 +4,6 @@ import {
   collectWhatsAppStatusIssues,
   createActionGate,
   DEFAULT_ACCOUNT_ID,
-  escapeRegExp,
   formatPairingApproveHint,
   getChatChannelMeta,
   listWhatsAppAccountIds,
@@ -14,15 +13,21 @@ import {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeE164,
+  formatWhatsAppConfigAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
-  normalizeWhatsAppTarget,
   readStringParam,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppOutboundTarget,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveWhatsAppAccount,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
   resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppHeartbeatRecipients,
+  resolveWhatsAppMentionStripPatterns,
   whatsappOnboardingAdapter,
   WhatsAppConfigSchema,
   type ChannelMessageActionName,
@@ -110,14 +115,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
-    formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter((entry): entry is string => Boolean(entry))
-        .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
-        .filter((entry): entry is string => Boolean(entry)),
+    resolveAllowFrom: ({ cfg, accountId }) => resolveWhatsAppConfigAllowFrom({ cfg, accountId }),
+    formatAllowFrom: ({ allowFrom }) => formatWhatsAppConfigAllowFromEntries(allowFrom),
+    resolveDefaultTo: ({ cfg, accountId }) => resolveWhatsAppConfigDefaultTo({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -136,8 +136,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.whatsapp !== undefined,
+        groupPolicy: account.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -199,18 +203,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   groups: {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
     resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-    resolveGroupIntroHint: () =>
-      "WhatsApp IDs: SenderId is the participant JID (group participant id).",
+    resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
   },
   mentions: {
-    stripPatterns: ({ ctx }) => {
-      const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
-      if (!selfE164) {
-        return [];
-      }
-      const escaped = escapeRegExp(selfE164);
-      return [escaped, `@${escaped}`];
-    },
+    stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
   },
   commands: {
     enforceOwnerForCommands: true,

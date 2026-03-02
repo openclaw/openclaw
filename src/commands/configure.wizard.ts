@@ -1,3 +1,5 @@
+import fsPromises from "node:fs/promises";
+import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
@@ -332,6 +334,32 @@ export async function runConfigureWizard(
         runtime,
       );
       workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      if (!snapshot.exists) {
+        const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
+          nodePath.join(workspaceDir, name),
+        );
+        const hasExistingContent = (
+          await Promise.all(
+            indicators.map(async (candidate) => {
+              try {
+                await fsPromises.access(candidate);
+                return true;
+              } catch {
+                return false;
+              }
+            }),
+          )
+        ).some(Boolean);
+        if (hasExistingContent) {
+          note(
+            [
+              `Existing workspace detected at ${workspaceDir}`,
+              "Existing files are preserved. Missing templates may be created, never overwritten.",
+            ].join("\n"),
+            "Existing workspace",
+          );
+        }
+      }
       nextConfig = {
         ...nextConfig,
         agents: {
@@ -343,6 +371,33 @@ export async function runConfigureWizard(
         },
       };
       await ensureWorkspaceAndSessions(workspaceDir, runtime);
+    };
+
+    const configureChannelsSection = async () => {
+      await noteChannelStatus({ cfg: nextConfig, prompter });
+      const channelMode = await promptChannelMode(runtime);
+      if (channelMode === "configure") {
+        nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+          allowDisable: true,
+          allowSignalInstall: true,
+          skipConfirm: true,
+          skipStatusNote: true,
+        });
+      } else {
+        nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
+      }
+    };
+
+    const promptDaemonPort = async () => {
+      const portInput = guardCancel(
+        await text({
+          message: "Gateway port for service install",
+          initialValue: String(gatewayPort),
+          validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+        }),
+        runtime,
+      );
+      gatewayPort = Number.parseInt(String(portInput), 10);
     };
 
     if (opts.sections) {
@@ -372,18 +427,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("channels")) {
-        await noteChannelStatus({ cfg: nextConfig, prompter });
-        const channelMode = await promptChannelMode(runtime);
-        if (channelMode === "configure") {
-          nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-            allowDisable: true,
-            allowSignalInstall: true,
-            skipConfirm: true,
-            skipStatusNote: true,
-          });
-        } else {
-          nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
-        }
+        await configureChannelsSection();
       }
 
       if (selected.includes("skills")) {
@@ -395,15 +439,7 @@ export async function runConfigureWizard(
 
       if (selected.includes("daemon")) {
         if (!selected.includes("gateway")) {
-          const portInput = guardCancel(
-            await text({
-              message: "Gateway port for service install",
-              initialValue: String(gatewayPort),
-              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
-            }),
-            runtime,
-          );
-          gatewayPort = Number.parseInt(String(portInput), 10);
+          await promptDaemonPort();
         }
 
         await maybeInstallDaemon({ runtime, port: gatewayPort, gatewayToken });
@@ -448,18 +484,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "channels") {
-          await noteChannelStatus({ cfg: nextConfig, prompter });
-          const channelMode = await promptChannelMode(runtime);
-          if (channelMode === "configure") {
-            nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-              allowDisable: true,
-              allowSignalInstall: true,
-              skipConfirm: true,
-              skipStatusNote: true,
-            });
-          } else {
-            nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
-          }
+          await configureChannelsSection();
           await persistConfig();
         }
 
@@ -471,15 +496,7 @@ export async function runConfigureWizard(
 
         if (choice === "daemon") {
           if (!didConfigureGateway) {
-            const portInput = guardCancel(
-              await text({
-                message: "Gateway port for service install",
-                initialValue: String(gatewayPort),
-                validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
-              }),
-              runtime,
-            );
-            gatewayPort = Number.parseInt(String(portInput), 10);
+            await promptDaemonPort();
           }
           await maybeInstallDaemon({
             runtime,

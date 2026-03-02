@@ -67,7 +67,7 @@ async function startAndRunCheck(
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 500);
+  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
 }
 
@@ -91,7 +91,7 @@ describe("channel-health-monitor", () => {
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
@@ -244,11 +244,9 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
@@ -284,7 +282,7 @@ describe("channel-health-monitor", () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);
     monitor.stop();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
   });
 
@@ -293,7 +291,7 @@ describe("channel-health-monitor", () => {
     const abort = new AbortController();
     const monitor = startDefaultMonitor(manager, { abortSignal: abort.signal });
     abort.abort();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
@@ -307,5 +305,111 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
+  });
+
+  describe("stale socket detection", () => {
+    const STALE_THRESHOLD = 30 * 60_000;
+
+    it("restarts a channel with no events past the stale threshold", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: now - STALE_THRESHOLD - 30_000,
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      monitor.stop();
+    });
+
+    it("skips channels with recent events", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+            lastEventAt: now - 5_000,
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("skips channels still within the startup grace window for stale detection", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 5_000,
+            lastEventAt: null,
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    });
+
+    it("restarts a channel that never received any event past the stale threshold", async () => {
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - STALE_THRESHOLD - 60_000,
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager);
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      monitor.stop();
+    });
+
+    it("respects custom staleEventThresholdMs", async () => {
+      const customThreshold = 10 * 60_000;
+      const now = Date.now();
+      const manager = createSnapshotManager({
+        slack: {
+          default: {
+            running: true,
+            connected: true,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - customThreshold - 60_000,
+            lastEventAt: now - customThreshold - 30_000,
+          },
+        },
+      });
+      const monitor = await startAndRunCheck(manager, {
+        staleEventThresholdMs: customThreshold,
+      });
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+      monitor.stop();
+    });
   });
 });

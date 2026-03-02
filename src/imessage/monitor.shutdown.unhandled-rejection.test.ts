@@ -30,13 +30,7 @@ describe("monitorIMessageProvider", () => {
       });
       abortController.abort();
       // Give the event loop a turn to surface any unhandledRejection, if present.
-      await new Promise<void>((resolve) => {
-        if (typeof setImmediate === "function") {
-          setImmediate(resolve);
-          return;
-        }
-        setTimeout(resolve, 0);
-      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
       detach();
     } finally {
       process.off("unhandledRejection", onUnhandled);

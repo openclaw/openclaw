@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
+import { isPathInside } from "./scan-paths.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -250,13 +251,6 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
-}
-
-function isPathInside(basePath: string, candidatePath: string): boolean {
-  const base = path.resolve(basePath);
-  const candidate = path.resolve(candidatePath);
-  const rel = path.relative(base, candidate);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
 }
 
 async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
