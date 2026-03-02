@@ -126,20 +126,16 @@ async function waitForListMatch<T>(
   timeoutMs = RELAY_LIST_MATCH_TIMEOUT_MS,
   intervalMs = 20,
 ): Promise<T> {
-  let latest: T | undefined;
-  await expect
-    .poll(
-      async () => {
-        latest = await fetchList();
-        return predicate(latest);
-      },
-      { timeout: timeoutMs, interval: intervalMs },
-    )
-    .toBe(true);
-  if (latest === undefined) {
-    throw new Error("expected list value");
+  const deadline = Date.now() + timeoutMs;
+  let latest: T | null = null;
+  while (Date.now() <= deadline) {
+    latest = await fetchList();
+    if (predicate(latest)) {
+      return latest;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  return latest;
+  throw new Error("timeout waiting for list match");
 }
 
 describe("chrome extension relay server", () => {
@@ -453,14 +449,13 @@ describe("chrome extension relay server", () => {
       }),
     );
 
-    const list = await waitForListMatch(
+    await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
           headers: relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (entries) => entries.some((entry) => entry.id === "t-minimal"),
     );
-    expect(list.some((entry) => entry.id === "t-minimal")).toBe(true);
   });
 
   it("waits briefly for extension reconnect before failing CDP commands", async () => {
@@ -666,7 +661,7 @@ describe("chrome extension relay server", () => {
         }),
       );
 
-      const list2 = await waitForListMatch(
+      await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
             headers: relayAuthHeaders(cdpUrl),
@@ -683,12 +678,6 @@ describe("chrome extension relay server", () => {
               t.title === "DER STANDARD",
           ),
       );
-      expect(
-        list2.some(
-          (t) =>
-            t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD",
-        ),
-      ).toBe(true);
 
       const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
         headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
@@ -699,7 +688,10 @@ describe("chrome extension relay server", () => {
       cdp.send(JSON.stringify({ id: 1, method: "Target.getTargets" }));
       const res1 = JSON.parse(await q.next()) as { id: number; result?: unknown };
       expect(res1.id).toBe(1);
-      expect(JSON.stringify(res1.result ?? {})).toContain("t1");
+      const targetInfos = (
+        res1.result as { targetInfos?: Array<{ targetId?: string }> } | undefined
+      )?.targetInfos;
+      expect((targetInfos ?? []).some((target) => target.targetId === "t1")).toBe(true);
 
       cdp.send(
         JSON.stringify({
@@ -719,11 +711,13 @@ describe("chrome extension relay server", () => {
 
       const res2 = received.find((m) => m.id === 2);
       expect(res2?.id).toBe(2);
-      expect(JSON.stringify(res2?.result ?? {})).toContain("cb-tab-1");
+      expect((res2?.result as { sessionId?: string } | undefined)?.sessionId).toBe("cb-tab-1");
 
       const evt = received.find((m) => m.method === "Target.attachedToTarget");
       expect(evt?.method).toBe("Target.attachedToTarget");
-      expect(JSON.stringify(evt?.params ?? {})).toContain("t1");
+      expect(
+        (evt?.params as { targetInfo?: { targetId?: string } } | undefined)?.targetInfo?.targetId,
+      ).toBe("t1");
 
       cdp.close();
       ext.close();
@@ -771,15 +765,13 @@ describe("chrome extension relay server", () => {
       }),
     );
 
-    const updatedList = await waitForListMatch(
+    await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
           headers: relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.every((target) => target.id !== "t1"),
     );
-
-    expect(updatedList.some((target) => target.id === "t1")).toBe(false);
     ext.close();
   });
 
@@ -860,14 +852,13 @@ describe("chrome extension relay server", () => {
     expect(response?.id).toBe(77);
     expect(response?.error?.message ?? "").toContain("No target with given id");
 
-    const updatedList = await waitForListMatch(
+    await waitForListMatch(
       async () =>
         (await fetch(`${cdpUrl}/json/list`, {
           headers: relayAuthHeaders(cdpUrl),
         }).then((r) => r.json())) as Array<{ id?: string }>,
       (list) => list.every((target) => target.id !== "t1"),
     );
-    expect(updatedList.some((target) => target.id === "t1")).toBe(false);
 
     cdp.close();
     ext.close();
@@ -903,7 +894,9 @@ describe("chrome extension relay server", () => {
 
     const first = JSON.parse(await q.next()) as { method?: string; params?: unknown };
     expect(first.method).toBe("Target.attachedToTarget");
-    expect(JSON.stringify(first.params ?? {})).toContain("t1");
+    expect(
+      (first.params as { targetInfo?: { targetId?: string } } | undefined)?.targetInfo?.targetId,
+    ).toBe("t1");
 
     ext.send(
       JSON.stringify({
@@ -930,8 +923,11 @@ describe("chrome extension relay server", () => {
 
     const detached = received.find((m) => m.method === "Target.detachedFromTarget");
     const attached = received.find((m) => m.method === "Target.attachedToTarget");
-    expect(JSON.stringify(detached?.params ?? {})).toContain("t1");
-    expect(JSON.stringify(attached?.params ?? {})).toContain("t2");
+    expect((detached?.params as { targetId?: string } | undefined)?.targetId).toBe("t1");
+    expect(
+      (attached?.params as { targetInfo?: { targetId?: string } } | undefined)?.targetInfo
+        ?.targetId,
+    ).toBe("t2");
 
     cdp.close();
     ext.close();
@@ -1007,14 +1003,13 @@ describe("chrome extension relay server", () => {
         }),
       );
 
-      const list1 = await waitForListMatch(
+      await waitForListMatch(
         async () =>
           (await fetch(`${cdpUrl}/json/list`, {
             headers: relayAuthHeaders(cdpUrl),
           }).then((r) => r.json())) as Array<{ id?: string }>,
         (list) => list.some((t) => t.id === "t10"),
       );
-      expect(list1.some((t) => t.id === "t10")).toBe(true);
 
       // Disconnect extension and wait for grace period cleanup.
       const ext1Closed = waitForClose(ext1, 2_000);
