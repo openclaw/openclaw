@@ -1042,7 +1042,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.relayRouting":
     "Controls read-only relay routing for inbound sessions using ordered match rules and named relay targets. Use this when messages should resolve to fixed delivery targets while preserving source metadata separately.",
   "session.relayRouting.defaultMode":
-    'Fallback relay mode when no relay rule matches: "read-write" or "read-only". With read-only default, OpenClaw only resolves a relay target when exactly one target is configured; ambiguous target sets fall back to read-write.',
+    'Fallback relay mode when no relay rule matches: "read-write" or "read-only". With read-only default, OpenClaw resolves a relay target only when exactly one target is configured; ambiguous or missing target sets fail closed and drop delivery.',
   "session.relayRouting.targets":
     "Named relay target map keyed by target IDs used by read-only relay rules (for example `ops`, `triage`, `audit`). Keep target keys stable so rule relayTo references remain deterministic.",
   "session.relayRouting.targets.*.channel":

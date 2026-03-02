@@ -465,6 +465,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async (replyCtx: MsgContext) => {
+      // The entire body is replaced by the XML block — user text lives inside <message>.
       expect(replyCtx.BodyForAgent).toContain("<read_only_metadata>");
       expect(replyCtx.BodyForAgent).toContain("<provider>slack</provider>");
       expect(replyCtx.BodyForAgent).toContain("<sender>alice &lt;&amp;&gt;&quot;&apos;</sender>");
@@ -472,7 +473,9 @@ describe("dispatchReplyFromConfig", () => {
         "<source_to>room &lt;&amp;&gt;&quot;&apos;</source_to>",
       );
       expect(replyCtx.BodyForAgent).toContain("<chat_type>group</chat_type>");
+      expect(replyCtx.BodyForAgent).toContain("<message>existing prompt</message>");
       expect(replyCtx.Body).toContain("<read_only_metadata>");
+      expect(replyCtx.Body).toContain("<message>existing body</message>");
       return { text: "hi" } satisfies ReplyPayload;
     };
 

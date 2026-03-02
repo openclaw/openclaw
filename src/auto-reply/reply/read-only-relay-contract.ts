@@ -1,7 +1,5 @@
 import type { FinalizedMsgContext } from "../templating.js";
 
-const READ_ONLY_METADATA_TAG = "<read_only_metadata>";
-
 function escapeXml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -19,15 +17,7 @@ function resolveText(value: unknown, fallback = "unknown"): string {
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
-function appendContractIfMissing(existing: unknown, contract: string): string {
-  const current = typeof existing === "string" ? existing : "";
-  if (current.includes(READ_ONLY_METADATA_TAG)) {
-    return current;
-  }
-  return current.trim().length > 0 ? `${current}\n\n${contract}` : contract;
-}
-
-function buildReadOnlyRelayMetadataXml(ctx: FinalizedMsgContext): string {
+function buildReadOnlyRelayBlock(ctx: FinalizedMsgContext, message: string): string {
   const provider = resolveText(ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider);
   const sender = resolveText(ctx.From ?? ctx.SenderUsername ?? ctx.SenderId ?? ctx.SenderE164);
   const sourceTo = resolveText(ctx.OriginatingTo ?? ctx.To);
@@ -38,6 +28,7 @@ function buildReadOnlyRelayMetadataXml(ctx: FinalizedMsgContext): string {
     `  <sender>${escapeXml(sender)}</sender>`,
     `  <source_to>${escapeXml(sourceTo)}</source_to>`,
     `  <chat_type>${escapeXml(chatType)}</chat_type>`,
+    `  <message>${escapeXml(message)}</message>`,
     "  <instructions>",
     "    <routing>This turn is read-only. Runtime relay destination is fixed by OpenClaw configuration.</routing>",
     "    <delivery>Generate a single assistant response as normal. Delivery routing is handled out-of-band.</delivery>",
@@ -48,10 +39,13 @@ function buildReadOnlyRelayMetadataXml(ctx: FinalizedMsgContext): string {
 }
 
 /**
- * Appends read-only relay XML metadata to inbound prompt fields consumed by agent execution.
+ * Replaces inbound prompt fields with a read-only relay XML block that wraps the
+ * user's message text inside structured metadata consumed by agent execution.
  */
 export function appendReadOnlyContractToInbound(params: { ctx: FinalizedMsgContext }): void {
-  const metadata = buildReadOnlyRelayMetadataXml(params.ctx);
-  params.ctx.BodyForAgent = appendContractIfMissing(params.ctx.BodyForAgent, metadata);
-  params.ctx.Body = appendContractIfMissing(params.ctx.Body, metadata);
+  const bodyForAgent =
+    typeof params.ctx.BodyForAgent === "string" ? params.ctx.BodyForAgent.trim() : "";
+  const body = typeof params.ctx.Body === "string" ? params.ctx.Body.trim() : "";
+  params.ctx.BodyForAgent = buildReadOnlyRelayBlock(params.ctx, bodyForAgent);
+  params.ctx.Body = buildReadOnlyRelayBlock(params.ctx, body);
 }
