@@ -93,7 +93,7 @@ describe("after_tool_call hook wiring", () => {
       {
         type: "tool_execution_start",
         toolName: "read",
-        toolCallId: "call-1",
+        toolCallId: "wired-hook-call-1",
         args: { path: "/tmp/file.txt" },
       } as never,
     );
@@ -103,7 +103,7 @@ describe("after_tool_call hook wiring", () => {
       {
         type: "tool_execution_end",
         toolName: "read",
-        toolCallId: "call-1",
+        toolCallId: "wired-hook-call-1",
         isError: false,
         result: { content: [{ type: "text", text: "file contents" }] },
       } as never,
