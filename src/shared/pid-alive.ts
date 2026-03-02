@@ -1,5 +1,9 @@
 import fsSync from "node:fs";
 
+function isValidPid(pid: number): boolean {
+  return Number.isInteger(pid) && pid > 0;
+}
+
 /**
  * Check if a process is a zombie on Linux by reading /proc/<pid>/status.
  * Returns false on non-Linux platforms or if the proc file can't be read.
@@ -18,7 +22,7 @@ function isZombieProcess(pid: number): boolean {
 }
 
 export function isPidAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
+  if (!isValidPid(pid)) {
     return false;
   }
   try {
@@ -44,18 +48,22 @@ export function getProcessStartTime(pid: number): number | null {
   if (process.platform !== "linux") {
     return null;
   }
-  if (!Number.isFinite(pid) || pid <= 0) {
+  if (!isValidPid(pid)) {
     return null;
   }
   try {
     const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const commEndIndex = stat.lastIndexOf(")");
+    if (commEndIndex < 0) {
+      return null;
+    }
     // The comm field (field 2) is wrapped in parens and can contain spaces,
     // so split after the last ")" to get fields 3..N reliably.
-    const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
-    const fields = afterComm.split(" ");
+    const afterComm = stat.slice(commEndIndex + 1).trimStart();
+    const fields = afterComm.split(/\s+/);
     // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
-    const starttime = parseInt(fields[19], 10);
-    return Number.isFinite(starttime) ? starttime : null;
+    const starttime = Number(fields[19]);
+    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
   } catch {
     return null;
   }

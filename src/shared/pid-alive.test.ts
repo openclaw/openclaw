@@ -14,6 +14,7 @@ describe("isPidAlive", () => {
   it("returns false for invalid PIDs", () => {
     expect(isPidAlive(0)).toBe(false);
     expect(isPidAlive(-1)).toBe(false);
+    expect(isPidAlive(1.5)).toBe(false);
     expect(isPidAlive(Number.NaN)).toBe(false);
     expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
   });
@@ -97,8 +98,38 @@ describe("getProcessStartTime", () => {
   it("returns null for invalid PIDs", () => {
     expect(getProcessStartTime(0)).toBeNull();
     expect(getProcessStartTime(-1)).toBeNull();
+    expect(getProcessStartTime(1.5)).toBeNull();
     expect(getProcessStartTime(Number.NaN)).toBeNull();
     expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  it("returns null for malformed /proc stat content", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!originalPlatformDescriptor) {
+      throw new Error("missing process.platform descriptor");
+    }
+
+    const originalReadFileSync = fsSync.readFileSync;
+    vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+      if (filePath === "/proc/42/stat") {
+        return "42 node S malformed";
+      }
+      return originalReadFileSync(filePath as never, encoding as never) as never;
+    });
+
+    Object.defineProperty(process, "platform", {
+      ...originalPlatformDescriptor,
+      value: "linux",
+    });
+
+    try {
+      vi.resetModules();
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(42)).toBeNull();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      vi.restoreAllMocks();
+    }
   });
 
   it("handles comm fields containing spaces and parentheses", async () => {
