@@ -216,6 +216,9 @@ async function configureTrustedProxyControlUiAuth() {
   await writeConfigFile({
     gateway: {
       trustedProxies: ["127.0.0.1"],
+      controlUi: {
+        allowedOrigins: ["https://localhost"],
+      },
     },
     // oxlint-disable-next-line typescript/no-explicit-any
   } as any);
@@ -1023,12 +1026,18 @@ describe("gateway server auth/connect", () => {
   });
 
   test("does not bypass pairing for control ui device identity when insecure auth is enabled", async () => {
-    testState.gatewayControlUi = { allowInsecureAuth: true };
+    testState.gatewayControlUi = {
+      allowInsecureAuth: true,
+      allowedOrigins: ["https://localhost"],
+    };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: {
         trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: ["https://localhost"],
+        },
       },
       // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
