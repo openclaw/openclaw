@@ -16,7 +16,6 @@ const TLS_CERT_ERROR_PATTERNS = [
   /unable to verify the first certificate/i,
   /self[- ]signed certificate/i,
   /certificate has expired/i,
-  /tls/i,
 ];
 
 const OPENAI_AUTH_PROBE_URL =
