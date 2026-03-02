@@ -46,6 +46,14 @@ function expectEnvProxyAgentConstructorCall(params: { nth: number; autoSelectFam
   });
 }
 
+function resolveTelegramFetchOrThrow() {
+  const resolved = resolveTelegramFetch();
+  if (!resolved) {
+    throw new Error("expected resolved fetch");
+  }
+  return resolved;
+}
+
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
@@ -233,10 +241,7 @@ describe("resolveTelegramFetch", () => {
       .mockResolvedValueOnce({ ok: true } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
 
@@ -261,10 +266,7 @@ describe("resolveTelegramFetch", () => {
       .mockResolvedValueOnce({ ok: true } as Response);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
     await resolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
@@ -281,10 +283,7 @@ describe("resolveTelegramFetch", () => {
     const fetchMock = vi.fn().mockRejectedValue(fetchError);
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const resolved = resolveTelegramFetch();
-    if (!resolved) {
-      throw new Error("expected resolved fetch");
-    }
+    const resolved = resolveTelegramFetchOrThrow();
 
     await expect(resolved("https://api.telegram.org/file/botx/photos/file_3.jpg")).rejects.toThrow(
       "fetch failed",
