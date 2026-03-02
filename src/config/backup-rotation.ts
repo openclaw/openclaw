@@ -9,6 +9,10 @@ export interface BackupRotationFs {
   readdir?: (path: string) => Promise<string[]>;
 }
 
+export interface BackupMaintenanceFs extends BackupRotationFs {
+  copyFile: (from: string, to: string) => Promise<void>;
+}
+
 export async function rotateConfigBackups(
   configPath: string,
   ioFs: BackupRotationFs,
@@ -102,4 +106,20 @@ export async function cleanOrphanBackups(
       // best-effort
     });
   }
+}
+
+/**
+ * Run the full backup maintenance cycle around config writes.
+ * Order matters: rotate ring -> create new .bak -> harden modes -> prune orphan .bak.* files.
+ */
+export async function maintainConfigBackups(
+  configPath: string,
+  ioFs: BackupMaintenanceFs,
+): Promise<void> {
+  await rotateConfigBackups(configPath, ioFs);
+  await ioFs.copyFile(configPath, `${configPath}.bak`).catch(() => {
+    // best-effort
+  });
+  await hardenBackupPermissions(configPath, ioFs);
+  await cleanOrphanBackups(configPath, ioFs);
 }
