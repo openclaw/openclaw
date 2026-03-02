@@ -1051,11 +1051,11 @@ describe("followup queue collect routing", () => {
     });
   });
 
-  it("splits interleaved read-only and read-write collect batches by prefixed routing keys", async () => {
+  it("keeps interleaved route groups in FIFO order", async () => {
     const key = `test-collect-mixed-relay-origin-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
-    const expectedCalls = 2;
+    const expectedCalls = 4;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
       if (calls.length >= expectedCalls) {
@@ -1121,19 +1121,125 @@ describe("followup queue collect routing", () => {
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
-    expect(calls[0]?.prompt).toContain("Queued #1\nrelay one");
-    expect(calls[0]?.prompt).toContain("Queued #2\nrelay two");
+    expect(calls[0]?.prompt).toBe("relay one");
     expect(calls[0]?.relayMode).toBe("read-only");
     expect(calls[0]?.relayOutput).toEqual({
       channel: "slack",
       to: "channel:relay",
     });
 
-    expect(calls[1]?.prompt).toContain("Queued #1\norigin one");
-    expect(calls[1]?.prompt).toContain("Queued #2\norigin two");
+    expect(calls[1]?.prompt).toBe("origin one");
     expect(calls[1]?.relayMode).toBe("read-write");
     expect(calls[1]?.originatingChannel).toBe("discord");
     expect(calls[1]?.originatingTo).toBe("channel:source");
+
+    expect(calls[2]?.prompt).toBe("relay two");
+    expect(calls[2]?.relayMode).toBe("read-only");
+    expect(calls[2]?.relayOutput).toEqual({
+      channel: "slack",
+      to: "channel:relay",
+    });
+
+    expect(calls[3]?.prompt).toBe("origin two");
+    expect(calls[3]?.relayMode).toBe("read-write");
+    expect(calls[3]?.originatingChannel).toBe("discord");
+    expect(calls[3]?.originatingTo).toBe("channel:source");
+  });
+
+  it("batches contiguous items with the same route", async () => {
+    const key = `test-collect-contiguous-route-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "a1",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "a2",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "b1",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("Queued #1\na1");
+    expect(calls[0]?.prompt).toContain("Queued #2\na2");
+    expect(calls[1]?.prompt).toBe("b1");
+  });
+
+  it("drains non-collectable items individually", async () => {
+    const key = `test-collect-noncollectable-singletons-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "invalid one",
+        originatingChannel: "slack",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "invalid two",
+        originatingChannel: "slack",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toBe("invalid one");
+    expect(calls[1]?.prompt).toBe("invalid two");
   });
 
   it("retries collect-mode batches without losing queued items", async () => {

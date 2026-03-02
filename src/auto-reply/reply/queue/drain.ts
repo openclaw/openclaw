@@ -94,21 +94,29 @@ type FollowupCollectGroup = {
 };
 
 function resolveCollectGroups(items: FollowupRun[]): FollowupCollectGroup[] {
-  const groups = new Map<string, FollowupCollectGroup>();
+  const groups: FollowupCollectGroup[] = [];
+  let currentGroup: FollowupCollectGroup | undefined;
   for (const [index, item] of items.entries()) {
     const resolved = resolveCrossChannelKey(item);
     const collectable = Boolean(resolved.key && !resolved.cross);
     const key = collectable
       ? (resolved.key ?? `single|${index}|${item.enqueuedAt}`)
       : `single|${index}|${item.enqueuedAt}`;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.items.push(item);
+
+    // Preserve FIFO across destinations by only collecting contiguous runs.
+    if (currentGroup && currentGroup.collectable && collectable && currentGroup.key === key) {
+      currentGroup.items.push(item);
       continue;
     }
-    groups.set(key, { key, items: [item], collectable });
+    if (currentGroup) {
+      groups.push(currentGroup);
+    }
+    currentGroup = { key, items: [item], collectable };
   }
-  return Array.from(groups.values());
+  if (currentGroup) {
+    groups.push(currentGroup);
+  }
+  return groups;
 }
 
 function removeDrainedItems(items: FollowupRun[], drained: FollowupRun[]) {
