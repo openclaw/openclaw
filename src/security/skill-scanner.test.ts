@@ -358,7 +358,7 @@ describe("scanDirectoryWithSummary", () => {
     expect(second.critical).toBe(first.critical);
     expect(readSpy).toHaveBeenCalledTimes(1);
 
-    await fs.writeFile(filePath, `const x = eval("2+2");`, "utf-8");
+    await fs.writeFile(filePath, `const x = eval("2+2"); // changed size`, "utf-8");
     const third = await scanDirectoryWithSummary(root);
 
     expect(third.critical).toBeGreaterThan(0);
