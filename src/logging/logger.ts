@@ -9,6 +9,7 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset } from "./timestamps.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
@@ -54,7 +55,27 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
   });
 }
 
+function canUseSilentVitestFileLogFastPath(envLevel: LogLevel | undefined): boolean {
+  return (
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_FILE_LOG !== "1" &&
+    !envLevel &&
+    !loggingState.overrideSettings
+  );
+}
+
 function resolveSettings(): ResolvedSettings {
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default file logs to silent. Skip config reads and fallback load in the
+  // common case to avoid pulling heavy config/schema stacks on startup.
+  if (canUseSilentVitestFileLogFastPath(envLevel)) {
+    return {
+      level: "silent",
+      file: defaultRollingPathForToday(),
+      maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+    };
+  }
+
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
@@ -72,7 +93,6 @@ function resolveSettings(): ResolvedSettings {
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
-  const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
@@ -98,6 +118,20 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
+  const logger = new TsLogger<LogObj>({
+    name: "openclaw",
+    minLevel: levelToMinLevel(settings.level),
+    type: "hidden", // no ansi formatting
+  });
+
+  // Silent logging does not write files; skip all filesystem setup in this path.
+  if (settings.level === "silent") {
+    for (const transport of externalTransports) {
+      attachExternalTransport(logger, transport);
+    }
+    return logger;
+  }
+
   fs.mkdirSync(path.dirname(settings.file), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (isRollingPath(settings.file)) {
@@ -105,15 +139,10 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   }
   let currentFileBytes = getCurrentLogFileBytes(settings.file);
   let warnedAboutSizeCap = false;
-  const logger = new TsLogger<LogObj>({
-    name: "openclaw",
-    minLevel: levelToMinLevel(settings.level),
-    type: "hidden", // no ansi formatting
-  });
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -122,7 +151,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         if (!warnedAboutSizeCap) {
           warnedAboutSizeCap = true;
           const warningLine = JSON.stringify({
-            time: new Date().toISOString(),
+            time: formatLocalIsoWithOffset(new Date()),
             level: "warn",
             subsystem: "logging",
             message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,

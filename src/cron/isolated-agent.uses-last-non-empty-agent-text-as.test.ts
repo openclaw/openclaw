@@ -1,8 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -15,56 +15,8 @@ import {
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 
-let tempRoot = "";
-let tempHomeId = 0;
-
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  if (!tempRoot) {
-    throw new Error("temp root not initialized");
-  }
-  const home = path.join(tempRoot, `case-${tempHomeId++}`);
-  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
-    recursive: true,
-  });
-  const snapshot = {
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-  };
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  delete process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-
-  if (process.platform === "win32") {
-    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
-    if (driveMatch) {
-      process.env.HOMEDRIVE = driveMatch[1];
-      process.env.HOMEPATH = driveMatch[2] || "\\";
-    }
-  }
-
-  try {
-    return await fn(home);
-  } finally {
-    const restoreKey = (key: keyof typeof snapshot) => {
-      const value = snapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    };
-    restoreKey("HOME");
-    restoreKey("USERPROFILE");
-    restoreKey("HOMEDRIVE");
-    restoreKey("HOMEPATH");
-    restoreKey("OPENCLAW_HOME");
-    restoreKey("OPENCLAW_STATE_DIR");
-  }
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-turn-suite-" });
 }
 
 function makeDeps(): CliDeps {
@@ -200,18 +152,20 @@ async function runTurnWithStoredModelOverride(
   });
 }
 
+async function runStoredOverrideAndExpectModel(params: {
+  home: string;
+  deterministicCatalog: Array<{ id: string; name: string; provider: string }>;
+  jobPayload: CronJob["payload"];
+  expected: { provider: string; model: string };
+}) {
+  vi.mocked(runEmbeddedPiAgent).mockClear();
+  vi.mocked(loadModelCatalog).mockResolvedValue(params.deterministicCatalog);
+  const res = (await runTurnWithStoredModelOverride(params.home, params.jobPayload)).res;
+  expect(res.status).toBe("ok");
+  expectEmbeddedProviderModel(params.expected);
+}
+
 describe("runCronIsolatedAgentTurn", () => {
-  beforeAll(async () => {
-    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-turn-suite-"));
-  });
-
-  afterAll(async () => {
-    if (!tempRoot) {
-      return;
-    }
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  });
-
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -385,6 +339,20 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
+      const deterministicCatalog = [
+        {
+          id: "gpt-4.1-mini",
+          name: "GPT-4.1 Mini",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
+
       let res = (
         await runCronTurn(home, {
           jobPayload: {
@@ -397,28 +365,28 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
 
-      vi.clearAllMocks();
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+        },
+        expected: { provider: "openai", model: "gpt-4.1-mini" },
+      });
 
-      vi.clearAllMocks();
-      res = (
-        await runTurnWithStoredModelOverride(home, {
+      await runStoredOverrideAndExpectModel({
+        home,
+        deterministicCatalog,
+        jobPayload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           model: "anthropic/claude-opus-4-5",
           deliver: false,
-        })
-      ).res;
-      expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
+        },
+        expected: { provider: "anthropic", model: "claude-opus-4-5" },
+      });
     });
   });
 
@@ -431,7 +399,7 @@ describe("runCronIsolatedAgentTurn", () => {
         model: GMAIL_MODEL.replace("openrouter/", ""),
       });
 
-      vi.clearAllMocks();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
       res = (
         await runGmailHookTurn(home, {
           "agent:main:hook:gmail:msg-1": {

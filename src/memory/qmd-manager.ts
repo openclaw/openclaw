@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -186,6 +187,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
@@ -260,6 +262,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         },
       ];
     }
+    this.managedCollectionNames = this.computeManagedCollectionNames();
   }
 
   private async initialize(mode: QmdManagerMode): Promise<void> {
@@ -1410,11 +1413,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const state = this.exportedSessionState.get(sessionFile);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
-        await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+        await writeFileWithinRoot({
+          rootDir: exportDir,
+          relativePath: targetName,
+          data: this.renderSessionMarkdown(entry),
+          encoding: "utf-8",
+        });
       }
       this.exportedSessionState.set(sessionFile, {
         hash: entry.hash,
@@ -1906,6 +1915,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private listManagedCollectionNames(): string[] {
+    return this.managedCollectionNames;
+  }
+
+  private computeManagedCollectionNames(): string[] {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {

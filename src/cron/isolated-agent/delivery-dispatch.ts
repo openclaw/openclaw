@@ -36,7 +36,11 @@ export function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  return target.to === delivery.to;
+  // Strip :topic:NNN suffix from target.to before comparing — the cron delivery.to
+  // is already stripped to chatId only, but the agent's message tool may pass a
+  // topic-qualified target (e.g. "-1003597428309:topic:462").
+  const normalizedTargetTo = target.to.replace(/:topic:\d+$/, "");
+  return normalizedTargetTo === delivery.to;
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {

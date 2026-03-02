@@ -1,7 +1,9 @@
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
+import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -188,7 +190,14 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
 function resolveFailureAlert(
   state: CronServiceState,
   job: CronJob,
-): { after: number; cooldownMs: number; channel: CronMessageChannel; to?: string } | null {
+): {
+  after: number;
+  cooldownMs: number;
+  channel: CronMessageChannel;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+} | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
@@ -198,6 +207,9 @@ function resolveFailureAlert(
   if (!jobConfig && globalConfig?.enabled !== true) {
     return null;
   }
+
+  const mode = jobConfig?.mode ?? globalConfig?.mode;
+  const explicitTo = normalizeTo(jobConfig?.to);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -209,7 +221,9 @@ function resolveFailureAlert(
       normalizeCronMessageChannel(jobConfig?.channel) ??
       normalizeCronMessageChannel(job.delivery?.channel) ??
       "last",
-    to: normalizeTo(jobConfig?.to) ?? normalizeTo(job.delivery?.to),
+    to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    mode,
+    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
   };
 }
 
@@ -221,6 +235,8 @@ function emitFailureAlert(
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
+    mode?: "announce" | "webhook";
+    accountId?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
@@ -237,6 +253,8 @@ function emitFailureAlert(
         text,
         channel: params.channel,
         to: params.to,
+        mode: params.mode,
+        accountId: params.accountId,
       })
       .catch((err) => {
         state.deps.log.warn(
@@ -287,19 +305,26 @@ export function applyJobResult(
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const now = state.deps.nowMs();
-      const lastAlert = job.state.lastFailureAlertAtMs;
-      const inCooldown =
-        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-      if (!inCooldown) {
-        emitFailureAlert(state, {
-          job,
-          error: result.error,
-          consecutiveErrors: job.state.consecutiveErrors,
-          channel: alertConfig.channel,
-          to: alertConfig.to,
-        });
-        job.state.lastFailureAlertAtMs = now;
+      const isBestEffort =
+        job.delivery?.bestEffort === true ||
+        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+      if (!isBestEffort) {
+        const now = state.deps.nowMs();
+        const lastAlert = job.state.lastFailureAlertAtMs;
+        const inCooldown =
+          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+        if (!inCooldown) {
+          emitFailureAlert(state, {
+            job,
+            error: result.error,
+            consecutiveErrors: job.state.consecutiveErrors,
+            channel: alertConfig.channel,
+            to: alertConfig.to,
+            mode: alertConfig.mode,
+            accountId: alertConfig.accountId,
+          });
+          job.state.lastFailureAlertAtMs = now;
+        }
       }
     }
   } else {
@@ -620,7 +645,11 @@ export async function onTimer(state: CronServiceState) {
         await persist(state);
       });
     }
+  } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
+    // Placed in `finally` so the reaper runs even when a long-running job keeps
+    // `state.running` true across multiple timer ticks — the early return at the
+    // top of onTimer would otherwise skip the reaper indefinitely.
     const storePaths = new Set<string>();
     if (state.deps.resolveSessionStorePath) {
       const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
@@ -652,7 +681,7 @@ export async function onTimer(state: CronServiceState) {
         }
       }
     }
-  } finally {
+
     state.running = false;
     armTimer(state);
   }
@@ -958,16 +987,23 @@ export async function executeJobCore(
   // ran. If delivery was attempted but final ack is uncertain, suppress the
   // main summary to avoid duplicate user-facing sends.
   // See: https://github.com/openclaw/openclaw/issues/15692
+  //
+  // Also suppress heartbeat-only summaries (e.g. "HEARTBEAT_OK") — these
+  // are internal ack tokens that should never leak into user conversations.
+  // See: https://github.com/openclaw/openclaw/issues/32013
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
     res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
   if (
-    summaryText &&
-    deliveryPlan.requested &&
-    !res.delivered &&
-    res.deliveryAttempted !== true &&
-    !suppressMainSummary
+    shouldEnqueueCronMainSummary({
+      summaryText,
+      deliveryRequested: deliveryPlan.requested,
+      delivered: res.delivered,
+      deliveryAttempted: res.deliveryAttempted,
+      suppressMainSummary,
+      isCronSystemEvent,
+    })
   ) {
     const prefix = "Cron";
     const label =

@@ -122,6 +122,32 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(params.releaseEarlyGatewayErrorGuard).toHaveBeenCalledTimes(1);
   }
 
+  function createGatewayHarness(params?: {
+    state?: {
+      sessionId?: string | null;
+      resumeGatewayUrl?: string | null;
+      sequence?: number | null;
+    };
+    sequence?: number | null;
+  }) {
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: false,
+      options: {},
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      ...(params?.state ? { state: params.state } : {}),
+      ...(params?.sequence !== undefined ? { sequence: params.sequence } : {}),
+      emitter,
+    };
+    return { emitter, gateway };
+  }
+
+  async function emitGatewayOpenAndWait(emitter: EventEmitter, delayMs = 30000): Promise<void> {
+    emitter.emit("debug", "WebSocket connection opened");
+    await vi.advanceTimersByTimeAsync(delayMs);
+  }
+
   it("cleans up thread bindings when exec approvals startup fails", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, releaseEarlyGatewayErrorGuard } =
@@ -229,28 +255,19 @@ describe("runDiscordGatewayLifecycle", () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const emitter = new EventEmitter();
-      const gateway = {
-        isConnected: false,
-        options: {},
-        disconnect: vi.fn(),
-        connect: vi.fn(),
+      const { emitter, gateway } = createGatewayHarness({
         state: {
           sessionId: "session-1",
           resumeGatewayUrl: "wss://gateway.discord.gg",
           sequence: 123,
         },
         sequence: 123,
-        emitter,
-      };
+      });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
       });
 
       const { lifecycleParams } = createLifecycleHarness({ gateway });
@@ -260,9 +277,10 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.connect).toHaveBeenNthCalledWith(1, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(2, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(3, false);
-      expect(gateway.state.sessionId).toBeNull();
-      expect(gateway.state.resumeGatewayUrl).toBeNull();
-      expect(gateway.state.sequence).toBeNull();
+      expect(gateway.state).toBeDefined();
+      expect(gateway.state?.sessionId).toBeNull();
+      expect(gateway.state?.resumeGatewayUrl).toBeNull();
+      expect(gateway.state?.sequence).toBeNull();
       expect(gateway.sequence).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -273,38 +291,27 @@ describe("runDiscordGatewayLifecycle", () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const emitter = new EventEmitter();
-      const gateway = {
-        isConnected: false,
-        options: {},
-        disconnect: vi.fn(),
-        connect: vi.fn(),
+      const { emitter, gateway } = createGatewayHarness({
         state: {
           sessionId: "session-2",
           resumeGatewayUrl: "wss://gateway.discord.gg",
           sequence: 456,
         },
         sequence: 456,
-        emitter,
-      };
+      });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(async () => {
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
 
         // Successful reconnect (READY/RESUMED sets isConnected=true), then
         // quick drop before the HELLO timeout window finishes.
         gateway.isConnected = true;
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(10);
+        await emitGatewayOpenAndWait(emitter, 10);
         emitter.emit("debug", "WebSocket connection closed with code 1006");
         gateway.isConnected = false;
 
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
-
-        emitter.emit("debug", "WebSocket connection opened");
-        await vi.advanceTimersByTimeAsync(30000);
+        await emitGatewayOpenAndWait(emitter);
+        await emitGatewayOpenAndWait(emitter);
       });
 
       const { lifecycleParams } = createLifecycleHarness({ gateway });
@@ -324,14 +331,7 @@ describe("runDiscordGatewayLifecycle", () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const emitter = new EventEmitter();
-      const gateway = {
-        isConnected: false,
-        options: {},
-        disconnect: vi.fn(),
-        connect: vi.fn(),
-        emitter,
-      };
+      const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(
         (waitParams: WaitForDiscordGatewayStopParams) =>
@@ -356,14 +356,7 @@ describe("runDiscordGatewayLifecycle", () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const emitter = new EventEmitter();
-      const gateway = {
-        isConnected: false,
-        options: {},
-        disconnect: vi.fn(),
-        connect: vi.fn(),
-        emitter,
-      };
+      const { emitter, gateway } = createGatewayHarness();
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       let resolveWait: (() => void) | undefined;
       waitForDiscordGatewayStopMock.mockImplementationOnce(

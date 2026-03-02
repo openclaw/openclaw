@@ -330,13 +330,6 @@ describe("loadOpenClawPlugins", () => {
     expect(telegram?.error).toBe("disabled in config");
   });
 
-  it("enables bundled memory plugin when selected by slot", () => {
-    const registry = loadBundledMemoryPluginRegistry();
-
-    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
-    expect(memory?.status).toBe("loaded");
-  });
-
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
       packageMeta: {
@@ -518,13 +511,18 @@ describe("loadOpenClawPlugins", () => {
     expect(channel).toBeDefined();
   });
 
-  it("registers http handlers", () => {
+  it("registers http routes with auth and match options", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "http-demo",
       filename: "http-demo.cjs",
       body: `module.exports = { id: "http-demo", register(api) {
-  api.registerHttpHandler(async () => false);
+  api.registerHttpRoute({
+    path: "/webhook",
+    auth: "plugin",
+    match: "prefix",
+    handler: async () => false
+  });
 } };`,
     });
 
@@ -535,10 +533,13 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    const handler = registry.httpHandlers.find((entry) => entry.pluginId === "http-demo");
-    expect(handler).toBeDefined();
+    const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-demo");
+    expect(route).toBeDefined();
+    expect(route?.path).toBe("/webhook");
+    expect(route?.auth).toBe("plugin");
+    expect(route?.match).toBe("prefix");
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-demo");
-    expect(httpPlugin?.httpHandlers).toBe(1);
+    expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
   it("registers http routes", () => {
@@ -547,7 +548,7 @@ describe("loadOpenClawPlugins", () => {
       id: "http-route-demo",
       filename: "http-route-demo.cjs",
       body: `module.exports = { id: "http-route-demo", register(api) {
-  api.registerHttpRoute({ path: "/demo", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } });
+  api.registerHttpRoute({ path: "/demo", auth: "gateway", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } });
 } };`,
     });
 
@@ -561,8 +562,99 @@ describe("loadOpenClawPlugins", () => {
     const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-route-demo");
     expect(route).toBeDefined();
     expect(route?.path).toBe("/demo");
+    expect(route?.auth).toBe("gateway");
+    expect(route?.match).toBe("exact");
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-route-demo");
-    expect(httpPlugin?.httpHandlers).toBe(1);
+    expect(httpPlugin?.httpRoutes).toBe(1);
+  });
+
+  it("rejects plugin http routes missing explicit auth", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-route-missing-auth",
+      filename: "http-route-missing-auth.cjs",
+      body: `module.exports = { id: "http-route-missing-auth", register(api) {
+  api.registerHttpRoute({ path: "/demo", handler: async () => true });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-route-missing-auth"],
+      },
+    });
+
+    expect(registry.httpRoutes.find((entry) => entry.pluginId === "http-route-missing-auth")).toBe(
+      undefined,
+    );
+    expect(
+      registry.diagnostics.some((diag) =>
+        String(diag.message).includes("http route registration missing or invalid auth"),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows explicit replaceExisting for same-plugin http route overrides", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "http-route-replace-self",
+      filename: "http-route-replace-self.cjs",
+      body: `module.exports = { id: "http-route-replace-self", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["http-route-replace-self"],
+      },
+    });
+
+    const routes = registry.httpRoutes.filter(
+      (entry) => entry.pluginId === "http-route-replace-self",
+    );
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.path).toBe("/demo");
+    expect(registry.diagnostics).toEqual([]);
+  });
+
+  it("rejects http route replacement when another plugin owns the route", () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "http-route-owner-a",
+      filename: "http-route-owner-a.cjs",
+      body: `module.exports = { id: "http-route-owner-a", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+} };`,
+    });
+    const second = writePlugin({
+      id: "http-route-owner-b",
+      filename: "http-route-owner-b.cjs",
+      body: `module.exports = { id: "http-route-owner-b", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["http-route-owner-a", "http-route-owner-b"],
+        },
+      },
+    });
+
+    const route = registry.httpRoutes.find((entry) => entry.path === "/demo");
+    expect(route?.pluginId).toBe("http-route-owner-a");
+    expect(
+      registry.diagnostics.some((diag) =>
+        String(diag.message).includes("http route replacement rejected"),
+      ),
+    ).toBe(true);
   });
 
   it("respects explicit disable in config", () => {
@@ -828,6 +920,58 @@ describe("loadOpenClawPlugins", () => {
     const record = registry.plugins.find((entry) => entry.id === "hardlinked");
     expect(record?.status).not.toBe("loaded");
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("allows bundled plugin entry files that are hardlinked aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "hardlinked-bundled");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.cjs");
+    fs.writeFileSync(
+      outsideEntry,
+      'module.exports = { id: "hardlinked-bundled", register() {} };',
+      "utf-8",
+    );
+    const plugin = writePlugin({
+      id: "hardlinked-bundled",
+      body: 'module.exports = { id: "hardlinked-bundled", register() {} };',
+      dir: pluginDir,
+      filename: "index.cjs",
+    });
+    fs.rmSync(plugin.file);
+    try {
+      fs.linkSync(outsideEntry, plugin.file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          entries: {
+            "hardlinked-bundled": { enabled: true },
+          },
+          allow: ["hardlinked-bundled"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
+    expect(record?.status).toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("unsafe plugin path"))).toBe(
+      false,
+    );
   });
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {

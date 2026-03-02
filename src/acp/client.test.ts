@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
@@ -35,22 +35,11 @@ function makePermissionRequest(
   };
 }
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-acp-client-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTrackedTempDirs();
+const createTempDir = () => tempDirs.make("openclaw-acp-client-test-");
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    await rm(dir, { recursive: true, force: true });
-  }
+  await tempDirs.cleanup();
 });
 
 describe("resolveAcpClientSpawnEnv", () => {

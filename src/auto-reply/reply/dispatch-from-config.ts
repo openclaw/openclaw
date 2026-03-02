@@ -177,6 +177,8 @@ export async function dispatchReplyFromConfig(params: {
           : "";
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const groupId = isGroup ? conversationId : undefined;
 
   // Trigger plugin hooks (fire-and-forget)
   if (hookRunner?.hasHooks("message_received")) {
@@ -291,6 +293,8 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       abortSignal,
       mirror,
+      isGroup,
+      groupId,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -316,6 +320,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -499,6 +505,8 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          isGroup,
+          groupId,
         });
         if (!result.ok) {
           logVerbose(
@@ -549,6 +557,8 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              isGroup,
+              groupId,
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {

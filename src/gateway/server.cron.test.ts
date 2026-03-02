@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
@@ -36,6 +36,15 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_INTERVAL_MS = 5;
 const CRON_WAIT_TIMEOUT_MS = 3_000;
+let cronSuiteTempRootPromise: Promise<string> | null = null;
+let cronSuiteCaseId = 0;
+
+async function getCronSuiteTempRoot(): Promise<string> {
+  if (!cronSuiteTempRootPromise) {
+    cronSuiteTempRootPromise = fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-suite-"));
+  }
+  return await cronSuiteTempRootPromise;
+}
 
 async function yieldToEventLoop() {
   await setImmediatePromise();
@@ -79,7 +88,6 @@ async function cleanupCronTestRun(params: {
 }) {
   params.ws.close();
   await params.server.close();
-  await rmTempDir(params.dir);
   testState.cronStorePath = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
@@ -100,7 +108,9 @@ async function setupCronTestRun(params: {
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+  const suiteRoot = await getCronSuiteTempRoot();
+  const dir = path.join(suiteRoot, `${params.tempPrefix}${cronSuiteCaseId++}`);
+  await fs.mkdir(dir, { recursive: true });
   testState.cronStorePath = path.join(dir, "cron", "jobs.json");
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
@@ -113,6 +123,15 @@ async function setupCronTestRun(params: {
 }
 
 describe("gateway server cron", () => {
+  afterAll(async () => {
+    if (!cronSuiteTempRootPromise) {
+      return;
+    }
+    await rmTempDir(await cronSuiteTempRootPromise);
+    cronSuiteTempRootPromise = null;
+    cronSuiteCaseId = 0;
+  });
+
   beforeEach(() => {
     // Keep polling helpers deterministic even if other tests left fake timers enabled.
     vi.useRealTimers();
@@ -473,7 +492,7 @@ describe("gateway server cron", () => {
       const autoRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
-        schedule: { kind: "at", at: new Date(Date.now() - 10).toISOString() },
+        schedule: { kind: "at", at: new Date(Date.now() + 50).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },
@@ -644,6 +663,58 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
+      fetchWithSsrFGuardMock.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const failureDestRes = await rpcReq(ws, "cron.add", {
+        name: "failure destination webhook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failure-destination",
+          },
+        },
+      });
+      expect(failureDestRes.ok).toBe(true);
+      const failureDestJobIdValue = (failureDestRes.payload as { id?: unknown } | null)?.id;
+      const failureDestJobId =
+        typeof failureDestJobIdValue === "string" ? failureDestJobIdValue : "";
+      expect(failureDestJobId.length > 0).toBe(true);
+
+      const failureDestRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: failureDestJobId, mode: "force" },
+        20_000,
+      );
+      expect(failureDestRunRes.ok).toBe(true);
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const [failureDestArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
+        {
+          url?: string;
+          init?: {
+            method?: string;
+            headers?: Record<string, string>;
+            body?: string;
+          };
+        },
+      ];
+      expect(failureDestArgs.url).toBe("https://example.invalid/failure-destination");
+      const failureDestBody = JSON.parse(failureDestArgs.init?.body ?? "{}");
+      expect(failureDestBody.message).toBe(
+        'Cron job "failure destination webhook" failed: unknown error',
+      );
+
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
         name: "webhook no summary",
@@ -668,7 +739,7 @@ describe("gateway server cron", () => {
       expect(noSummaryRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
       await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
     }

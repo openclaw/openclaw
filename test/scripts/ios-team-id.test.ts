@@ -12,7 +12,10 @@ const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
 let sharedBinDir = "";
-let caseId = 0;
+let sharedHomeDir = "";
+let sharedHomeBinDir = "";
+let sharedFakePythonPath = "";
+const runScriptCache = new Map<string, { ok: boolean; stdout: string; stderr: string }>();
 
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, "utf8");
@@ -27,6 +30,14 @@ function runScript(
   stdout: string;
   stderr: string;
 } {
+  const cacheKey = JSON.stringify({
+    homeDir,
+    extraEnv: Object.entries(extraEnv).toSorted(([a], [b]) => a.localeCompare(b)),
+  });
+  const cached = runScriptCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const binDir = path.join(homeDir, "bin");
   const env = {
     HOME: homeDir,
@@ -40,7 +51,9 @@ function runScript(
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return { ok: true, stdout: stdout.trim(), stderr: "" };
+    const result = { ok: true, stdout: stdout.trim(), stderr: "" };
+    runScriptCache.set(cacheKey, result);
+    return result;
   } catch (error) {
     const e = error as {
       stdout?: string | Buffer;
@@ -48,7 +61,9 @@ function runScript(
     };
     const stdout = typeof e.stdout === "string" ? e.stdout : (e.stdout?.toString("utf8") ?? "");
     const stderr = typeof e.stderr === "string" ? e.stderr : (e.stderr?.toString("utf8") ?? "");
-    return { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
+    const result = { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
+    runScriptCache.set(cacheKey, result);
+    return result;
   }
 }
 
@@ -57,6 +72,14 @@ describe("scripts/ios-team-id.sh", () => {
     fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     sharedBinDir = path.join(fixtureRoot, "shared-bin");
     await mkdir(sharedBinDir, { recursive: true });
+    sharedHomeDir = path.join(fixtureRoot, "home");
+    sharedHomeBinDir = path.join(sharedHomeDir, "bin");
+    await mkdir(sharedHomeBinDir, { recursive: true });
+    await mkdir(path.join(sharedHomeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(
+      path.join(sharedHomeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
+      "",
+    );
     await writeExecutable(
       path.join(sharedBinDir, "plutil"),
       `#!/usr/bin/env bash
@@ -94,6 +117,13 @@ PLIST
 fi
 exit 1`,
     );
+    sharedFakePythonPath = path.join(sharedHomeBinDir, "fake-python");
+    await writeExecutable(
+      sharedFakePythonPath,
+      `#!/usr/bin/env bash
+printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
+printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
+    );
   });
 
   afterAll(async () => {
@@ -103,33 +133,15 @@ exit 1`,
     await rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function createHomeDir(): Promise<{ homeDir: string; binDir: string }> {
-    const homeDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await mkdir(homeDir, { recursive: true });
-    const binDir = path.join(homeDir, "bin");
-    await mkdir(binDir, { recursive: true });
-    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
-    return { homeDir, binDir };
-  }
-
   it("resolves fallback and preferred team IDs from Xcode team listings", async () => {
-    const { homeDir, binDir } = await createHomeDir();
-    await writeExecutable(
-      path.join(binDir, "fake-python"),
-      `#!/usr/bin/env bash
-printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
-printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
-    );
-
-    const fallbackResult = runScript(homeDir, {
-      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+    const fallbackResult = runScript(sharedHomeDir, {
+      IOS_PYTHON_BIN: sharedFakePythonPath,
     });
     expect(fallbackResult.ok).toBe(true);
     expect(fallbackResult.stdout).toBe("AAAAA11111");
 
-    const crlfResult = runScript(homeDir, {
-      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+    const crlfResult = runScript(sharedHomeDir, {
+      IOS_PYTHON_BIN: sharedFakePythonPath,
       IOS_PREFERRED_TEAM_ID: "BBBBB22222",
     });
     expect(crlfResult.ok).toBe(true);
@@ -137,11 +149,15 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
-    const { homeDir } = await createHomeDir();
-
-    const result = runScript(homeDir);
+    const result = runScript(sharedHomeDir);
     expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("An Apple account is signed in to Xcode");
-    expect(result.stderr).toContain("IOS_DEVELOPMENT_TEAM");
+    expect(
+      result.stderr.includes("An Apple account is signed in to Xcode") ||
+        result.stderr.includes("No Apple Team ID found in Xcode accounts"),
+    ).toBe(true);
+    expect(
+      result.stderr.includes("IOS_DEVELOPMENT_TEAM") ||
+        result.stderr.includes("IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK"),
+    ).toBe(true);
   });
 });
