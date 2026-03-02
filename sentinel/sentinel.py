@@ -22,7 +22,11 @@ sys.path.insert(0, str(BASE))
 
 from lib.logging_util import setup_logger, log_event
 from lib.telegram import TelegramBridge
-from lib.reconciler import observe_all, execute_repair, compute_backoff
+from lib.reconciler import (
+    observe_all, execute_repair, compute_backoff, deep_probe,
+    read_stderr_tail, diagnose_config_error, repair_config_keys,
+    FLAP_THRESHOLD, FLAP_WINDOW_SEC,
+)
 from lib.config_guard import (
     observe_configs, snapshot_checksums, validate_config,
     backup_config, rollback_config,
@@ -160,6 +164,7 @@ class Sentinel:
 
         # ── 5. STORE observation ──
         self._store_observation(actual, deltas)
+        self._update_dashboard(actual, deltas)
         self._save_state()
 
     def _check_configs(self, configs_cfg):
@@ -339,7 +344,7 @@ class Sentinel:
         })
 
     def _act_low(self, delta, dkey, now, backoffs, action_log):
-        """Low risk: auto-repair with exponential backoff."""
+        """Low risk: auto-repair with exponential backoff + flap detection."""
         bo = backoffs.get(dkey, {"retries": 0, "delay": 0, "next_attempt": None})
         repair_cfg = delta.get("repair_cfg", {})
         max_retries = repair_cfg.get("max_retries", 10)
@@ -352,6 +357,27 @@ class Sentinel:
                                 dkey, max_retries)
             delta["risk"] = "med"
             self._act_med(delta, dkey, now, action_log)
+            return
+
+        # ── Flap detection: if kickstart keeps "succeeding" but service crashes again ──
+        reconcile = self.state["sentinel"].setdefault("reconcile", {})
+        repair_ts = reconcile.setdefault("repair_timestamps", {})
+        ts_list = repair_ts.get(dkey, [])
+        # Trim to window
+        cutoff = (now - timedelta(seconds=FLAP_WINDOW_SEC)).isoformat()
+        ts_list = [t for t in ts_list if t > cutoff]
+        if len(ts_list) >= FLAP_THRESHOLD:
+            self.logger.warning("[Reconcile] FLAP detected for %s (%d repairs in 1h)",
+                                dkey, len(ts_list))
+            handled = self._handle_flap(delta, dkey, now, action_log)
+            if handled:
+                ts_list.clear()
+                repair_ts[dkey] = ts_list
+                return
+            # Flap not fixable → escalate
+            delta["risk"] = "med"
+            self._act_med(delta, dkey, now, action_log)
+            repair_ts[dkey] = ts_list
             return
 
         # Check backoff timing
@@ -374,9 +400,9 @@ class Sentinel:
         bo["retries"] = bo["retries"] + 1
         if success:
             self.logger.info("[Reconcile] auto-repaired %s", dkey)
-            # Notify Cruz of the fix
-            if not self._is_quiet_hours():
-                self._notify(f"[Sentinel] auto-repaired {delta['name']}: {delta['issue']} → OK")
+            # Track for flap detection
+            ts_list.append(now.isoformat())
+            repair_ts[dkey] = ts_list
             # Reset backoff on success
             bo["retries"] = 0
             bo["delay"] = 0
@@ -393,6 +419,165 @@ class Sentinel:
             "action": method, "auto": True, "success": success,
         })
 
+    def _handle_flap(self, delta, dkey, now, action_log):
+        """Handle a flapping service: Layer 1 (pattern) → Layer 2 (AI) → Layer 3 (notify Cruz).
+
+        Returns True if the root cause was fixed, False if escalation needed.
+        """
+        label = delta.get("label", "")
+        name = delta.get("name", "")
+        self.logger.info("[Flap] diagnosing %s (label=%s)", dkey, label)
+
+        # Read stderr for clues
+        stderr = read_stderr_tail(label)
+        if not stderr:
+            self.logger.warning("[Flap] no stderr for %s, cannot diagnose", name)
+            return self._flap_ai_repair(delta, dkey, now, action_log, "(no stderr)")
+
+        # ── Layer 1: known pattern (config validation error) ──
+        diagnosis = diagnose_config_error(stderr)
+        if diagnosis:
+            config_path = diagnosis["config_path"]
+            bad_keys = diagnosis["bad_keys"]
+            self.logger.info("[Flap L1] config error: %d bad keys in %s", len(bad_keys), config_path)
+
+            result = repair_config_keys(diagnosis)
+            if result["fixed"]:
+                method = delta.get("action", "kickstart")
+                success = execute_repair(label, method)
+                removed_str = ", ".join(result["removed"])
+                msg = (
+                    f"[Sentinel L1 自動修復] {name} 反覆崩潰 → config 壞 key 已移除\n"
+                    f"移除: {removed_str}\n"
+                    f"備份: {result['backup']}\n"
+                    f"重啟: {'成功' if success else '失敗'}"
+                )
+                self._notify(msg)
+                self.logger.info("[Flap L1] %s", msg.replace("\n", " | "))
+                action_log.append({
+                    "at": now.isoformat(), "delta": dkey,
+                    "action": "config_auto_repair", "auto": True, "success": True,
+                    "detail": f"removed: {removed_str}",
+                })
+                return True
+
+        # ── Layer 2: AI diagnosis (Claude CLI) ──
+        return self._flap_ai_repair(delta, dkey, now, action_log, stderr[-2000:])
+
+    def _flap_ai_repair(self, delta, dkey, now, action_log, stderr_snippet):
+        """Layer 2: spawn Claude CLI to diagnose and fix an unknown flapping service.
+
+        Returns True if Claude fixed it, False → escalate to Cruz (Layer 3).
+        """
+        flap_cfg = self.config.get("flap_repair", {})
+        if not flap_cfg.get("ai_enabled", False):
+            self.logger.info("[Flap L2] AI repair disabled, escalating to Cruz")
+            return False
+
+        # Cooldown: max 1 AI repair per hour per service
+        reconcile = self.state["sentinel"].setdefault("reconcile", {})
+        last_ai = reconcile.get("last_ai_repair", {})
+        prev = last_ai.get(dkey)
+        cooldown = flap_cfg.get("cooldown_sec", 3600)
+        if prev:
+            try:
+                elapsed = (now - datetime.fromisoformat(prev)).total_seconds()
+                if elapsed < cooldown:
+                    self.logger.info("[Flap L2] AI cooldown for %s (%ds left)", dkey,
+                                     int(cooldown - elapsed))
+                    return False
+            except (ValueError, TypeError):
+                pass
+
+        name = delta.get("name", "")
+        label = delta.get("label", "")
+        model = flap_cfg.get("model", "haiku")
+        budget = flap_cfg.get("max_budget_usd", 0.05)
+        timeout = flap_cfg.get("timeout_sec", 120)
+        allowed = flap_cfg.get("allowed_tools", "Bash Read Edit Glob Grep")
+
+        prompt = (
+            f"Sentinel 偵測到 {name} (launchd label: {label}) 反覆崩潰 "
+            f"(1 小時內 kickstart {FLAP_THRESHOLD}+ 次都成功但馬上又掛)。\n\n"
+            f"stderr 最後內容:\n```\n{stderr_snippet}\n```\n\n"
+            f"請：\n"
+            f"1. 診斷根因\n"
+            f"2. 修復問題（備份原檔再改）\n"
+            f"3. 重啟服務: launchctl kickstart -k gui/{os.getuid()}/{label}\n"
+            f"4. 驗證服務正常\n\n"
+            f"限制：不要刪除任何資料檔案，只修 config。"
+        )
+
+        self.logger.info("[Flap L2] spawning Claude CLI (model=%s, budget=$%.2f) for %s",
+                         model, budget, dkey)
+        self._notify(f"[Sentinel L2] {name} 反覆崩潰，啟動 AI 診斷修復中...")
+
+        try:
+            cmd = [
+                "claude", "-p", prompt,
+                "--model", model,
+                "--max-budget-usd", str(budget),
+                "--allowedTools", allowed,
+                "--output-format", "text",
+                "--no-session-persistence",
+            ]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=timeout, cwd=str(BASE),
+            )
+            output = result.stdout[-1500:] if result.stdout else "(no output)"
+            exit_code = result.returncode
+
+            self.logger.info("[Flap L2] Claude exited %d, output: %s",
+                             exit_code, output[:200])
+        except subprocess.TimeoutExpired:
+            self.logger.warning("[Flap L2] Claude timed out after %ds", timeout)
+            output = "(timeout)"
+            exit_code = -1
+        except FileNotFoundError:
+            self.logger.error("[Flap L2] claude CLI not found in PATH")
+            return False
+        except Exception as e:
+            self.logger.error("[Flap L2] Claude spawn failed: %s", e)
+            return False
+
+        # Record AI repair attempt
+        last_ai[dkey] = now.isoformat()
+        reconcile["last_ai_repair"] = last_ai
+
+        # Check if service is now healthy
+        import time as _time
+        _time.sleep(5)
+        from lib.reconciler import _check_launchd, _check_port
+        svc_cfg = self.config.get("desired_state", {}).get("services", {}).get(name, {})
+        ld = _check_launchd(label)
+        port = svc_cfg.get("port")
+        port_ok = _check_port(port) if port else True
+        fixed = ld["running"] and port_ok
+
+        # Truncate output for notification
+        output_brief = output[:300].replace("\n", " ")
+        if fixed:
+            msg = (
+                f"[Sentinel L2 修復成功] {name}\n"
+                f"Claude 診斷: {output_brief}"
+            )
+        else:
+            msg = (
+                f"[Sentinel L2 修復失敗] {name} — 需要人工排查\n"
+                f"Claude 輸出: {output_brief}"
+            )
+        self._notify(msg)
+        self.logger.info("[Flap L2] fixed=%s", fixed)
+
+        action_log.append({
+            "at": now.isoformat(), "delta": dkey,
+            "action": "ai_repair", "auto": True, "success": fixed,
+            "detail": output_brief,
+        })
+
+        return fixed
+
     def _store_observation(self, actual, deltas):
         """Store observation snapshot in state, keeping last 24h."""
         observations = self.state["sentinel"].setdefault("observations", [])
@@ -403,6 +588,235 @@ class Sentinel:
         # Keep last 24h (~2880 at 30s intervals, but cap at 300 for sanity)
         if len(observations) > 300:
             self.state["sentinel"]["observations"] = observations[-300:]
+
+    def _build_thoughts(self, actual, deltas):
+        """Synthesize sentinel's reasoning trace with concrete evidence."""
+        now = datetime.now()
+        ts = now.strftime("%H:%M:%S")
+        thoughts = []
+        t = lambda ph, msg: thoughts.append({"t": ts, "ph": ph, "msg": msg})
+
+        svc_details = actual.get("details", {}).get("services", {})
+        sys_details = actual.get("details", {}).get("system", {})
+        up = sum(1 for v in svc_details.values() if v.get("running"))
+        total = len(svc_details)
+        down = total - up
+
+        # ── OBSERVE: per-service evidence ──
+        if down:
+            t("觀測", f"掃描 {total} 守護者 → {up} 健在, {down} 失聯")
+        else:
+            t("觀測", f"掃描 {total} 守護者 → 全員健在")
+
+        # Per-service status + deep probe for unhealthy ones
+        ds = self.config.get("desired_state", {})
+        svc_cfg = ds.get("services", {})
+        for name, info in svc_details.items():
+            healthy = info.get("running") and info.get("port_open", True) and info.get("healthy", True)
+            if healthy:
+                continue
+
+            if not info.get("running"):
+                err = info.get("error") or "process not found"
+                t("觀測", f"  {name}: pid=None, {err}")
+            elif not info.get("port_open"):
+                t("觀測", f"  {name}: pid={info.get('pid')} 但 port 無回應")
+            elif not info.get("healthy"):
+                t("觀測", f"  {name}: pid={info.get('pid')} port=ok 但 health check 失敗")
+
+            # Deep probe — endoscope
+            cfg = svc_cfg.get(name, {})
+            try:
+                findings = deep_probe(name, cfg, info)
+                for f in findings:
+                    t("探針", f"  {name}: {f}")
+            except Exception as e:
+                t("探針", f"  {name}: 探針失敗 — {e}")
+
+        # ── SYSTEM evidence ──
+        disk_pct = actual.get("disk", 0)
+        swap_mb = actual.get("swap", 0)
+        cpu_top = actual.get("cpu", [])
+        disk_info = sys_details.get("disk", {})
+        free_gb = disk_info.get("free_gb", "?")
+        cpu_str = ", ".join(f"{p.get('proc','?').rsplit('/',1)[-1]}={p.get('pct',0)}%" for p in cpu_top[:3]) if cpu_top else "idle"
+        t("系統", f"Disk {disk_pct:.1f}% (剩 {free_gb}GB) | Swap {swap_mb:.0f}MB | CPU [{cpu_str}]")
+
+        # ── DIFF + ACT: what's wrong and what I'm doing about it ──
+        if not deltas:
+            t("比對", "desired_state 與 actual 一致，穩態確認")
+        else:
+            reconcile = self.state["sentinel"].get("reconcile", {})
+            for d in deltas:
+                risk = d.get("risk", "high")
+                dkey = f"{d['kind']}:{d['name']}:{d['issue']}"
+
+                # Duration from first observation
+                dur = ""
+                if d.get("kind") == "service":
+                    for o in self.state["sentinel"].get("observations", []):
+                        if o.get("svc", {}).get(d["name"]) is False:
+                            try:
+                                first = datetime.fromisoformat(o["at"].replace("+08:00", "+08:00"))
+                                mins = (now - first.replace(tzinfo=None)).total_seconds() / 60
+                                dur = f" 已持續 {int(mins)}m"
+                            except (ValueError, TypeError, KeyError):
+                                pass
+                            break
+
+                t("裂隙", f"{d['name']}: desired={d.get('desired','?')} actual={d.get('actual','?')}{dur}")
+
+                # Decision with full reasoning
+                if risk == "med":
+                    notified_at = reconcile.get("last_med_notify", {}).get(dkey)
+                    if notified_at:
+                        try:
+                            elapsed = (now - datetime.fromisoformat(notified_at)).total_seconds()
+                            remaining_m = max(0, int((3600 - elapsed) / 60))
+                            t("決策", f"{d['name']}: risk=med 我無權自動修復 → "
+                              f"已於 {datetime.fromisoformat(notified_at).strftime('%H:%M')} 通報 Cruz "
+                              f"→ 1h 冷卻中 剩 {remaining_m}m{'，即將再次通報' if remaining_m == 0 else ''}")
+                        except (ValueError, TypeError):
+                            t("決策", f"{d['name']}: risk=med 已通報但時間戳異常")
+                    else:
+                        t("決策", f"{d['name']}: risk=med 我無權自動修復 → 首次通報 Cruz → 發送 Telegram")
+
+                elif risk == "low":
+                    bo = reconcile.get("backoffs", {}).get(dkey, {})
+                    retries = bo.get("retries", 0)
+                    max_r = d.get("repair_cfg", {}).get("max_retries", 10)
+                    next_at = bo.get("next_attempt")
+                    if next_at:
+                        try:
+                            wait = max(0, int((datetime.fromisoformat(next_at) - now).total_seconds()))
+                            t("決策", f"{d['name']}: risk=low 自動修復中 retry {retries}/{max_r} → 冷卻 {wait}s 後重試")
+                        except (ValueError, TypeError):
+                            t("決策", f"{d['name']}: risk=low 自動修復中 retry {retries}/{max_r}")
+                    elif retries >= max_r:
+                        t("決策", f"{d['name']}: risk=low 但已耗盡 {max_r} 次重試 → 升級為 med 通報 Cruz")
+                    else:
+                        t("決策", f"{d['name']}: risk=low → 執行 launchctl kickstart (attempt {retries+1}/{max_r})")
+                else:
+                    t("決策", f"{d['name']}: risk=high 不可自動處理 → 僅記錄，等待人工介入")
+
+        # Append to thoughts.log (tail -f friendly)
+        log_path = BASE / "thoughts.log"
+        try:
+            with open(log_path, "a") as f:
+                for t in thoughts:
+                    f.write(f"{t['t']}  [{t['ph']}]  {t['msg']}\n")
+                f.write("\n")
+        except Exception:
+            pass
+
+        return thoughts
+
+    def _update_dashboard(self, actual, deltas):
+        """Write dashboard-state.js for the HTML dashboard."""
+        reconcile = self.state["sentinel"].get("reconcile", {})
+
+        # Enrich deltas with depth info: first_seen, backoff state, notify state
+        enriched_deltas = []
+        observations = self.state["sentinel"].get("observations", [])
+        backoffs = reconcile.get("backoffs", {})
+        last_med_notify = reconcile.get("last_med_notify", {})
+
+        for d in deltas:
+            ed = {k: v for k, v in d.items() if k != "repair_cfg"}
+            dkey = f"{d['kind']}:{d['name']}:{d['issue']}"
+
+            # Find first_seen from observations
+            first_seen = None
+            if d["kind"] == "service":
+                for obs in observations:
+                    svc_map = obs.get("svc", {})
+                    if svc_map.get(d["name"]) is False:
+                        first_seen = obs.get("at")
+                        break
+            ed["first_seen"] = first_seen
+
+            # Backoff state (for low-risk auto-repair)
+            bo = backoffs.get(dkey)
+            if bo:
+                ed["backoff"] = {
+                    "retries": bo.get("retries", 0),
+                    "max_retries": d.get("repair_cfg", {}).get("max_retries", 10),
+                    "next_attempt": bo.get("next_attempt"),
+                    "delay": bo.get("delay", 0),
+                }
+
+            # Notification state (for med-risk)
+            notified_at = last_med_notify.get(dkey)
+            if notified_at:
+                ed["notified_at"] = notified_at
+                ed["next_notify"] = None
+                try:
+                    from datetime import datetime as _dt
+                    nxt = _dt.fromisoformat(notified_at) + timedelta(hours=1)
+                    ed["next_notify"] = nxt.isoformat()
+                except (ValueError, TypeError):
+                    pass
+
+            # Who needs to act
+            risk = d.get("risk", "high")
+            if risk == "low":
+                ed["owner"] = "auto"
+            elif risk == "med":
+                ed["owner"] = "cruz"
+            else:
+                ed["owner"] = "manual"
+
+            enriched_deltas.append(ed)
+
+        # Build thought stream and store rolling buffer
+        thoughts = self._build_thoughts(actual, deltas)
+        thought_buf = self.state["sentinel"].setdefault("thought_stream", [])
+        thought_buf.extend(thoughts)
+        if len(thought_buf) > 60:
+            self.state["sentinel"]["thought_stream"] = thought_buf[-60:]
+
+        dashboard_data = {
+            "updated_at": datetime.now().isoformat(),
+            "started_at": self.state["sentinel"].get("started_at"),
+            "thought_stream": self.state["sentinel"].get("thought_stream", [])[-60:],
+            "observation": {k: v for k, v in actual.items() if k != "details"},
+            "services": actual.get("details", {}).get("services", {}),
+            "system": actual.get("details", {}).get("system", {}),
+            "deltas": enriched_deltas,
+            "reconcile": {
+                "action_log": reconcile.get("action_log", [])[-20:],
+                "backoffs": backoffs,
+                "config_checksums": reconcile.get("config_checksums", {}),
+            },
+            "tasks": {
+                "last_task": self.state["sentinel"].get("last_task"),
+                "task_runs": self.state["sentinel"].get("task_runs", {}),
+                "last_task_dates": self.state["sentinel"].get("last_task_dates", {}),
+            },
+            "conversation_pulse": self.state["sentinel"].get("conversation_pulse", {}),
+            "conversation_sync": self.state["sentinel"].get("conversation_sync", {}),
+            "observations_24h": self.state["sentinel"].get("observations", [])[-300:],
+            "topology": {
+                "gateway": {"port": 18789},
+                "bridges": {
+                    "bridge-dufu": {"port": 18790, "agents": ["bita", "66-desk", "meihui"]},
+                    "bridge-andrew": {"port": 18795, "agents": ["xo", "grand-manager"]},
+                },
+                "tunnel": {"cloudflare-tunnel": {"target": "line-bot-b"}},
+            },
+        }
+        js_path = BASE / "dashboard-state.js"
+        tmp = js_path.with_suffix(".js.tmp")
+        try:
+            with open(tmp, "w") as f:
+                f.write("window.__STATE__ = ")
+                json.dump(dashboard_data, f, ensure_ascii=False)
+                f.write(";\n")
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.rename(js_path)
+        except Exception as e:
+            self.logger.warning("Dashboard update failed: %s", e)
 
     def _snapshot_configs_on_startup(self):
         """Take initial config snapshots and backups on startup."""

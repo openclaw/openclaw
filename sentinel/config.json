@@ -10,22 +10,25 @@
     "-1003573583957": {
       "name": "66群",
       "bridge": "dufu",
-      "priority": "high"
+      "priority": "high",
+      "agent_id": "66-desk"
     },
     "-5140508587": {
       "name": "BG666DB",
       "bridge": "dufu",
-      "priority": "high"
+      "priority": "high",
+      "agent_id": "66-desk"
     },
     "-4745247300": {
       "name": "LoLoTang",
-      "bridge": "dufu",
+      "bridge": "andrew",
       "priority": "medium"
     },
     "-1003798513755": {
       "name": "QQ群",
       "bridge": "dufu",
-      "priority": "medium"
+      "priority": "medium",
+      "agent_id": "grand-manager"
     },
     "-5160419850": {
       "name": "Crypto群",
@@ -47,6 +50,11 @@
       "bridge": "dufu",
       "priority": "low"
     }
+  },
+  "sync": {
+    "db_path": "data/conversations.db",
+    "incremental_limit": 100,
+    "retention_days": 90
   },
   "detection": {
     "thought_leak_patterns": [

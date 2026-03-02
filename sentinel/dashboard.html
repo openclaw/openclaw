@@ -1,0 +1,1230 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>無極哨兵</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      :root {
+        --bg: #0d1117;
+        --card: #161b22;
+        --border: #30363d;
+        --text: #c9d1d9;
+        --dim: #8b949e;
+        --bright: #e6edf3;
+        --green: #3fb950;
+        --orange: #d29922;
+        --red: #f85149;
+        --blue: #58a6ff;
+        --cyan: #39d2c0;
+        --mono: "SF Mono", "Menlo", "Consolas", monospace;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 20px 24px;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 16px;
+      }
+      .header h1 {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--bright);
+        letter-spacing: 2px;
+      }
+      .header-stats {
+        display: flex;
+        gap: 20px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .header-stats .val {
+        color: var(--bright);
+        font-weight: 600;
+      }
+      .header-stats .alert {
+        color: var(--orange);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+        margin-bottom: 12px;
+      }
+      .panel-title {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        color: var(--dim);
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .panel-title::before {
+        content: "";
+        display: inline-block;
+        width: 3px;
+        height: 12px;
+        border-radius: 1px;
+      }
+      .p-green .panel-title::before {
+        background: var(--green);
+      }
+      .p-blue .panel-title::before {
+        background: var(--blue);
+      }
+      .p-orange .panel-title::before {
+        background: var(--orange);
+      }
+      .p-red .panel-title::before {
+        background: var(--red);
+      }
+      .p-cyan .panel-title::before {
+        background: var(--cyan);
+      }
+
+      /* Services */
+      .svc-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .svc {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.03);
+        font-size: 12px;
+        border: 1px solid transparent;
+      }
+      .svc.down {
+        border-color: rgba(248, 81, 73, 0.3);
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .dot.up {
+        background: var(--green);
+        box-shadow: 0 0 6px var(--green);
+      }
+      .dot.degraded {
+        background: var(--orange);
+        box-shadow: 0 0 6px var(--orange);
+      }
+      .dot.down {
+        background: var(--red);
+        box-shadow: 0 0 6px var(--red);
+        animation: pulse-dot 2s infinite;
+      }
+      @keyframes pulse-dot {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+      .svc-status {
+        font-size: 10px;
+        color: var(--dim);
+        margin-left: 2px;
+      }
+      .svc-status.down {
+        color: var(--red);
+      }
+
+      /* Thought stream — the brain */
+      .thought-stream {
+        max-height: 280px;
+        overflow-y: auto;
+        font-size: 11px;
+        line-height: 1.6;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+      }
+      .thought-stream::-webkit-scrollbar {
+        width: 4px;
+      }
+      .thought-stream::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+      }
+      .thought-cycle {
+        margin-bottom: 6px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      }
+      .thought-cycle:last-child {
+        border-bottom: none;
+      }
+      .thought-line {
+        display: flex;
+        gap: 8px;
+        padding: 1px 0;
+      }
+      .thought-time {
+        color: var(--dim);
+        flex-shrink: 0;
+        width: 60px;
+      }
+      .thought-phase {
+        flex-shrink: 0;
+        width: 36px;
+        text-align: center;
+        border-radius: 2px;
+        font-size: 10px;
+        padding: 0 2px;
+      }
+      .ph-觀測 {
+        color: var(--blue);
+      }
+      .ph-系統 {
+        color: var(--dim);
+      }
+      .ph-比對 {
+        color: var(--green);
+      }
+      .ph-裂隙 {
+        color: var(--red);
+        font-weight: 600;
+      }
+      .ph-決策 {
+        color: var(--cyan);
+        font-weight: 600;
+      }
+      .ph-探針 {
+        color: #d2a8ff;
+        font-weight: 600;
+      }
+      .thought-msg {
+        color: var(--text);
+        flex: 1;
+      }
+
+      /* Rift detail cards */
+      .rift-card {
+        background: rgba(248, 81, 73, 0.06);
+        border: 1px solid rgba(248, 81, 73, 0.2);
+        border-radius: 6px;
+        padding: 12px 14px;
+        margin-bottom: 8px;
+      }
+      .rift-card:last-child {
+        margin-bottom: 0;
+      }
+      .rift-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .rift-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--red);
+      }
+      .rift-duration {
+        font-size: 11px;
+        color: var(--orange);
+      }
+      .rift-detail {
+        font-size: 11px;
+        color: var(--dim);
+        line-height: 1.6;
+      }
+      .rift-detail .label {
+        color: var(--dim);
+        display: inline-block;
+        width: 70px;
+      }
+      .rift-detail .val {
+        color: var(--text);
+      }
+      .rift-owner {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 600;
+        margin-top: 6px;
+      }
+      .owner-cruz {
+        background: rgba(210, 153, 34, 0.2);
+        color: var(--orange);
+      }
+      .owner-auto {
+        background: rgba(63, 185, 80, 0.2);
+        color: var(--green);
+      }
+      .owner-manual {
+        background: rgba(248, 81, 73, 0.2);
+        color: var(--red);
+      }
+
+      /* System metrics */
+      .metric {
+        margin-bottom: 10px;
+      }
+      .metric-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 3px;
+      }
+      .metric-label {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .metric-val {
+        color: var(--bright);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .bar-bg {
+        width: 100%;
+        height: 4px;
+        background: var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .bar-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.5s;
+      }
+      .sparkline {
+        margin-top: 8px;
+      }
+      .sparkline-label {
+        font-size: 10px;
+        color: var(--dim);
+        margin-bottom: 2px;
+      }
+      .sparkline svg {
+        width: 100%;
+        height: 36px;
+      }
+      .sparkline .area {
+        fill: rgba(88, 166, 255, 0.08);
+        stroke: none;
+      }
+      .sparkline .line {
+        fill: none;
+        stroke: var(--blue);
+        stroke-width: 1.5;
+      }
+
+      /* Configs */
+      .cfg-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 0;
+        font-size: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      }
+      .cfg-item:last-child {
+        border-bottom: none;
+      }
+      .cfg-item .sha {
+        color: var(--dim);
+        font-size: 10px;
+        margin-left: auto;
+      }
+
+      /* Topology */
+      .topo-wrap {
+        display: flex;
+        justify-content: center;
+        padding: 4px 0;
+      }
+      .topo-wrap svg text {
+        fill: var(--text);
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      .topo-wrap svg .node {
+        rx: 4;
+        ry: 4;
+        stroke-width: 1.5;
+      }
+      .topo-wrap svg .edge {
+        stroke: var(--border);
+        stroke-width: 1.2;
+        fill: none;
+      }
+
+      /* Actions */
+      .action-row {
+        display: flex;
+        gap: 12px;
+        padding: 5px 0;
+        font-size: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        align-items: baseline;
+      }
+      .action-row:last-child {
+        border-bottom: none;
+      }
+      .action-time {
+        color: var(--dim);
+        flex-shrink: 0;
+        width: 46px;
+      }
+      .action-delta {
+        flex: 1;
+        color: var(--text);
+        line-height: 1.4;
+      }
+      .action-tag {
+        font-size: 10px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        margin-left: 6px;
+      }
+      .tag-auto {
+        background: rgba(63, 185, 80, 0.15);
+        color: var(--green);
+      }
+      .tag-notify {
+        background: rgba(210, 153, 34, 0.15);
+        color: var(--orange);
+      }
+      .action-icon {
+        flex-shrink: 0;
+        width: 18px;
+        text-align: right;
+      }
+
+      /* Health bar */
+      .health-bar {
+        display: flex;
+        height: 14px;
+        border-radius: 3px;
+        overflow: hidden;
+        gap: 1px;
+      }
+      .health-bar .slot {
+        flex: 1;
+        min-width: 1px;
+        transition: background 0.3s;
+      }
+      .health-bar .slot.ok {
+        background: var(--green);
+      }
+      .health-bar .slot.warn {
+        background: var(--orange);
+      }
+      .health-bar .slot.empty {
+        background: rgba(48, 54, 61, 0.5);
+      }
+      .health-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--dim);
+      }
+
+      /* Conversation pulse */
+      .pulse-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 8px;
+      }
+      .pulse-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        position: relative;
+      }
+      .pulse-card.alert {
+        border-color: rgba(248, 81, 73, 0.3);
+      }
+      .pulse-card.warn {
+        border-color: rgba(210, 153, 34, 0.3);
+      }
+      .pulse-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--bright);
+        margin-bottom: 2px;
+      }
+      .pulse-agent {
+        font-size: 10px;
+        color: var(--dim);
+      }
+      .pulse-ago {
+        font-size: 11px;
+        color: var(--dim);
+        margin-top: 4px;
+      }
+      .pulse-status {
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        font-size: 14px;
+      }
+      .pulse-badge {
+        display: inline-block;
+        font-size: 9px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        margin-top: 4px;
+        font-weight: 600;
+      }
+      .badge-p0 {
+        background: rgba(248, 81, 73, 0.2);
+        color: var(--red);
+      }
+      .badge-p1 {
+        background: rgba(210, 153, 34, 0.2);
+        color: var(--orange);
+      }
+      .badge-p2 {
+        background: rgba(88, 166, 255, 0.15);
+        color: var(--blue);
+      }
+      .pulse-meta {
+        font-size: 10px;
+        color: var(--dim);
+        margin-top: 8px;
+        display: flex;
+        gap: 12px;
+      }
+
+      /* Stale */
+      .stale-banner {
+        background: rgba(248, 81, 73, 0.12);
+        border: 1px solid rgba(248, 81, 73, 0.4);
+        color: var(--red);
+        padding: 10px 16px;
+        border-radius: 6px;
+        text-align: center;
+        margin-bottom: 14px;
+        font-size: 12px;
+        display: none;
+        letter-spacing: 1px;
+        animation: pulse-banner 3s infinite;
+      }
+      @keyframes pulse-banner {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.6;
+        }
+      }
+      .no-data {
+        color: var(--dim);
+        font-style: italic;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stale-banner" id="staleBanner">哨兵意識已斷線 — 資料超過 90 秒未更新</div>
+
+    <div class="header">
+      <h1>無極哨兵</h1>
+      <div class="header-stats">
+        <div>覺醒 <span class="val" id="hUptime">--</span></div>
+        <div>裂隙 <span class="val alert" id="hDeltas">0</span></div>
+        <div>修復 <span class="val" id="hRepairs">0</span></div>
+        <div><span class="val" id="hUpdated">--:--:--</span> 更新</div>
+      </div>
+    </div>
+
+    <!-- 守護者 -->
+    <div class="panel p-green">
+      <div class="panel-title">守護者</div>
+      <div class="svc-grid" id="svcGrid"></div>
+    </div>
+
+    <!-- 對話脈搏 -->
+    <div class="panel p-cyan">
+      <div class="panel-title">對話脈搏</div>
+      <div class="pulse-grid" id="pulseGrid"></div>
+      <div class="pulse-meta" id="pulseMeta"></div>
+    </div>
+
+    <!-- 裂隙 — active issues with depth -->
+    <div class="panel p-red" id="riftPanel" style="display: none">
+      <div class="panel-title">裂隙</div>
+      <div id="riftCards"></div>
+    </div>
+
+    <!-- 哨兵意識流 — live reasoning stream -->
+    <div class="panel p-cyan">
+      <div class="panel-title">哨兵意識流</div>
+      <div class="thought-stream" id="thoughtStream"></div>
+    </div>
+
+    <div class="grid">
+      <div class="panel p-blue">
+        <div class="panel-title">能量核心</div>
+        <div id="sysMetrics"></div>
+        <div class="sparkline" id="cpuSparkline"></div>
+      </div>
+      <div class="panel p-green">
+        <div class="panel-title">封印</div>
+        <div id="cfgList"></div>
+      </div>
+    </div>
+
+    <div class="panel p-blue">
+      <div class="panel-title">陣型</div>
+      <div class="topo-wrap" id="topoWrap"></div>
+    </div>
+
+    <div class="panel p-orange">
+      <div class="panel-title">戰報</div>
+      <div id="actionLog"></div>
+    </div>
+
+    <div class="panel p-blue">
+      <div class="panel-title">時空穩定帶 (24h)</div>
+      <div class="health-bar" id="healthBar"></div>
+      <div class="health-labels" id="healthLabels"></div>
+    </div>
+
+    <script src="dashboard-state.js"></script>
+    <script>
+      (function () {
+        const REFRESH = 5000;
+
+        const ISSUE_MAP = {
+          not_running: "失去脈搏",
+          port_closed: "端口無回應",
+          unhealthy: "健康檢查異常",
+          disk_critical: "磁碟告急",
+          swap_critical: "記憶體溢流",
+          missing: "遺失",
+          invalid: "結構損壞",
+        };
+        const ACTION_MAP = {
+          notify_cruz: "通報指揮官",
+          kickstart: "重啟術",
+          log_only: "記錄",
+        };
+        const OWNER_LABEL = {
+          cruz: "等待指揮官",
+          auto: "自動修復中",
+          manual: "需人工介入",
+        };
+        const OWNER_CLS = {
+          cruz: "owner-cruz",
+          auto: "owner-auto",
+          manual: "owner-manual",
+        };
+
+        function render(S) {
+          if (!S) {
+            document.getElementById("staleBanner").style.display = "block";
+            return;
+          }
+
+          const updAt = new Date(S.updated_at);
+          const age = (Date.now() - updAt.getTime()) / 1000;
+          document.getElementById("staleBanner").style.display = age > 90 ? "block" : "none";
+
+          document.getElementById("hUpdated").textContent = updAt.toLocaleTimeString("en-GB");
+          document.getElementById("hUptime").textContent = fmtUptime(S.started_at);
+
+          const deltaCount = (S.deltas || []).length;
+          const hDeltas = document.getElementById("hDeltas");
+          hDeltas.textContent = deltaCount;
+          hDeltas.className = deltaCount > 0 ? "val alert" : "val";
+
+          const repairs = (S.reconcile?.action_log || []).filter((a) => a.auto && a.success).length;
+          document.getElementById("hRepairs").textContent = repairs;
+
+          renderPulse(S);
+          renderServices(S);
+          renderRifts(S);
+          renderThoughts(S);
+          renderSystem(S);
+          renderConfigs(S);
+          renderTopology(S);
+          renderActions(S);
+          renderHealth(S);
+        }
+
+        function fmtUptime(iso) {
+          if (!iso) return "--";
+          const ms = Date.now() - new Date(iso).getTime();
+          const h = Math.floor(ms / 3600000);
+          const m = Math.floor((ms % 3600000) / 60000);
+          return h > 0 ? `${h}h ${m}m` : `${m}m`;
+        }
+
+        function fmtDuration(isoFirst) {
+          if (!isoFirst) return "?";
+          const ms = Date.now() - new Date(isoFirst).getTime();
+          const m = Math.floor(ms / 60000);
+          if (m < 60) return `${m}m`;
+          return `${Math.floor(m / 60)}h ${m % 60}m`;
+        }
+
+        // ─── 對話脈搏 ───
+        function renderPulse(S) {
+          const grid = document.getElementById("pulseGrid");
+          const meta = document.getElementById("pulseMeta");
+          const pulse = S.conversation_pulse || {};
+          const lastResult = pulse.last_result || {};
+          const issues = lastResult.issues || [];
+          const knownAlerts = pulse.known_alerts || {};
+          const syncInfo = S.conversation_sync || {};
+
+          // Build issue index by chat_name
+          const issueMap = {};
+          issues.forEach((i) => {
+            if (!issueMap[i.chat_name]) issueMap[i.chat_name] = [];
+            issueMap[i.chat_name].push(i);
+          });
+
+          // Groups from topology or hardcoded fallback
+          const topo = S.topology || {};
+          const bridges = topo.bridges || {};
+          const allAgents = {};
+          Object.entries(bridges).forEach(([bn, bc]) => {
+            (bc.agents || []).forEach((a) => {
+              allAgents[a] = bn;
+            });
+          });
+
+          // Build cards from known_alerts + topology agents
+          // Use a static group list from config (passed via dashboard data)
+          // Fallback: show agents we know about
+          const agentGroups = [
+            { name: "66群", agent: "66-desk" },
+            { name: "BG666DB", agent: "66-desk" },
+            { name: "LoLoTang", agent: null },
+            { name: "QQ群", agent: "grand-manager" },
+            { name: "Crypto群", agent: null },
+            { name: "Mimi", agent: null },
+            { name: "Andrew日報群", agent: null },
+            { name: "ThinkerNews", agent: null },
+          ];
+
+          if (!pulse.last_run) {
+            grid.innerHTML = '<div class="no-data">尚無脈搏資料 — 等待首次掃描</div>';
+            meta.innerHTML = "";
+            return;
+          }
+
+          grid.innerHTML = agentGroups
+            .map((g) => {
+              const gi = issueMap[g.name] || [];
+              const worst = gi.reduce((w, i) => {
+                const s = parseInt(i.severity?.replace("P", "") ?? "9");
+                return s < w ? s : w;
+              }, 9);
+              let status = "●",
+                cardCls = "",
+                badgeHtml = "";
+              if (worst <= 0) {
+                status = "○";
+                cardCls = "alert";
+              } else if (worst <= 1) {
+                status = "◐";
+                cardCls = "warn";
+              }
+
+              if (gi.length) {
+                badgeHtml = gi
+                  .map((i) => {
+                    const bc =
+                      i.severity === "P0"
+                        ? "badge-p0"
+                        : i.severity === "P1"
+                          ? "badge-p1"
+                          : "badge-p2";
+                    return `<span class="pulse-badge ${bc}">${i.severity} ${i.type}</span>`;
+                  })
+                  .join(" ");
+              }
+
+              const agentTag = g.agent ? `<div class="pulse-agent">${g.agent}</div>` : "";
+              const statusColor =
+                worst <= 0 ? "var(--red)" : worst <= 1 ? "var(--orange)" : "var(--green)";
+              return `<div class="pulse-card ${cardCls}">
+        <div class="pulse-name">${g.name}</div>${agentTag}
+        <div class="pulse-status" style="color:${statusColor}">${status}</div>
+        ${badgeHtml ? '<div style="margin-top:4px">' + badgeHtml + "</div>" : ""}
+      </div>`;
+            })
+            .join("");
+
+          const lastRun = pulse.last_run
+            ? new Date(pulse.last_run).toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "--";
+          const syncRun = syncInfo.last_run
+            ? new Date(syncInfo.last_run).toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "--";
+          const dbSize = syncInfo.last_result?.db_size_mb || 0;
+          meta.innerHTML = `<span>掃描 ${lastRun}</span><span>同步 ${syncRun}</span><span>DB ${dbSize}MB</span><span>${lastResult.issue_count || 0} 異常</span>`;
+        }
+
+        // ─── 守護者 ───
+        function renderServices(S) {
+          const grid = document.getElementById("svcGrid");
+          const svcs = S.services || {};
+          const deltas = S.deltas || [];
+          const deltaMap = {};
+          deltas.forEach((d) => {
+            deltaMap[d.name] = d;
+          });
+
+          if (!Object.keys(svcs).length) {
+            grid.innerHTML = '<div class="no-data">尚無觀測資料</div>';
+            return;
+          }
+
+          grid.innerHTML = Object.entries(svcs)
+            .map(([name, info]) => {
+              let cls = "up",
+                statusText = "",
+                svcCls = "";
+              if (!info.running) {
+                cls = "down";
+                svcCls = "down";
+                statusText = "(失聯)";
+              } else if (deltaMap[name]) {
+                cls = "degraded";
+                const issue = deltaMap[name].issue;
+                statusText = `(${ISSUE_MAP[issue] || issue})`;
+              } else if (info.port_open === false) {
+                cls = "degraded";
+                statusText = "(端口異常)";
+              }
+              return `<div class="svc ${svcCls}"><div class="dot ${cls}"></div>${name}<span class="svc-status ${cls}">${statusText}</span></div>`;
+            })
+            .join("");
+        }
+
+        // ─── 裂隙 (deep view) ───
+        function renderRifts(S) {
+          const panel = document.getElementById("riftPanel");
+          const cards = document.getElementById("riftCards");
+          const deltas = S.deltas || [];
+
+          if (!deltas.length) {
+            panel.style.display = "none";
+            return;
+          }
+          panel.style.display = "block";
+
+          cards.innerHTML = deltas
+            .map((d) => {
+              const duration = d.first_seen ? fmtDuration(d.first_seen) : "剛偵測";
+              const issueText = ISSUE_MAP[d.issue] || d.issue;
+              const owner = d.owner || "manual";
+              const ownerLabel = OWNER_LABEL[owner] || owner;
+              const ownerCls = OWNER_CLS[owner] || "owner-manual";
+
+              let detailLines = "";
+              detailLines += `<div><span class="label">狀況</span><span class="val">${d.name} ${issueText}</span></div>`;
+              detailLines += `<div><span class="label">預期</span><span class="val">${d.desired || "?"}</span></div>`;
+              detailLines += `<div><span class="label">實際</span><span class="val">${d.actual || "?"}</span></div>`;
+              detailLines += `<div><span class="label">風險</span><span class="val">${d.risk || "?"}</span></div>`;
+
+              // Backoff state for auto-repair
+              if (d.backoff) {
+                const bo = d.backoff;
+                let boText = `retry ${bo.retries}/${bo.max_retries}`;
+                if (bo.next_attempt) {
+                  const wait = Math.max(
+                    0,
+                    Math.round((new Date(bo.next_attempt).getTime() - Date.now()) / 1000),
+                  );
+                  boText += ` → 冷卻 ${wait}s`;
+                }
+                detailLines += `<div><span class="label">修復進度</span><span class="val">${boText}</span></div>`;
+              }
+
+              // Notification state
+              if (d.notified_at) {
+                const ago = Math.round((Date.now() - new Date(d.notified_at).getTime()) / 60000);
+                let notifyText = `已通報 (${ago}m前)`;
+                if (d.next_notify) {
+                  const left = Math.max(
+                    0,
+                    Math.round((new Date(d.next_notify).getTime() - Date.now()) / 60000),
+                  );
+                  notifyText += ` → 下次通報 ${left}m後`;
+                }
+                detailLines += `<div><span class="label">通報</span><span class="val">${notifyText}</span></div>`;
+              }
+
+              return `<div class="rift-card">
+        <div class="rift-header">
+          <span class="rift-name">${d.name}:${d.issue}</span>
+          <span class="rift-duration">持續 ${duration}</span>
+        </div>
+        <div class="rift-detail">${detailLines}</div>
+        <div class="rift-owner ${ownerCls}">${ownerLabel}</div>
+      </div>`;
+            })
+            .join("");
+        }
+
+        // ─── 哨兵意識流 ───
+        function renderThoughts(S) {
+          const el = document.getElementById("thoughtStream");
+          const stream = S.thought_stream || [];
+          if (!stream.length) {
+            el.innerHTML = '<div class="no-data">哨兵尚未產生思緒</div>';
+            return;
+          }
+
+          // Group by timestamp (each reconcile cycle shares same timestamp)
+          const cycles = [];
+          let currentCycle = null;
+          stream.forEach((t) => {
+            if (!currentCycle || currentCycle.t !== t.t) {
+              currentCycle = { t: t.t, lines: [] };
+              cycles.push(currentCycle);
+            }
+            currentCycle.lines.push(t);
+          });
+
+          // Show most recent cycles first
+          el.innerHTML = cycles
+            .reverse()
+            .map((c) => {
+              const lines = c.lines
+                .map((t) => {
+                  return `<div class="thought-line">
+          <span class="thought-time">${t.t}</span>
+          <span class="thought-phase ph-${t.ph}">${t.ph}</span>
+          <span class="thought-msg">${t.msg}</span>
+        </div>`;
+                })
+                .join("");
+              return `<div class="thought-cycle">${lines}</div>`;
+            })
+            .join("");
+        }
+
+        // ─── 能量核心 ───
+        function cpuTotal(f) {
+          if (typeof f === "number") return f;
+          if (Array.isArray(f)) return f.reduce((s, p) => s + (p.pct || 0), 0);
+          return 0;
+        }
+
+        function renderSystem(S) {
+          const el = document.getElementById("sysMetrics");
+          const obs = S.observation || {};
+          const sys = S.system || {};
+          const disk = obs.disk ?? sys.disk?.used_pct ?? 0;
+          const swap = obs.swap ?? sys.swap_mb ?? 0;
+          const cpu = cpuTotal(obs.cpu) || cpuTotal(sys.cpu_top) || 0;
+          function bc(v, w, c) {
+            if (v >= c) return "var(--red)";
+            if (v >= w) return "var(--orange)";
+            return "var(--green)";
+          }
+          el.innerHTML = [
+            met("Disk", `${disk.toFixed(1)}%`, disk, bc(disk, 70, 85)),
+            met(
+              "Swap",
+              `${swap.toFixed(0)} MB`,
+              Math.min((swap / 1000) * 100, 100),
+              bc(swap, 500, 900),
+            ),
+            met("CPU", `${cpu.toFixed(1)}%`, Math.min(cpu, 100), bc(cpu, 60, 85)),
+          ].join("");
+          renderSparkline(S.observations_24h || []);
+        }
+
+        function met(label, val, pct, color) {
+          return `<div class="metric"><div class="metric-row"><span class="metric-label">${label}</span><span class="metric-val">${val}</span></div><div class="bar-bg"><div class="bar-fill" style="width:${Math.min(pct, 100)}%;background:${color}"></div></div></div>`;
+        }
+
+        function renderSparkline(obs) {
+          const el = document.getElementById("cpuSparkline");
+          const data = obs.slice(-120).map((o) => o.disk ?? 0);
+          if (data.length < 2) {
+            el.innerHTML = "";
+            return;
+          }
+          const w = 300,
+            h = 36;
+          const min = Math.min(...data),
+            max = Math.max(...data, min + 1),
+            range = max - min || 1;
+          const step = w / (data.length - 1);
+          const pts = data.map(
+            (v, i) =>
+              `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h * 0.85 - 2).toFixed(1)}`,
+          );
+          const line = pts.join(" ");
+          const area = `0,${h} ${line} ${((data.length - 1) * step).toFixed(1)},${h}`;
+          el.innerHTML = `<div class="sparkline-label">Disk 脈搏</div><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polygon class="area" points="${area}"/><polyline class="line" points="${line}"/></svg>`;
+        }
+
+        // ─── 封印 ───
+        function renderConfigs(S) {
+          const el = document.getElementById("cfgList");
+          const checksums = S.reconcile?.config_checksums || {};
+          const cfgDeltas = (S.deltas || []).filter((d) => d.kind === "config");
+          const driftNames = new Set(cfgDeltas.map((d) => d.name));
+          if (!Object.keys(checksums).length) {
+            el.innerHTML = '<div class="no-data">尚無封印資料</div>';
+            return;
+          }
+          el.innerHTML = Object.entries(checksums)
+            .map(([name, sha]) => {
+              const cls = driftNames.has(name) ? "degraded" : "up";
+              const status = driftNames.has(name)
+                ? ' <span style="color:var(--orange)">(鬆動)</span>'
+                : "";
+              return `<div class="cfg-item"><div class="dot ${cls}"></div>${name}${status}<span class="sha">sha:${sha.slice(0, 8)}</span></div>`;
+            })
+            .join("");
+        }
+
+        // ─── 陣型 ───
+        function renderTopology(S) {
+          const wrap = document.getElementById("topoWrap");
+          const topo = S.topology;
+          if (!topo) {
+            wrap.innerHTML = '<div class="no-data">尚無陣型資料</div>';
+            return;
+          }
+          const svcs = S.services || {},
+            deltas = S.deltas || [];
+          const deltaNames = new Set(deltas.map((d) => d.name));
+          function sc(name) {
+            const i = svcs[name];
+            if (!i) return "var(--dim)";
+            if (!i.running) return "var(--red)";
+            if (deltaNames.has(name)) return "var(--orange)";
+            return "var(--green)";
+          }
+
+          const W = 620,
+            H = 240,
+            nodes = [],
+            edges = [];
+          const bridges = topo.bridges || {},
+            bE = Object.entries(bridges);
+          const tunnel = topo.tunnel || {},
+            tE = Object.entries(tunnel);
+          const rowH = 70,
+            startY = 40;
+          const gwY = startY + ((bE.length + tE.length - 1) * rowH) / 2;
+          const gw = {
+            x: 70,
+            y: gwY,
+            w: 110,
+            h: 28,
+            label: `Gateway:${topo.gateway?.port || 18789}`,
+            color: sc("openclaw-gateway"),
+          };
+          nodes.push(gw);
+          let row = 0;
+          bE.forEach(([bn, bc]) => {
+            const by = startY + row * rowH;
+            const bN = { x: 250, y: by, w: 130, h: 28, label: `${bn}:${bc.port}`, color: sc(bn) };
+            nodes.push(bN);
+            edges.push({
+              x1: gw.x + gw.w / 2,
+              y1: gw.y,
+              x2: bN.x - bN.w / 2,
+              y2: bN.y,
+              color: sc(bn),
+            });
+            const ag = bc.agents || [];
+            const asY = by - (ag.length - 1) * 14;
+            ag.forEach((a, i) => {
+              const ay = asY + i * 28;
+              const aN = { x: 460, y: ay, w: 110, h: 24, label: a, color: "var(--blue)" };
+              nodes.push(aN);
+              edges.push({
+                x1: bN.x + bN.w / 2,
+                y1: bN.y,
+                x2: aN.x - aN.w / 2,
+                y2: aN.y,
+                color: sc(bn),
+              });
+            });
+            row++;
+          });
+          tE.forEach(([tn, tc]) => {
+            const ty = startY + row * rowH;
+            const tN = {
+              x: 250,
+              y: ty,
+              w: 130,
+              h: 28,
+              label: "CF-Tunnel",
+              color: sc("cloudflared"),
+            };
+            nodes.push(tN);
+            edges.push({
+              x1: gw.x + gw.w / 2,
+              y1: gw.y,
+              x2: tN.x - tN.w / 2,
+              y2: tN.y,
+              color: sc("cloudflared"),
+            });
+            const target = tc.target || tn;
+            const lN = { x: 460, y: ty, w: 110, h: 24, label: target, color: sc(target) };
+            nodes.push(lN);
+            edges.push({
+              x1: tN.x + tN.w / 2,
+              y1: tN.y,
+              x2: lN.x - lN.w / 2,
+              y2: lN.y,
+              color: sc(target),
+            });
+            row++;
+          });
+          let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+          edges.forEach((e) => {
+            const mx = (e.x1 + e.x2) / 2;
+            svg += `<path class="edge" style="stroke:${e.color || "var(--border)"};opacity:0.5" d="M${e.x1},${e.y1} C${mx},${e.y1} ${mx},${e.y2} ${e.x2},${e.y2}"/>`;
+          });
+          nodes.forEach((n) => {
+            svg += `<rect class="node" x="${n.x - n.w / 2}" y="${n.y - n.h / 2}" width="${n.w}" height="${n.h}" fill="var(--card)" stroke="${n.color}"/>`;
+            svg += `<text x="${n.x}" y="${n.y + 4}" text-anchor="middle" font-size="10">${n.label}</text>`;
+          });
+          svg += "</svg>";
+          wrap.innerHTML = svg;
+        }
+
+        // ─── 戰報 ───
+        function renderActions(S) {
+          const el = document.getElementById("actionLog");
+          const log = S.reconcile?.action_log || [];
+          if (!log.length) {
+            el.innerHTML = '<div class="no-data">尚無戰報</div>';
+            return;
+          }
+          el.innerHTML = log
+            .slice(-15)
+            .reverse()
+            .map((a) => {
+              const t = new Date(a.at).toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+              const parts = (a.delta || "").split(":");
+              const svcName = parts[1] || "";
+              const issue = parts.slice(2).join(":") || "";
+              const desc = `${svcName} ${ISSUE_MAP[issue] || issue} → ${ACTION_MAP[a.action] || a.action}`;
+              const icon = a.success
+                ? '<span style="color:var(--green)">&#10003;</span>'
+                : '<span style="color:var(--orange)">&#9888;</span>';
+              let tag = "";
+              if (a.auto) tag = '<span class="action-tag tag-auto">自動修復</span>';
+              else if (a.action === "notify_cruz")
+                tag = '<span class="action-tag tag-notify">通報</span>';
+              return `<div class="action-row"><span class="action-time">${t}</span><span class="action-delta">${desc}${tag}</span><span class="action-icon">${icon}</span></div>`;
+            })
+            .join("");
+        }
+
+        // ─── 時空穩定帶 ───
+        function renderHealth(S) {
+          const bar = document.getElementById("healthBar"),
+            labels = document.getElementById("healthLabels");
+          const obs = S.observations_24h || [];
+          const SLOTS = 96,
+            now = Date.now(),
+            dayMs = 24 * 3600000,
+            slotMs = dayMs / SLOTS;
+          const buckets = new Array(SLOTS).fill(null);
+          obs.forEach((o) => {
+            const ts = new Date(o.at || o.timestamp).getTime();
+            if (isNaN(ts)) return;
+            const ago = now - ts;
+            if (ago > dayMs || ago < 0) return;
+            const idx = SLOTS - 1 - Math.floor(ago / slotMs);
+            if (idx < 0 || idx >= SLOTS) return;
+            const hasIssue = (o.delta_count || 0) > 0 || (o.issues && o.issues.length > 0);
+            if (buckets[idx] === null) buckets[idx] = hasIssue ? "warn" : "ok";
+            else if (hasIssue) buckets[idx] = "warn";
+          });
+          bar.innerHTML = buckets
+            .map((b) => `<div class="slot ${b === null ? "empty" : b}"></div>`)
+            .join("");
+          const fmt = (h) => {
+            const d = new Date(now - h * 3600000);
+            return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+          };
+          labels.innerHTML = `<span>${fmt(24)}</span><span>${fmt(16)}</span><span>${fmt(8)}</span><span>現在</span>`;
+        }
+
+        // ─── Auto-reload ───
+        function reload() {
+          const old = document.getElementById("stateScript");
+          if (old) old.remove();
+          const s = document.createElement("script");
+          s.id = "stateScript";
+          s.src = "dashboard-state.js?t=" + Date.now();
+          s.onload = () => {
+            try {
+              render(window.__STATE__);
+            } catch (e) {
+              console.error("render error", e);
+            }
+          };
+          s.onerror = () => {
+            document.getElementById("staleBanner").style.display = "block";
+          };
+          document.head.appendChild(s);
+        }
+
+        try {
+          render(window.__STATE__);
+        } catch (e) {
+          console.error(e);
+        }
+        document
+          .querySelectorAll('script[src^="dashboard-state"]')
+          .forEach((s) => (s.id = "stateScript"));
+        setInterval(reload, REFRESH);
+      })();
+    </script>
+  </body>
+</html>

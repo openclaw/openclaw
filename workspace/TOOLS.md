@@ -13,6 +13,18 @@ Things like:
 - Device nicknames
 - Anything environment-specific
 
+## 群組讀取 SOP（鐵規則）
+
+當有人說「看看 XX 群的消息」「讀一下 XX 群」：
+
+1. **先查 CHANNELS.md** — 用群名關鍵字比對 chatId
+2. **找不到？用 `GET /chats` 搜索** — `curl -s http://localhost:18790/chats`，用關鍵字 grep 出 chatId
+3. **找到 chatId 後直接 `GET /messages?chat=<id>&limit=30`** — 讀訊息、整理摘要、回覆
+4. **絕對不要問用戶要 chatId** — 你有 /chats API，自己查
+
+❌ 錯誤示範：「你能幫我確認群組ID嗎？」「在群裡 @ 我我就能找到」
+✅ 正確做法：直接 /chats 搜索 → /messages 讀取 → 整理回覆
+
 ## Local Services
 
 ### Telethon HTTP Bridge (杜甫帳號)
@@ -22,7 +34,7 @@ Things like:
 - **Session 檔**: `~/Documents/two/mcp-telegram/session/claude_session.session`
 - **⚠️ Session 檔被鎖時不要直接用 Telethon，走 HTTP API**
 - **API**:
-  - `GET /chats` — 列出所有對話
+  - `GET /chats` — 列出所有對話（用來搜索不認識的群名）
   - `GET /messages?chat=<id>&limit=30` — 讀取訊息
 - **佔用檢查**: `fuser ~/Documents/two/mcp-telegram/session/claude_session.session`
 

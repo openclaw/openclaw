@@ -4,6 +4,8 @@ tasks:
   morning_brief: { schedule: "07:00", enabled: true, ai_model: "claude-haiku-4-5-20251001" }
   anomaly_scan: { schedule: "every 4h", enabled: true, ai_threshold: 3 }
   weekly_review: { schedule: "sunday 10:00", enabled: true, ai_model: "claude-sonnet-4-5-20250514" }
+  conversation_sync: { schedule: "every 4h", enabled: true }
+  conversation_pulse: { schedule: "every 15m", enabled: true }
 notifications:
   telegram_bridge: "http://localhost:18790"
   cruz_chat_id: "448345880"
@@ -11,6 +13,15 @@ notifications:
 claude:
   api_key_env: "ANTHROPIC_API_KEY"
   max_daily_calls: 20
+
+# ── Flap auto-repair: Layer 2 (AI diagnosis) ──
+flap_repair:
+  ai_enabled: true
+  model: "haiku"
+  max_budget_usd: 0.05
+  timeout_sec: 120
+  cooldown_sec: 3600
+  allowed_tools: "Bash Read Edit Glob Grep"
 paths:
   workspace: "/Users/sulaxd/clawd/workspace"
 prune:
