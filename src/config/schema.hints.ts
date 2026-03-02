@@ -195,7 +195,7 @@ export function mapSensitivePaths(
   if (isSensitive) {
     next[path] = { ...next[path], sensitive: true };
   } else if (isSensitiveConfigPath(path) && !next[path]?.sensitive) {
-    log.warn(`possibly sensitive key found: (${path})`);
+    log.debug(`possibly sensitive key found: (${path})`);
   }
 
   if (currentSchema instanceof z.ZodObject) {
