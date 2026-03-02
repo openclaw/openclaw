@@ -297,11 +297,11 @@ describe("docker-setup.sh", () => {
       const result = runDockerSetup(activeSandbox, {
         OPENCLAW_SANDBOX: "1",
         OPENCLAW_DOCKER_SOCKET: socketPath,
-        DOCKER_STUB_FAIL_MATCH: "config set agents.defaults.sandbox.mode",
+        DOCKER_STUB_FAIL_MATCH: "config set agents.defaults.sandbox.scope",
       });
 
       expect(result.status).toBe(0);
-      expect(result.stderr).toContain("Failed to set agents.defaults.sandbox.mode");
+      expect(result.stderr).toContain("Failed to set agents.defaults.sandbox.scope");
       expect(result.stderr).toContain("Skipping gateway restart to avoid exposing Docker socket");
 
       const log = await readFile(activeSandbox.logPath, "utf8");
@@ -309,6 +309,8 @@ describe("docker-setup.sh", () => {
         .split("\n")
         .filter((line) => line.includes("compose") && line.includes(" up -d openclaw-gateway"));
       expect(gatewayStarts).toHaveLength(1);
+      expect(log).toContain("config set agents.defaults.sandbox.mode non-main");
+      expect(log).toContain("config set agents.defaults.sandbox.mode off");
       await expect(
         stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml")),
       ).rejects.toThrow();
