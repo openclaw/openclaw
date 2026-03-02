@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as skillScanner from "../security/skill-scanner.js";
@@ -24,6 +23,7 @@ let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
 let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
 let suiteTempRoot = "";
 let tempDirCounter = 0;
+const pluginFixturesDir = path.resolve(process.cwd(), "test", "fixtures", "plugins-install");
 
 function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
@@ -62,57 +62,8 @@ async function packToArchive({
   return dest;
 }
 
-function writePluginPackage(params: {
-  pkgDir: string;
-  name: string;
-  version: string;
-  extensions: string[];
-}) {
-  fs.mkdirSync(path.join(params.pkgDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pkgDir, "package.json"),
-    JSON.stringify(
-      {
-        name: params.name,
-        version: params.version,
-        openclaw: { extensions: params.extensions },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(params.pkgDir, "dist", "index.js"), "export {};", "utf-8");
-}
-
-async function createVoiceCallArchive(params: {
-  workDir: string;
-  outName: string;
-  version: string;
-}) {
-  const pkgDir = path.join(params.workDir, "package");
-  writePluginPackage({
-    pkgDir,
-    name: "@openclaw/voice-call",
-    version: params.version,
-    extensions: ["./dist/index.js"],
-  });
-  const archivePath = await packToArchive({
-    pkgDir,
-    outDir: params.workDir,
-    outName: params.outName,
-  });
-  return { pkgDir, archivePath };
-}
-
 async function createVoiceCallArchiveBuffer(version: string): Promise<Buffer> {
-  const workDir = makeTempDir();
-  const { archivePath } = await createVoiceCallArchive({
-    workDir,
-    outName: `plugin-${version}.tgz`,
-    version,
-  });
-  return fs.readFileSync(archivePath);
+  return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
 }
 
 function writeArchiveBuffer(params: { outName: string; buffer: Buffer }): string {
@@ -123,17 +74,7 @@ function writeArchiveBuffer(params: { outName: string; buffer: Buffer }): string
 }
 
 async function createZipperArchiveBuffer(): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file(
-    "package/package.json",
-    JSON.stringify({
-      name: "@openclaw/zipper",
-      version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-  );
-  zip.file("package/dist/index.js", "export {};");
-  return zip.generateAsync({ type: "nodebuffer" });
+  return fs.readFileSync(path.join(pluginFixturesDir, "zipper-0.0.1.zip"));
 }
 
 const VOICE_CALL_ARCHIVE_V1_BUFFER_PROMISE = createVoiceCallArchiveBuffer("0.0.1");
