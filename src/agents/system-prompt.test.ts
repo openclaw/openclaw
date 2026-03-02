@@ -295,6 +295,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
     expect(prompt).not.toContain(
       'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
     );
