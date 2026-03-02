@@ -38,7 +38,6 @@ export type WaitForBatchResult = {
 };
 
 const MIN_POLL_MS = 250;
-const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_POLL_MS = 2000;
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000; // 1h
 
@@ -66,12 +65,13 @@ export async function waitForBatch<TStatus>(
   params: WaitForBatchParams<TStatus>,
 ): Promise<WaitForBatchResult> {
   const { adapter, batchId, wait, debug } = params;
-  // Clamp poll/timeout to sane ranges to prevent API hammering or infinite waits.
+  // Clamp poll interval to prevent API hammering; honor caller timeout as-is
+  // (the pre-refactor providers passed timeoutMs through without a ceiling).
   const pollIntervalMs = Number.isFinite(params.pollIntervalMs)
     ? Math.max(MIN_POLL_MS, params.pollIntervalMs)
     : DEFAULT_POLL_MS;
   const timeoutMs = Number.isFinite(params.timeoutMs)
-    ? Math.min(MAX_TIMEOUT_MS, Math.max(1, params.timeoutMs))
+    ? Math.max(1, params.timeoutMs)
     : DEFAULT_TIMEOUT_MS;
   const start = Date.now();
   // Use initial status on first iteration to avoid an extra network round-trip
