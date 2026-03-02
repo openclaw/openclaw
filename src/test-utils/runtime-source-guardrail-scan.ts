@@ -23,6 +23,7 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
 ];
 
 const runtimeSourceGuardrailCache = new Map<string, Promise<RuntimeSourceGuardrailFile[]>>();
+const trackedRuntimeSourceListCache = new Map<string, string[]>();
 const FILE_READ_CONCURRENCY = 24;
 
 export function shouldSkipGuardrailRuntimeSource(relativePath: string): boolean {
@@ -66,17 +67,24 @@ async function readRuntimeSourceFiles(
 }
 
 function tryListTrackedRuntimeSourceFiles(repoRoot: string): string[] | null {
+  const cached = trackedRuntimeSourceListCache.get(repoRoot);
+  if (cached) {
+    return cached.slice();
+  }
+
   try {
     const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return stdout
+    const files = stdout
       .split(/\r?\n/u)
       .filter(Boolean)
       .filter((relativePath) => relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"))
       .filter((relativePath) => !shouldSkipGuardrailRuntimeSource(relativePath))
       .map((relativePath) => path.join(repoRoot, relativePath));
+    trackedRuntimeSourceListCache.set(repoRoot, files);
+    return files.slice();
   } catch {
     return null;
   }
