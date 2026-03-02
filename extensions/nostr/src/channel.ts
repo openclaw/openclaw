@@ -156,6 +156,11 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         messageId: `nostr-${Date.now()}`,
       };
     },
+    sendMedia: async ({ to, accountId }) => {
+      // Nostr channel does not support media (capabilities.media = false)
+      // This stub is required by the delivery framework
+      throw new Error("Nostr channel does not support media attachments");
+    },
   },
 
   status: {
@@ -274,15 +279,24 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
-      };
+      // Wait for abort signal instead of returning immediately (fixes infinite restart loop)
+      // This keeps the account running until explicitly stopped
+      await new Promise<void>((resolve) => {
+        const checkAbort = () => {
+          if (ctx.abortSignal?.aborted) {
+            resolve();
+          } else {
+            setTimeout(checkAbort, 1000);
+          }
+        };
+        checkAbort();
+      });
+
+      // Cleanup when abort signal is received
+      bus.close();
+      activeBuses.delete(account.accountId);
+      metricsSnapshots.delete(account.accountId);
+      ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
     },
   },
 };
