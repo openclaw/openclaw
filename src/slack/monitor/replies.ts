@@ -22,13 +22,13 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
   cfg?: OpenClawConfig;
-}) {
+}): Promise<{ delivered: boolean }> {
   if (
     params.cfg &&
     isOutboundSuppressed({ cfg: params.cfg, channel: "slack", accountId: params.accountId })
   ) {
     logVerbose(`[suppressOutbound] Blocked Slack reply to ${params.target}`);
-    return;
+    return { delivered: false };
   }
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -68,6 +68,7 @@ export async function deliverReplies(params: {
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }
+  return { delivered: true };
 }
 
 export type SlackRespondFn = (payload: {

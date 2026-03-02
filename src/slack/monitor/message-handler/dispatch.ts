@@ -223,7 +223,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
-    await deliverReplies({
+    const result = await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -235,7 +235,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       cfg,
     });
-    // Record the thread ts only after confirmed delivery success.
+    if (!result.delivered) {
+      return;
+    }
     if (replyThreadTs) {
       usedReplyThreadTs ??= replyThreadTs;
     }

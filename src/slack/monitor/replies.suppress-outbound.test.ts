@@ -14,8 +14,8 @@ vi.mock("../format.js", () => ({
 }));
 
 describe("deliverReplies suppressOutbound", () => {
-  it("blocks delivery when suppressOutbound is true", async () => {
-    await deliverReplies({
+  it("blocks delivery and returns delivered:false when suppressOutbound is true", async () => {
+    const result = await deliverReplies({
       replies: [{ text: "hello" }],
       target: "C123",
       token: "token",
@@ -26,13 +26,14 @@ describe("deliverReplies suppressOutbound", () => {
       cfg: { channels: { slack: { suppressOutbound: true } } } as OpenClawConfig,
     });
 
+    expect(result).toEqual({ delivered: false });
     expect(sendMessageSlackMock).not.toHaveBeenCalled();
   });
 
-  it("allows delivery when suppressOutbound is false", async () => {
+  it("allows delivery and returns delivered:true when suppressOutbound is false", async () => {
     sendMessageSlackMock.mockResolvedValue(undefined);
 
-    await deliverReplies({
+    const result = await deliverReplies({
       replies: [{ text: "hello" }],
       target: "C123",
       token: "token",
@@ -43,6 +44,7 @@ describe("deliverReplies suppressOutbound", () => {
       cfg: { channels: { slack: {} } } as OpenClawConfig,
     });
 
+    expect(result).toEqual({ delivered: true });
     expect(sendMessageSlackMock).toHaveBeenCalled();
   });
 });
