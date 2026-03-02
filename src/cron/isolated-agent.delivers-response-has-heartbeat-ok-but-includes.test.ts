@@ -1,16 +1,66 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStore,
-} from "./isolated-agent.test-harness.js";
+import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
+
+let tempRoot = "";
+let tempHomeId = 0;
+
+async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  if (!tempRoot) {
+    throw new Error("temp root not initialized");
+  }
+  const home = path.join(tempRoot, `case-${tempHomeId++}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
+  const snapshot = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+  if (process.platform === "win32") {
+    const driveMatch = home.match(/^([A-Za-z]:)(.*)$/);
+    if (driveMatch) {
+      process.env.HOMEDRIVE = driveMatch[1];
+      process.env.HOMEPATH = driveMatch[2] || "\\";
+    }
+  }
+
+  try {
+    return await fn(home);
+  } finally {
+    const restoreKey = (key: keyof typeof snapshot) => {
+      const value = snapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    };
+    restoreKey("HOME");
+    restoreKey("USERPROFILE");
+    restoreKey("HOMEDRIVE");
+    restoreKey("HOMEPATH");
+    restoreKey("OPENCLAW_HOME");
+    restoreKey("OPENCLAW_STATE_DIR");
+  }
+}
 
 async function createTelegramDeliveryFixture(home: string): Promise<{
   storePath: string;
@@ -70,12 +120,23 @@ async function runTelegramAnnounceTurn(params: {
 }
 
 describe("runCronIsolatedAgentTurn", () => {
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-heartbeat-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!tempRoot) {
+      return;
+    }
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
   it("does not fan out telegram cron delivery across allowFrom entries", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
       mockEmbeddedAgentPayloads([
         { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
@@ -117,7 +178,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("handles media heartbeat delivery and announce cleanup modes", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
 
       // Media should still be delivered even if text is just HEARTBEAT_OK.
@@ -200,7 +261,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("skips structured outbound delivery when timeout abort is already set", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
       const controller = new AbortController();
       controller.abort("cron: job execution timed out");
@@ -224,7 +285,7 @@ describe("runCronIsolatedAgentTurn", () => {
   });
 
   it("uses a unique announce childRunId for each cron run", async () => {
-    await withTempCronHome(async (home) => {
+    await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, {
         lastProvider: "telegram",
         lastChannel: "telegram",
@@ -251,23 +312,30 @@ describe("runCronIsolatedAgentTurn", () => {
       const job = makeJob({ kind: "agentTurn", message: "do it" });
       job.delivery = { mode: "announce", channel: "last" };
 
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps,
-        job,
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
-      });
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps,
-        job,
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
-      });
+      const nowSpy = vi.spyOn(Date, "now");
+      let now = Date.now();
+      nowSpy.mockImplementation(() => now);
+      try {
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+        now += 5;
+        await runCronIsolatedAgentTurn({
+          cfg,
+          deps,
+          job,
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
 
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
       const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
