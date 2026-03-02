@@ -581,6 +581,7 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
+        backfillAssistantUsage(limited);
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
@@ -939,5 +940,33 @@ export async function runEmbeddedAttempt(
   } finally {
     restoreSkillEnv?.();
     process.chdir(prevCwd);
+  }
+}
+
+const EMPTY_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/**
+ * Ensure every assistant message in session history has a valid `usage`
+ * object. The Pi SDK's auto-compaction check accesses
+ * `message.usage.totalTokens` without a null guard, so sessions
+ * containing older messages saved without usage crash with
+ * "Cannot read properties of undefined (reading 'totalTokens')".
+ */
+function backfillAssistantUsage(messages: AgentMessage[]): void {
+  for (const msg of messages) {
+    if (msg.role !== "assistant") {
+      continue;
+    }
+    const assistant = msg as Record<string, unknown>;
+    if (!assistant.usage || typeof assistant.usage !== "object") {
+      assistant.usage = { ...EMPTY_USAGE, cost: { ...EMPTY_USAGE.cost } };
+    }
   }
 }
