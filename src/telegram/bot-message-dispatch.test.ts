@@ -9,6 +9,7 @@ const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const emitMessageSentHooks = vi.hoisted(() => vi.fn());
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -31,6 +32,10 @@ vi.mock("../config/sessions.js", async () => ({
   resolveStorePath,
 }));
 
+vi.mock("../hooks/message-sent.js", () => ({
+  emitMessageSentHooks,
+}));
+
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
   describeStickerImage: vi.fn(),
@@ -46,6 +51,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();
     editMessageTelegram.mockClear();
+    emitMessageSentHooks.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
@@ -1062,6 +1068,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("emits answer-only hook content when reasoning level is off", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "off" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onDelivery?.(
+        {
+          text: "<think>should not leak</think>Visible answer",
+        },
+        {
+          kind: "final",
+          success: true,
+          delivered: true,
+          messageId: "telegram-msg-1",
+        },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "partial",
+    });
+
+    expect(emitMessageSentHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Visible answer",
+        success: true,
+        messageId: "telegram-msg-1",
+      }),
+    );
   });
 
   it.each([undefined, null] as const)(

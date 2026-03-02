@@ -254,6 +254,19 @@ export const dispatchTelegramMessage = async ({
         Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
     };
   };
+  const deriveHookContent = (payload: ReplyPayload): string => {
+    if (resolvedReasoningLevel !== "off") {
+      return payload.text ?? "";
+    }
+    const split = splitTextIntoLaneSegments(payload.text);
+    if (split.suppressedReasoningOnly) {
+      return "";
+    }
+    if (split.segments.length === 0) {
+      return payload.text ?? "";
+    }
+    return split.segments.map((segment) => segment.text).join("\n\n");
+  };
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
@@ -586,13 +599,14 @@ export const dispatchTelegramMessage = async ({
         },
         onDelivery: (payload, info) => {
           const target = String(chatId);
+          const hookContent = deriveHookContent(payload);
           if (info.success) {
             if (!info.delivered) {
               return;
             }
             emitMessageSentHooks({
               to: target,
-              content: payload.text ?? "",
+              content: hookContent,
               success: true,
               channelId: "telegram",
               accountId: route.accountId,
@@ -604,7 +618,7 @@ export const dispatchTelegramMessage = async ({
           }
           emitMessageSentHooks({
             to: target,
-            content: payload.text ?? "",
+            content: hookContent,
             success: false,
             error: info.error instanceof Error ? info.error.message : String(info.error),
             channelId: "telegram",

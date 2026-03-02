@@ -5,6 +5,7 @@ import {
   createBaseSignalEventHandlerDeps,
   createSignalReceiveEvent,
 } from "./event-handler.test-harness.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const { dispatchInboundMessageMock, emitMessageSentHooksMock, setDispatchPayload } = vi.hoisted(
   () => {
@@ -47,7 +48,9 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-function createDeliveryHookHandler(params: { deliverReplies: ReturnType<typeof vi.fn> }) {
+function createDeliveryHookHandler(params: {
+  deliverReplies: SignalEventHandlerDeps["deliverReplies"];
+}) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
       cfg: { messages: { inbound: { debounceMs: 0 } } },
@@ -65,7 +68,9 @@ describe("signal message:sent delivery hooks", () => {
   });
 
   it("does not emit success hooks when delivery reports delivered=false", async () => {
-    const deliverReplies = vi.fn(async () => ({ delivered: false }));
+    const deliverReplies = vi.fn<SignalEventHandlerDeps["deliverReplies"]>(async () => ({
+      delivered: false,
+    }));
     const handler = createDeliveryHookHandler({ deliverReplies });
 
     await handler(
@@ -82,7 +87,7 @@ describe("signal message:sent delivery hooks", () => {
   });
 
   it("emits success hooks with messageId when delivery reports delivered=true", async () => {
-    const deliverReplies = vi.fn(async () => ({
+    const deliverReplies = vi.fn<SignalEventHandlerDeps["deliverReplies"]>(async () => ({
       delivered: true,
       messageId: "signal-msg-1",
     }));
