@@ -5,6 +5,9 @@ import { generateUUID } from "../uuid.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
+function isSilentReplyStream(text: string): boolean {
+  return SILENT_REPLY_PATTERN.test(text);
+}
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -17,15 +20,10 @@ function isAssistantSilentReply(message: unknown): boolean {
   }
   // entry.text takes precedence — matches gateway extractAssistantTextForSilentCheck
   if (typeof entry.text === "string") {
-    return SILENT_REPLY_PATTERN.test(entry.text);
+    return isSilentReplyStream(entry.text);
   }
   const text = extractText(message);
-  return typeof text === "string" && SILENT_REPLY_PATTERN.test(text);
-}
-
-/** Check if raw text matches the silent reply token. */
-function isSilentReplyStream(text: string): boolean {
-  return SILENT_REPLY_PATTERN.test(text);
+  return typeof text === "string" && isSilentReplyStream(text);
 }
 
 export type ChatState = {
@@ -67,7 +65,7 @@ export async function loadChatHistory(state: ChatState) {
       },
     );
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((m) => !isAssistantSilentReply(m));
+    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
     state.lastError = String(err);
@@ -267,7 +265,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
-    if (typeof next === "string") {
+    if (typeof next === "string" && !isSilentReplyStream(next)) {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
         state.chatStream = next;

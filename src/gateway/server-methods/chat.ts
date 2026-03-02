@@ -207,17 +207,22 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   if (typeof entry.content === "string") {
     return entry.content;
   }
-  if (Array.isArray(entry.content)) {
-    const texts = entry.content
-      .filter(
-        (b: unknown): b is Record<string, unknown> =>
-          !!b && typeof b === "object" && (b as Record<string, unknown>).type === "text",
-      )
-      .map((b) => (b as Record<string, unknown>).text)
-      .filter((t): t is string => typeof t === "string");
-    return texts.length > 0 ? texts.join("\n") : undefined;
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
+    return undefined;
   }
-  return undefined;
+
+  const texts: string[] = [];
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
+  }
+  return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
 function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {

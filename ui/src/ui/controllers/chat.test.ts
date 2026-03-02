@@ -53,6 +53,23 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Hello");
   });
 
+  it("ignores NO_REPLY delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Hello",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Hello");
+  });
+
   it("appends final payload from another run without clearing active stream", () => {
     const state = createState({
       sessionKey: "main",
@@ -75,6 +92,30 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(123);
     expect(state.chatMessages).toHaveLength(1);
     expect(state.chatMessages[0]).toEqual(payload.message);
+  });
+
+  it("drops NO_REPLY final payload from another run without clearing active stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
   });
 
   it("returns final for another run when payload has no message", () => {
@@ -479,9 +520,7 @@ describe("loadChatHistory", () => {
   });
 
   it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
-    const messages = [
-      { role: "assistant", text: "real reply", content: "NO_REPLY" },
-    ];
+    const messages = [{ role: "assistant", text: "real reply", content: "NO_REPLY" }];
     const mockClient = {
       request: vi.fn().mockResolvedValue({ messages }),
     };
@@ -494,5 +533,36 @@ describe("loadChatHistory", () => {
 
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
+  });
+});
+
+describe("loadChatHistory", () => {
+  it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+        { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+      ],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+    });
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+      { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+    expect(state.lastError).toBeNull();
   });
 });
