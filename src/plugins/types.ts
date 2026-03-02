@@ -205,8 +205,9 @@ export type OpenClawPluginHttpRouteHandler = (
 export type OpenClawPluginHttpRouteParams = {
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
-  auth?: OpenClawPluginHttpRouteAuth;
+  auth: OpenClawPluginHttpRouteAuth;
   match?: OpenClawPluginHttpRouteMatch;
+  replaceExisting?: boolean;
 };
 
 export type OpenClawPluginCliContext = {
