@@ -290,7 +290,7 @@ export const registerTelegramHandlers = ({
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const threadKeys =
       dmThreadId != null
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+        ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
