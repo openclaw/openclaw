@@ -14,6 +14,13 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /**
+   * Override the context window size (in tokens) for this specific model.
+   * Takes precedence over agents.defaults.contextTokens and the provider catalog.
+   * Useful for custom/self-hosted models or proxies that expose a different context
+   * window than what the catalog reports.
+   */
+  contextTokens?: number;
 };
 
 export type AgentModelListConfig = {

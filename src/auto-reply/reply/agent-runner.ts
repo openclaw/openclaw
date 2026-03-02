@@ -479,7 +479,12 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+    const perModelKey =
+      providerUsed && modelUsed ? `${providerUsed}/${modelUsed}` : modelUsed;
     const contextTokensUsed =
+      (perModelKey != null
+        ? cfg.agents?.defaults?.models?.[perModelKey]?.contextTokens
+        : undefined) ??
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??

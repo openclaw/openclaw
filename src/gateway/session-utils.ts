@@ -623,7 +623,12 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const modelKey =
+    resolved.provider && resolved.model
+      ? `${resolved.provider}/${resolved.model}`
+      : resolved.model;
   const contextTokens =
+    (modelKey != null ? cfg.agents?.defaults?.models?.[modelKey]?.contextTokens : undefined) ??
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model) ??
     DEFAULT_CONTEXT_TOKENS;

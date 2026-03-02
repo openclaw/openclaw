@@ -540,8 +540,15 @@ export async function runCronIsolatedAgentTurn(params: {
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const perModelKey =
+      providerUsed && modelUsed ? `${providerUsed}/${modelUsed}` : modelUsed;
     const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+      (perModelKey != null
+        ? agentCfg.models?.[perModelKey]?.contextTokens
+        : undefined) ??
+      agentCfg?.contextTokens ??
+      lookupContextTokens(modelUsed) ??
+      DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,
