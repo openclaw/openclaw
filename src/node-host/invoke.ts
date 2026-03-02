@@ -877,9 +877,56 @@ export async function handleInvoke(
 }
 
 /**
+ * Security types that noVNC can handle. Apple-specific types (30=ARD, 31-36)
+ * require SRP or username+password which noVNC's password prompt can't provide.
+ * We filter the VNC server's type list to only include these standard types.
+ */
+const NOVNC_SUPPORTED_TYPES = new Set([1, 2, 16, 19, 22]);
+
+/**
+ * Filter the RFB security-types message from a VNC server so that only
+ * types supported by noVNC are forwarded to the browser. This prevents
+ * noVNC from selecting Apple ARD (type 30) which requires username+password
+ * and always fails with a password-only prompt.
+ *
+ * Returns the filtered Buffer, or null if no supported types remain.
+ */
+function filterVncSecurityTypes(data: Buffer): Buffer | null {
+  if (data.length < 2) {
+    return data;
+  }
+  const numTypes = data[0];
+  if (numTypes === 0 || data.length < 1 + numTypes) {
+    return data;
+  }
+
+  const supported: number[] = [];
+  for (let i = 0; i < numTypes; i++) {
+    const t = data[1 + i];
+    if (NOVNC_SUPPORTED_TYPES.has(t)) {
+      supported.push(t);
+    }
+  }
+  if (supported.length === 0) {
+    return null;
+  }
+
+  const buf = Buffer.alloc(1 + supported.length);
+  buf[0] = supported.length;
+  for (let i = 0; i < supported.length; i++) {
+    buf[1 + i] = supported[i];
+  }
+  return buf;
+}
+
+/**
  * Open a VNC tunnel: connect a new WebSocket to the gateway and pipe binary
  * data between it and a local VNC server (macOS Screen Sharing / x11vnc on
  * port 5900).
+ *
+ * The initial RFB handshake is intercepted to filter Apple-specific security
+ * types that noVNC cannot handle (ARD, Mac OS X SecType, etc.). After the
+ * security-types message is filtered, all subsequent data is relayed as-is.
  */
 async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void> {
   const { createConnection } = await import("node:net");
@@ -899,11 +946,45 @@ async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void>
     // Now connect to the local VNC server.
     const tcp = createConnection({ host: vncHost, port: vncPort }, () => {
       log("VNC TCP connected — relaying data");
-      // TCP → WS
+
+      // RFB handshake state machine:
+      //   phase 0: waiting for server version (12 bytes)
+      //   phase 1: waiting for security-types message (after client version sent)
+      //   phase 2: passthrough (handshake complete, relay everything as-is)
+      let phase = 0;
+
+      // TCP → WS (with security-type filtering during handshake)
       tcp.on("data", (data: Buffer) => {
-        if (ws.readyState === WsClient.OPEN) {
-          ws.send(data);
+        if (ws.readyState !== WsClient.OPEN) {
+          return;
         }
+
+        if (phase === 0) {
+          // Server version string (e.g. "RFB 003.889\n") — pass through.
+          ws.send(data);
+          phase = 1;
+          return;
+        }
+
+        if (phase === 1) {
+          // Security types message: filter to noVNC-supported types.
+          const filtered = filterVncSecurityTypes(data);
+          if (!filtered) {
+            log("VNC server offers no noVNC-compatible security types");
+            ws.close(1011, "No compatible VNC security types");
+            tcp.end();
+            return;
+          }
+          const origCount = data[0];
+          const filteredCount = filtered[0];
+          log(`filtered security types: ${origCount} → ${filteredCount} types`);
+          ws.send(filtered);
+          phase = 2;
+          return;
+        }
+
+        // phase 2: passthrough
+        ws.send(data);
       });
       tcp.on("end", () => ws.close(1000, "VNC server closed"));
       tcp.on("error", (err) => ws.close(1011, `VNC error: ${err.message}`));
