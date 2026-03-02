@@ -210,7 +210,7 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const localTokenFallback = remoteTokenFallback === "remote-only" ? undefined : localToken;
   const localPasswordFallback =
     remotePasswordFallback === "remote-only" ? undefined : localPassword;
-  if (remoteTokenRef && !token && !envToken && !localTokenFallback) {
+  if (remoteTokenRef && !token && !envToken && !localTokenFallback && !password) {
     throwUnresolvedGatewaySecretInput("gateway.remote.token");
   }
   if (remotePasswordRef && !password && !envPassword && !localPasswordFallback && !token) {

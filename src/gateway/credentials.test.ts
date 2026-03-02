@@ -255,6 +255,33 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.remote.token");
   });
 
+  it("does not throw for unresolved remote token ref when password is available", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+            password: "remote-password",
+          },
+          auth: {},
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+      includeLegacyEnv: false,
+    });
+    expect(resolved).toEqual({
+      token: undefined,
+      password: "remote-password",
+    });
+  });
+
   it("throws when remote password auth relies on an unresolved SecretRef", () => {
     expect(() =>
       resolveGatewayCredentialsFromConfig({
