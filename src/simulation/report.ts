@@ -129,11 +129,41 @@ function evaluateAssertions(
         break;
       }
       case "no_stale_context": {
-        const staleSymptoms = symptoms.filter((s) => s.type === "stale_context");
-        const maxStaleness = staleSymptoms.reduce(
-          (max, s) => (s.type === "stale_context" ? Math.max(max, s.staleness) : max),
-          0,
-        );
+        // Compute staleness directly from messages so the assertion is
+        // independent of the detection thresholds in scenario.symptoms.
+        const byId = new Map<string, SimMessage>();
+        const byConv = new Map<string, SimMessage[]>();
+        for (const msg of messages) {
+          byId.set(msg.id, msg);
+          let list = byConv.get(msg.conversationId);
+          if (!list) {
+            list = [];
+            byConv.set(msg.conversationId, list);
+          }
+          list.push(msg);
+        }
+        let maxStaleness = 0;
+        for (const msg of messages) {
+          if (msg.direction !== "outbound" || !msg.causalParentId) {
+            continue;
+          }
+          const parent = byId.get(msg.causalParentId);
+          if (!parent) {
+            continue;
+          }
+          const convMsgs = byConv.get(msg.conversationId) ?? [];
+          let missed = 0;
+          for (const convMsg of convMsgs) {
+            if (convMsg.direction !== "inbound") {
+              continue;
+            }
+            // Use seq ordering to handle same-millisecond events under burst traffic
+            if (convMsg.seq > parent.seq && convMsg.seq < msg.seq) {
+              missed++;
+            }
+          }
+          maxStaleness = Math.max(maxStaleness, missed);
+        }
         results.push({
           name: "no_stale_context",
           passed: maxStaleness <= assertion.maxStaleness,

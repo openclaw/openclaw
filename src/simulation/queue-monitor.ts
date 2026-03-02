@@ -17,8 +17,13 @@ export class QueueMonitor {
     this.lanePrefix = lanePrefix;
 
     this.dispose = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
-      // Only capture events relevant to simulation lanes
-      if (this.lanePrefix && "lane" in evt && typeof evt.lane === "string") {
+      // When filtering by prefix, only capture events from matching lanes.
+      // Skip events without a lane field entirely — they are unrelated
+      // process diagnostics that would add noise to simulation timelines.
+      if (this.lanePrefix) {
+        if (!("lane" in evt) || typeof evt.lane !== "string") {
+          return;
+        }
         if (!evt.lane.startsWith(this.lanePrefix)) {
           return;
         }

@@ -86,6 +86,7 @@ export async function runSimulation(
   // Wrap in try/finally so monitor and lanes are always cleaned up,
   // even if generateTraffic throws (e.g. missing conversation ID)
   let timeline;
+  const laneTaskErrors: Error[] = [];
   try {
     // Generate traffic — all traffic groups start concurrently
     await generateTraffic(scenario, {
@@ -97,19 +98,28 @@ export async function runSimulation(
       rng,
       log,
       verbose: opts?.verbose,
+      laneTaskErrors,
     });
 
     // Wait for all lanes to drain (poll until no queued or active tasks remain).
-    // Deadline accounts for queue depth: worst case is all messages processed
-    // serially at the slowest model's latency, plus margin.
+    // Deadline accounts for queue depth: worst case is all lane tasks processed
+    // serially at the slowest model's latency, plus margin.  Each inbound message
+    // fans out into one lane task per configured agent, so total work is
+    // trafficCount * agentCount.
     if (!controller.signal.aborted) {
       const maxLatency = Math.max(...Object.values(allModels).map((m) => m.latencyMs), 1000);
-      const totalMessages = scenario.traffic.reduce((sum, t) => sum + t.count, 0);
+      const totalInbound = scenario.traffic.reduce((sum, t) => sum + t.count, 0);
+      const totalLaneTasks = totalInbound * scenario.agents.length;
       const effectiveConcurrency = Math.max(maxConcurrent, 1);
-      const estimatedDrainMs = Math.ceil(totalMessages / effectiveConcurrency) * maxLatency;
+      const estimatedDrainMs = Math.ceil(totalLaneTasks / effectiveConcurrency) * maxLatency;
       const drainDeadline = Date.now() + estimatedDrainMs + 5000;
       log(`[sim] waiting for lane drain`);
       await waitForLaneDrain(lanePrefix, drainDeadline, controller.signal);
+    }
+
+    // Surface any non-abort lane task failures collected during traffic generation
+    if (laneTaskErrors.length > 0) {
+      throw laneTaskErrors[0];
     }
   } finally {
     // Stop monitor and clean up simulation lanes
@@ -168,6 +178,8 @@ type TrafficContext = {
   rng?: () => number;
   log: (msg: string) => void;
   verbose?: boolean;
+  /** Collects non-abort lane task errors so the caller can surface them. */
+  laneTaskErrors: Error[];
 };
 
 async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): Promise<void> {
@@ -276,10 +288,11 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
                 }
               }
             }).catch((err: unknown) => {
-              // Lane cleared errors are expected on abort — surface all others
+              // Lane cleared errors are expected on abort — collect all others
+              // so the caller can surface them after drain completes.
               if (!(err instanceof CommandLaneClearedError)) {
                 ctx.log(`[sim] lane task error: ${String(err)}`);
-                throw err;
+                ctx.laneTaskErrors.push(err instanceof Error ? err : new Error(String(err)));
               }
             });
           }
