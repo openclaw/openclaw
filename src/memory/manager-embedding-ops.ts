@@ -747,11 +747,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, dims, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              hash=excluded.hash,
              model=excluded.model,
+             dims=excluded.dims,
              text=excluded.text,
              embedding=excluded.embedding,
              updated_at=excluded.updated_at`,
@@ -764,6 +765,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           chunk.endLine,
           chunk.hash,
           this.provider.model,
+          embedding.length,
           chunk.text,
           JSON.stringify(embedding),
           now,

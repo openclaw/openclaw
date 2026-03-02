@@ -30,6 +30,7 @@ export function ensureMemoryIndexSchema(params: {
       end_line INTEGER NOT NULL,
       hash TEXT NOT NULL,
       model TEXT NOT NULL,
+      dims INTEGER,
       text TEXT NOT NULL,
       embedding TEXT NOT NULL,
       updated_at INTEGER NOT NULL

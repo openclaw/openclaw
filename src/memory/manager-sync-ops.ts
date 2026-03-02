@@ -352,6 +352,112 @@ export abstract class MemoryManagerSyncOps {
       this.fts.loadError = result.ftsError;
       log.warn(`fts unavailable: ${result.ftsError}`);
     }
+    this.checkEmbeddingDimensions();
+  }
+
+  protected checkEmbeddingDimensions(): void {
+    // Check if stored embeddings have consistent dimensions with current provider
+    try {
+      // Get the dimension of the current provider's embeddings
+      const currentDims = this.provider ? this.getProviderEmbeddingDims() : null;
+
+      // Check chunks table for stored dimensions
+      const chunkDimsResult = this.db
+        .prepare(`SELECT DISTINCT dims FROM chunks WHERE dims IS NOT NULL LIMIT 10`)
+        .all() as Array<{ dims: number }>;
+
+      const storedChunkDims = new Set(chunkDimsResult.map((r) => r.dims));
+
+      // Check embedding cache for stored dimensions
+      const cacheDimsResult = this.db
+        .prepare(
+          `SELECT DISTINCT dims FROM ${EMBEDDING_CACHE_TABLE} WHERE dims IS NOT NULL LIMIT 10`,
+        )
+        .all() as Array<{ dims: number }>;
+
+      const storedCacheDims = new Set(cacheDimsResult.map((r) => r.dims));
+      const allStoredDims = new Set([...storedChunkDims, ...storedCacheDims]);
+
+      if (allStoredDims.size === 0) {
+        // No stored embeddings yet, nothing to check
+        return;
+      }
+
+      if (allStoredDims.size > 1) {
+        // Multiple dimensions stored - this is already corrupted
+        const dimsList = Array.from(allStoredDims).join(", ");
+        log.warn(
+          `[memory] Dimension mismatch detected: stored embeddings have multiple dimensions (${dimsList}). ` +
+            `This indicates a previous provider switch without re-indexing. Run 'openclaw memory reindex' to fix.`,
+        );
+        return;
+      }
+
+      const storedDim = Array.from(allStoredDims)[0];
+
+      if (currentDims && storedDim !== currentDims) {
+        log.warn(
+          `[memory] Dimension mismatch: stored vectors are ${storedDim}-dim but active provider ` +
+            `produces ${currentDims}-dim vectors. Re-index required. Run 'openclaw memory reindex' or delete the ` +
+            `SQLite database to re-index from scratch.`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`[memory] Failed to check embedding dimensions: ${message}`);
+    }
+  }
+
+  protected getProviderEmbeddingDims(): number | null {
+    // Return the expected embedding dimension for the current provider
+    if (!this.provider) {
+      return null;
+    }
+
+    // Try to get dimension from a cached embedding or provider metadata
+    const model = this.provider.model;
+
+    // Known dimensions for common models
+    const knownDims: Record<string, number> = {
+      // Gemini
+      "gemini-embedding-001": 3072,
+      "text-embedding-004": 768,
+      // OpenAI
+      "text-embedding-3-small": 1536,
+      "text-embedding-3-large": 3072,
+      "text-embedding-ada-002": 1536,
+      // Voyage
+      "voyage-3": 1024,
+      "voyage-3-lite": 512,
+      "voyage-code-3": 1024,
+      // Mistral
+      "mistral-embed": 1024,
+      // Local
+      "all-minilm-l6-v2": 384,
+      "embeddinggemma-300m": 300,
+    };
+
+    if (model in knownDims) {
+      return knownDims[model];
+    }
+
+    // Try to infer from existing embeddings in cache
+    try {
+      const result = this.db
+        .prepare(
+          `SELECT embedding FROM ${EMBEDDING_CACHE_TABLE} WHERE provider = ? AND model = ? LIMIT 1`,
+        )
+        .get(this.provider.id, model) as { embedding?: string } | undefined;
+
+      if (result?.embedding) {
+        const arr = JSON.parse(result.embedding) as number[];
+        return Array.isArray(arr) ? arr.length : null;
+      }
+    } catch {
+      // Ignore errors when trying to infer dimension
+    }
+
+    return null;
   }
 
   protected ensureWatcher() {
