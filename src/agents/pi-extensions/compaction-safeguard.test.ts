@@ -102,6 +102,23 @@ const createCompactionContext = (params: {
     },
   }) as unknown as Partial<ExtensionContext>;
 
+async function runCompactionScenario(params: {
+  sessionManager: ExtensionContext["sessionManager"];
+  event: unknown;
+  apiKey: string | null;
+}) {
+  const compactionHandler = createCompactionHandler();
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const mockContext = createCompactionContext({
+    sessionManager: params.sessionManager,
+    getApiKeyMock,
+  });
+  const result = (await compactionHandler(params.event, mockContext)) as {
+    cancel?: boolean;
+  };
+  return { result, getApiKeyMock };
+}
+
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
     const messages: AgentMessage[] = [
@@ -377,22 +394,15 @@ describe("compaction-safeguard extension model fallback", () => {
     // Set up runtime with model (mimics buildEmbeddedExtensionPaths behavior)
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test message",
       tokensBefore: 1000,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    // Call the handler and wait for result
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
@@ -410,21 +420,15 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test",
       tokensBefore: 500,
     });
-
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
 
     expect(result).toEqual({ cancel: true });
 
@@ -439,7 +443,6 @@ describe("compaction-safeguard double-compaction guard", () => {
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = {
       preparation: {
         messagesToSummarize: [] as AgentMessage[],
@@ -451,16 +454,11 @@ describe("compaction-safeguard double-compaction guard", () => {
       customInstructions: "",
       signal: new AbortController().signal,
     };
-
-    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: "sk-test",
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
@@ -470,20 +468,15 @@ describe("compaction-safeguard double-compaction guard", () => {
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
 
-    const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "real message",
       tokensBefore: 1500,
     });
-    const getApiKeyMock = vi.fn().mockResolvedValue(null);
-    const mockContext = createCompactionContext({
+    const { result, getApiKeyMock } = await runCompactionScenario({
       sessionManager,
-      getApiKeyMock,
+      event: mockEvent,
+      apiKey: null,
     });
-
-    const result = (await compactionHandler(mockEvent, mockContext)) as {
-      cancel?: boolean;
-    };
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).toHaveBeenCalled();
   });
