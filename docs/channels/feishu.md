@@ -224,6 +224,34 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
 }
 ```
 
+### Quota optimization flags
+
+You can reduce Feishu API usage with two optional flags:
+
+- `typingIndicator` (default `true`): when `false`, skip typing reaction calls.
+- `resolveSenderNames` (default `true`): when `false`, skip sender profile lookup calls.
+
+Set them at top level or per account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      typingIndicator: false,
+      resolveSenderNames: false,
+      accounts: {
+        main: {
+          appId: "cli_xxx",
+          appSecret: "xxx",
+          typingIndicator: true,
+          resolveSenderNames: false,
+        },
+      },
+    },
+  },
+}
+```
+
 ---
 
 ## Step 3: Start + test
@@ -450,6 +478,7 @@ openclaw pairing list feishu
 {
   channels: {
     feishu: {
+      defaultAccount: "main",
       accounts: {
         main: {
           appId: "cli_xxx",
@@ -467,6 +496,8 @@ openclaw pairing list feishu
   },
 }
 ```
+
+`defaultAccount` controls which Feishu account is used when outbound APIs do not specify an `accountId` explicitly.
 
 ### Message limits
 
@@ -553,28 +584,29 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                           | Description                     | Default          |
-| ------------------------------------------------- | ------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | Enable/disable channel          | `true`           |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`) | `feishu`         |
-| `channels.feishu.connectionMode`                  | Event transport mode            | `websocket`      |
-| `channels.feishu.verificationToken`               | Required for webhook mode       | -                |
-| `channels.feishu.webhookPath`                     | Webhook route path              | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook bind host               | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook bind port               | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                          | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                      | -                |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override | `feishu`         |
-| `channels.feishu.dmPolicy`                        | DM policy                       | `pairing`        |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)     | -                |
-| `channels.feishu.groupPolicy`                     | Group policy                    | `open`           |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                 | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                | `true`           |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`           |
-| `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`             |
-| `channels.feishu.streaming`                       | Enable streaming card output    | `true`           |
-| `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`           |
+| Setting                                           | Description                             | Default          |
+| ------------------------------------------------- | --------------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | Enable/disable channel                  | `true`           |
+| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)         | `feishu`         |
+| `channels.feishu.connectionMode`                  | Event transport mode                    | `websocket`      |
+| `channels.feishu.defaultAccount`                  | Default account ID for outbound routing | `default`        |
+| `channels.feishu.verificationToken`               | Required for webhook mode               | -                |
+| `channels.feishu.webhookPath`                     | Webhook route path                      | `/feishu/events` |
+| `channels.feishu.webhookHost`                     | Webhook bind host                       | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | Webhook bind port                       | `3000`           |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                  | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                              | -                |
+| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override         | `feishu`         |
+| `channels.feishu.dmPolicy`                        | DM policy                               | `pairing`        |
+| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)             | -                |
+| `channels.feishu.groupPolicy`                     | Group policy                            | `open`           |
+| `channels.feishu.groupAllowFrom`                  | Group allowlist                         | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                        | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                            | `true`           |
+| `channels.feishu.textChunkLimit`                  | Message chunk size                      | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | Media size limit                        | `30`             |
+| `channels.feishu.streaming`                       | Enable streaming card output            | `true`           |
+| `channels.feishu.blockStreaming`                  | Enable block streaming                  | `true`           |
 
 ---
 

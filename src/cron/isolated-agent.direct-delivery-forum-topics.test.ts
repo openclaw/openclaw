@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
@@ -14,7 +14,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("uses direct delivery for text-only forum topic targets", async () => {
+  it("routes forum-topic and plain telegram targets through the correct delivery path", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -38,24 +38,23 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
           messageThreadId: 42,
         }),
       );
-    });
-  });
 
-  it("keeps text-only non-threaded targets on announce flow", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const deps = createCliDeps();
+      vi.clearAllMocks();
       mockAgentPayloads([{ text: "plain message" }]);
 
-      const res = await runTelegramAnnounceTurn({
+      const plainRes = await runTelegramAnnounceTurn({
         home,
         storePath,
         deps,
         delivery: { mode: "announce", channel: "telegram", to: "123" },
       });
 
-      expect(res.status).toBe("ok");
+      expect(plainRes.status).toBe("ok");
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { expectsCompletionMessage?: boolean }
+        | undefined;
+      expect(announceArgs?.expectsCompletionMessage).toBe(true);
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });

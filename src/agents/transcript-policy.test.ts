@@ -44,6 +44,16 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBeUndefined();
   });
 
+  it("enables strict tool call id sanitization for openai-completions APIs", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      modelApi: "openai-completions",
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+  });
+
   it("enables user-turn merge for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "moonshot",

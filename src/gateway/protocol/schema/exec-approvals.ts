@@ -90,10 +90,9 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     id: Type.Optional(NonEmptyString),
     command: NonEmptyString,
     commandArgv: Type.Optional(Type.Array(Type.String())),
-    systemRunPlanV2: Type.Optional(
+    systemRunPlan: Type.Optional(
       Type.Object(
         {
-          version: Type.Literal(2),
           argv: Type.Array(Type.String()),
           cwd: Type.Union([Type.String(), Type.Null()]),
           rawCommand: Type.Union([Type.String(), Type.Null()]),
