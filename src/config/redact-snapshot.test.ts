@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import {
   REDACTED_SENTINEL,
@@ -252,6 +253,27 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).not.toContain("abcdef1234567890ghij");
     expect(result.raw).toContain(REDACTED_SENTINEL);
+  });
+
+  it("keeps non-sensitive raw fields intact when secret values overlap", () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        auth: { password: "local" },
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config));
+
+    const result = redactConfigSnapshot(snapshot);
+    const parsed: {
+      gateway?: { mode?: string; auth?: { password?: string } };
+    } = JSON5.parse(result.raw ?? "{}");
+    expect(parsed.gateway?.mode).toBe("local");
+    expect(parsed.gateway?.auth?.password).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(parsed, snapshot.config, mainSchemaHints);
+    expect(restored.gateway.mode).toBe("local");
+    expect(restored.gateway.auth.password).toBe("local");
   });
 
   it("redacts parsed and resolved objects", () => {
