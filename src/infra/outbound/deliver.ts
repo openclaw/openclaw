@@ -446,14 +446,21 @@ async function deliverOutboundPayloadsCore(
       text: normalizedText,
     };
   };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
-    .flatMap((payload) => {
-      if (channel !== "whatsapp") {
-        return [payload];
+  const normalizeEmptyTextPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const rawText = typeof payload.text === "string" ? payload.text : "";
+    if (!rawText.trim()) {
+      if (!hasMedia) {
+        return null;
       }
-      const normalized = normalizeWhatsAppPayload(payload);
-      return normalized ? [normalized] : [];
-    })
+      return {
+        ...payload,
+        text: "",
+      };
+    }
+    return payload;
+  };
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
     .map((payload) => {
       // Strip HTML tags for plain-text surfaces (WhatsApp, Signal, etc.)
       // Models occasionally produce <br>, <b>, etc. that render as literal text.
@@ -461,7 +468,18 @@ async function deliverOutboundPayloadsCore(
       if (!isPlainTextSurface(channel) || !payload.text) {
         return payload;
       }
+      // Telegram sendPayload uses textMode:"html". Preserve raw HTML in this path.
+      if (channel === "telegram" && payload.channelData) {
+        return payload;
+      }
       return { ...payload, text: sanitizeForPlainText(payload.text) };
+    })
+    .flatMap((payload) => {
+      const normalized =
+        channel === "whatsapp"
+          ? normalizeWhatsAppPayload(payload)
+          : normalizeEmptyTextPayload(payload);
+      return normalized ? [normalized] : [];
     });
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
