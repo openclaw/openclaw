@@ -291,6 +291,11 @@ When validation fails:
     }
     ```
 
+    Security note:
+    - Treat all hook/webhook payload content as untrusted input.
+    - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
+    - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
+
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
 
   </Accordion>
