@@ -9,6 +9,7 @@ struct GatewaySessionDefaultsRecord: Codable {
 struct GatewaySessionEntryRecord: Codable {
     let key: String
     let displayName: String?
+    let label: String?
     let provider: String?
     let subject: String?
     let room: String?
