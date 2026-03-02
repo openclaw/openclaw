@@ -182,22 +182,32 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 
   e.preventDefault();
 
+  let processed = 0;
+  const total = fileItems.length;
+  const newAttachments: ChatAttachment[] = [];
+  const current = props.attachments ?? [];
+
   for (const item of fileItems) {
     const file = item.getAsFile();
     if (!file) {
+      processed++;
+      if (processed === total && newAttachments.length > 0) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
       continue;
     }
 
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
+      newAttachments.push({
         id: generateAttachmentId(),
-        dataUrl,
+        dataUrl: reader.result as string,
         mimeType: file.type || "application/octet-stream",
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+      });
+      processed++;
+      if (processed === total) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
     });
     reader.readAsDataURL(file);
   }
@@ -222,22 +232,32 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     return;
   }
 
+  let processed = 0;
+  const total = fileItems.length;
+  const newAttachments: ChatAttachment[] = [];
+  const current = props.attachments ?? [];
+
   for (const item of fileItems) {
     const file = item.getAsFile();
     if (!file) {
+      processed++;
+      if (processed === total && newAttachments.length > 0) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
       continue;
     }
 
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
+      newAttachments.push({
         id: generateAttachmentId(),
-        dataUrl,
+        dataUrl: reader.result as string,
         mimeType: file.type || "application/octet-stream",
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+      });
+      processed++;
+      if (processed === total) {
+        props.onAttachmentsChange?.([...current, ...newAttachments]);
+      }
     });
     reader.readAsDataURL(file);
   }
