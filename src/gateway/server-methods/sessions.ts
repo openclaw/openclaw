@@ -23,6 +23,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -84,6 +85,9 @@ function rejectWebchatSessionMutation(params: {
   respond: RespondFn;
 }): boolean {
   if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
+    return false;
+  }
+  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
     return false;
   }
   params.respond(
@@ -462,6 +466,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const next = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
       const entry = store[primaryKey];
+      const parsed = parseAgentSessionKey(primaryKey);
+      const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
+      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       oldSessionId = entry?.sessionId;
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
@@ -474,8 +481,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         responseUsage: entry?.responseUsage,
-        model: entry?.model,
-        modelProvider: entry?.modelProvider,
+        model: resolvedModel.model,
+        modelProvider: resolvedModel.provider,
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,

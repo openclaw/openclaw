@@ -46,6 +46,14 @@ describe("system events (session routing)", () => {
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
   });
+
+  it("returns false for consecutive duplicate events", () => {
+    const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
+    const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
 });
 
 describe("isCronSystemEvent", () => {

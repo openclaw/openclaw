@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
+import { execFile } from "node:child_process";
 // Manual ACP thread smoke for plain-language routing.
 // Keep this script available for regression/debug validation. Do not delete.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 type ThreadBindingRecord = {
   accountId?: string;
@@ -38,7 +40,9 @@ type DiscordUser = {
   bot?: boolean;
 };
 
-type DriverMode = "token" | "webhook";
+const execFileAsync = promisify(execFile);
+
+type DriverMode = "token" | "webhook" | "openclaw";
 
 type Args = {
   channelId: string;
@@ -53,6 +57,7 @@ type Args = {
   mentionUserId?: string;
   instruction?: string;
   threadBindingsPath: string;
+  openclawBin: string;
   json: boolean;
 };
 
@@ -146,13 +151,13 @@ function hasFlag(flag: string): boolean {
 function usage(): string {
   return (
     "Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts " +
-    "--channel <discord-channel-id> [--token <driver-token> | --driver webhook --bot-token <bot-token>] [options]\n\n" +
+    "--channel <discord-channel-id> [--token <driver-token> | --driver webhook --bot-token <bot-token> | --driver openclaw] [options]\n\n" +
     "Manual live smoke only (not CI). Sends a plain-language instruction in Discord and verifies:\n" +
     "1) OpenClaw spawned an ACP thread binding\n" +
     "2) agent replied in that bound thread with the expected ACK token\n\n" +
     "Options:\n" +
     "  --channel <id>               Parent Discord channel id (required)\n" +
-    "  --driver <token|webhook>     Driver transport mode (default: token)\n" +
+    "  --driver <token|webhook|openclaw> Driver transport mode (default: token)\n" +
     "  --token <token>              Driver Discord token (required for driver=token)\n" +
     "  --token-prefix <prefix>      Auth prefix for --token (default: Bot)\n" +
     "  --bot-token <token>          Bot token for webhook driver mode\n" +
@@ -163,6 +168,7 @@ function usage(): string {
     "  --timeout-ms <n>             Total timeout in ms (default: 240000)\n" +
     "  --poll-ms <n>                Poll interval in ms (default: 1500)\n" +
     "  --thread-bindings-path <p>   Override thread-bindings json path\n" +
+    "  --openclaw-bin <path>        OpenClaw CLI binary for driver=openclaw (default: openclaw)\n" +
     "  --json                       Emit JSON output\n" +
     "\n" +
     "Environment fallbacks:\n" +
@@ -176,7 +182,8 @@ function usage(): string {
     "  OPENCLAW_DISCORD_SMOKE_MENTION_USER_ID\n" +
     "  OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS\n" +
     "  OPENCLAW_DISCORD_SMOKE_POLL_MS\n" +
-    "  OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH"
+    "  OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH\n" +
+    "  OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN"
   );
 }
 
@@ -195,9 +202,11 @@ function parseArgs(): Args {
   const driverMode: DriverMode =
     normalizedDriverMode === "webhook"
       ? "webhook"
-      : normalizedDriverMode === "token"
-        ? "token"
-        : "token";
+      : normalizedDriverMode === "openclaw"
+        ? "openclaw"
+        : normalizedDriverMode === "token"
+          ? "token"
+          : "token";
   const driverToken =
     resolveArg("--token") ||
     process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN ||
@@ -243,6 +252,8 @@ function parseArgs(): Args {
     resolveArg("--thread-bindings-path") ||
     process.env.OPENCLAW_DISCORD_SMOKE_THREAD_BINDINGS_PATH ||
     defaultBindingsPath;
+  const openclawBin =
+    resolveArg("--openclaw-bin") || process.env.OPENCLAW_DISCORD_SMOKE_OPENCLAW_BIN || "openclaw";
   const json = hasFlag("--json");
 
   if (!channelId) {
@@ -268,8 +279,47 @@ function parseArgs(): Args {
     mentionUserId,
     instruction,
     threadBindingsPath,
+    openclawBin,
     json,
   };
+}
+
+async function openclawCliJson<T>(params: { openclawBin: string; args: string[] }): Promise<T> {
+  const result = await execFileAsync(params.openclawBin, params.args, {
+    maxBuffer: 8 * 1024 * 1024,
+    env: process.env,
+  });
+  const stdout = (result.stdout || "").trim();
+  if (!stdout) {
+    throw new Error(`openclaw ${params.args.join(" ")} returned empty stdout`);
+  }
+  return JSON.parse(stdout) as T;
+}
+
+async function readMessagesWithOpenclaw(params: {
+  openclawBin: string;
+  target: string;
+  limit: number;
+}): Promise<DiscordMessage[]> {
+  const response = await openclawCliJson<{
+    payload?: {
+      messages?: DiscordMessage[];
+    };
+  }>({
+    openclawBin: params.openclawBin,
+    args: [
+      "message",
+      "read",
+      "--channel",
+      "discord",
+      "--target",
+      params.target,
+      "--limit",
+      String(params.limit),
+      "--json",
+    ],
+  });
+  return Array.isArray(response.payload?.messages) ? response.payload.messages : [];
 }
 
 function resolveAuthorizationHeader(params: { token: string; tokenPrefix: string }): string {
@@ -554,7 +604,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         },
       });
       sentMessageId = sent.id;
-    } else {
+    } else if (args.driverMode === "webhook") {
       const botAuthHeader = resolveAuthorizationHeader({
         token: args.botToken,
         tokenPrefix: args.botTokenPrefix,
@@ -601,6 +651,32 @@ async function run(): Promise<SuccessResult | FailureResult> {
       });
       sentMessageId = sent.id;
       senderAuthorId = sent.author?.id;
+    } else {
+      setupStage = "send-message";
+      const sent = await openclawCliJson<{
+        payload?: {
+          result?: {
+            messageId?: string;
+          };
+        };
+      }>({
+        openclawBin: args.openclawBin,
+        args: [
+          "message",
+          "send",
+          "--channel",
+          "discord",
+          "--target",
+          args.channelId,
+          "--message",
+          instruction,
+          "--json",
+        ],
+      });
+      sentMessageId = String(sent.payload?.result?.messageId || "");
+      if (!sentMessageId) {
+        throw new Error("openclaw message send did not return payload.result.messageId");
+      }
     }
   } catch (err) {
     return {
@@ -638,11 +714,18 @@ async function run(): Promise<SuccessResult | FailureResult> {
     if (!winningBinding?.threadId || !winningBinding?.targetSessionKey) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent = await discordApi<DiscordMessage[]>({
-          method: "GET",
-          path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
-          authHeader: readAuthHeader,
-        });
+        parentRecent =
+          args.driverMode === "openclaw"
+            ? await readMessagesWithOpenclaw({
+                openclawBin: args.openclawBin,
+                target: args.channelId,
+                limit: 20,
+              })
+            : await discordApi<DiscordMessage[]>({
+                method: "GET",
+                path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
+                authHeader: readAuthHeader,
+              });
       } catch {
         // Best effort diagnostics only.
       }
@@ -668,11 +751,18 @@ async function run(): Promise<SuccessResult | FailureResult> {
     let ackMessage: DiscordMessage | undefined;
     while (Date.now() < deadline && !ackMessage) {
       try {
-        const threadMessages = await discordApi<DiscordMessage[]>({
-          method: "GET",
-          path: `/channels/${encodeURIComponent(threadId)}/messages?limit=50`,
-          authHeader: readAuthHeader,
-        });
+        const threadMessages =
+          args.driverMode === "openclaw"
+            ? await readMessagesWithOpenclaw({
+                openclawBin: args.openclawBin,
+                target: threadId,
+                limit: 50,
+              })
+            : await discordApi<DiscordMessage[]>({
+                method: "GET",
+                path: `/channels/${encodeURIComponent(threadId)}/messages?limit=50`,
+                authHeader: readAuthHeader,
+              });
         ackMessage = threadMessages.find((message) => {
           const content = message.content || "";
           if (!content.includes(ackToken)) {
@@ -692,11 +782,18 @@ async function run(): Promise<SuccessResult | FailureResult> {
     if (!ackMessage) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent = await discordApi<DiscordMessage[]>({
-          method: "GET",
-          path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
-          authHeader: readAuthHeader,
-        });
+        parentRecent =
+          args.driverMode === "openclaw"
+            ? await readMessagesWithOpenclaw({
+                openclawBin: args.openclawBin,
+                target: args.channelId,
+                limit: 20,
+              })
+            : await discordApi<DiscordMessage[]>({
+                method: "GET",
+                path: `/channels/${encodeURIComponent(args.channelId)}/messages?limit=20`,
+                authHeader: readAuthHeader,
+              });
       } catch {
         // Best effort diagnostics only.
       }

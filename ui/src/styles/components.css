@@ -608,6 +608,8 @@
 .cron-workspace-form {
   position: sticky;
   top: 74px;
+  max-height: calc(100vh - 74px - 32px);
+  overflow-y: auto;
 }
 
 .cron-form {
@@ -1189,6 +1191,21 @@
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
+}
+
+/* Debug event log payloads should use full width like other debug sections. */
+.debug-event-log__item {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.debug-event-log__meta {
+  min-width: 0;
+  text-align: left;
+}
+
+.debug-event-log__payload {
+  margin: 0;
+  max-width: 100%;
 }
 
 /* Cron jobs: allow long payload/state text and keep action buttons inside the card. */

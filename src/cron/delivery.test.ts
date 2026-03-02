@@ -43,6 +43,18 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.requested).toBe(false);
   });
 
+  it("resolves mode=none with requested=false and no channel (#21808)", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "none", to: "telegram:123" },
+      }),
+    );
+    expect(plan.mode).toBe("none");
+    expect(plan.requested).toBe(false);
+    expect(plan.channel).toBeUndefined();
+    expect(plan.to).toBe("telegram:123");
+  });
+
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({

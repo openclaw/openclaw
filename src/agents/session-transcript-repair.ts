@@ -60,7 +60,7 @@ function hasToolCallName(block: ToolCallBlock, allowedToolNames: Set<string> | n
     return false;
   }
   const trimmed = block.name.trim();
-  if (!trimmed || trimmed !== block.name) {
+  if (!trimmed) {
     return false;
   }
   if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
@@ -89,6 +89,38 @@ function makeMissingToolResult(params: {
     isError: true,
     timestamp: Date.now(),
   } as Extract<AgentMessage, { role: "toolResult" }>;
+}
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeToolResultName(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+  fallbackName?: string,
+): Extract<AgentMessage, { role: "toolResult" }> {
+  const rawToolName = (message as { toolName?: unknown }).toolName;
+  const normalizedToolName = trimNonEmptyString(rawToolName);
+  if (normalizedToolName) {
+    if (rawToolName === normalizedToolName) {
+      return message;
+    }
+    return { ...message, toolName: normalizedToolName };
+  }
+
+  const normalizedFallback = trimNonEmptyString(fallbackName);
+  if (normalizedFallback) {
+    return { ...message, toolName: normalizedFallback };
+  }
+
+  if (typeof rawToolName === "string") {
+    return { ...message, toolName: "unknown" };
+  }
+  return message;
 }
 
 export { makeMissingToolResult };
@@ -143,8 +175,9 @@ export function repairToolCallInputs(
       continue;
     }
 
-    const nextContent = [];
+    const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
+    let trimmedInMessage = 0;
 
     for (const block of msg.content) {
       if (
@@ -158,6 +191,19 @@ export function repairToolCallInputs(
         changed = true;
         continue;
       }
+      // Normalize tool call names by trimming whitespace so that downstream
+      // lookup (toolsByName map) matches correctly even when the model emits
+      // names with leading/trailing spaces (e.g. " read" → "read").
+      if (isToolCallBlock(block) && typeof (block as ToolCallBlock).name === "string") {
+        const rawName = (block as ToolCallBlock).name as string;
+        if (rawName !== rawName.trim()) {
+          const normalized = { ...block, name: rawName.trim() } as typeof block;
+          nextContent.push(normalized);
+          trimmedInMessage += 1;
+          changed = true;
+          continue;
+        }
+      }
       nextContent.push(block);
     }
 
@@ -167,6 +213,13 @@ export function repairToolCallInputs(
         changed = true;
         continue;
       }
+      out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    // When tool names were trimmed but nothing was dropped,
+    // we still need to emit the message with the normalized content.
+    if (trimmedInMessage > 0) {
       out.push({ ...msg, content: nextContent });
       continue;
     }
@@ -270,6 +323,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
+    const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
@@ -296,8 +350,15 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
             changed = true;
             continue;
           }
+          const normalizedToolResult = normalizeToolResultName(
+            toolResult,
+            toolCallNamesById.get(id),
+          );
+          if (normalizedToolResult !== toolResult) {
+            changed = true;
+          }
           if (!spanResultsById.has(id)) {
-            spanResultsById.set(id, toolResult);
+            spanResultsById.set(id, normalizedToolResult);
           }
           continue;
         }

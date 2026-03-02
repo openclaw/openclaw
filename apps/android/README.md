@@ -9,14 +9,14 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Encrypted persistence for gateway setup/auth state
 - [x] Chat UI restyled
 - [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [ ] QR code scanning in onboarding
-- [ ] Performance improvements
-- [ ] Streaming support in chat UI
-- [ ] Request camera/location and other permissions in onboarding/settings flow
-- [ ] Push notifications for gateway/chat status updates
-- [ ] Security hardening (biometric lock, token handling, safer defaults)
-- [ ] Voice tab full functionality
-- [ ] Screen tab full functionality
+- [x] QR code scanning in onboarding
+- [x] Performance improvements
+- [x] Streaming support in chat UI
+- [x] Request camera/location and other permissions in onboarding/settings flow
+- [x] Push notifications for gateway/chat status updates
+- [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Voice tab full functionality
+- [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
@@ -30,6 +30,28 @@ cd apps/android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug
 ./gradlew :app:testDebugUnitTest
+```
+
+## Kotlin Lint + Format
+
+```bash
+pnpm android:lint
+pnpm android:format
+```
+
+Android framework/resource lint (separate pass):
+
+```bash
+pnpm android:lint:android
+```
+
+Direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat
+./gradlew :app:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -149,6 +171,56 @@ More details: `docs/platforms/android.md`.
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
+
+## Integration Capability Test (Preconditioned)
+
+This suite assumes setup is already done manually. It does **not** install/run/pair automatically.
+
+Pre-req checklist:
+
+1) Gateway is running and reachable from the Android app.
+2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+3) App stays unlocked and in foreground for the whole run.
+4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
+5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
+6) No interactive system dialogs should be pending before test start.
+7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
+9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+
+```bash
+openclaw devices list
+openclaw devices approve --latest
+```
+
+Run:
+
+```bash
+pnpm android:test:integration
+```
+
+Optional overrides:
+
+- `OPENCLAW_ANDROID_GATEWAY_URL=ws://...` (default: from your local OpenClaw config)
+- `OPENCLAW_ANDROID_GATEWAY_TOKEN=...`
+- `OPENCLAW_ANDROID_GATEWAY_PASSWORD=...`
+- `OPENCLAW_ANDROID_NODE_ID=...` or `OPENCLAW_ANDROID_NODE_NAME=...`
+
+What it does:
+
+- Reads `node.describe` command list from the selected Android node.
+- Invokes advertised non-interactive commands.
+- Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
+- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send`, `notifications.actions`, `app.update`).
+
+Common failure quick-fixes:
+
+- `pairing required` before tests start:
+  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
+- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
+  - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
+- `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
+  - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 
 ## Contributions
 
