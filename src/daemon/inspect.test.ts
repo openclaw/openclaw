@@ -325,6 +325,22 @@ describe("findExtraGatewayServices (linux)", () => {
     expect(result).toEqual([]);
   });
 
+  it("skips services when env split-string payload includes remote-debugging-port", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "openclaw-env-split-remote-port.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        'ExecStart=/usr/bin/env -S "/usr/local/bin/helper --mode openclaw --remote-debugging-port=18800"',
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
+  });
+
   it("skips browser services when env uses split-string inline assignment", async () => {
     vi.spyOn(fs, "readdir").mockResolvedValue([
       "chromium-env-split-inline.service",

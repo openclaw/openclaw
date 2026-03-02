@@ -139,14 +139,52 @@ function normalizeExecStartToken(token: string): string {
   return normalized;
 }
 
+function extractInlineSplitStringValue(token: string): string | null {
+  if (token.startsWith("--split-string=")) {
+    return token.slice("--split-string=".length);
+  }
+  if (token.startsWith("-S") && token.length > 2) {
+    return token.slice(2);
+  }
+  return null;
+}
+
 function hasRemoteDebuggingPortArg(execStartValue: string): boolean {
-  const tokens = parseSystemdExecStart(execStartValue);
-  return tokens.some((token) => {
-    const normalized = normalizeExecStartToken(token);
-    return (
-      normalized === "--remote-debugging-port" || normalized.startsWith("--remote-debugging-port=")
-    );
-  });
+  const pending = parseSystemdExecStart(execStartValue);
+  while (pending.length > 0) {
+    const normalized = normalizeExecStartToken(pending.shift() ?? "");
+    if (!normalized) {
+      continue;
+    }
+    if (
+      normalized === "--remote-debugging-port" ||
+      normalized.startsWith("--remote-debugging-port=")
+    ) {
+      return true;
+    }
+
+    const inlineSplitStringValue = extractInlineSplitStringValue(normalized);
+    if (inlineSplitStringValue) {
+      const expanded = parseSystemdExecStart(normalizeExecStartToken(inlineSplitStringValue));
+      if (expanded.length > 0) {
+        pending.unshift(...expanded);
+      }
+      continue;
+    }
+
+    if (normalized === "-S" || normalized === "--split-string") {
+      const splitStringValue = pending.shift();
+      if (!splitStringValue) {
+        continue;
+      }
+      const expanded = parseSystemdExecStart(normalizeExecStartToken(splitStringValue));
+      if (expanded.length > 0) {
+        pending.unshift(...expanded);
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
