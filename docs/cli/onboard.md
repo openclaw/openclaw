@@ -70,6 +70,17 @@ Interactive onboarding behavior with reference mode:
 - Onboarding performs a fast preflight validation before saving the ref.
   - If validation fails, onboarding shows the error and lets you retry.
 
+Non-interactive Claude Code SDK (no API key):
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice claude-sdk \
+  --accept-risk
+```
+
+No credentials flags needed. Requires the `claude` CLI to be installed and
+signed in on the gateway host (Max subscription).
+
 Non-interactive Z.AI endpoint choices:
 
 Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).

@@ -67,6 +67,23 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 }
 ```
 
+### Claude Code SDK
+
+- Provider: `claude-sdk`
+- Auth: None (reuses local `claude` CLI authentication)
+- Requires: Claude Max subscription + `claude` CLI installed and signed in
+- Example model: `claude-sdk/opus`
+- CLI: `openclaw onboard --auth-choice claude-sdk`
+
+```json5
+{
+  agents: { defaults: { model: { primary: "claude-sdk/opus" } } },
+}
+```
+
+No API key or token is needed. The SDK forwards requests through the locally
+authenticated `claude` CLI session.
+
 ### OpenAI Code (Codex)
 
 - Provider: `openai-codex`
