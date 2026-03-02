@@ -43,7 +43,8 @@ describe("openVerifiedFileSync", () => {
         return;
       }
       expect(opened.stat.isDirectory()).toBe(true);
-      fs.closeSync(opened.fd);
+      // Directories return fd=-1 and should not be closed
+      expect(opened.fd).toBe(-1);
     });
   });
 });

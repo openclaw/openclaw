@@ -274,7 +274,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
             );
       }
     } else {
-      fs.closeSync(guarded.fd);
+      // Only close valid file descriptors (fd >= 0)
+      // Directories return fd=-1 and don't need closing
+      if (guarded.fd >= 0) {
+        fs.closeSync(guarded.fd);
+      }
     }
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({

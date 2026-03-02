@@ -63,6 +63,13 @@ export function openVerifiedFileSync(params: {
       return { ok: false, reason: "validation" };
     }
 
+    // For directories, we don't need to open with openSync - lstat is sufficient
+    // and avoids issues with directory file descriptors
+    if (allowedType === "directory") {
+      const opened = { ok: true as const, path: realPath, fd: -1, stat: preOpenStat };
+      return opened;
+    }
+
     fd = ioFs.openSync(realPath, openReadFlags);
     const openedStat = ioFs.fstatSync(fd);
     if (!isAllowedType(openedStat, allowedType)) {
