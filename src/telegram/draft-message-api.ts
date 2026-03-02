@@ -38,16 +38,11 @@ export async function sendMessageDraft(
   api: Bot["api"],
   params: SendMessageDraftParams,
 ): Promise<boolean> {
-  try {
-    // grammy exposes `api.raw` for methods not yet in its type definitions.
-    const result = await (
-      api as unknown as {
-        raw: (method: string, payload: Record<string, unknown>) => Promise<SendMessageDraftResult>;
-      }
-    ).raw("sendMessageDraft", params as unknown as Record<string, unknown>);
-    return result.ok;
-  } catch (err) {
-    // Re-throw so the caller (draft-stream) can decide whether to stop or retry.
-    throw err;
-  }
+  // grammy exposes `api.raw` for methods not yet in its type definitions.
+  const result = await (
+    api as unknown as {
+      raw: (method: string, payload: Record<string, unknown>) => Promise<SendMessageDraftResult>;
+    }
+  ).raw("sendMessageDraft", params as unknown as Record<string, unknown>);
+  return result.ok;
 }
