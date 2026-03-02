@@ -50,6 +50,7 @@ const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, 
 
 export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,

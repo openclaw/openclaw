@@ -321,4 +321,6 @@ export type DiscordAccountConfig = {
 export type DiscordConfig = {
   /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & DiscordAccountConfig;

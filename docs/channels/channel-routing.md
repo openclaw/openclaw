@@ -15,6 +15,8 @@ host configuration.
 
 - **Channel**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
 - **AccountId**: per‑channel account instance (when supported).
+- Optional channel default account: `channels.<channel>.defaultAccount` chooses
+  which account is used when an outbound path does not specify `accountId`.
 - **AgentId**: an isolated workspace + session store (“brain”).
 - **SessionKey**: the bucket key used to store context and control concurrency.
 

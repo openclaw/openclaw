@@ -197,6 +197,16 @@ Channels that support **multiple accounts** (e.g. WhatsApp) use `accountId` to i
 each login. Each `accountId` can be routed to a different agent, so one server can host
 multiple phone numbers without mixing sessions.
 
+If you want a channel-wide default account when `accountId` is omitted, set
+`channels.<channel>.defaultAccount` (optional). When unset, OpenClaw falls back
+to `default` if present, otherwise the first configured account id (sorted).
+
+Common channels supporting this pattern include:
+
+- `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`
+- `irc`, `line`, `googlechat`, `mattermost`, `matrix`, `nextcloud-talk`
+- `bluebubbles`, `zalo`, `zalouser`, `nostr`, `feishu`
+
 ## Concepts
 
 - `agentId`: one “brain” (workspace, per-agent auth, per-agent session store).
