@@ -1523,7 +1523,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.12;
+    const timeoutSeconds = 0.06;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
