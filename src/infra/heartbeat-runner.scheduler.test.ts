@@ -134,7 +134,7 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
-  it("reschedules timer when runOnce returns requests-in-flight", async () => {
+  it("retries soon when runOnce returns requests-in-flight", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
@@ -154,13 +154,50 @@ describe("startHeartbeatRunner", () => {
       runOnce: runSpy,
     });
 
-    // First heartbeat returns requests-in-flight
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // First heartbeat fires at 30m and is skipped (requests-in-flight).
+    // heartbeat-wake retries ~1 s later and the retry succeeds because
+    // the agent schedule was NOT advanced.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 2_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+
+    runner.stop();
+  });
+
+  it("drains queued heartbeat when requests-in-flight clears (#31237)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    // Simulate a queue that is busy for the first 3 attempts then clears.
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 3) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Advance past the first interval — heartbeat fires and is skipped.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 500);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Timer should be rescheduled; next heartbeat should still fire
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    // heartbeat-wake retries every ~1 s. After 3 retries (3 skips) the
+    // 4th attempt succeeds — all within seconds, NOT after a full interval.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(callCount).toBe(4);
+    expect(runSpy.mock.lastCall?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+
+    // Verify normal scheduling resumes: next heartbeat fires ~30 m later.
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 2_000);
+    expect(callCount).toBe(5);
 
     runner.stop();
   });

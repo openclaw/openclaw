@@ -1174,8 +1174,9 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
-        scheduleNext();
+        // Don't advance the schedule — the heartbeat didn't actually run.
+        // heartbeat-wake retries after ~1 s; the agent must still appear
+        // "due" so the retry is not skipped by the isInterval gate.
         return res;
       }
       if (res.status !== "skipped" || res.reason !== "disabled") {
