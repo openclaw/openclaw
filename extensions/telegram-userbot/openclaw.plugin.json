@@ -1,0 +1,9 @@
+{
+  "id": "telegram-userbot",
+  "channels": ["telegram-userbot"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -33,3 +33,10 @@ export { SessionStore } from "./session-store.js";
 
 export { FloodController } from "./flood-control.js";
 export type { FloodControllerConfig, FloodControllerMetrics } from "./flood-control.js";
+
+export {
+  TELEGRAM_USERBOT_CHANNEL_ID,
+  telegramUserbotMeta,
+  telegramUserbotConfigSchema,
+} from "./config-schema.js";
+export type { TelegramUserbotConfig } from "./config-schema.js";
