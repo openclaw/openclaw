@@ -286,22 +286,27 @@ export function createFollowupRunner(params: {
         typeof sessionEntry?.lastMessagingToolSentAt === "number" &&
         sessionEntry?.lastMessagingToolSessionId === queued.run.sessionId &&
         now - sessionEntry.lastMessagingToolSentAt <= RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS;
+      const previousSentTargets = sessionEntry?.lastMessagingToolSentTargets ?? [];
       const recentTargetMatch =
         recentWindowActive &&
         shouldSuppressMessagingToolReplies({
           messageProvider,
-          messagingToolSentTargets: sessionEntry?.lastMessagingToolSentTargets,
+          messagingToolSentTargets: previousSentTargets,
           originatingTo,
           accountId: originAccountId,
         });
+      const canReuseSessionDedupeFingerprints =
+        recentTargetMatch && previousSentTargets.length <= 1;
 
       const sentTexts = [
         ...(runResult.messagingToolSentTexts ?? []),
-        ...(recentTargetMatch ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
+        ...(canReuseSessionDedupeFingerprints ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
       ];
       const sentMediaUrls = [
         ...(runResult.messagingToolSentMediaUrls ?? []),
-        ...(recentTargetMatch ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? []) : []),
+        ...(canReuseSessionDedupeFingerprints
+          ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? [])
+          : []),
       ];
       // Keep target-based suppression scoped to the current run only.
       // Session-level dedupe state is used for text/media duplicate filtering when target matches.

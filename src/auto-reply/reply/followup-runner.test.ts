@@ -370,6 +370,40 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).toHaveBeenCalled();
   });
 
+  it("does not reuse session-level text dedupe when prior run had multiple messaging targets", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastMessagingToolSessionId: "session",
+      lastMessagingToolSentAt: Date.now(),
+      lastMessagingToolSentTexts: ["hello world!"],
+      lastMessagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "123" },
+        { tool: "message", provider: "telegram", to: "999" },
+      ],
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply, {
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    await runner({
+      ...baseQueuedRun("telegram"),
+      originatingTo: "123",
+    });
+
+    expect(onBlockReply).toHaveBeenCalled();
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
