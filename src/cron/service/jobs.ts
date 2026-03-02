@@ -649,6 +649,11 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   };
 }
 
+function normalizeOptionalTrimmedString(value: unknown): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed ? trimmed : undefined;
+}
+
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
@@ -665,16 +670,13 @@ function mergeCronDelivery(
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
   }
   if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
+    next.channel = normalizeOptionalTrimmedString(patch.channel);
   }
   if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
+    next.to = normalizeOptionalTrimmedString(patch.to);
   }
   if ("accountId" in patch) {
-    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
-    next.accountId = accountId ? accountId : undefined;
+    next.accountId = normalizeOptionalTrimmedString(patch.accountId);
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
@@ -701,12 +703,10 @@ function mergeCronFailureAlert(
     next.after = after > 0 ? Math.floor(after) : undefined;
   }
   if ("channel" in patch) {
-    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
-    next.channel = channel ? channel : undefined;
+    next.channel = normalizeOptionalTrimmedString(patch.channel);
   }
   if ("to" in patch) {
-    const to = typeof patch.to === "string" ? patch.to.trim() : "";
-    next.to = to ? to : undefined;
+    next.to = normalizeOptionalTrimmedString(patch.to);
   }
   if ("cooldownMs" in patch) {
     const cooldownMs =
