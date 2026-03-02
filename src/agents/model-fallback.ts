@@ -26,7 +26,6 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -41,6 +40,16 @@ type FallbackAttempt = {
   status?: number;
   code?: string;
 };
+
+const NON_RETRYABLE_MODEL_FALLBACK_REASONS = new Set<FailoverReason>([
+  "format",
+  "auth",
+  "auth_permanent",
+]);
+
+function isNonRetryableModelFallbackReason(reason: FailoverReason | undefined): boolean {
+  return Boolean(reason && NON_RETRYABLE_MODEL_FALLBACK_REASONS.has(reason));
+}
 
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
@@ -456,24 +465,16 @@ export async function runWithModelFallback<T>(params: {
       if (shouldRethrowAbort(err)) {
         throw err;
       }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
-      if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
-      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
 
-      // Even unrecognized errors should not abort the fallback loop when
-      // there are remaining candidates.  Only abort/context-overflow errors
-      // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
+      if (isKnownFailover && isNonRetryableModelFallbackReason(normalized.reason)) {
+        throw normalized;
+      }
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
       }

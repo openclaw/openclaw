@@ -1,11 +1,12 @@
 import {
   classifyFailoverReason,
   isAuthPermanentErrorMessage,
+  isLikelyContextOverflowError,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
 
 const TIMEOUT_HINT_RE =
-  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
+  /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort|\bENOTFOUND\b|\bECONNREFUSED\b/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export class FailoverError extends Error {
@@ -179,6 +180,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "timeout";
   }
   if (status === 400) {
+    const msg = getErrorMessage(err);
+    if (msg && isLikelyContextOverflowError(msg)) {
+      return "timeout";
+    }
     return "format";
   }
 
@@ -190,6 +195,7 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
       "ECONNRESET",
       "ECONNABORTED",
       "ECONNREFUSED",
+      "ENOTFOUND",
       "ENETUNREACH",
       "EHOSTUNREACH",
       "ENETRESET",

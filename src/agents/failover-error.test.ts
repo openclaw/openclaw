@@ -18,6 +18,12 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Request size exceeds model context window",
+      }),
+    ).toBe("timeout");
   });
 
   it("infers format errors from error messages", () => {
@@ -31,6 +37,17 @@ describe("failover-error", () => {
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENOTFOUND" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
+  });
+
+  it("infers timeout from DNS/connectivity message hints", () => {
+    expect(
+      resolveFailoverReasonFromError({ message: "getaddrinfo ENOTFOUND api.ollama.local" }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({ message: "connect ECONNREFUSED 127.0.0.1:11434" }),
+    ).toBe("timeout");
   });
 
   it("infers timeout from abort stop-reason messages", () => {

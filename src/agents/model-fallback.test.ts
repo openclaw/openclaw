@@ -247,15 +247,43 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back on auth errors", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("nope"), { status: 401 }),
-    });
+  it("does not fall back on auth errors (401)", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("unauthorized"), { status: 401 }))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("unauthorized");
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back directly to configured primary when an override model fails", async () => {
+  it("does not fall back on auth errors (403)", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("forbidden"), { status: 403 }))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("forbidden");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back directly to configured primary when an override model is rate-limited", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -272,7 +300,7 @@ describe("runWithModelFallback", () => {
       overrideModel: "claude-opus-4-5",
       fallbackProvider: "openai",
       fallbackModel: "gpt-4.1-mini",
-      firstError: Object.assign(new Error("unauthorized"), { status: 401 }),
+      firstError: Object.assign(new Error("rate limited"), { status: 429 }),
     });
 
     const result = await runWithModelFallback({
@@ -343,7 +371,7 @@ describe("runWithModelFallback", () => {
 
     const run = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("nope"), { status: 401 }))
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
       .mockResolvedValueOnce("ok");
 
     const result = await runWithModelFallback({
@@ -378,6 +406,16 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on 400 context-window overflow errors", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("Request size exceeds model context window"), {
+        status: 400,
+      }),
+    });
+  });
+
   it("falls back on billing errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
@@ -388,14 +426,14 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("falls back to configured primary for override credential validation errors", async () => {
+  it("falls back to configured primary for override transport errors", async () => {
     const cfg = makeCfg();
     const run = createOverrideFailureRun({
       overrideProvider: "anthropic",
       overrideModel: "claude-opus-4",
       fallbackProvider: "openai",
       fallbackModel: "gpt-4.1-mini",
-      firstError: new Error('No credentials found for profile "anthropic:default".'),
+      firstError: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
     });
 
     const result = await runWithModelFallback({
@@ -567,7 +605,9 @@ describe("runWithModelFallback", () => {
     });
     const run = vi
       .fn()
-      .mockImplementation(() => Promise.reject(Object.assign(new Error("nope"), { status: 401 })));
+      .mockImplementation(() =>
+        Promise.reject(Object.assign(new Error("rate limited"), { status: 429 })),
+      );
 
     await expect(
       runWithModelFallback({
@@ -598,7 +638,7 @@ describe("runWithModelFallback", () => {
       run: async (provider, model) => {
         calls.push({ provider, model });
         if (provider === "anthropic") {
-          throw Object.assign(new Error("nope"), { status: 401 });
+          throw Object.assign(new Error("rate limited"), { status: 429 });
         }
         if (provider === "openai" && model === "gpt-4.1") {
           return "ok";
@@ -696,20 +736,44 @@ describe("runWithModelFallback", () => {
     expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
   });
 
-  it("falls back on missing API key errors", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error("No API key found for profile openai."),
-    });
+  it("does not fall back on missing API key auth errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("No API key found for profile openai."))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("No API key found for profile openai.");
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back on lowercase credential errors", async () => {
-    await expectFallsBackToHaiku({
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      firstError: new Error("no api key found for profile openai"),
-    });
+  it("does not fall back on format errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("invalid request format: messages.1.content.1.tool_use.id"), {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("invalid request format");
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("falls back on timeout abort errors", async () => {
@@ -783,6 +847,16 @@ describe("runWithModelFallback", () => {
       model: "gpt-4.1-mini",
       firstError: Object.assign(new Error("getaddrinfo EAI_AGAIN api.openai.com"), {
         code: "EAI_AGAIN",
+      }),
+    });
+  });
+
+  it("falls back on ENOTFOUND (DNS lookup failure)", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: Object.assign(new Error("getaddrinfo ENOTFOUND api.ollama.local"), {
+        code: "ENOTFOUND",
       }),
     });
   });
@@ -926,7 +1000,7 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error('No credentials found for profile "openai:default".'))
+        .mockRejectedValueOnce(Object.assign(new Error("rate limit exceeded"), { status: 429 }))
         .mockResolvedValueOnce("config primary worked");
 
       const result = await runWithModelFallback({
