@@ -66,10 +66,14 @@ const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 const MAX_ANNOUNCE_RETRY_COUNT = 3;
 /**
  * Non-completion announce entries older than this are force-expired even if
- * delivery never succeeded. Completion-message flows can stay pending while
- * descendants finish and are governed by retry limits instead.
+ * delivery never succeeded.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+/**
+ * Completion-message flows can wait for descendants to finish, but this hard
+ * cap prevents indefinite pending state when descendants never fully settle.
+ */
+const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000; // 30 minutes
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
@@ -720,6 +724,7 @@ async function finalizeSubagentCleanup(
     // Defer until descendants are fully settled, including post-end cleanup.
     activeDescendantRuns: Math.max(0, countPendingDescendantRuns(entry.childSessionKey)),
     announceExpiryMs: ANNOUNCE_EXPIRY_MS,
+    announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
     maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
     deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
     resolveAnnounceRetryDelayMs,
@@ -762,6 +767,7 @@ async function finalizeSubagentCleanup(
   // Applies to both keep/delete cleanup modes so delete-runs are only removed
   // after a successful announce (or terminal give-up).
   entry.cleanupHandled = false;
+  // Clear the in-flight resume marker so the scheduled retry can run again.
   resumedRuns.delete(runId);
   persistSubagentRuns();
   if (deferredDecision.resumeDelayMs == null) {

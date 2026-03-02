@@ -2,73 +2,80 @@ import { describe, expect, it } from "vitest";
 import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function buildRun(partial?: Partial<SubagentRunRecord>): SubagentRunRecord {
+function makeEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
     runId: "run-1",
-    childSessionKey: "agent:main:subagent:orchestrator",
+    childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
-    task: "orchestrate",
+    task: "test",
     cleanup: "keep",
-    createdAt: 1,
-    startedAt: 1,
-    endedAt: 2,
-    expectsCompletionMessage: true,
-    ...partial,
+    createdAt: 0,
+    endedAt: 1_000,
+    ...overrides,
   };
 }
 
-describe("subagent registry cleanup decisions", () => {
-  it("keeps deferring completion-message announces while descendants are still active", () => {
-    const now = 10 * 60_000;
+describe("resolveDeferredCleanupDecision", () => {
+  const now = 2_000;
+
+  it("defers completion-message cleanup while descendants are still pending", () => {
     const decision = resolveDeferredCleanupDecision({
-      entry: buildRun({ endedAt: 0 }),
+      entry: makeEntry({ expectsCompletionMessage: true }),
       now,
       activeDescendantRuns: 2,
       announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
       maxAnnounceRetryCount: 3,
       deferDescendantDelayMs: 1_000,
-      resolveAnnounceRetryDelayMs: () => 1_000,
+      resolveAnnounceRetryDelayMs: () => 2_000,
     });
 
     expect(decision).toEqual({ kind: "defer-descendants", delayMs: 1_000 });
   });
 
-  it("does not expire completion-message announces just because descendants took a long time", () => {
-    const now = 10 * 60_000;
+  it("hard-expires completion-message cleanup when descendants never settle", () => {
     const decision = resolveDeferredCleanupDecision({
-      entry: buildRun({ endedAt: 0 }),
+      entry: makeEntry({ expectsCompletionMessage: true, endedAt: now - (30 * 60_000 + 1) }),
       now,
-      activeDescendantRuns: 0,
+      activeDescendantRuns: 1,
       announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
       maxAnnounceRetryCount: 3,
       deferDescendantDelayMs: 1_000,
       resolveAnnounceRetryDelayMs: () => 2_000,
     });
 
-    expect(decision).toEqual({
-      kind: "retry",
-      retryCount: 1,
-      resumeDelayMs: 2_000,
-    });
+    expect(decision).toEqual({ kind: "give-up", reason: "expiry" });
   });
 
-  it("still expires stale non-completion announces", () => {
-    const now = 10 * 60_000;
+  it("keeps regular expiry behavior for non-completion flows", () => {
     const decision = resolveDeferredCleanupDecision({
-      entry: buildRun({ expectsCompletionMessage: false, endedAt: 0 }),
+      entry: makeEntry({ expectsCompletionMessage: false, endedAt: now - (5 * 60_000 + 1) }),
       now,
       activeDescendantRuns: 0,
       announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
       maxAnnounceRetryCount: 3,
       deferDescendantDelayMs: 1_000,
       resolveAnnounceRetryDelayMs: () => 2_000,
     });
 
-    expect(decision).toEqual({
-      kind: "give-up",
-      reason: "expiry",
-      retryCount: 1,
+    expect(decision).toEqual({ kind: "give-up", reason: "expiry", retryCount: 1 });
+  });
+
+  it("uses retry backoff for completion-message flows once descendants are settled", () => {
+    const decision = resolveDeferredCleanupDecision({
+      entry: makeEntry({ expectsCompletionMessage: true, announceRetryCount: 1 }),
+      now,
+      activeDescendantRuns: 0,
+      announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
+      maxAnnounceRetryCount: 3,
+      deferDescendantDelayMs: 1_000,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
     });
+
+    expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
 });
