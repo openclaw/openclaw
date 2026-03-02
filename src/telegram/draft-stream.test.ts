@@ -371,4 +371,148 @@ describe("draft stream initial message debounce", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hi", undefined);
     });
   });
+
+  describe("native sendMessageDraft streaming", () => {
+    function createNativeDraftApi() {
+      return {
+        sendMessage: vi.fn(async () => ({ message_id: 17 })),
+        editMessageText: vi.fn().mockResolvedValue(true),
+        deleteMessage: vi.fn().mockResolvedValue(true),
+        sendMessageDraft: vi.fn().mockResolvedValue(true),
+      };
+    }
+
+    function createNativeDraftStream(
+      api: ReturnType<typeof createNativeDraftApi>,
+      overrides: Partial<TelegramDraftStreamParams> = {},
+    ) {
+      return createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        useNativeDraft: true,
+        draftId: 42,
+        ...overrides,
+      });
+    }
+
+    it("uses sendMessageDraft instead of sendMessage + editMessageText", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", undefined);
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+    });
+
+    it("passes message_thread_id when thread is specified", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api, {
+        thread: { id: 99, scope: "forum" },
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", {
+        message_thread_id: 99,
+      });
+    });
+
+    it("returns undefined for messageId() in native draft mode", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(stream.messageId()).toBeUndefined();
+    });
+
+    it("falls back to legacy edit mode on sendMessageDraft failure", async () => {
+      const api = createNativeDraftApi();
+      api.sendMessageDraft.mockRejectedValueOnce(new Error("Method not supported"));
+      const warnSpy = vi.fn();
+      const stream = createNativeDraftStream(api, { warn: warnSpy });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("telegram native draft failed"),
+      );
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    });
+
+    it("stays on legacy path after fallback (does not retry native)", async () => {
+      const api = createNativeDraftApi();
+      api.sendMessageDraft.mockRejectedValueOnce(new Error("Method not supported"));
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      stream.update("Hello world");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).toHaveBeenCalled();
+    });
+
+    it("regenerates draftId on forceNewMessage()", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Part 1");
+      await stream.flush();
+      const firstDraftId = api.sendMessageDraft.mock.calls[0][1];
+
+      stream.forceNewMessage();
+      stream.update("Part 2");
+      await stream.flush();
+      const secondDraftId = api.sendMessageDraft.mock.calls[1][1];
+
+      expect(secondDraftId).not.toBe(firstDraftId);
+    });
+
+    it("debounces first send with minInitialChars", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api, { minInitialChars: 10 });
+
+      stream.update("Hi");
+      await stream.flush();
+      expect(api.sendMessageDraft).not.toHaveBeenCalled();
+
+      stream.update("Hello world!");
+      await stream.flush();
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips duplicate text in native draft mode", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    });
+
+    it("clear() is a no-op in native draft mode (no message to delete)", async () => {
+      const api = createNativeDraftApi();
+      const stream = createNativeDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      await stream.clear();
+
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+    });
+  });
 });

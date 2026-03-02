@@ -189,7 +189,23 @@ export const dispatchTelegramMessage = async ({
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
+  // Use Bot API 9.3+ native sendMessageDraft when configured.
+  // Since Bot API 9.5 (March 2026), this is available for all bots.
+  // Falls back automatically on any API error.
+  const useNativeDraft = telegramCfg.nativeDraftStreaming === true;
+
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    // Derive a stable non-zero draft_id for this streaming session.
+    // Use chatId XOR msg.message_id (when available) so retried updates reuse
+    // the same draft slot.  Falls back to timestamp within int32 range.
+    const nativeDraftId = useNativeDraft
+      ? Math.max(
+          1,
+          (typeof msg.message_id === "number"
+            ? (chatId ^ msg.message_id) >>> 0
+            : Date.now()) % 2147483647,
+        )
+      : undefined;
     const stream = enabled
       ? createTelegramDraftStream({
           api: bot.api,
@@ -199,6 +215,8 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
+          useNativeDraft,
+          draftId: nativeDraftId,
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {

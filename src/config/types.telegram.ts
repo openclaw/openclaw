@@ -159,6 +159,23 @@ export type TelegramAccountConfig = {
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
   /**
+   * Enable native `sendMessageDraft` streaming (Bot API 9.3+).
+   *
+   * When `true`, OpenClaw uses `sendMessageDraft` for animated streaming
+   * previews instead of the legacy sendMessage + editMessageText loop.
+   * This produces smoother, animated "typing" without leaving "edited"
+   * markers or consuming extra message IDs.
+   *
+   * Since Bot API 9.5 (March 1, 2026), `sendMessageDraft` is available
+   * to **all bots** — the earlier forum-topic-mode restriction was lifted.
+   *
+   * On any API failure, the stream automatically falls back to the legacy
+   * edit-based path for that session.
+   *
+   * Default: `false` (safe default; existing edit-based preview preserved).
+   */
+  nativeDraftStreaming?: boolean;
+  /**
    * Per-channel outbound response prefix override.
    *
    * When set, this takes precedence over the global `messages.responsePrefix`.
