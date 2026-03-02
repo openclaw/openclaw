@@ -128,6 +128,16 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
   }
 }
 
+export async function resolveRegisteredExecApprovalDecision(params: {
+  approvalId: string;
+  preResolvedDecision: string | null | undefined;
+}): Promise<string | null> {
+  if (params.preResolvedDecision !== undefined) {
+    return params.preResolvedDecision ?? null;
+  }
+  return await waitForExecApprovalDecision(params.approvalId);
+}
+
 export async function requestExecApprovalDecision(
   params: RequestExecApprovalDecisionParams,
 ): Promise<string | null> {
