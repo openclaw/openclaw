@@ -133,12 +133,13 @@ function mergeFeishuDebounceMentions(
   const merged = new Map<string, NonNullable<FeishuMessageEvent["message"]["mentions"]>[number]>();
   for (const entry of entries) {
     for (const mention of entry.message.mentions ?? []) {
-      const key =
-        mention.id.open_id?.trim() ||
-        mention.id.user_id?.trim() ||
-        mention.id.union_id?.trim() ||
-        mention.name?.trim() ||
-        mention.key?.trim();
+      const stableId =
+        mention.id.open_id?.trim() || mention.id.user_id?.trim() || mention.id.union_id?.trim();
+      const mentionName = mention.name?.trim();
+      const mentionKey = mention.key?.trim();
+      const fallback =
+        mentionName && mentionKey ? `${mentionName}|${mentionKey}` : mentionName || mentionKey;
+      const key = stableId || fallback;
       if (!key || merged.has(key)) {
         continue;
       }
