@@ -18,6 +18,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
@@ -36,9 +37,11 @@ export type CronFormState = {
   payloadText: string;
   payloadModel: string;
   payloadThinking: string;
+  payloadLightContext: boolean;
   deliveryMode: "none" | "announce" | "webhook";
   deliveryChannel: string;
   deliveryTo: string;
+  deliveryAccountId: string;
   deliveryBestEffort: boolean;
   failureAlertMode: "inherit" | "disabled" | "custom";
   failureAlertAfter: string;
