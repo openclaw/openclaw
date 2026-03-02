@@ -203,6 +203,21 @@ describe("launchd install", () => {
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
+  it("writes ProcessType=Interactive and NSAppSleepDisabled to prevent macOS App Nap during screen lock", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>ProcessType</key>");
+    expect(plist).toContain("<string>Interactive</string>");
+    expect(plist).toContain("<key>NSAppSleepDisabled</key>");
+  });
+
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({
