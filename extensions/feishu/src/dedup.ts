@@ -89,3 +89,12 @@ export async function hasRecordedMessagePersistent(
     return false;
   }
 }
+
+export async function warmupDedupFromDisk(
+  namespace: string,
+  log?: (...args: unknown[]) => void,
+): Promise<number> {
+  return persistentDedupe.warmup(namespace, (error) => {
+    log?.(`feishu-dedup: warmup disk error: ${String(error)}`);
+  });
+}
