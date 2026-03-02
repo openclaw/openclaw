@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { type APIChannel, ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -15,6 +15,7 @@ import { extensionForMime } from "../media/mime.js";
 import type { PollInput } from "../polls.js";
 import { loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { enforceOutboundAllowlistAsync } from "./send.outbound-allowlist.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -24,7 +25,6 @@ import {
   normalizeStickerIds,
   parseAndResolveRecipient,
   resolveChannelId,
-  resolveDiscordChannelType,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
@@ -34,7 +34,7 @@ import {
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
-import type { DiscordSendResult } from "./send.types.js";
+import { DiscordSendError, type DiscordSendResult } from "./send.types.js";
 import {
   ensureOggOpus,
   getVoiceMessageMetadata,
@@ -105,6 +105,29 @@ function isForumLikeType(channelType?: number): boolean {
   return channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
 }
 
+function isThreadType(channelType?: number): boolean {
+  return (
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread
+  );
+}
+
+function readGuildChannelMeta(channel: APIChannel | undefined): {
+  channelName?: string;
+  guildId?: string;
+  parentChannelId?: string;
+} {
+  const data = channel as
+    | (APIChannel & { guild_id?: string; parent_id?: string; name?: string })
+    | undefined;
+  return {
+    channelName: typeof data?.name === "string" ? data.name : undefined,
+    guildId: typeof data?.guild_id === "string" ? data.guild_id : undefined,
+    parentChannelId: typeof data?.parent_id === "string" ? data.parent_id : undefined,
+  };
+}
+
 function toDiscordSendResult(
   result: DiscordChannelMessageResult,
   fallbackChannelId: string,
@@ -113,17 +136,6 @@ function toDiscordSendResult(
     messageId: result.id ? String(result.id) : "unknown",
     channelId: String(result.channel_id ?? fallbackChannelId),
   };
-}
-
-async function resolveDiscordSendTarget(
-  to: string,
-  opts: DiscordSendOpts,
-): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
-  const cfg = loadConfig();
-  const { rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId);
-  const { channelId } = await resolveChannelId(rest, recipient, request);
-  return { rest, request, channelId };
 }
 
 export async function sendMessageDiscord(
@@ -146,9 +158,41 @@ export async function sendMessageDiscord(
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
+  const isDm = recipient.kind === "user";
 
-  // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  // Fetch channel metadata (needed for forum detection and outbound allowlist).
+  let channel: APIChannel | undefined;
+  try {
+    channel = (await request(
+      () => rest.get(Routes.channel(channelId)) as Promise<APIChannel>,
+      "channel-metadata",
+    )) as APIChannel | undefined;
+  } catch {
+    if (!isDm) {
+      throw new DiscordSendError(
+        `Cannot verify outbound allowlist: channel metadata fetch failed for ${channelId}`,
+        { kind: "channel-metadata-unavailable", channelId },
+      );
+    }
+  }
+  const channelType = channel?.type;
+  const isThread = isThreadType(channelType);
+  const { channelName, guildId, parentChannelId } = readGuildChannelMeta(channel);
+
+  // Enforce outbound allowlist for non-DM sends.
+  if (!isDm) {
+    await enforceOutboundAllowlistAsync({
+      cfg,
+      accountId: accountInfo.accountId,
+      channelId,
+      channelName,
+      guildId,
+      isDm: false,
+      isThread,
+      parentChannelId,
+      rest,
+    });
+  }
 
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
@@ -403,7 +447,43 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
+  const cfg = loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+  const { rest, request } = createDiscordClient(opts, cfg);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
+  const isDm = recipient.kind === "user";
+
+  // Enforce outbound allowlist for non-DM sends.
+  if (!isDm) {
+    let ch: APIChannel | undefined;
+    try {
+      ch = (await request(
+        () => rest.get(Routes.channel(channelId)) as Promise<APIChannel>,
+        "channel-metadata",
+      )) as APIChannel | undefined;
+    } catch {
+      throw new DiscordSendError(
+        `Cannot verify outbound allowlist: channel metadata fetch failed for ${channelId}`,
+        { kind: "channel-metadata-unavailable", channelId },
+      );
+    }
+    const channelType = ch?.type;
+    const isThread = isThreadType(channelType);
+    const { channelName, guildId, parentChannelId } = readGuildChannelMeta(ch);
+    await enforceOutboundAllowlistAsync({
+      cfg,
+      accountId: accountInfo.accountId,
+      channelId,
+      channelName,
+      guildId,
+      isDm: false,
+      isThread,
+      parentChannelId,
+      rest,
+    });
+  }
+
   const content = opts.content?.trim();
   const stickers = normalizeStickerIds(stickerIds);
   const res = (await request(
@@ -424,7 +504,43 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
+  const cfg = loadConfig();
+  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
+  const { rest, request } = createDiscordClient(opts, cfg);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
+  const isDm = recipient.kind === "user";
+
+  // Enforce outbound allowlist for non-DM sends.
+  if (!isDm) {
+    let ch: APIChannel | undefined;
+    try {
+      ch = (await request(
+        () => rest.get(Routes.channel(channelId)) as Promise<APIChannel>,
+        "channel-metadata",
+      )) as APIChannel | undefined;
+    } catch {
+      throw new DiscordSendError(
+        `Cannot verify outbound allowlist: channel metadata fetch failed for ${channelId}`,
+        { kind: "channel-metadata-unavailable", channelId },
+      );
+    }
+    const channelType = ch?.type;
+    const isThread = isThreadType(channelType);
+    const { channelName, guildId, parentChannelId } = readGuildChannelMeta(ch);
+    await enforceOutboundAllowlistAsync({
+      cfg,
+      accountId: accountInfo.accountId,
+      channelId,
+      channelName,
+      guildId,
+      isDm: false,
+      isThread,
+      parentChannelId,
+      rest,
+    });
+  }
+
   const content = opts.content?.trim();
   if (poll.durationSeconds !== undefined) {
     throw new Error("Discord polls do not support durationSeconds; use durationHours");
