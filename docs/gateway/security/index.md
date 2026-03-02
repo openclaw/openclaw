@@ -691,6 +691,8 @@ do **not** protect local WS access by themselves.
 Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
 is unset.
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
+Plaintext `ws://` is loopback-only by default. For trusted private-network
+paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
 
 Local device pairing:
 
