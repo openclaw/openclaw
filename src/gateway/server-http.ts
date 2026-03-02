@@ -424,9 +424,6 @@ export function createGatewayHttpServer(opts: {
         req.url = scopedCanvas.rewrittenUrl;
       }
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (handleGatewayProbeRequest(req, res, requestPath)) {
-        return;
-      }
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -530,6 +527,9 @@ export function createGatewayHttpServer(opts: {
         if (await handlePluginRequest(req, res)) {
           return;
         }
+      }
+      if (handleGatewayProbeRequest(req, res, requestPath)) {
+        return;
       }
 
       res.statusCode = 404;
