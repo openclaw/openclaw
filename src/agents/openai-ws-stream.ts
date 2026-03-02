@@ -42,6 +42,10 @@ import {
   type ResponseObject,
 } from "./openai-ws-connection.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import {
+  buildAssistantMessageWithZeroUsage,
+  buildStreamErrorAssistantMessage,
+} from "./stream-message-shared.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -605,23 +609,11 @@ export function createOpenAIWebSocketStreamFn(
 
       eventStream.push({
         type: "start",
-        partial: {
-          role: "assistant",
+        partial: buildAssistantMessageWithZeroUsage({
+          model,
           content: [],
           stopReason: "stop",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          timestamp: Date.now(),
-        },
+        }),
       });
 
       // ── 5. Wait for response.completed ───────────────────────────────────
@@ -678,23 +670,11 @@ export function createOpenAIWebSocketStreamFn(
             reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
           } else if (event.type === "response.output_text.delta") {
             // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = {
-              role: "assistant",
+            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+              model,
               content: [{ type: "text", text: event.delta }],
               stopReason: "stop",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              timestamp: Date.now(),
-            };
+            });
             eventStream.push({
               type: "text_delta",
               contentIndex: 0,
@@ -713,24 +693,10 @@ export function createOpenAIWebSocketStreamFn(
         eventStream.push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant" as const,
-            content: [],
-            stopReason: "error" as StopReason,
+          error: buildStreamErrorAssistantMessage({
+            model,
             errorMessage,
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: Date.now(),
-          },
+          }),
         });
         eventStream.end();
       }),
