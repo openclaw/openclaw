@@ -22,23 +22,25 @@ export function setDefaultChannelPluginRegistryForTests(): void {
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
-export function patchChannelOnboardingAdapter<K extends keyof ChannelOnboardingAdapter>(
+export function patchChannelOnboardingAdapter(
   channel: ChannelChoice,
-  patch: Pick<ChannelOnboardingAdapter, K>,
+  patch: Partial<ChannelOnboardingAdapter>,
 ): () => void {
   const adapter = getChannelOnboardingAdapter(channel);
   if (!adapter) {
     throw new Error(`missing onboarding adapter for ${channel}`);
   }
-  const keys = Object.keys(patch) as K[];
-  const previous = {} as Pick<ChannelOnboardingAdapter, K>;
+  const keys = Object.keys(patch);
+  const adapterRecord = adapter as unknown as Record<string, unknown>;
+  const patchRecord = patch as Record<string, unknown>;
+  const previous = new Map<string, unknown>();
   for (const key of keys) {
-    previous[key] = adapter[key];
-    adapter[key] = patch[key];
+    previous.set(key, adapterRecord[key]);
+    adapterRecord[key] = patchRecord[key];
   }
   return () => {
     for (const key of keys) {
-      adapter[key] = previous[key];
+      adapterRecord[key] = previous.get(key);
     }
   };
 }
