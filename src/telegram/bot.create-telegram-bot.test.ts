@@ -1775,10 +1775,14 @@ describe("createTelegramBot", () => {
       });
 
       expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-      for (const call of sendMessageSpy.mock.calls) {
-        expect((call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id).toBe(
-          messageId,
-        );
+      for (const [index, call] of sendMessageSpy.mock.calls.entries()) {
+        const actual = (call[2] as { reply_to_message_id?: number } | undefined)
+          ?.reply_to_message_id;
+        if (mode === "all" || index === 0) {
+          expect(actual).toBe(messageId);
+        } else {
+          expect(actual).toBeUndefined();
+        }
       }
     }
   });
