@@ -391,7 +391,11 @@ export function resolveProfile(
 
   const parsedProfileProxy = profile.proxy?.trim() ? parseProxyUrl(profile.proxy) : undefined;
   const proxy = parsedProfileProxy?.server ?? resolved.proxy;
-  const proxyCredentials = parsedProfileProxy?.credentials ?? resolved.proxyCredentials;
+  // Only inherit global credentials when the profile doesn't specify its own proxy.
+  // A profile proxy without credentials means no auth — don't leak global credentials.
+  const proxyCredentials = parsedProfileProxy
+    ? parsedProfileProxy.credentials
+    : resolved.proxyCredentials;
 
   return {
     name: profileName,

@@ -440,4 +440,24 @@ describe("browser config", () => {
     const openclaw = resolveProfile(resolved, "openclaw");
     expect(openclaw?.proxyCredentials).toEqual({ username: "globaluser", password: "globalpass" });
   });
+
+  it("profile proxy without credentials does not inherit global credentials", () => {
+    const resolved = resolveBrowserConfig({
+      proxy: "http://user:pass@global-proxy:8080",
+      profiles: {
+        work: {
+          proxy: "socks5://work-proxy:1080",
+          cdpPort: 9223,
+        },
+      },
+    });
+    const work = resolveProfile(resolved, "work");
+    expect(work?.proxy).toBe("socks5://work-proxy:1080");
+    expect(work?.proxyCredentials).toBeUndefined();
+
+    // Global profile should still retain its own credentials
+    const openclaw = resolveProfile(resolved, "openclaw");
+    expect(openclaw?.proxy).toBe("http://global-proxy:8080");
+    expect(openclaw?.proxyCredentials).toEqual({ username: "user", password: "pass" });
+  });
 });
