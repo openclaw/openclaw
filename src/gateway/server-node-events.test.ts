@@ -62,7 +62,7 @@ import { requestSessionEventRun } from "../infra/session-event-run.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
@@ -71,6 +71,7 @@ const loadConfigMock = vi.mocked(loadConfig);
 const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
+const resolveGatewaySessionStoreTargetMock = vi.mocked(resolveGatewaySessionStoreTarget);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -101,6 +102,11 @@ describe("node exec events", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatNowMock.mockClear();
     requestSessionEventRunMock.mockClear();
+    resolveGatewaySessionStoreTargetMock.mockReset();
+    resolveGatewaySessionStoreTargetMock.mockImplementation(({ key }: { key: string }) => ({
+      canonicalKey: key,
+      storeKeys: [key],
+    }));
   });
 
   it("enqueues exec.started events", async () => {
@@ -151,9 +157,11 @@ describe("node exec events", () => {
   });
 
   it("keeps raw session keys for exec event runs", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({
-      ...buildSessionLookup("agent:main:main"),
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:node-node-2",
+      storeKeys: ["agent:main:main"],
     });
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-2", {
@@ -168,7 +176,11 @@ describe("node exec events", () => {
       }),
     });
 
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(resolveGatewaySessionStoreTargetMock).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      key: "agent:main:main",
+      scanLegacyKeys: false,
+    });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "agent:main:main", contextKey: "exec:run-2" },
@@ -180,10 +192,46 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
+  it("treats alias session keys as wake-eligible when canonicalized to agent keys", async () => {
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["main", "agent:main:main"],
+    });
+    const ctx = buildCtx();
+    const warn = vi.fn();
+    ctx.logGateway = { warn };
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "main",
+        runId: "run-main-alias",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        wakeOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-main-alias, code 0)\ndone",
+      { sessionKey: "main", contextKey: "exec:run-main-alias" },
+    );
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "main",
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("warns and skips immediate wake for non-agent session keys", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({
-      ...buildSessionLookup("global"),
+    resolveGatewaySessionStoreTargetMock.mockReturnValueOnce({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
       canonicalKey: "global",
+      storeKeys: ["global"],
     });
     const ctx = buildCtx();
     const warn = vi.fn();
@@ -200,7 +248,11 @@ describe("node exec events", () => {
       }),
     });
 
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+    expect(resolveGatewaySessionStoreTargetMock).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      key: "global",
+      scanLegacyKeys: false,
+    });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-global, code 0)\ndone",
       { sessionKey: "global", contextKey: "exec:run-global" },

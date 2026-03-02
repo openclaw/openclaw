@@ -586,9 +586,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
       if (wakeOnExit) {
         if (evt.event === "exec.finished") {
-          if (!isAgentScopedSessionKey(sessionKeyRaw)) {
+          const wakeTarget = resolveGatewaySessionStoreTarget({
+            cfg,
+            key: sessionKeyRaw,
+            scanLegacyKeys: false,
+          });
+          if (!isAgentScopedSessionKey(wakeTarget.canonicalKey)) {
             ctx.logGateway.warn(
-              `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw}`,
+              `exec wakeOnExit ignored for non-agent session key node=${nodeId}${runId ? ` id=${runId}` : ""} sessionKey=${sessionKeyRaw} canonicalKey=${wakeTarget.canonicalKey}`,
             );
             return;
           }
