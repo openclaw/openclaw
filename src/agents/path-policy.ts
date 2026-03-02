@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
 type RelativePathOptions = {
@@ -7,17 +8,6 @@ type RelativePathOptions = {
   boundaryLabel?: string;
   includeRootInError?: boolean;
 };
-
-function normalizeWindowsPathForComparison(input: string): string {
-  let normalized = path.win32.normalize(input);
-  if (normalized.startsWith("\\\\?\\")) {
-    normalized = normalized.slice(4);
-    if (normalized.toUpperCase().startsWith("UNC\\")) {
-      normalized = `\\\\${normalized.slice(4)}`;
-    }
-  }
-  return normalized.replaceAll("/", "\\").toLowerCase();
-}
 
 function toRelativePathUnderRoot(params: {
   root: string;
