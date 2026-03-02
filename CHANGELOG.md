@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice-call/Twilio inbound greeting: run answered-call initial notify greeting for Twilio instead of skipping the manager speak path, with regression coverage for both Twilio and Plivo notify flows. (#29121) Thanks @xinhuagu.
 - Feishu/topic session routing: use `thread_id` as topic session scope fallback when `root_id` is absent, keep first-turn topic keys stable across thread creation, and force thread replies when inbound events already carry topic/thread context. (#29788) Thanks @songyaolun.
 - Feishu/topic root replies: prefer `root_id` as outbound `replyTargetMessageId` when present, and parse millisecond `message_create_time` values correctly so topic replies anchor to the root message in grouped thread flows. (#29968) Thanks @bmendonca3.
 - Feishu/DM pairing reply target: send pairing challenge replies to `chat:<chat_id>` instead of `user:<sender_open_id>` so Lark/Feishu private chats with user-id-only sender payloads receive pairing messages reliably. (#31403) Thanks @stakeswky.
