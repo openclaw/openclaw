@@ -158,7 +158,8 @@ export function buildAgentPeerSessionKey(params: {
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
   const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
-  return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
+  const accountId = normalizeAccountId(params.accountId);
+  return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:${peerKind}:${peerId}`;
 }
 
 function resolveLinkedPeerId(params: {

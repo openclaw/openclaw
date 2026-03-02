@@ -115,3 +115,63 @@ describe("session key canonicalization", () => {
     ).toBe("agent:main:main");
   });
 });
+
+describe("buildAgentPeerSessionKey with accountId", () => {
+  it("includes accountId in group/channel session keys", async () => {
+    const { buildAgentPeerSessionKey } = await import("./session-key.js");
+
+    const groupKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "discord",
+      accountId: "designer",
+      peerKind: "group",
+      peerId: "123456",
+    });
+    expect(groupKey).toBe("agent:main:discord:designer:group:123456");
+
+    const channelKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "discord",
+      accountId: "designer",
+      peerKind: "channel",
+      peerId: "789012",
+    });
+    expect(channelKey).toBe("agent:main:discord:designer:channel:789012");
+  });
+
+  it("uses default accountId when not provided for group/channel", async () => {
+    const { buildAgentPeerSessionKey, DEFAULT_ACCOUNT_ID } = await import("./session-key.js");
+
+    const groupKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "discord",
+      peerKind: "group",
+      peerId: "123456",
+    });
+    expect(groupKey).toBe(`agent:main:discord:${DEFAULT_ACCOUNT_ID}:group:123456`);
+  });
+
+  it("distinguishes sessions from different accounts to same channel", async () => {
+    const { buildAgentPeerSessionKey } = await import("./session-key.js");
+
+    const key1 = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "discord",
+      accountId: "designer",
+      peerKind: "channel",
+      peerId: "123456",
+    });
+
+    const key2 = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "discord",
+      accountId: "erp",
+      peerKind: "channel",
+      peerId: "123456",
+    });
+
+    expect(key1).not.toBe(key2);
+    expect(key1).toBe("agent:main:discord:designer:channel:123456");
+    expect(key2).toBe("agent:main:discord:erp:channel:123456");
+  });
+});
