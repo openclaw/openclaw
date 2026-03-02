@@ -2,35 +2,57 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
 
+function createGatewayWaitHarness() {
+  const emitter = new EventEmitter();
+  const disconnect = vi.fn();
+  const abort = new AbortController();
+  return { emitter, disconnect, abort };
+}
+
+function startGatewayWait(params?: {
+  onGatewayError?: (error: unknown) => void;
+  shouldStopOnError?: (error: unknown) => boolean;
+  registerForceStop?: (fn: (error: unknown) => void) => void;
+}) {
+  const harness = createGatewayWaitHarness();
+  const promise = waitForDiscordGatewayStop({
+    gateway: { emitter: harness.emitter, disconnect: harness.disconnect },
+    abortSignal: harness.abort.signal,
+    ...(params?.onGatewayError ? { onGatewayError: params.onGatewayError } : {}),
+    ...(params?.shouldStopOnError ? { shouldStopOnError: params.shouldStopOnError } : {}),
+    ...(params?.registerForceStop ? { registerForceStop: params.registerForceStop } : {}),
+  });
+  return { ...harness, promise };
+}
+
+async function expectAbortToResolve(params: {
+  emitter: EventEmitter;
+  disconnect: ReturnType<typeof vi.fn>;
+  abort: AbortController;
+  promise: Promise<void>;
+  expectedDisconnectBeforeAbort?: number;
+}) {
+  if (params.expectedDisconnectBeforeAbort !== undefined) {
+    expect(params.disconnect).toHaveBeenCalledTimes(params.expectedDisconnectBeforeAbort);
+  }
+  expect(params.emitter.listenerCount("error")).toBe(1);
+  params.abort.abort();
+  await expect(params.promise).resolves.toBeUndefined();
+  expect(params.disconnect).toHaveBeenCalledTimes(1);
+  expect(params.emitter.listenerCount("error")).toBe(0);
+}
+
 describe("waitForDiscordGatewayStop", () => {
   it("resolves on abort and disconnects gateway", async () => {
-    const emitter = new EventEmitter();
-    const disconnect = vi.fn();
-    const abort = new AbortController();
-
-    const promise = waitForDiscordGatewayStop({
-      gateway: { emitter, disconnect },
-      abortSignal: abort.signal,
-    });
-
-    expect(emitter.listenerCount("error")).toBe(1);
-    abort.abort();
-
-    await expect(promise).resolves.toBeUndefined();
-    expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(emitter.listenerCount("error")).toBe(0);
+    const { emitter, disconnect, abort, promise } = startGatewayWait();
+    await expectAbortToResolve({ emitter, disconnect, abort, promise });
   });
 
   it("rejects on gateway error and disconnects", async () => {
-    const emitter = new EventEmitter();
-    const disconnect = vi.fn();
     const onGatewayError = vi.fn();
-    const abort = new AbortController();
     const err = new Error("boom");
 
-    const promise = waitForDiscordGatewayStop({
-      gateway: { emitter, disconnect },
-      abortSignal: abort.signal,
+    const { emitter, disconnect, abort, promise } = startGatewayWait({
       onGatewayError,
     });
 
@@ -46,28 +68,23 @@ describe("waitForDiscordGatewayStop", () => {
   });
 
   it("ignores gateway errors when instructed", async () => {
-    const emitter = new EventEmitter();
-    const disconnect = vi.fn();
     const onGatewayError = vi.fn();
-    const abort = new AbortController();
     const err = new Error("transient");
 
-    const promise = waitForDiscordGatewayStop({
-      gateway: { emitter, disconnect },
-      abortSignal: abort.signal,
+    const { emitter, disconnect, abort, promise } = startGatewayWait({
       onGatewayError,
       shouldStopOnError: () => false,
     });
 
     emitter.emit("error", err);
     expect(onGatewayError).toHaveBeenCalledWith(err);
-    expect(disconnect).toHaveBeenCalledTimes(0);
-    expect(emitter.listenerCount("error")).toBe(1);
-
-    abort.abort();
-    await expect(promise).resolves.toBeUndefined();
-    expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(emitter.listenerCount("error")).toBe(0);
+    await expectAbortToResolve({
+      emitter,
+      disconnect,
+      abort,
+      promise,
+      expectedDisconnectBeforeAbort: 0,
+    });
   });
 
   it("resolves on abort without a gateway", async () => {
@@ -83,14 +100,9 @@ describe("waitForDiscordGatewayStop", () => {
   });
 
   it("rejects via registerForceStop and disconnects gateway", async () => {
-    const emitter = new EventEmitter();
-    const disconnect = vi.fn();
-    const abort = new AbortController();
     let forceStop: ((err: unknown) => void) | undefined;
 
-    const promise = waitForDiscordGatewayStop({
-      gateway: { emitter, disconnect },
-      abortSignal: abort.signal,
+    const { emitter, disconnect, promise } = startGatewayWait({
       registerForceStop: (fn) => {
         forceStop = fn;
       },
@@ -106,14 +118,9 @@ describe("waitForDiscordGatewayStop", () => {
   });
 
   it("ignores forceStop after promise already settled", async () => {
-    const emitter = new EventEmitter();
-    const disconnect = vi.fn();
-    const abort = new AbortController();
     let forceStop: ((err: unknown) => void) | undefined;
 
-    const promise = waitForDiscordGatewayStop({
-      gateway: { emitter, disconnect },
-      abortSignal: abort.signal,
+    const { abort, disconnect, promise } = startGatewayWait({
       registerForceStop: (fn) => {
         forceStop = fn;
       },
