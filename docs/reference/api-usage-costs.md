@@ -48,7 +48,7 @@ OpenClaw can pick up credentials from:
 Every reply or tool call uses the **current model provider** (OpenAI, Anthropic, etc). This is the
 primary source of usage and cost.
 
-See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
+See [Models](/providers) for pricing config and [Token use & costs](/reference/token-use) for display.
 
 ### 2) Media understanding (audio/image/video)
 
