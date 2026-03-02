@@ -1,3 +1,4 @@
+import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -187,11 +188,11 @@ export function createProfileTabOps({
           return endpointUrl.toString();
         })()
       : `${endpointUrl.toString()}?${encoded}`;
-    const created = await fetchJson<CdpTarget>(endpoint, 1500, {
+    const created = await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS, {
       method: "PUT",
     }).catch(async (err) => {
       if (String(err).includes("HTTP 405")) {
-        return await fetchJson<CdpTarget>(endpoint, 1500);
+        return await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS);
       }
       throw err;
     });
