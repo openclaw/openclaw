@@ -14,7 +14,9 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
-async function resolveDashboardToken(cfg: { gateway?: { auth?: { token?: string } } }): Promise<string> {
+async function resolveDashboardToken(cfg: {
+  gateway?: { auth?: { token?: string } };
+}): Promise<string> {
   const configToken = cfg.gateway?.auth?.token?.trim();
   if (configToken) {
     return configToken;
