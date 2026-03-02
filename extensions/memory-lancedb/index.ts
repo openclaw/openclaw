@@ -287,14 +287,12 @@ export function detectCategory(text: string): MemoryCategory {
 // text-embedding-3-small has an 8192-token limit.
 // UTF-8 byte length is always >= token count, so 7000 bytes guarantees < 8192 tokens.
 const RECALL_MAX_BYTES = 7000;
-const RECALL_MAX_CHUNKS = 10;
 
 /**
  * Split text into chunks that fit within the embedding model's input limit.
  * Chunks from the END of the text first (most recent conversation turns are
- * the most relevant for recall), then works backwards. If the chunk cap is
- * hit, the oldest content at the start is what gets dropped.
- * Prefers splitting at paragraph, line, or word boundaries.
+ * the most relevant for recall), then works backwards until the entire text
+ * is covered. Prefers splitting at paragraph, line, or word boundaries.
  */
 function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) {
@@ -305,7 +303,7 @@ function splitForRecall(text: string, maxBytes = RECALL_MAX_BYTES): string[] {
   const chunks: string[] = [];
   let end = text.length;
 
-  while (end > 0 && chunks.length < RECALL_MAX_CHUNKS) {
+  while (end > 0) {
     // Binary search for the leftmost start position within byte limit
     let lo = Math.max(0, end - maxBytes);
     let hi = end - 1;
