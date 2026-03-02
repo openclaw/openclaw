@@ -369,6 +369,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("disables streaming for thread replies and keeps reply metadata", async () => {
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_msg",
+        replyInThread: true,
+      }),
+    );
+  });
+
   it("passes replyInThread to media attachments", async () => {
     createFeishuReplyDispatcher({
       cfg: {} as never,

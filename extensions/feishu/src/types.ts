@@ -40,6 +40,7 @@ export type FeishuMessageContext = {
   mentionedBot: boolean;
   rootId?: string;
   parentId?: string;
+  threadId?: string;
   content: string;
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */
