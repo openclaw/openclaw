@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -14,6 +15,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { sameFileIdentity } from "../infra/file-identity.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
@@ -81,9 +83,12 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   segments: ExecCommandSegment[];
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
+  approvedCwdStat: fs.Stats | undefined;
 };
 
 const safeBinTrustedDirWarningCache = new Set<string>();
+const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -105,6 +110,36 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     default:
       return "approval-required";
   }
+}
+
+function revalidateApprovedCwdBeforeExecution(
+  phase: SystemRunPolicyPhase,
+): { ok: true } | { ok: false } {
+  if (!phase.policy.approvedByAsk || !phase.cwd || !phase.approvedCwdStat) {
+    return { ok: true };
+  }
+  const hardened = hardenApprovedExecutionPaths({
+    approvedByAsk: true,
+    argv: [],
+    shellCommand: null,
+    cwd: phase.cwd,
+  });
+  if (!hardened.ok || hardened.cwd !== phase.cwd) {
+    return { ok: false };
+  }
+  let currentCwdStat: fs.Stats;
+  try {
+    currentCwdStat = fs.statSync(phase.cwd);
+  } catch {
+    return { ok: false };
+  }
+  if (!currentCwdStat.isDirectory()) {
+    return { ok: false };
+  }
+  if (!sameFileIdentity(phase.approvedCwdStat, currentCwdStat)) {
+    return { ok: false };
+  }
+  return { ok: true };
 }
 
 export type HandleSystemRunInvokeOptions = {
@@ -299,6 +334,25 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
+  let approvedCwdStat: fs.Stats | undefined;
+  if (policy.approvedByAsk && hardenedPaths.cwd) {
+    try {
+      approvedCwdStat = fs.statSync(hardenedPaths.cwd);
+    } catch {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+      });
+      return null;
+    }
+    if (!approvedCwdStat.isDirectory()) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+      });
+      return null;
+    }
+  }
 
   const plannedAllowlistArgv = resolvePlannedAllowlistArgv({
     security,
@@ -326,6 +380,7 @@ async function evaluateSystemRunPolicyPhase(
     segments,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
+    approvedCwdStat,
   };
 }
 
@@ -333,6 +388,18 @@ async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
+  const cwdRevalidation = revalidateApprovedCwdBeforeExecution(phase);
+  if (!cwdRevalidation.ok) {
+    console.warn(
+      `[security] system.run approval cwd drift blocked: runId=${phase.runId} cwd=${phase.cwd ?? ""}`,
+    );
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-required",
+      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+    });
+    return;
+  }
+
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
