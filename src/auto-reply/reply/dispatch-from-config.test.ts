@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -291,6 +294,221 @@ describe("dispatchReplyFromConfig", () => {
         groupId: "telegram:999",
       }),
     );
+  });
+
+  it("routes read-only turns to relay target and uses target account/thread", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      session: {
+        relayRouting: {
+          defaultMode: "read-only",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+              accountId: "relay-account",
+              threadId: "relay-thread",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "source-account",
+      MessageThreadId: 42,
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:relay",
+        accountId: "relay-account",
+        threadId: "relay-thread",
+      }),
+    );
+  });
+
+  it("does not fall back to source delivery when read-only relay routing fails", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    mocks.routeReply.mockResolvedValueOnce({ ok: false, messageId: "" });
+    const cfg = {
+      session: {
+        relayRouting: {
+          defaultMode: "read-only",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:relay",
+      }),
+    );
+  });
+
+  it("uses live inbound channel/chatType for relay match even when session store channel is stale", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-relay-route-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:relay-live-match";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          channel: "slack",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: {
+        store: storePath,
+        relayRouting: {
+          defaultMode: "read-write",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "relay",
+              match: {
+                channel: "telegram",
+                chatType: "direct",
+              },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: sessionKey,
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:source-chat",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:relay",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("injects escaped read-only XML metadata before non-ACP agent execution", async () => {
+    setNoAbort();
+    const cfg = {
+      session: {
+        relayRouting: {
+          defaultMode: "read-only",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      Body: "existing body",
+      BodyForAgent: "existing prompt",
+      From: "alice <&>\"'",
+      To: "room <&>\"'",
+      ChatType: "group",
+    });
+
+    const replyResolver = async (replyCtx: MsgContext) => {
+      expect(replyCtx.BodyForAgent).toContain("<read_only_metadata>");
+      expect(replyCtx.BodyForAgent).toContain("<provider>slack</provider>");
+      expect(replyCtx.BodyForAgent).toContain("<sender>alice &lt;&amp;&gt;&quot;&apos;</sender>");
+      expect(replyCtx.BodyForAgent).toContain(
+        "<source_to>room &lt;&amp;&gt;&quot;&apos;</source_to>",
+      );
+      expect(replyCtx.BodyForAgent).toContain("<chat_type>group</chat_type>");
+      expect(replyCtx.Body).toContain("<read_only_metadata>");
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+  });
+
+  it("does not inject read-only XML metadata for read-write turns", async () => {
+    setNoAbort();
+    const cfg = {
+      session: {
+        relayRouting: {
+          defaultMode: "read-write",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      Body: "existing body",
+      BodyForAgent: "existing prompt",
+    });
+
+    const replyResolver = async (replyCtx: MsgContext) => {
+      expect(replyCtx.BodyForAgent).not.toContain("<read_only_metadata>");
+      expect(replyCtx.Body).not.toContain("<read_only_metadata>");
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
   });
 
   it("forces suppressTyping when routing to a different originating channel", async () => {
@@ -1232,6 +1450,83 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:thread-1",
       }),
     );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("routes ACP read-only turns only to relay target and injects XML before ACP dispatch", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "relay chunk" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-read-only",
+      storeSessionKey: "agent:codex-acp:session-read-only",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:read-only",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+      session: {
+        relayRouting: {
+          defaultMode: "read-only",
+          targets: {
+            relay: {
+              channel: "telegram",
+              to: "telegram:relay-acp",
+              accountId: "relay-account",
+              threadId: "relay-thread",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:source-room",
+      AccountId: "source-account",
+      MessageThreadId: "source-thread",
+      SessionKey: "agent:codex-acp:session-read-only",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:relay-acp",
+        accountId: "relay-account",
+        threadId: "relay-thread",
+      }),
+    );
+    const runtimeCall = (runtime.runTurn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      | { text?: string }
+      | undefined;
+    expect(runtimeCall?.text).toContain("<read_only_metadata>");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });

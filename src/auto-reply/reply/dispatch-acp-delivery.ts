@@ -2,7 +2,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import type { RelayRouteTarget } from "../../sessions/relay-routing.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import type { OriginatingChannelType } from "../templating.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -49,11 +51,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  routeTarget?: RelayRouteTarget;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
 }): AcpDispatchDeliveryCoordinator {
+  const routeTarget =
+    params.routeTarget ??
+    (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo
+      ? {
+          channel: params.originatingChannel,
+          to: params.originatingTo,
+          accountId: params.ctx.AccountId,
+          threadId: params.ctx.MessageThreadId,
+        }
+      : undefined);
+
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
@@ -78,7 +92,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
-    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+    if (!routeTarget) {
       return false;
     }
     const handle = state.toolMessageByCallId.get(toolCallId);
@@ -140,7 +154,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    if (routeTarget) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
@@ -151,11 +165,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
       const result = await routeReply({
         payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
+        channel: routeTarget.channel as OriginatingChannelType,
+        to: routeTarget.to,
         sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
+        accountId: routeTarget.accountId,
+        threadId: routeTarget.threadId,
         cfg: params.cfg,
       });
       if (!result.ok) {
@@ -166,10 +180,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
-          to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          channel: routeTarget.channel,
+          accountId: routeTarget.accountId,
+          to: routeTarget.to,
+          ...(routeTarget.threadId != null ? { threadId: routeTarget.threadId } : {}),
           messageId: result.messageId,
         });
       }

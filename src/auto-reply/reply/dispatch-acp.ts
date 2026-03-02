@@ -15,6 +15,7 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { RelayRouteTarget } from "../../sessions/relay-routing.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
   isCommandEnabled,
@@ -151,6 +152,7 @@ export async function tryDispatchAcpReply(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  routeTarget?: RelayRouteTarget;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -182,6 +184,7 @@ export async function tryDispatchAcpReply(params: {
     inboundAudio: params.inboundAudio,
     sessionTtsAuto: params.sessionTtsAuto,
     ttsChannel: params.ttsChannel,
+    routeTarget: params.routeTarget,
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
