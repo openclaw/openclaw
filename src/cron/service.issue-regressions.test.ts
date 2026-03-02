@@ -27,7 +27,7 @@ const noopLogger = {
   trace: vi.fn(),
 };
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
-const FAST_TIMEOUT_SECONDS = 0.004;
+const FAST_TIMEOUT_SECONDS = 0.003;
 type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
 function topOfHourOffsetMs(jobId: string) {
@@ -1556,7 +1556,7 @@ describe("Cron issue regressions", () => {
     const timerPromise = onTimer(state);
     const startTimeout = setTimeout(() => {
       bothRunsStarted.reject(new Error("timed out waiting for concurrent job starts"));
-    }, 250);
+    }, 120);
     try {
       await bothRunsStarted.promise;
     } finally {
@@ -1586,7 +1586,7 @@ describe("Cron issue regressions", () => {
 
     // Keep this short for suite speed while still separating expected timeout
     // from the 1/3-regression timeout.
-    const timeoutSeconds = 0.015;
+    const timeoutSeconds = 0.012;
     const cronJob = createIsolatedRegressionJob({
       id: "timeout-fraction-29774",
       name: "timeout fraction regression",
