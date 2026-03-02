@@ -306,7 +306,7 @@ async function resolveGatewayTlsFingerprint(params: {
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
-    context.isRemoteMode && !context.urlOverrideSource && context.remoteUrl
+    context.isRemoteMode && context.urlOverrideSource !== "cli"
       ? trimToUndefined(context.remote?.tlsFingerprint)
       : undefined;
   return (

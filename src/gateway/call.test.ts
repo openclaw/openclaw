@@ -11,6 +11,7 @@ let lastClientOptions: {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   scopes?: string[];
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
@@ -205,6 +206,50 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
     expect(lastClientOptions?.token).toBe("env-token");
     expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("uses remote tlsFingerprint with env URL override", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example:9443/ws",
+          tlsFingerprint: "remote-fingerprint",
+        },
+      },
+    });
+    setGatewayNetworkDefaults(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+    });
+
+    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+  });
+
+  it("does not apply remote tlsFingerprint for CLI url override", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example:9443/ws",
+          tlsFingerprint: "remote-fingerprint",
+        },
+      },
+    });
+    setGatewayNetworkDefaults(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({
+      method: "health",
+      url: "wss://override.example:9443/ws",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.tlsFingerprint).toBeUndefined();
   });
 
   it.each([
