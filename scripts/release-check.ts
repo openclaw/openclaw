@@ -164,6 +164,10 @@ function checkAppcastSparkleVersions() {
     console.error("release-check: appcast sparkle version validation failed:");
     for (const error of errors) {
       console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
 
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any are missing from the compiled output, plugins crash at runtime (#27569).
