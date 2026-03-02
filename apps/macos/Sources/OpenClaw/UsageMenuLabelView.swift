@@ -9,14 +9,6 @@ struct UsageMenuLabelView: View {
     private let paddingTrailing: CGFloat = 14
     private let barHeight: CGFloat = 6
 
-    private var primaryTextColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
-    }
-
-    private var secondaryTextColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let used = row.usedPercent {
@@ -30,7 +22,7 @@ struct UsageMenuLabelView: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(self.row.titleText)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(self.primaryTextColor)
+                    .foregroundStyle(MenuItemHighlightColors.primary(self.isHighlighted))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(1)
@@ -39,7 +31,7 @@ struct UsageMenuLabelView: View {
 
                 Text(self.row.detailText())
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(self.secondaryTextColor)
+                    .foregroundStyle(MenuItemHighlightColors.secondary(self.isHighlighted))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(2)
@@ -47,7 +39,7 @@ struct UsageMenuLabelView: View {
                 if self.showsChevron {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(self.secondaryTextColor)
+                        .foregroundStyle(MenuItemHighlightColors.secondary(self.isHighlighted))
                         .padding(.leading, 2)
                 }
             }

@@ -6,10 +6,6 @@ struct ContextMenuCardView: View {
     private let rows: [SessionRow]
     private let statusText: String?
     private let isLoading: Bool
-    private let paddingTop: CGFloat = 8
-    private let paddingBottom: CGFloat = 8
-    private let paddingTrailing: CGFloat = 10
-    private let paddingLeading: CGFloat = 20
     private let barHeight: CGFloat = 3
 
     init(
@@ -23,45 +19,32 @@ struct ContextMenuCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Context")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 10)
-                Text(self.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let statusText {
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if self.rows.isEmpty, !self.isLoading {
-                Text("No active sessions")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    if self.rows.isEmpty, self.isLoading {
-                        ForEach(0..<2, id: \.self) { _ in
-                            self.placeholderRow
-                        }
-                    } else {
-                        ForEach(self.rows) { row in
-                            self.sessionRow(row)
+        MenuHeaderCard(
+            title: "Context",
+            subtitle: self.subtitle,
+            statusText: self.statusText,
+            paddingBottom: 8)
+        {
+            if self.statusText == nil {
+                if self.rows.isEmpty, !self.isLoading {
+                    Text("No active sessions")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if self.rows.isEmpty, self.isLoading {
+                            ForEach(0..<2, id: \.self) { _ in
+                                self.placeholderRow
+                            }
+                        } else {
+                            ForEach(self.rows) { row in
+                                self.sessionRow(row)
+                            }
                         }
                     }
                 }
             }
         }
-        .padding(.top, self.paddingTop)
-        .padding(.bottom, self.paddingBottom)
-        .padding(.leading, self.paddingLeading)
-        .padding(.trailing, self.paddingTrailing)
-        .frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
-        .transaction { txn in txn.animation = nil }
     }
 
     private var subtitle: String {

@@ -14,8 +14,7 @@ final class VoiceWakeGlobalSettingsSync {
     }
 
     func start() {
-        guard self.task == nil else { return }
-        self.task = Task { [weak self] in
+        SimpleTaskSupport.start(task: &self.task) { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 do {
@@ -39,8 +38,7 @@ final class VoiceWakeGlobalSettingsSync {
     }
 
     func stop() {
-        self.task?.cancel()
-        self.task = nil
+        SimpleTaskSupport.stop(task: &self.task)
     }
 
     private func refreshFromGateway() async {

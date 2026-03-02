@@ -53,7 +53,7 @@ struct ConnectOptions {
                 i += 1
                 continue
             }
-            if let handler = valueHandlers[arg], let value = self.nextValue(args, index: &i) {
+            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                 handler(&opts, value)
                 i += 1
                 continue
@@ -61,12 +61,6 @@ struct ConnectOptions {
             i += 1
         }
         return opts
-    }
-
-    private static func nextValue(_ args: [String], index: inout Int) -> String? {
-        guard index + 1 < args.count else { return nil }
-        index += 1
-        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -233,14 +227,7 @@ private func printConnectOutput(_ output: ConnectOutput, json: Bool) {
 private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     let resolvedMode = (opts.mode ?? config.mode ?? "local").lowercased()
     if let raw = opts.url, !raw.isEmpty {
-        guard let url = URL(string: raw) else {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
-        }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
-            mode: resolvedMode)
+        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
     }
 
     if resolvedMode == "remote" {
@@ -252,14 +239,7 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
-        guard let url = URL(string: raw) else {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
-        }
-        return GatewayEndpoint(
-            url: url,
-            token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-            password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
-            mode: resolvedMode)
+        return try gatewayEndpoint(fromRawURL: raw, opts: opts, mode: resolvedMode, config: config)
     }
 
     let port = config.port ?? 18789
@@ -279,6 +259,22 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
 
 private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> GatewayEndpoint? {
     try? resolveGatewayEndpoint(opts: opts, config: config)
+}
+
+private func gatewayEndpoint(
+    fromRawURL raw: String,
+    opts: ConnectOptions,
+    mode: String,
+    config: GatewayConfig) throws -> GatewayEndpoint
+{
+    guard let url = URL(string: raw) else {
+        throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
+    }
+    return GatewayEndpoint(
+        url: url,
+        token: resolvedToken(opts: opts, mode: mode, config: config),
+        password: resolvedPassword(opts: opts, mode: mode, config: config),
+        mode: mode)
 }
 
 private func resolvedToken(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {

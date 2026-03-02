@@ -1,41 +1,7 @@
 import Foundation
-import Network
+import OpenClawKit
 
 enum GatewayRemoteConfig {
-    private static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
-        if host.isEmpty {
-            return false
-        }
-        if host == "localhost" || host == "0.0.0.0" || host == "::" {
-            return true
-        }
-
-        if let ipv4 = IPv4Address(host) {
-            return ipv4.rawValue.first == 127
-        }
-        if let ipv6 = IPv6Address(host) {
-            let bytes = Array(ipv6.rawValue)
-            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
-            if isV6Loopback {
-                return true
-            }
-            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
-            return isMappedV4 && bytes[12] == 127
-        }
-
-        return false
-    }
-
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
@@ -74,7 +40,7 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws", !self.isLoopbackHost(host) {
+        if scheme == "ws", !LoopbackHost.isLoopbackHost(host) {
             return nil
         }
         if scheme == "ws", url.port == nil {

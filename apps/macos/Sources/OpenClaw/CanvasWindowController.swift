@@ -274,25 +274,11 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func applyDebugStatusIfNeeded() {
-        let enabled = self.debugStatusEnabled
-        let title = Self.jsOptionalStringLiteral(self.debugStatusTitle)
-        let subtitle = Self.jsOptionalStringLiteral(self.debugStatusSubtitle)
-        let js = """
-        (() => {
-          try {
-            const api = globalThis.__openclaw;
-            if (!api) return;
-            if (typeof api.setDebugStatusEnabled === 'function') {
-              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
-            }
-            if (!\(enabled ? "true" : "false")) return;
-            if (typeof api.setStatus === 'function') {
-              api.setStatus(\(title), \(subtitle));
-            }
-          } catch (_) {}
-        })();
-        """
-        self.webView.evaluateJavaScript(js) { _, _ in }
+        WebViewJavaScriptSupport.applyDebugStatus(
+            webView: self.webView,
+            enabled: self.debugStatusEnabled,
+            title: self.debugStatusTitle,
+            subtitle: self.debugStatusSubtitle)
     }
 
     private func loadFile(_ url: URL) {
@@ -302,19 +288,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func eval(javaScript: String) async throws -> String {
-        try await withCheckedThrowingContinuation { cont in
-            self.webView.evaluateJavaScript(javaScript) { result, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                if let result {
-                    cont.resume(returning: String(describing: result))
-                } else {
-                    cont.resume(returning: "")
-                }
-            }
-        }
+        try await WebViewJavaScriptSupport.evaluateToString(webView: self.webView, javaScript: javaScript)
     }
 
     func snapshot(to outPath: String?) async throws -> String {

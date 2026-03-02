@@ -68,7 +68,7 @@ struct NodeMenuEntryFormatter {
 
     static func platformText(_ entry: NodeInfo) -> String? {
         if let raw = entry.platform?.nonEmpty {
-            return self.prettyPlatform(raw) ?? raw
+            return PlatformLabelFormatter.pretty(raw) ?? raw
         }
         if let family = entry.deviceFamily?.lowercased() {
             if family.contains("mac") { return "macOS" }
@@ -77,34 +77,6 @@ struct NodeMenuEntryFormatter {
             if family.contains("android") { return "Android" }
         }
         return nil
-    }
-
-    private static func prettyPlatform(_ raw: String) -> String? {
-        let (prefix, version) = self.parsePlatform(raw)
-        if prefix.isEmpty { return nil }
-        let name: String = switch prefix {
-        case "macos": "macOS"
-        case "ios": "iOS"
-        case "ipados": "iPadOS"
-        case "tvos": "tvOS"
-        case "watchos": "watchOS"
-        default: prefix.prefix(1).uppercased() + prefix.dropFirst()
-        }
-        guard let version, !version.isEmpty else { return name }
-        let parts = version.split(separator: ".").map(String.init)
-        if parts.count >= 2 {
-            return "\(name) \(parts[0]).\(parts[1])"
-        }
-        return "\(name) \(version)"
-    }
-
-    private static func parsePlatform(_ raw: String) -> (prefix: String, version: String?) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return ("", nil) }
-        let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        let prefix = parts.first?.lowercased() ?? ""
-        let versionToken = parts.dropFirst().first
-        return (prefix, versionToken)
     }
 
     private static func compactVersion(_ raw: String) -> String {
@@ -201,12 +173,8 @@ struct NodeMenuRowView: View {
     let width: CGFloat
     @Environment(\.menuItemHighlighted) private var isHighlighted
 
-    private var primaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
-    }
-
-    private var secondaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
+    private var palette: MenuItemHighlightColors.Palette {
+        MenuItemHighlightColors.palette(self.isHighlighted)
     }
 
     var body: some View {
@@ -216,9 +184,9 @@ struct NodeMenuRowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(NodeMenuEntryFormatter.primaryName(self.entry))
-                        .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
-                        .foregroundStyle(self.primaryColor)
+                        Text(NodeMenuEntryFormatter.primaryName(self.entry))
+                            .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
+                            .foregroundStyle(self.palette.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .layoutPriority(1)
@@ -227,9 +195,9 @@ struct NodeMenuRowView: View {
 
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         if let right = NodeMenuEntryFormatter.headlineRight(self.entry) {
-                            Text(right)
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(self.secondaryColor)
+                                Text(right)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(self.palette.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .layoutPriority(2)
@@ -237,7 +205,7 @@ struct NodeMenuRowView: View {
 
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(self.secondaryColor)
+                            .foregroundStyle(self.palette.secondary)
                             .padding(.leading, 2)
                     }
                 }
@@ -245,7 +213,7 @@ struct NodeMenuRowView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.detailLeft(self.entry))
                         .font(.caption)
-                        .foregroundStyle(self.secondaryColor)
+                        .foregroundStyle(self.palette.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
 
@@ -254,7 +222,7 @@ struct NodeMenuRowView: View {
                     if let version = NodeMenuEntryFormatter.detailRightVersion(self.entry) {
                         Text(version)
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(self.secondaryColor)
+                            .foregroundStyle(self.palette.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -273,11 +241,11 @@ struct NodeMenuRowView: View {
     private var leadingIcon: some View {
         if NodeMenuEntryFormatter.isAndroid(self.entry) {
             AndroidMark()
-                .foregroundStyle(self.secondaryColor)
+                .foregroundStyle(self.palette.secondary)
         } else {
             Image(systemName: NodeMenuEntryFormatter.leadingSymbol(self.entry))
                 .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(self.secondaryColor)
+                .foregroundStyle(self.palette.secondary)
         }
     }
 }
@@ -305,23 +273,19 @@ struct NodeMenuMultilineView: View {
     let width: CGFloat
     @Environment(\.menuItemHighlighted) private var isHighlighted
 
-    private var primaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
-    }
-
-    private var secondaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
+    private var palette: MenuItemHighlightColors.Palette {
+        MenuItemHighlightColors.palette(self.isHighlighted)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(self.label):")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(self.secondaryColor)
+                .foregroundStyle(self.palette.secondary)
 
             Text(self.value)
                 .font(.caption)
-                .foregroundStyle(self.primaryColor)
+                .foregroundStyle(self.palette.primary)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }

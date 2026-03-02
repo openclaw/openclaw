@@ -50,17 +50,8 @@ final class NotifyOverlayController {
         self.dismissTask = nil
         guard let window else { return }
 
-        let target = window.frame.offsetBy(dx: 8, dy: 6)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().setFrame(target, display: true)
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            Task { @MainActor in
-                window.orderOut(nil)
-                self.model.isVisible = false
-            }
+        OverlayPanelFactory.animateDismissAndHide(window: window, offsetX: 8, offsetY: 6) {
+            self.model.isVisible = false
         }
     }
 
@@ -70,44 +61,21 @@ final class NotifyOverlayController {
         self.ensureWindow()
         self.hostingView?.rootView = NotifyOverlayView(controller: self)
         let target = self.targetFrame()
-
-        guard let window else { return }
-        if !self.model.isVisible {
-            self.model.isVisible = true
-            let start = target.offsetBy(dx: 0, dy: -6)
-            window.setFrame(start, display: true)
-            window.alphaValue = 0
-            window.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window.animator().setFrame(target, display: true)
-                window.animator().alphaValue = 1
-            }
-        } else {
-            self.updateWindowFrame(animate: true)
-            window.orderFrontRegardless()
+        OverlayPanelFactory.present(
+            window: self.window,
+            isVisible: &self.model.isVisible,
+            target: target) { window in
+                self.updateWindowFrame(animate: true)
+                window.orderFrontRegardless()
         }
     }
 
     private func ensureWindow() {
         if self.window != nil { return }
-        let panel = NSPanel(
+        let panel = OverlayPanelFactory.makePanel(
             contentRect: NSRect(x: 0, y: 0, width: self.width, height: self.minHeight),
-            styleMask: [.nonactivatingPanel, .borderless],
-            backing: .buffered,
-            defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.hidesOnDeactivate = false
-        panel.isMovable = false
-        panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
+            level: .statusBar,
+            hasShadow: true)
 
         let host = NSHostingView(rootView: NotifyOverlayView(controller: self))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -126,17 +94,7 @@ final class NotifyOverlayController {
     }
 
     private func updateWindowFrame(animate: Bool = false) {
-        guard let window else { return }
-        let frame = self.targetFrame()
-        if animate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.12
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window.animator().setFrame(frame, display: true)
-            }
-        } else {
-            window.setFrame(frame, display: true)
-        }
+        OverlayPanelFactory.applyFrame(window: self.window, target: self.targetFrame(), animate: animate)
     }
 
     private func measuredHeight() -> CGFloat {
