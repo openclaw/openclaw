@@ -141,11 +141,10 @@ async function openVerifiedLocalFile(
   }
 }
 
-export async function openFileWithinRoot(params: {
+async function resolvePathWithinRoot(params: {
   rootDir: string;
   relativePath: string;
-  rejectHardlinks?: boolean;
-}): Promise<SafeOpenResult> {
+}): Promise<{ rootReal: string; rootWithSep: string; resolved: string }> {
   let rootReal: string;
   try {
     rootReal = await fs.realpath(params.rootDir);
@@ -161,6 +160,15 @@ export async function openFileWithinRoot(params: {
   if (!isPathInside(rootWithSep, resolved)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
+  return { rootReal, rootWithSep, resolved };
+}
+
+export async function openFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+}): Promise<SafeOpenResult> {
+  const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
 
   let opened: SafeOpenResult;
   try {
@@ -281,21 +289,7 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  let rootReal: string;
-  try {
-    rootReal = await fs.realpath(params.rootDir);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      throw new SafeOpenError("not-found", "root dir not found");
-    }
-    throw err;
-  }
-  const rootWithSep = ensureTrailingSep(rootReal);
-  const expanded = await expandRelativePathWithHome(params.relativePath);
-  const resolved = path.resolve(rootWithSep, expanded);
-  if (!isPathInside(rootWithSep, resolved)) {
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
-  }
+  const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
       absolutePath: resolved,
