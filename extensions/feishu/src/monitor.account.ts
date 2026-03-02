@@ -11,7 +11,12 @@ import {
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
-import { tryRecordMessage, tryRecordMessagePersistent } from "./dedup.js";
+import {
+  hasRecordedMessage,
+  hasRecordedMessagePersistent,
+  tryRecordMessage,
+  tryRecordMessagePersistent,
+} from "./dedup.js";
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -204,13 +209,15 @@ function registerEventHandlers(
     const parsed = parseFeishuMessageEvent(event, botOpenId);
     return parsed.content.trim();
   };
-  const recordSuppressedMessageIds = async (entries: FeishuMessageEvent[]) => {
-    const finalMessageId = entries.at(-1)?.message.message_id?.trim();
+  const recordSuppressedMessageIds = async (
+    entries: FeishuMessageEvent[],
+    dispatchMessageId?: string,
+  ) => {
+    const keepMessageId = dispatchMessageId?.trim();
     const suppressedIds = new Set(
       entries
-        .slice(0, -1)
         .map((entry) => entry.message.message_id?.trim())
-        .filter((id): id is string => Boolean(id) && (!finalMessageId || id !== finalMessageId)),
+        .filter((id): id is string => Boolean(id) && (!keepMessageId || id !== keepMessageId)),
     );
     if (suppressedIds.size === 0) {
       return;
@@ -226,6 +233,17 @@ function registerEventHandlers(
         );
       }
     }
+  };
+  const isMessageAlreadyProcessed = async (entry: FeishuMessageEvent): Promise<boolean> => {
+    const messageId = entry.message.message_id?.trim();
+    if (!messageId) {
+      return false;
+    }
+    const memoryKey = `${accountId}:${messageId}`;
+    if (hasRecordedMessage(memoryKey)) {
+      return true;
+    }
+    return hasRecordedMessagePersistent(messageId, accountId, log);
   };
   const inboundDebouncer = core.channel.debounce.createInboundDebouncer<FeishuMessageEvent>({
     debounceMs: inboundDebounceMs,
@@ -258,30 +276,40 @@ function registerEventHandlers(
         await dispatchFeishuMessage(last);
         return;
       }
-      await recordSuppressedMessageIds(entries);
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
-      const combinedText = dedupedEntries
+      const freshEntries: FeishuMessageEvent[] = [];
+      for (const entry of dedupedEntries) {
+        if (!(await isMessageAlreadyProcessed(entry))) {
+          freshEntries.push(entry);
+        }
+      }
+      const dispatchEntry = freshEntries.at(-1);
+      if (!dispatchEntry) {
+        return;
+      }
+      await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
+      const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
         .join("\n");
-      const mergedMentions = mergeFeishuDebounceMentions(dedupedEntries);
+      const mergedMentions = mergeFeishuDebounceMentions(freshEntries);
       if (!combinedText.trim()) {
         await dispatchFeishuMessage({
-          ...last,
+          ...dispatchEntry,
           message: {
-            ...last.message,
-            mentions: mergedMentions ?? last.message.mentions,
+            ...dispatchEntry.message,
+            mentions: mergedMentions ?? dispatchEntry.message.mentions,
           },
         });
         return;
       }
       await dispatchFeishuMessage({
-        ...last,
+        ...dispatchEntry,
         message: {
-          ...last.message,
+          ...dispatchEntry.message,
           message_type: "text",
           content: JSON.stringify({ text: combinedText }),
-          mentions: mergedMentions ?? last.message.mentions,
+          mentions: mergedMentions ?? dispatchEntry.message.mentions,
         },
       });
     },

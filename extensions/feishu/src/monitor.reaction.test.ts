@@ -388,6 +388,8 @@ describe("Feishu inbound debounce regressions", () => {
   it("preserves both mentions when per-message mention keys collide", async () => {
     vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
     vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockReturnValue(false);
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockResolvedValue(false);
     const onMessage = await setupDebounceMonitor();
 
     await onMessage(
@@ -429,25 +431,59 @@ describe("Feishu inbound debounce regressions", () => {
     expect(mergedMentions.some((mention) => mention.id.open_id === "ou_bot")).toBe(true);
   });
 
-  it("dedupes retried message ids before combining debounce text", async () => {
+  it("excludes previously processed retries from combined debounce text", async () => {
     vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
     vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockImplementation((key) => key.endsWith(":om_old"));
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockImplementation(
+      async (messageId) => messageId === "om_old",
+    );
     const onMessage = await setupDebounceMonitor();
 
-    await onMessage(createTextEvent({ messageId: "om_retry", text: "first" }));
+    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
     await Promise.resolve();
     await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_retry", text: "first" }));
+    await onMessage(createTextEvent({ messageId: "om_new_1", text: "first" }));
     await Promise.resolve();
     await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_final", text: "second" }));
+    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await onMessage(createTextEvent({ messageId: "om_new_2", text: "second" }));
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(25);
 
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
     const dispatched = getFirstDispatchedEvent();
+    expect(dispatched.message.message_id).toBe("om_new_2");
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("first\nsecond");
+  });
+
+  it("uses latest fresh message id when debounce batch ends with stale retry", async () => {
+    const recordSpy = vi.spyOn(dedup, "tryRecordMessage").mockReturnValue(true);
+    vi.spyOn(dedup, "tryRecordMessagePersistent").mockResolvedValue(true);
+    vi.spyOn(dedup, "hasRecordedMessage").mockImplementation((key) => key.endsWith(":om_old"));
+    vi.spyOn(dedup, "hasRecordedMessagePersistent").mockImplementation(
+      async (messageId) => messageId === "om_old",
+    );
+    const onMessage = await setupDebounceMonitor();
+
+    await onMessage(createTextEvent({ messageId: "om_new", text: "fresh" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    const dispatched = getFirstDispatchedEvent();
+    expect(dispatched.message.message_id).toBe("om_new");
+    const combined = JSON.parse(dispatched.message.content) as { text?: string };
+    expect(combined.text).toBe("fresh");
+    expect(recordSpy).toHaveBeenCalledWith("default:om_old");
+    expect(recordSpy).not.toHaveBeenCalledWith("default:om_new");
   });
 });
