@@ -11,9 +11,21 @@
       "label": "Default Font Size",
       "help": "Base diff font size in pixels."
     },
+    "defaults.lineSpacing": {
+      "label": "Default Line Spacing",
+      "help": "Line-height multiplier applied to diff rows."
+    },
     "defaults.layout": {
       "label": "Default Layout",
       "help": "Initial diff layout shown in the viewer."
+    },
+    "defaults.showLineNumbers": {
+      "label": "Show Line Numbers",
+      "help": "Show line numbers by default."
+    },
+    "defaults.diffIndicators": {
+      "label": "Diff Indicator Style",
+      "help": "Choose added/removed indicators style."
     },
     "defaults.wordWrap": {
       "label": "Default Word Wrap",
@@ -30,6 +42,10 @@
     "defaults.mode": {
       "label": "Default Output Mode",
       "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, image for PNG, or both."
+    },
+    "security.allowRemoteViewer": {
+      "label": "Allow Remote Viewer",
+      "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
     }
   },
   "configSchema": {
@@ -50,10 +66,25 @@
             "maximum": 24,
             "default": 15
           },
+          "lineSpacing": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3,
+            "default": 1.6
+          },
           "layout": {
             "type": "string",
             "enum": ["unified", "split"],
             "default": "unified"
+          },
+          "showLineNumbers": {
+            "type": "boolean",
+            "default": true
+          },
+          "diffIndicators": {
+            "type": "string",
+            "enum": ["bars", "classic", "none"],
+            "default": "bars"
           },
           "wordWrap": {
             "type": "boolean",
@@ -72,6 +103,16 @@
             "type": "string",
             "enum": ["view", "image", "both"],
             "default": "both"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowRemoteViewer": {
+            "type": "boolean",
+            "default": false
           }
         }
       }

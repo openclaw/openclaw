@@ -120,6 +120,7 @@ describe("handleFeishuMessage command authorization", () => {
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
+  const mockEnqueueSystemEvent = vi.fn();
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
@@ -127,6 +128,7 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
       accountId: "default",
@@ -140,9 +142,10 @@ describe("handleFeishuMessage command authorization", () => {
         },
       },
     });
+    mockEnqueueSystemEvent.mockReset();
     setFeishuRuntime({
       system: {
-        enqueueSystemEvent: vi.fn(),
+        enqueueSystemEvent: mockEnqueueSystemEvent,
       },
       channel: {
         routing: {
@@ -172,6 +175,37 @@ describe("handleFeishuMessage command authorization", () => {
         detectMime: vi.fn(async () => "application/octet-stream"),
       },
     } as unknown as PluginRuntime);
+  });
+
+  it("does not enqueue inbound preview text as system events", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-no-system-preview",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hi there" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
@@ -1153,6 +1187,38 @@ describe("handleFeishuMessage command authorization", () => {
         parentPeer: { kind: "group", id: "oc-group" },
       }),
     );
+  });
+
+  it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-image-dedup",
+        },
+      },
+      message: {
+        message_id: "msg-image-dedup",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img_dedup_payload",
+        }),
+      },
+    };
+
+    await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });
 

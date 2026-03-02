@@ -16,6 +16,12 @@ import {
 } from "./types.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 
+const MAX_BEFORE_AFTER_BYTES = 512 * 1024;
+const MAX_PATCH_BYTES = 2 * 1024 * 1024;
+const MAX_TITLE_BYTES = 1_024;
+const MAX_PATH_BYTES = 2_048;
+const MAX_LANG_BYTES = 128;
+
 function stringEnum<T extends readonly string[]>(values: T, description: string) {
   return Type.Unsafe<T[number]>({
     type: "string",
@@ -28,12 +34,30 @@ const DiffsToolSchema = Type.Object(
   {
     before: Type.Optional(Type.String({ description: "Original text content." })),
     after: Type.Optional(Type.String({ description: "Updated text content." })),
-    patch: Type.Optional(Type.String({ description: "Unified diff or patch text." })),
-    path: Type.Optional(Type.String({ description: "Display path for before/after input." })),
-    lang: Type.Optional(
-      Type.String({ description: "Optional language override for before/after input." }),
+    patch: Type.Optional(
+      Type.String({
+        description: "Unified diff or patch text.",
+        maxLength: MAX_PATCH_BYTES,
+      }),
     ),
-    title: Type.Optional(Type.String({ description: "Optional title for the rendered diff." })),
+    path: Type.Optional(
+      Type.String({
+        description: "Display path for before/after input.",
+        maxLength: MAX_PATH_BYTES,
+      }),
+    ),
+    lang: Type.Optional(
+      Type.String({
+        description: "Optional language override for before/after input.",
+        maxLength: MAX_LANG_BYTES,
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        description: "Optional title for the rendered diff.",
+        maxLength: MAX_TITLE_BYTES,
+      }),
+    ),
     mode: Type.Optional(
       stringEnum(DIFF_MODES, "Output mode: view, image, or both. Default: both."),
     ),
@@ -102,6 +126,7 @@ export function createDiffsTool(params: {
           theme,
         });
         const imageStats = await fs.stat(imagePath);
+        params.store.scheduleCleanup();
 
         return {
           content: [
@@ -217,27 +242,46 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   const after = params.after;
 
   if (patch) {
+    assertMaxBytes(patch, "patch", MAX_PATCH_BYTES);
     if (before !== undefined || after !== undefined) {
       throw new PluginToolInputError("Provide either patch or before/after input, not both.");
+    }
+    const title = params.title?.trim();
+    if (title) {
+      assertMaxBytes(title, "title", MAX_TITLE_BYTES);
     }
     return {
       kind: "patch",
       patch,
-      title: params.title?.trim() || undefined,
+      title,
     };
   }
 
   if (before === undefined || after === undefined) {
     throw new PluginToolInputError("Provide patch or both before and after text.");
   }
+  assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
+  assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
+  const path = params.path?.trim() || undefined;
+  const lang = params.lang?.trim() || undefined;
+  const title = params.title?.trim() || undefined;
+  if (path) {
+    assertMaxBytes(path, "path", MAX_PATH_BYTES);
+  }
+  if (lang) {
+    assertMaxBytes(lang, "lang", MAX_LANG_BYTES);
+  }
+  if (title) {
+    assertMaxBytes(title, "title", MAX_TITLE_BYTES);
+  }
 
   return {
     kind: "before_after",
     before,
     after,
-    path: params.path?.trim() || undefined,
-    lang: params.lang?.trim() || undefined,
-    title: params.title?.trim() || undefined,
+    path,
+    lang,
+    title,
   };
 }
 
@@ -277,4 +321,11 @@ class PluginToolInputError extends Error {
     super(message);
     this.name = "ToolInputError";
   }
+}
+
+function assertMaxBytes(value: string, label: string, maxBytes: number): void {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return;
+  }
+  throw new PluginToolInputError(`${label} exceeds maximum size (${maxBytes} bytes).`);
 }

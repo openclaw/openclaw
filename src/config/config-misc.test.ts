@@ -321,4 +321,51 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues).not.toHaveLength(0);
     });
   });
+
+  it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          gateway: { bind: "${OPENCLAW_BIND}" },
+        }),
+        "utf-8",
+      );
+
+      const prev = process.env.OPENCLAW_BIND;
+      process.env.OPENCLAW_BIND = "0.0.0.0";
+      try {
+        const snap = await readConfigFileSnapshot();
+        expect(snap.valid).toBe(false);
+        expect(snap.legacyIssues).toHaveLength(0);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.OPENCLAW_BIND;
+        } else {
+          process.env.OPENCLAW_BIND = prev;
+        }
+      }
+    });
+  });
+
+  it("still marks literal gateway.bind host aliases as legacy", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          gateway: { bind: "0.0.0.0" },
+        }),
+        "utf-8",
+      );
+
+      const snap = await readConfigFileSnapshot();
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+    });
+  });
 });

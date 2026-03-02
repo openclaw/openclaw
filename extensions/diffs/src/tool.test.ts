@@ -40,14 +40,8 @@ describe("diffs tool", () => {
   });
 
   it("returns an image artifact in image mode", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
+    const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
+    const screenshotter = createScreenshotter();
 
     const tool = createDiffsTool({
       api: createApi(),
@@ -68,6 +62,7 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     expect((result?.details as Record<string, unknown>).imagePath).toBeDefined();
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to view output when both mode cannot render an image", async () => {
@@ -110,6 +105,38 @@ describe("diffs tool", () => {
     ).rejects.toThrow("Invalid baseUrl");
   });
 
+  it("rejects oversized before/after payloads", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+    const large = "x".repeat(600_000);
+
+    await expect(
+      tool.execute?.("tool-large-before", {
+        before: large,
+        after: "ok",
+        mode: "view",
+      }),
+    ).rejects.toThrow("before exceeds maximum size");
+  });
+
+  it("rejects oversized patch payloads", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    await expect(
+      tool.execute?.("tool-large-patch", {
+        patch: "x".repeat(2_100_000),
+        mode: "view",
+      }),
+    ).rejects.toThrow("patch exceeds maximum size");
+  });
+
   it("uses configured defaults when tool params omit them", async () => {
     const tool = createDiffsTool({
       api: createApi(),
@@ -144,14 +171,7 @@ describe("diffs tool", () => {
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
-        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
+    const screenshotter = createScreenshotter();
     const tool = createDiffsTool({
       api: createApi(),
       store,
@@ -221,4 +241,15 @@ function readTextContent(result: unknown, index: number): string {
     ?.content;
   const entry = content?.[index];
   return entry?.type === "text" ? (entry.text ?? "") : "";
+}
+
+function createScreenshotter() {
+  return {
+    screenshotHtml: vi.fn(async ({ html, outputPath }: { html: string; outputPath: string }) => {
+      expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.writeFile(outputPath, Buffer.from("png"));
+      return outputPath;
+    }),
+  };
 }

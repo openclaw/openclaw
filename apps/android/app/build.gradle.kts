@@ -22,7 +22,7 @@ android {
         minSdk = 31
         targetSdk = 36
         versionCode = 202603010
-        versionName = "2026.3.1"
+        versionName = "2026.3.2"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -66,6 +66,7 @@ android {
     lint {
         disable +=
             setOf(
+                "AndroidGradlePluginVersion",
                 "GradleDependency",
                 "IconLauncherShape",
                 "NewerVersionAvailable",
