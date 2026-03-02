@@ -1,5 +1,18 @@
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
+# OCI base-image metadata for downstream image consumers.
+# If you change these annotations, also update:
+# - docs/install/docker.md ("Base image metadata" section)
+# - https://docs.openclaw.ai/install/docker
+LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm" \
+  org.opencontainers.image.base.digest="sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935" \
+  org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.url="https://openclaw.ai" \
+  org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.title="OpenClaw" \
+  org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
+
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
@@ -73,6 +86,11 @@ USER node
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
+#
+# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
+# makes the gateway unreachable from the host. Either:
+#   - Use --network host, OR
+#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
 #
 # For container platforms requiring external health checks:
 #   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var

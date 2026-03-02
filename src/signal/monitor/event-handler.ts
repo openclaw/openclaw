@@ -420,18 +420,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!envelope) {
       return;
     }
-    if (envelope.syncMessage) {
-      return;
-    }
 
+    // Check for syncMessage (e.g., sentTranscript from other devices)
+    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
-    if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) {
-        return;
-      }
+
+    // Check if the message is from our own account to prevent loop/self-reply
+    // This handles both phone number and UUID based identification
+    const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+    const isOwnMessage =
+      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
+    if (isOwnMessage) {
+      return;
+    }
+
+    // Filter all sync messages (sentTranscript, readReceipts, etc.).
+    // signal-cli may set syncMessage to null instead of omitting it, so
+    // check property existence rather than truthiness to avoid replaying
+    // the bot's own sent messages on daemon restart.
+    if ("syncMessage" in envelope) {
+      return;
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;

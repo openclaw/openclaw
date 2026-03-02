@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 
 const {
   attachDiscordGatewayLoggingMock,
@@ -16,7 +17,9 @@ const {
   return {
     attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
     getDiscordGatewayEmitterMock,
-    waitForDiscordGatewayStopMock: vi.fn(() => Promise.resolve()),
+    waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
+      Promise.resolve(),
+    ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
     stopGatewayLoggingMock,
@@ -331,7 +334,7 @@ describe("runDiscordGatewayLifecycle", () => {
       };
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (waitParams: { registerForceStop?: (stop: (err: unknown) => void) => void }) =>
+        (waitParams: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((_resolve, reject) => {
             waitParams.registerForceStop?.((err) => reject(err));
           }),
@@ -364,7 +367,7 @@ describe("runDiscordGatewayLifecycle", () => {
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       let resolveWait: (() => void) | undefined;
       waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (waitParams: { registerForceStop?: (stop: (err: unknown) => void) => void }) =>
+        (waitParams: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((resolve, reject) => {
             resolveWait = resolve;
             waitParams.registerForceStop?.((err) => reject(err));

@@ -45,6 +45,7 @@ import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-strea
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
@@ -256,6 +257,21 @@ function normalizeToolCallNameForDispatch(rawName: string, allowedToolNames?: Se
     caseInsensitiveMatch = name;
   }
   return caseInsensitiveMatch ?? trimmed;
+}
+
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  const providerBaseUrl = params.providerBaseUrl?.trim() ?? "";
+  if (providerBaseUrl) {
+    return providerBaseUrl;
+  }
+  const modelBaseUrl = params.modelBaseUrl?.trim() ?? "";
+  if (modelBaseUrl) {
+    return modelBaseUrl;
+  }
+  return OLLAMA_NATIVE_BASE_URL;
 }
 
 function trimWhitespaceFromToolCallNamesInMessage(
@@ -524,6 +540,8 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
       });
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
@@ -900,13 +918,16 @@ export async function runEmbeddedAttempt(
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
-        // Use the resolved model baseUrl first so custom provider aliases work.
+        // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const modelBaseUrl =
-          typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : "";
+          typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
         const providerBaseUrl =
-          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
-        const ollamaBaseUrl = modelBaseUrl || providerBaseUrl || OLLAMA_NATIVE_BASE_URL;
+          typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
+        const ollamaBaseUrl = resolveOllamaBaseUrlForRun({
+          modelBaseUrl,
+          providerBaseUrl,
+        });
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
       } else if (params.model.api === "openai-responses" && params.provider === "openai") {
         const wsApiKey = await params.authStorage.getApiKey(params.provider);
@@ -1001,6 +1022,29 @@ export async function runEmbeddedAttempt(
             return inner(model, context, options);
           }
           const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
+      if (
+        params.model.api === "openai-responses" ||
+        params.model.api === "openai-codex-responses"
+      ) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
           if (sanitized === messages) {
             return inner(model, context, options);
           }

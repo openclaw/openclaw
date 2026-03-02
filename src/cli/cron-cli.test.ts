@@ -40,7 +40,13 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
-    payload?: { kind?: string; message?: string; model?: string; thinking?: string };
+    payload?: {
+      kind?: string;
+      message?: string;
+      model?: string;
+      thinking?: string;
+      lightContext?: boolean;
+    };
     delivery?: {
       mode?: string;
       channel?: string;
@@ -53,7 +59,7 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string };
+  payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -151,6 +157,62 @@ async function expectCronEditWithScheduleLookupExit(
 }
 
 describe("cron cli", () => {
+  it("exits 0 for cron run when job executes successfully", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: true };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const runtimeModule = await import("../runtime.js");
+    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+    const originalExit = runtime.exit;
+    const exitSpy = vi.fn();
+    runtime.exit = exitSpy;
+    try {
+      const program = buildProgram();
+      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      runtime.exit = originalExit;
+    }
+  });
+
+  it("exits 1 for cron run when job does not execute", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: false };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const runtimeModule = await import("../runtime.js");
+    const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+    const originalExit = runtime.exit;
+    const exitSpy = vi.fn();
+    runtime.exit = exitSpy;
+    try {
+      const program = buildProgram();
+      await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      runtime.exit = originalExit;
+    }
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",
@@ -315,6 +377,22 @@ describe("cron cli", () => {
     expect(params?.agentId).toBe("ops");
   });
 
+  it("sets lightContext on cron add when --light-context is passed", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Light context",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--light-context",
+    ]);
+
+    expect(params?.payload?.lightContext).toBe(true);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -355,6 +433,14 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.payload?.model).toBe("opus");
     expect(patch?.patch?.payload?.thinking).toBe("low");
+  });
+
+  it("sets and clears lightContext on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
+    expect(setPatch?.patch?.payload?.lightContext).toBe(true);
+
+    const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
+    expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
   });
 
   it("updates delivery settings without requiring --message", async () => {
