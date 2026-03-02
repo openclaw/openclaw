@@ -297,7 +297,7 @@ export function buildGatewayCronService(params: {
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const webhookToken = params.cfg.cron?.webhookToken?.trim();
+      const webhookToken = trimToOptionalString(params.cfg.cron?.webhookToken);
 
       // Webhook mode requires a URL - fail closed if missing
       if (mode === "webhook" && !to) {
