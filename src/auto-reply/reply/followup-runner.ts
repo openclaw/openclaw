@@ -167,6 +167,9 @@ export function createFollowupRunner(params: {
               agentAccountId: queued.run.agentAccountId,
               messageTo: queued.originatingTo,
               messageThreadId: queued.originatingThreadId,
+              currentChannelId: queued.originatingTo,
+              currentThreadTs:
+                queued.originatingThreadId != null ? String(queued.originatingThreadId) : undefined,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,
