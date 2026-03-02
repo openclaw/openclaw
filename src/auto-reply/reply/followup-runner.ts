@@ -295,8 +295,17 @@ export function createFollowupRunner(params: {
           originatingTo,
           accountId: originAccountId,
         });
+      const uniquePreviousTargets = new Set(
+        previousSentTargets.map((target) =>
+          JSON.stringify({
+            provider: target.provider,
+            to: target.to ?? "",
+            accountId: target.accountId ?? "",
+          }),
+        ),
+      );
       const canReuseSessionDedupeFingerprints =
-        recentTargetMatch && previousSentTargets.length <= 1;
+        recentTargetMatch && uniquePreviousTargets.size <= 1;
 
       const sentTexts = [
         ...(runResult.messagingToolSentTexts ?? []),
