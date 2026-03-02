@@ -1,10 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
+import { runAudioTranscription } from "./audio-transcription-runner.js";
 
 /**
  * Transcribe an audio file using the configured media-understanding provider.
@@ -25,27 +20,10 @@ export async function transcribeAudioFile(params: {
     MediaPath: params.filePath,
     MediaType: params.mime,
   };
-  const attachments = normalizeMediaAttachments(ctx);
-  if (attachments.length === 0) {
-    return { text: undefined };
-  }
-  const cache = createMediaAttachmentCache(attachments);
-  const providerRegistry = buildProviderRegistry();
-  try {
-    const result = await runCapability({
-      capability: "audio",
-      cfg: params.cfg,
-      ctx,
-      attachments: cache,
-      media: attachments,
-      agentDir: params.agentDir,
-      providerRegistry,
-      config: params.cfg.tools?.media?.audio,
-    });
-    const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
-    const text = output?.text?.trim();
-    return { text: text || undefined };
-  } finally {
-    await cache.cleanup();
-  }
+  const { transcript } = await runAudioTranscription({
+    ctx,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+  return { text: transcript };
 }
