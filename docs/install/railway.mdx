@@ -58,10 +58,10 @@ Attach a volume mounted at:
 Set these variables on the service:
 
 - `SETUP_PASSWORD` (required)
-- `PORT=8080` (required — must match the port in Public Networking)
+- `PORT=8080` (required — must match the port in Public Networking; also tells the gateway to bind to `0.0.0.0` so Railway's health probe can reach it)
+- `OPENCLAW_GATEWAY_TOKEN` (required when `PORT` is set — non-loopback binds require auth; Railway's template generates this automatically)
 - `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
-- `OPENCLAW_GATEWAY_TOKEN` (recommended; treat as an admin secret)
 
 ## Setup flow
 

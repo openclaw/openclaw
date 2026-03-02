@@ -128,6 +128,11 @@ USER node
 #   - GET /healthz (liveness) and GET /readyz (readiness)
 #   - aliases: /health and /ready
 # For external access from host/ingress, override bind to "lan" and set auth.
+#
+# PaaS deployments (Railway, Render, Fly.io): set PORT and OPENCLAW_GATEWAY_TOKEN.
+# When PORT is set the gateway binds to 0.0.0.0:$PORT (lan mode) so the platform
+# health probe can reach it. Auth is required for non-loopback binds.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+# Shell form so $PORT expansion works. exec replaces sh as PID 1 for signal forwarding.
+CMD ["sh", "-c", "exec node openclaw.mjs gateway --allow-unconfigured${PORT:+ --port ${PORT} --bind lan}"]
