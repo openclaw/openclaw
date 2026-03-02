@@ -11,6 +11,7 @@ import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { resolveAgentConfig } from "./views/agents-utils.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -122,6 +123,28 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
+export function resolveActiveAgentId(state: AppViewState): string {
+  const key = state.sessionKey.trim();
+  const match = key.match(/^agent:([^:]+):/);
+  if (match?.[1]?.trim()) {
+    return match[1].trim();
+  }
+  return state.agentsList?.defaultId?.trim() || "main";
+}
+
+export function resolveActiveWorkspace(state: AppViewState, agentId: string): string {
+  const config = resolveAgentConfig(state.configForm, agentId);
+  return config.entry?.workspace || config.defaults?.workspace || "default";
+}
+
+function truncateMiddle(value: string, max = 42): string {
+  if (value.length <= max) {
+    return value;
+  }
+  const keep = Math.max(10, Math.floor((max - 1) / 2));
+  return `${value.slice(0, keep)}…${value.slice(value.length - keep)}`;
+}
+
 export function renderChatControls(state: AppViewState) {
   const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
   const hideCron = state.sessionsHideCron ?? true;
@@ -138,6 +161,9 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const activeAgentId = resolveActiveAgentId(state);
+  const activeWorkspace = resolveActiveWorkspace(state, activeAgentId);
+  const activeWorkspaceShort = truncateMiddle(activeWorkspace);
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -211,6 +237,14 @@ export function renderChatControls(state: AppViewState) {
           )}
         </select>
       </label>
+      <div class="chat-controls__context" role="status" aria-live="polite">
+        <span class="chat-controls__badge" title=${`Active agent: ${activeAgentId}`}>
+          Agent: <strong>${activeAgentId}</strong>
+        </span>
+        <span class="chat-controls__badge chat-controls__badge--workspace" title=${activeWorkspace}>
+          Workspace: <strong class="mono">${activeWorkspaceShort}</strong>
+        </span>
+      </div>
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}

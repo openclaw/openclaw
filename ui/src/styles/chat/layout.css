@@ -336,6 +336,41 @@
   max-width: 300px;
 }
 
+.chat-controls__context {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-controls__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-controls__badge strong {
+  color: var(--text);
+}
+
+.chat-controls__badge--workspace {
+  max-width: min(48vw, 440px);
+}
+
+.chat-controls__badge--workspace strong {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;
