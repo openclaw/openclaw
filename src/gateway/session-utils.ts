@@ -55,8 +55,10 @@ export {
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
+  readSessionMessagesWithStatus,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
+export type { ReadSessionMessagesResult } from "./session-utils.fs.js";
 export type {
   GatewayAgentRow,
   GatewaySessionRow,

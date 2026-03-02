@@ -71,16 +71,21 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
-export function readSessionMessages(
+export type ReadSessionMessagesResult = {
+  messages: unknown[];
+  fileFound: boolean;
+};
+
+export function readSessionMessagesWithStatus(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
-): unknown[] {
+): ReadSessionMessagesResult {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) {
-    return [];
+    return { messages: [], fileFound: false };
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
@@ -115,7 +120,15 @@ export function readSessionMessages(
       // ignore bad lines
     }
   }
-  return messages;
+  return { messages, fileFound: true };
+}
+
+export function readSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): unknown[] {
+  return readSessionMessagesWithStatus(sessionId, storePath, sessionFile).messages;
 }
 
 export function resolveSessionTranscriptCandidates(
