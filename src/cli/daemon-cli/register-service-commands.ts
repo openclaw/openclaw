@@ -96,6 +96,15 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option(
+      "--notify",
+      "After restart, send a post-restart summary to the main session (uses restart sentinel).",
+      false,
+    )
+    .option(
+      "--note <text>",
+      "Optional note to include in the post-restart message (only used with --notify).",
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonRestart(cmdOpts);
