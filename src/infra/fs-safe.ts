@@ -4,6 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { sameFileIdentity } from "./file-identity.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
@@ -282,13 +283,15 @@ async function readOpenedFileSafely(params: {
   };
 }
 
-export async function writeFileWithinRoot(params: {
+async function openWritableFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
-  data: string | Buffer;
-  encoding?: BufferEncoding;
   mkdir?: boolean;
-}): Promise<void> {
+}): Promise<{
+  handle: FileHandle;
+  createdForWrite: boolean;
+  openedRealPath: string;
+}> {
   const { rootReal, rootWithSep, resolved } = await resolvePathWithinRoot(params);
   try {
     await assertNoPathAliasEscape({
@@ -372,17 +375,92 @@ export async function writeFileWithinRoot(params: {
     if (!createdForWrite) {
       await handle.truncate(0);
     }
-    if (typeof params.data === "string") {
-      await handle.writeFile(params.data, params.encoding ?? "utf8");
-    } else {
-      await handle.writeFile(params.data);
-    }
+    return {
+      handle,
+      createdForWrite,
+      openedRealPath: realPath,
+    };
   } catch (err) {
     if (createdForWrite && err instanceof SafeOpenError && openedRealPath) {
       await fs.rm(openedRealPath, { force: true }).catch(() => {});
     }
+    await handle.close().catch(() => {});
+    throw err;
+  }
+}
+
+export async function writeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
+  const target = await openWritableFileWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
+    mkdir: params.mkdir,
+  });
+  try {
+    if (typeof params.data === "string") {
+      await target.handle.writeFile(params.data, params.encoding ?? "utf8");
+    } else {
+      await target.handle.writeFile(params.data);
+    }
+  } finally {
+    await target.handle.close().catch(() => {});
+  }
+}
+
+export async function copyFileWithinRoot(params: {
+  sourcePath: string;
+  rootDir: string;
+  relativePath: string;
+  maxBytes?: number;
+  mkdir?: boolean;
+}): Promise<void> {
+  const source = await openVerifiedLocalFile(params.sourcePath);
+  if (params.maxBytes !== undefined && source.stat.size > params.maxBytes) {
+    await source.handle.close().catch(() => {});
+    throw new SafeOpenError(
+      "too-large",
+      `file exceeds limit of ${params.maxBytes} bytes (got ${source.stat.size})`,
+    );
+  }
+
+  let target: {
+    handle: FileHandle;
+    createdForWrite: boolean;
+    openedRealPath: string;
+  } | null = null;
+  let sourceClosedByStream = false;
+  let targetClosedByStream = false;
+  try {
+    target = await openWritableFileWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+      mkdir: params.mkdir,
+    });
+    const sourceStream = source.handle.createReadStream();
+    const targetStream = target.handle.createWriteStream();
+    sourceStream.once("close", () => {
+      sourceClosedByStream = true;
+    });
+    targetStream.once("close", () => {
+      targetClosedByStream = true;
+    });
+    await pipeline(sourceStream, targetStream);
+  } catch (err) {
+    if (target?.createdForWrite) {
+      await fs.rm(target.openedRealPath, { force: true }).catch(() => {});
+    }
     throw err;
   } finally {
-    await handle.close().catch(() => {});
+    if (!sourceClosedByStream) {
+      await source.handle.close().catch(() => {});
+    }
+    if (target && !targetClosedByStream) {
+      await target.handle.close().catch(() => {});
+    }
   }
 }

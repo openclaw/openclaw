@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  copyFileWithinRoot,
   createRootScopedReadFile,
   SafeOpenError,
   openFileWithinRoot,
@@ -174,6 +175,42 @@ describe("fs-safe", () => {
       data: "hello",
     });
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
+  });
+
+  it("copies a file within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+    const sourcePath = path.join(sourceDir, "in.txt");
+    await fs.writeFile(sourcePath, "copy-ok");
+
+    await copyFileWithinRoot({
+      sourcePath,
+      rootDir: root,
+      relativePath: "nested/copied.txt",
+    });
+
+    await expect(fs.readFile(path.join(root, "nested", "copied.txt"), "utf8")).resolves.toBe(
+      "copy-ok",
+    );
+  });
+
+  it("enforces maxBytes when copying into root", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
+    const sourcePath = path.join(sourceDir, "big.bin");
+    await fs.writeFile(sourcePath, Buffer.alloc(8));
+
+    await expect(
+      copyFileWithinRoot({
+        sourcePath,
+        rootDir: root,
+        relativePath: "nested/big.bin",
+        maxBytes: 4,
+      }),
+    ).rejects.toMatchObject({ code: "too-large" });
+    await expect(fs.stat(path.join(root, "nested", "big.bin"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("rejects write traversal outside root", async () => {
