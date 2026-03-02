@@ -2,7 +2,7 @@ import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-
 import { describe, expect, it, vi } from "vitest";
 import { __testing } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
-import type { ResolvedZalouserAccount, ZcaMessage } from "./types.js";
+import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 const sendMessageZalouserMock = vi.hoisted(() => vi.fn(async () => {}));
 
@@ -72,17 +72,16 @@ describe("zalouser monitor pairing account scoping", () => {
       },
     };
 
-    const message: ZcaMessage = {
+    const message: ZaloInboundMessage = {
       threadId: "chat-1",
+      isGroup: false,
+      senderId: "attacker",
+      senderName: "Attacker",
+      groupName: undefined,
+      timestampMs: Date.now(),
       msgId: "msg-1",
-      type: 1,
       content: "hello",
-      timestamp: Math.floor(Date.now() / 1000),
-      metadata: {
-        isGroup: false,
-        fromId: "attacker",
-        senderName: "Attacker",
-      },
+      raw: { source: "test" },
     };
 
     const runtime: RuntimeEnv = {
