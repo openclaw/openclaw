@@ -62,21 +62,23 @@ describe("runCommandWithTimeout", () => {
         process.execPath,
         "-e",
         [
-          'process.stdout.write(".");',
           "let count = 0;",
-          'const ticker = setInterval(() => { process.stdout.write(".");',
+          "const emit = () => {",
+          'process.stdout.write(".");',
           "count += 1;",
-          "if (count === 3) {",
-          "clearInterval(ticker);",
+          "if (count >= 4) {",
           "process.exit(0);",
+          "return;",
           "}",
-          "}, 6);",
+          "setTimeout(emit, 40);",
+          "};",
+          "emit();",
         ].join(" "),
       ],
       {
-        timeoutMs: 180,
-        // Keep a healthy margin above the emit interval while avoiding long idle waits.
-        noOutputTimeoutMs: 120,
+        timeoutMs: 2_000,
+        // Keep a healthy margin above the emit interval for loaded CI runners.
+        noOutputTimeoutMs: 400,
       },
     );
 
