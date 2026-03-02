@@ -80,7 +80,7 @@ const copilotProxyPlugin = {
     api.registerProvider({
       id: "copilot-proxy",
       label: "Copilot Proxy",
-      docsPath: "/providers/models",
+      docsPath: "/providers",
       auth: [
         {
           id: "local",
