@@ -1,5 +1,9 @@
 import fs from "node:fs";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentSkillsFilter,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
@@ -64,6 +68,7 @@ export function listSkillCommandsForAgents(params: {
     visitedDirs.add(canonicalDir);
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
+      skillFilter: resolveAgentSkillsFilter(params.cfg, agentId),
       eligibility: { remote: getRemoteSkillEligibility() },
       reservedNames: used,
     });
