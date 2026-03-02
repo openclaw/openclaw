@@ -51,8 +51,8 @@ describe("windows command wrapper behavior", () => {
   it("wraps .cmd commands via cmd.exe in runCommandWithTimeout", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
-    let captured: { command: string; args: string[]; options: Record<string, unknown> } | null =
-      null;
+    type CapturedCall = { command: string; args: string[]; options: Record<string, unknown> };
+    let captured: CapturedCall | null = null;
 
     spawnMock.mockImplementation(
       (command: string, args: string[], options: Record<string, unknown>) => {
@@ -64,10 +64,11 @@ describe("windows command wrapper behavior", () => {
     try {
       const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
       expect(result.code).toBe(0);
-      expect(captured?.command).toBe(expectedComSpec);
-      expect(captured?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-      expect(captured?.args[3]).toContain("pnpm.cmd --version");
-      expect(captured?.options.windowsVerbatimArguments).toBe(true);
+      expect(captured).not.toBeNull();
+      expect(captured!.command).toBe(expectedComSpec);
+      expect(captured!.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured!.args[3]).toContain("pnpm.cmd --version");
+      expect(captured!.options.windowsVerbatimArguments).toBe(true);
     } finally {
       platformSpy.mockRestore();
     }
@@ -76,8 +77,8 @@ describe("windows command wrapper behavior", () => {
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
-    let captured: { command: string; args: string[]; options: Record<string, unknown> } | null =
-      null;
+    type CapturedCall = { command: string; args: string[]; options: Record<string, unknown> };
+    let captured: CapturedCall | null = null;
 
     execFileMock.mockImplementation(
       (
@@ -93,10 +94,11 @@ describe("windows command wrapper behavior", () => {
 
     try {
       await runExec("pnpm", ["--version"], 1000);
-      expect(captured?.command).toBe(expectedComSpec);
-      expect(captured?.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-      expect(captured?.args[3]).toContain("pnpm.cmd --version");
-      expect(captured?.options.windowsVerbatimArguments).toBe(true);
+      expect(captured).not.toBeNull();
+      expect(captured!.command).toBe(expectedComSpec);
+      expect(captured!.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured!.args[3]).toContain("pnpm.cmd --version");
+      expect(captured!.options.windowsVerbatimArguments).toBe(true);
     } finally {
       platformSpy.mockRestore();
     }
