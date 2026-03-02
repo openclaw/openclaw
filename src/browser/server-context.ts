@@ -278,6 +278,7 @@ function createProfileContext(
   const ensureBrowserAvailable = async (): Promise<void> => {
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
+    const attachOnly = profile.attachOnly;
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
@@ -303,13 +304,13 @@ function createProfileContext(
     }
 
     if (!httpReachable) {
-      if ((current.resolved.attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
+      if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(1200)) {
           return;
         }
       }
-      if (current.resolved.attachOnly || remoteCdp) {
+      if (attachOnly || remoteCdp) {
         throw new Error(
           remoteCdp
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
@@ -336,7 +337,7 @@ function createProfileContext(
     }
 
     // We own it but WebSocket failed - restart
-    if (current.resolved.attachOnly || remoteCdp) {
+    if (attachOnly || remoteCdp) {
       if (opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isReachable(1200)) {
