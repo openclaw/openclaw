@@ -1,4 +1,7 @@
-import type { AllowlistMatch } from "../../channels/allowlist-match.js";
+import {
+  resolveAllowlistMatchByCandidates,
+  type AllowlistMatch,
+} from "../../channels/allowlist-match.js";
 import {
   normalizeHyphenSlug,
   normalizeStringEntries,
@@ -49,19 +52,7 @@ export function resolveSlackAllowListMatch(params: {
         ] satisfies Array<{ value?: string; source: SlackAllowListMatch["matchSource"] }>)
       : []),
   ];
-  for (const candidate of candidates) {
-    if (!candidate.value) {
-      continue;
-    }
-    if (allowList.includes(candidate.value)) {
-      return {
-        allowed: true,
-        matchKey: candidate.value,
-        matchSource: candidate.source,
-      };
-    }
-  }
-  return { allowed: false };
+  return resolveAllowlistMatchByCandidates({ allowList, candidates });
 }
 
 export function allowListMatches(params: {

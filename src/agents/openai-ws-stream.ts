@@ -30,7 +30,6 @@ import type {
   StopReason,
   TextContent,
   ToolCall,
-  Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -43,7 +42,9 @@ import {
 } from "./openai-ws-connection.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import {
+  buildAssistantMessage,
   buildAssistantMessageWithZeroUsage,
+  buildUsageWithNoCost,
   buildStreamErrorAssistantMessage,
 } from "./stream-message-shared.js";
 
@@ -298,25 +299,16 @@ export function buildAssistantMessageFromResponse(
   const hasToolCalls = content.some((c) => c.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
 
-  const usage: Usage = {
-    input: response.usage?.input_tokens ?? 0,
-    output: response.usage?.output_tokens ?? 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: response.usage?.total_tokens ?? 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-
-  return {
-    role: "assistant",
+  return buildAssistantMessage({
+    model: modelInfo,
     content,
     stopReason,
-    api: modelInfo.api,
-    provider: modelInfo.provider,
-    model: modelInfo.id,
-    usage,
-    timestamp: Date.now(),
-  };
+    usage: buildUsageWithNoCost({
+      input: response.usage?.input_tokens ?? 0,
+      output: response.usage?.output_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+    }),
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

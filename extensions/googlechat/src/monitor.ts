@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createInboundEnvelopeBuilder,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
@@ -11,6 +10,7 @@ import {
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
@@ -638,7 +638,7 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const route = core.channel.routing.resolveAgentRoute({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
@@ -646,15 +646,8 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? "group" : "direct",
       id: spaceId,
     },
-  });
-  const buildEnvelope = createInboundEnvelopeBuilder({
-    cfg: config,
-    route,
+    runtime: core.channel,
     sessionStore: config.session?.store,
-    resolveStorePath: core.channel.session.resolveStorePath,
-    readSessionUpdatedAt: core.channel.session.readSessionUpdatedAt,
-    resolveEnvelopeFormatOptions: core.channel.reply.resolveEnvelopeFormatOptions,
-    formatAgentEnvelope: core.channel.reply.formatAgentEnvelope,
   });
 
   let mediaPath: string | undefined;
