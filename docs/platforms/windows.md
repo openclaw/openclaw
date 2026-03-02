@@ -55,6 +55,45 @@ Repair/migrate:
 openclaw doctor
 ```
 
+## Gateway auto start before Windows login
+
+For headless setups, enabling the WSL user service alone is not enough. You
+also need Windows to start WSL during boot.
+
+### 1) Enable user linger in WSL
+
+`linger` allows systemd user services to run without an interactive login.
+
+```bash
+sudo loginctl enable-linger "$(whoami)"
+```
+
+### 2) Install the gateway service in WSL
+
+```bash
+openclaw gateway install
+```
+
+### 3) Start WSL at Windows boot
+
+Run in PowerShell as Administrator:
+
+```powershell
+schtasks /create /tn "WSL Boot" /tr "wsl.exe -d Ubuntu --exec /bin/true" /sc onstart /ru SYSTEM
+```
+
+Use your distro name instead of `Ubuntu` if different.
+
+Verify after a reboot:
+
+```powershell
+schtasks /query /tn "WSL Boot" /v /fo list
+```
+
+```bash
+systemctl --user status "openclaw-gateway.service"
+```
+
 ## Advanced: expose WSL services over LAN (portproxy)
 
 WSL has its own virtual network. If another machine needs to reach a service
