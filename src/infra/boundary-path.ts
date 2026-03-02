@@ -128,6 +128,15 @@ type BoundaryResolutionContext = {
   canonicalOutsideLexicalPath: string;
 };
 
+function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
+  return Boolean(
+    value &&
+    (typeof value === "object" || typeof value === "function") &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function",
+  );
+}
+
 function createLexicalTraversalState(params: {
   params: ResolveBoundaryPathParams;
   rootPath: string;
@@ -320,8 +329,10 @@ function readLexicalStat(params: {
 }): fs.Stats | null | Promise<fs.Stats | null> {
   try {
     const stat = params.read(params.state.lexicalCursor);
-    if (stat instanceof Promise) {
-      return stat.catch((error) => handleLexicalStatReadFailure({ ...params, error }));
+    if (isPromiseLike<fs.Stats>(stat)) {
+      return Promise.resolve(stat).catch((error) =>
+        handleLexicalStatReadFailure({ ...params, error }),
+      );
     }
     return stat;
   } catch (error) {
@@ -336,8 +347,8 @@ function resolveAndApplySymlinkHop(params: {
   resolveLinkCanonical: (cursor: string) => string | Promise<string>;
 }): void | Promise<void> {
   const linkCanonical = params.resolveLinkCanonical(params.state.lexicalCursor);
-  if (linkCanonical instanceof Promise) {
-    return linkCanonical.then((value) =>
+  if (isPromiseLike<string>(linkCanonical)) {
+    return Promise.resolve(linkCanonical).then((value) =>
       applyResolvedSymlinkHop({
         state: params.state,
         linkCanonical: value,
@@ -441,7 +452,7 @@ function resolveBoundaryPathLexicalSync(params: {
       absolutePath: params.absolutePath,
       read: (cursor) => fs.lstatSync(cursor),
     });
-    if (maybeStat instanceof Promise) {
+    if (isPromiseLike<fs.Stats | null>(maybeStat)) {
       throw new Error("Unexpected async lexical stat");
     }
     const stat = maybeStat;
@@ -471,7 +482,7 @@ function resolveBoundaryPathLexicalSync(params: {
       boundaryLabel: params.params.boundaryLabel,
       resolveLinkCanonical: (cursor) => resolveSymlinkHopPathSync(cursor),
     });
-    if (maybeApplied instanceof Promise) {
+    if (isPromiseLike<void>(maybeApplied)) {
       throw new Error("Unexpected async symlink resolution");
     }
   }
