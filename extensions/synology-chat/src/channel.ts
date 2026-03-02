@@ -196,15 +196,19 @@ export function createSynologyChatPlugin() {
       textChunkLimit: 2000,
 
       sendPayload: async (ctx: any) => {
+        const text = ctx.payload.text ?? "";
         const urls = ctx.payload.mediaUrls?.length
           ? ctx.payload.mediaUrls
           : ctx.payload.mediaUrl
             ? [ctx.payload.mediaUrl]
             : [];
+        if (!text && urls.length === 0) {
+          return { channel: CHANNEL_ID, messageId: "" };
+        }
         if (urls.length > 0) {
           let lastResult = await plugin.outbound.sendMedia!({
             ...ctx,
-            text: ctx.payload.text ?? "",
+            text,
             mediaUrl: urls[0],
           });
           for (let i = 1; i < urls.length; i++) {
@@ -216,7 +220,15 @@ export function createSynologyChatPlugin() {
           }
           return lastResult;
         }
-        return plugin.outbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+        const outbound = plugin.outbound;
+        const limit = outbound.textChunkLimit;
+        const chunks =
+          limit && (outbound as any).chunker ? (outbound as any).chunker(text, limit) : [text];
+        let lastResult: any;
+        for (const chunk of chunks) {
+          lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+        }
+        return lastResult!;
       },
 
       sendText: async ({ to, text, accountId, cfg }: any) => {

@@ -372,15 +372,19 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
       const urls = ctx.payload.mediaUrls?.length
         ? ctx.payload.mediaUrls
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
+      if (!text && urls.length === 0) {
+        return { channel: "mattermost", messageId: "" };
+      }
       if (urls.length > 0) {
         let lastResult = await mattermostPlugin.outbound!.sendMedia!({
           ...ctx,
-          text: ctx.payload.text ?? "",
+          text,
           mediaUrl: urls[0],
         });
         for (let i = 1; i < urls.length; i++) {
@@ -392,7 +396,14 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
         }
         return lastResult;
       }
-      return mattermostPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+      const outbound = mattermostPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
     },
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();

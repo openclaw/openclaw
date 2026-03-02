@@ -10,15 +10,19 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
     const urls = ctx.payload.mediaUrls?.length
       ? ctx.payload.mediaUrls
       : ctx.payload.mediaUrl
         ? [ctx.payload.mediaUrl]
         : [];
+    if (!text && urls.length === 0) {
+      return { channel: "msteams", messageId: "" };
+    }
     if (urls.length > 0) {
       let lastResult = await msteamsOutbound.sendMedia!({
         ...ctx,
-        text: ctx.payload.text ?? "",
+        text,
         mediaUrl: urls[0],
       });
       for (let i = 1; i < urls.length; i++) {
@@ -30,7 +34,13 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return msteamsOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+    const limit = msteamsOutbound.textChunkLimit;
+    const chunks = limit && msteamsOutbound.chunker ? msteamsOutbound.chunker(text, limit) : [text];
+    let lastResult: Awaited<ReturnType<NonNullable<typeof msteamsOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await msteamsOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
   },
   sendText: async ({ cfg, to, text, deps }) => {
     const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
