@@ -187,6 +187,29 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("includes provider-specific setup guidance when Google API key is missing", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: undefined,
+      },
+      async () => {
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({
+            provider: "google",
+            store: { version: 1, profiles: {} },
+          });
+        } catch (err) {
+          error = err;
+        }
+
+        expect(String(error)).toContain('No API key found for provider "google".');
+        expect(String(error)).toContain("Set GEMINI_API_KEY");
+        expect(String(error)).toContain("models.providers.google.apiKey");
+      },
+    );
+  });
+
   it("accepts legacy Z_AI_API_KEY for zai", async () => {
     await withEnvAsync(
       {
