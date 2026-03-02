@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger } from "openclaw/plugin-sdk";
-import type { DiffArtifactMeta } from "./types.js";
+import type { DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
@@ -87,27 +87,40 @@ export class DiffArtifactStore {
     return await fs.readFile(htmlPath, "utf8");
   }
 
-  async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
+  async updateFilePath(id: string, filePath: string): Promise<DiffArtifactMeta> {
     const meta = await this.readMeta(id);
     if (!meta) {
       throw new Error(`Diff artifact not found: ${id}`);
     }
-    const normalizedImagePath = this.normalizeStoredPath(imagePath, "imagePath");
+    const normalizedFilePath = this.normalizeStoredPath(filePath, "filePath");
     const next: DiffArtifactMeta = {
       ...meta,
-      imagePath: normalizedImagePath,
+      filePath: normalizedFilePath,
+      imagePath: normalizedFilePath,
     };
     await this.writeMeta(next);
     return next;
   }
 
-  allocateImagePath(id: string): string {
-    return path.join(this.artifactDir(id), "preview.png");
+  async updateImagePath(id: string, imagePath: string): Promise<DiffArtifactMeta> {
+    return this.updateFilePath(id, imagePath);
   }
 
-  allocateStandaloneImagePath(): string {
+  allocateFilePath(id: string, format: DiffOutputFormat = "png"): string {
+    return path.join(this.artifactDir(id), `preview.${format}`);
+  }
+
+  allocateStandaloneFilePath(format: DiffOutputFormat = "png"): string {
     const id = crypto.randomBytes(10).toString("hex");
-    return path.join(this.artifactDir(id), "preview.png");
+    return path.join(this.artifactDir(id), `preview.${format}`);
+  }
+
+  allocateImagePath(id: string, format: DiffOutputFormat = "png"): string {
+    return this.allocateFilePath(id, format);
+  }
+
+  allocateStandaloneImagePath(format: DiffOutputFormat = "png"): string {
+    return this.allocateStandaloneFilePath(format);
   }
 
   scheduleCleanup(): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
+import { DEFAULT_DIFFS_TOOL_DEFAULTS, resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 
 describe("renderDiffDocument", () => {
@@ -13,6 +13,7 @@ describe("renderDiffDocument", () => {
       },
       {
         presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
         expandUnchanged: false,
       },
     );
@@ -61,6 +62,11 @@ describe("renderDiffDocument", () => {
           layout: "split",
           theme: "dark",
         },
+        image: resolveDiffImageRenderOptions({
+          defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          fileQuality: "hq",
+          fileMaxWidth: 1180,
+        }),
         expandUnchanged: true,
       },
     );
@@ -68,6 +74,7 @@ describe("renderDiffDocument", () => {
     expect(rendered.title).toBe("Workspace patch");
     expect(rendered.fileCount).toBe(2);
     expect(rendered.html).toContain("Workspace patch");
+    expect(rendered.imageHtml).toContain("max-width: 1180px;");
   });
 
   it("rejects patches that exceed file-count limits", async () => {
@@ -90,6 +97,7 @@ describe("renderDiffDocument", () => {
         },
         {
           presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
           expandUnchanged: false,
         },
       ),

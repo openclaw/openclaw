@@ -35,7 +35,11 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {
-    const pages: Array<{ close: ReturnType<typeof vi.fn> }> = [];
+    const pages: Array<{
+      close: ReturnType<typeof vi.fn>;
+      screenshot: ReturnType<typeof vi.fn>;
+      pdf: ReturnType<typeof vi.fn>;
+    }> = [];
     const browser = createMockBrowser(pages);
     launchMock.mockResolvedValue(browser);
     const { PlaywrightDiffScreenshotter } = await import("./browser.js");
@@ -49,11 +53,25 @@ describe("PlaywrightDiffScreenshotter", () => {
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
       outputPath,
       theme: "dark",
+      image: {
+        format: "png",
+        qualityPreset: "standard",
+        scale: 2,
+        maxWidth: 960,
+        maxPixels: 8_000_000,
+      },
     });
     await screenshotter.screenshotHtml({
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
       outputPath,
       theme: "dark",
+      image: {
+        format: "png",
+        qualityPreset: "standard",
+        scale: 2,
+        maxWidth: 960,
+        maxPixels: 8_000_000,
+      },
     });
 
     expect(launchMock).toHaveBeenCalledTimes(1);
@@ -75,9 +93,52 @@ describe("PlaywrightDiffScreenshotter", () => {
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
       outputPath,
       theme: "light",
+      image: {
+        format: "png",
+        qualityPreset: "standard",
+        scale: 2,
+        maxWidth: 960,
+        maxPixels: 8_000_000,
+      },
     });
 
     expect(launchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders PDF output when format is pdf", async () => {
+    const pages: Array<{
+      close: ReturnType<typeof vi.fn>;
+      screenshot: ReturnType<typeof vi.fn>;
+      pdf: ReturnType<typeof vi.fn>;
+    }> = [];
+    const browser = createMockBrowser(pages);
+    launchMock.mockResolvedValue(browser);
+    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
+
+    const screenshotter = new PlaywrightDiffScreenshotter({
+      config: createConfig(),
+      browserIdleMs: 1_000,
+    });
+    const pdfPath = path.join(rootDir, "preview.pdf");
+
+    await screenshotter.screenshotHtml({
+      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+      outputPath: pdfPath,
+      theme: "light",
+      image: {
+        format: "pdf",
+        qualityPreset: "standard",
+        scale: 2,
+        maxWidth: 960,
+        maxPixels: 8_000_000,
+      },
+    });
+
+    expect(launchMock).toHaveBeenCalledTimes(1);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
+    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+    await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
 });
 
@@ -89,7 +150,13 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createMockBrowser(pages: Array<{ close: ReturnType<typeof vi.fn> }>) {
+function createMockBrowser(
+  pages: Array<{
+    close: ReturnType<typeof vi.fn>;
+    screenshot: ReturnType<typeof vi.fn>;
+    pdf: ReturnType<typeof vi.fn>;
+  }>,
+) {
   const browser = {
     newPage: vi.fn(async () => {
       const page = createMockPage();
@@ -103,19 +170,26 @@ function createMockBrowser(pages: Array<{ close: ReturnType<typeof vi.fn> }>) {
 }
 
 function createMockPage() {
+  const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
+    await fs.writeFile(screenshotPath, Buffer.from("png"));
+  });
+  const pdf = vi.fn(async ({ path: pdfPath }: { path: string }) => {
+    await fs.writeFile(pdfPath, "%PDF-1.7 mock");
+  });
+
   return {
     route: vi.fn(async () => {}),
     setContent: vi.fn(async () => {}),
     waitForFunction: vi.fn(async () => {}),
     evaluate: vi.fn(async () => {}),
+    emulateMedia: vi.fn(async () => {}),
     locator: vi.fn(() => ({
       waitFor: vi.fn(async () => {}),
       boundingBox: vi.fn(async () => ({ x: 40, y: 40, width: 640, height: 240 })),
     })),
     setViewportSize: vi.fn(async () => {}),
-    screenshot: vi.fn(async ({ path: screenshotPath }: { path: string }) => {
-      await fs.writeFile(screenshotPath, Buffer.from("png"));
-    }),
+    screenshot,
+    pdf,
     close: vi.fn(async () => {}),
   };
 }
