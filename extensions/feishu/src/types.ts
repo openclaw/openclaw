@@ -72,6 +72,8 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  /** Enable the feishu_urgent tool (buzz/urgent notifications). Enabled by default. */
+  urgent?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {
