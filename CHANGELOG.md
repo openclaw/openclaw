@@ -1893,7 +1893,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Telegram: inherit forum topic bindings from parent group for routing. Forum topics now automatically use their parent group's agent binding when no direct topic binding exists.
+- Telegram: inherit forum topic bindings from parent group for routing. Forum topics now automatically use their parent group's agent binding when no direct topic binding exists. (#7224) Thanks @Buywatermelon.
 
 ## 2026.2.1
 

@@ -706,7 +706,7 @@ describe("role-based agent routing", () => {
 
 describe("Telegram forum topic parent binding inheritance", () => {
   test("forum topic inherits binding from parent group", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "coder",
@@ -728,7 +728,7 @@ describe("Telegram forum topic parent binding inheritance", () => {
   });
 
   test("direct topic binding wins over parent group binding", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "topic-specific-agent",
@@ -757,7 +757,7 @@ describe("Telegram forum topic parent binding inheritance", () => {
   });
 
   test("non-forum group without parentPeer matches directly", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "coder",
