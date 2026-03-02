@@ -156,4 +156,62 @@ describe("registerSlackMessageEvents", () => {
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
+
+  it("handles channel and group messages via the unified message handler", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { handler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(handler).toBeTruthy();
+
+    // channel_type distinguishes the source; all arrive as event type "message"
+    const channelMessage = {
+      type: "message",
+      channel: "C1",
+      channel_type: "channel",
+      user: "U1",
+      text: "hello channel",
+      ts: "123.100",
+    };
+    await handler!({ event: channelMessage, body: {} });
+    await handler!({
+      event: {
+        ...channelMessage,
+        channel_type: "group",
+        channel: "G1",
+        ts: "123.200",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(2);
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("applies subtype system-event handling for channel messages", async () => {
+    messageQueueMock.mockClear();
+    messageAllowMock.mockReset().mockResolvedValue([]);
+    const { handler, handleSlackMessage } = createMessageHandlers({
+      dmPolicy: "open",
+      channelType: "channel",
+    });
+
+    expect(handler).toBeTruthy();
+
+    // message_changed events from channels arrive via the generic "message"
+    // handler with channel_type:"channel" — not a separate event type.
+    await handler!({
+      event: {
+        ...makeChangedEvent({ channel: "C1", user: "U1" }),
+        channel_type: "channel",
+      },
+      body: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
 });
