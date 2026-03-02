@@ -285,19 +285,8 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
       },
     });
-    callGatewayMock.mockImplementation(async () => ({
-      runId: "run-1",
-      status: "accepted",
-      acceptedAt: 1000,
-    }));
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-valid", {
-      task: "do thing",
-      agentId: "my-research_agent01",
-    });
+    mockAcceptedSpawn(1000);
+    const result = await executeSpawn("call-valid", "my-research_agent01");
     const details = result.details as { status?: string };
     expect(details.status).toBe("accepted");
   });
@@ -312,19 +301,8 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
         ],
       },
     });
-    callGatewayMock.mockImplementation(async () => ({
-      runId: "run-1",
-      status: "accepted",
-      acceptedAt: 1000,
-    }));
-    const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
-      agentChannel: "whatsapp",
-    });
-    const result = await tool.execute("call-unconfigured", {
-      task: "do thing",
-      agentId: "research",
-    });
+    mockAcceptedSpawn(1000);
+    const result = await executeSpawn("call-unconfigured", "research");
     const details = result.details as { status?: string };
     // Must pass: "research" is in allowAgents even though not in agents.list
     expect(details.status).toBe("accepted");
