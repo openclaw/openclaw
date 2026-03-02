@@ -39,6 +39,14 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /**
+   * Use Telegram Bot API sendMessageDraft for streaming updates instead of
+   * sendMessage + editMessageText. Requires Bot API 9.5+ (March 2026).
+   * Produces smoother streaming without message flicker.
+   */
+  nativeStreaming?: boolean;
+  /** Draft slot id used with sendMessageDraft (default: 1). */
+  draftId?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -54,6 +62,9 @@ export function createTelegramDraftStream(params: {
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
       : threadParams;
+
+  const nativeStreaming = params.nativeStreaming === true;
+  const draftId = params.draftId ?? 1;
 
   const streamState = { stopped: false, final: false };
   let streamMessageId: number | undefined;
@@ -100,6 +111,22 @@ export function createTelegramDraftStream(params: {
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
+      if (nativeStreaming) {
+        // Use Bot API 9.5 sendMessageDraft for smooth streaming without flicker.
+        // No message_id tracking needed — draft slot is identified by draftId.
+        // Cast to any: grammy typings may lag behind Bot API 9.5.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (params.api as any).sendMessageDraft({
+          chat_id: chatId,
+          draft_id: draftId,
+          text: renderedText,
+          ...(threadParams?.message_thread_id != null && {
+            message_thread_id: threadParams.message_thread_id,
+          }),
+          ...(renderedParseMode && { parse_mode: renderedParseMode }),
+        });
+        return true;
+      }
       if (typeof streamMessageId === "number") {
         if (renderedParseMode) {
           await params.api.editMessageText(chatId, streamMessageId, renderedText, {

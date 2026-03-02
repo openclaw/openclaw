@@ -122,6 +122,12 @@ export type TelegramAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
+  /**
+   * Use Bot API sendMessageDraft (Bot API 9.5+, March 2026) for smooth
+   * streaming without flicker instead of sendMessage + editMessageText.
+   * Requires streaming to be enabled (partial or block).
+   */
+  nativeStreaming?: boolean;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;

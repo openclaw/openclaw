@@ -38,6 +38,7 @@ import {
   buildTelegramGroupPeerId,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
+  resolveTelegramNativeStreaming,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
@@ -291,6 +292,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const streamMode = resolveTelegramStreamMode(telegramCfg);
+  const nativeStreaming = resolveTelegramNativeStreaming(telegramCfg);
   const resolveGroupPolicy = (chatId: string | number) =>
     resolveChannelGroupPolicy({
       cfg,
@@ -391,6 +393,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     runtime,
     replyToMode,
     streamMode,
+    nativeStreaming,
     textLimit,
     opts,
   });

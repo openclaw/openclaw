@@ -1387,6 +1387,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
   "channels.telegram.streaming":
     'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+  "channels.telegram.nativeStreaming":
+    "Use Bot API sendMessageDraft (Bot API 9.5+, March 2026) for smooth streaming without message flicker instead of sendMessage + editMessageText. Requires streaming to be enabled (partial or block).",
   "channels.discord.streaming":
     'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   "channels.discord.streamMode":

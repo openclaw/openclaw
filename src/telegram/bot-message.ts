@@ -19,6 +19,7 @@ type TelegramMessageProcessorDeps = Omit<
   runtime: RuntimeEnv;
   replyToMode: ReplyToMode;
   streamMode: TelegramStreamMode;
+  nativeStreaming: boolean;
   textLimit: number;
   opts: Pick<TelegramBotOptions, "token">;
 };
@@ -43,6 +44,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     runtime,
     replyToMode,
     streamMode,
+    nativeStreaming,
     textLimit,
     opts,
   } = deps;
@@ -85,6 +87,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       runtime,
       replyToMode,
       streamMode,
+      nativeStreaming,
       textLimit,
       telegramCfg,
       opts,

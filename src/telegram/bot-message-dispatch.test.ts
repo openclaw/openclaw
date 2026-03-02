@@ -170,6 +170,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       runtime: createRuntime(),
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
+      nativeStreaming: false,
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
       opts: { token: "token" },

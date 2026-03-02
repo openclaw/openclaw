@@ -98,6 +98,7 @@ type DispatchTelegramMessageParams = {
   runtime: RuntimeEnv;
   replyToMode: ReplyToMode;
   streamMode: TelegramStreamMode;
+  nativeStreaming: boolean;
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "token">;
@@ -135,6 +136,7 @@ export const dispatchTelegramMessage = async ({
   runtime,
   replyToMode,
   streamMode,
+  nativeStreaming,
   textLimit,
   telegramCfg,
   opts,
@@ -199,6 +201,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText: renderDraftPreview,
+          nativeStreaming,
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {

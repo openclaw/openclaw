@@ -171,6 +171,17 @@ export function resolveTelegramStreamMode(telegramCfg?: {
   return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
+/**
+ * Resolve whether to use Bot API sendMessageDraft (Bot API 9.5+) for smooth
+ * streaming instead of the default sendMessage + editMessageText approach.
+ * Enable via `channels.telegram.nativeStreaming: true` in config.
+ */
+export function resolveTelegramNativeStreaming(telegramCfg?: {
+  nativeStreaming?: unknown;
+}): boolean {
+  return telegramCfg?.nativeStreaming === true;
+}
+
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
   return messageThreadId != null ? `${chatId}:topic:${messageThreadId}` : String(chatId);
 }
