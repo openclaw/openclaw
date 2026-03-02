@@ -940,15 +940,23 @@ function matchesPathPattern(targetPath: string, patterns: string[]): boolean {
     }
     // Glob match (directory prefix)
     if (pattern.includes("*")) {
-      const prefix = patternResolved;
+      const prefix = patternResolved.endsWith(path.sep)
+        ? patternResolved.slice(0, -1)
+        : patternResolved;
       if (resolved.startsWith(prefix + path.sep) || resolved.startsWith(prefix + "/")) {
         return true;
       }
     }
     // Directory containment (pattern is a directory)
+    // Handle root directories specially (e.g., "/" or "C:\")
+    const sep = path.sep;
+    const normalizedResolved = resolved.endsWith(sep) ? resolved.slice(0, -1) : resolved;
+    const normalizedPattern = patternResolved.endsWith(sep)
+      ? patternResolved.slice(0, -1)
+      : patternResolved;
     if (
-      resolved.startsWith(patternResolved + path.sep) ||
-      resolved.startsWith(patternResolved + "/")
+      normalizedResolved.startsWith(normalizedPattern + sep) ||
+      normalizedResolved.startsWith(normalizedPattern + "/")
     ) {
       return true;
     }

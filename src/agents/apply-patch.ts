@@ -73,6 +73,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Paths that are read-only and cannot be modified by apply_patch */
+  readOnlyPaths?: string[];
   signal?: AbortSignal;
 };
 
@@ -83,7 +85,12 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    readOnlyPaths?: string[];
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -111,6 +118,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        readOnlyPaths: options.readOnlyPaths,
         signal,
       });
 
@@ -240,6 +248,28 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
+  const readOnlyPaths = options.readOnlyPaths;
+
+  // Helper to check if path is read-only
+  const checkReadOnly = (filePath: string) => {
+    if (!readOnlyPaths || readOnlyPaths.length === 0) {
+      return;
+    }
+    // Import the matching function from pi-tools.read
+    // For simplicity, inline a basic check here
+    const resolved = path.resolve(filePath);
+    for (const pattern of readOnlyPaths) {
+      const patternResolved = path.resolve(pattern);
+      if (
+        resolved === patternResolved ||
+        resolved.startsWith(patternResolved + path.sep) ||
+        resolved.startsWith(patternResolved + "/")
+      ) {
+        throw new Error(`Path is read-only: ${filePath}`);
+      }
+    }
+  };
+
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
@@ -258,6 +288,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
       }
     },
     writeFile: async (filePath, content) => {
+      checkReadOnly(filePath);
       if (!workspaceOnly) {
         await fs.writeFile(filePath, content, "utf8");
         return;
@@ -270,7 +301,10 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         encoding: "utf8",
       });
     },
-    remove: (filePath) => fs.rm(filePath),
+    remove: (filePath) => {
+      checkReadOnly(filePath);
+      return fs.rm(filePath);
+    },
     mkdirp: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
   };
 }
