@@ -136,4 +136,26 @@ describe("sessions_spawn tool", () => {
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
+
+  it.each(["target", "transport", "channel", "to", "threadId", "thread_id", "replyTo", "reply_to"])(
+    "rejects unsupported routing parameter %s",
+    async (key) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:123",
+        agentThreadId: "456",
+      });
+
+      await expect(
+        tool.execute("call-unsupported-param", {
+          task: "build feature",
+          [key]: "value",
+        }),
+      ).rejects.toThrow(`sessions_spawn does not support "${key}"`);
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    },
+  );
 });
