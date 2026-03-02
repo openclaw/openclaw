@@ -163,8 +163,10 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   };
 };
 
+// Cache the resolved timezone so we don't construct Intl.DateTimeFormat on every call.
+const _cachedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  date.toLocaleDateString("en-CA", { timeZone: _cachedTimeZone });
 
 const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
   if (!values.length) {
@@ -437,9 +439,11 @@ function accumulateLatency(
   }
 }
 
-/** Derives raw token count and cost from a parsed transcript entry (requires non-null `entry.usage`). */
-function deriveEntryTokensAndCost(entry: ParsedTranscriptEntry): { tokens: number; cost: number } {
-  const usage = entry.usage!;
+/** Derives raw token count and cost from a parsed transcript entry with known usage. */
+function deriveEntryTokensAndCost(
+  usage: NormalizedUsage,
+  entry: Pick<ParsedTranscriptEntry, "costBreakdown" | "costTotal">,
+): { tokens: number; cost: number } {
   const tokens =
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
   const cost =
@@ -465,7 +469,7 @@ function accumulateDailyUsage(
   }
 
   const dayKey = formatDayKey(entry.timestamp);
-  const { tokens: entryTokens, cost: entryCost } = deriveEntryTokensAndCost(entry);
+  const { tokens: entryTokens, cost: entryCost } = deriveEntryTokensAndCost(entry.usage, entry);
 
   const existing = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
   dailyMap.set(dayKey, {
@@ -489,7 +493,7 @@ function accumulateModelUsage(
     return;
   }
 
-  const { tokens: entryTokens, cost: entryCost } = deriveEntryTokensAndCost(entry);
+  const { tokens: entryTokens, cost: entryCost } = deriveEntryTokensAndCost(entry.usage, entry);
 
   // Per-model aggregate
   const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;

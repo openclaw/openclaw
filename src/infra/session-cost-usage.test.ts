@@ -539,7 +539,7 @@ example
     });
   });
 
-  it("extracts text from content blocks and returns first text block as firstUserMessage", async () => {
+  it("joins text content blocks for firstUserMessage preview", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extract-blocks-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
