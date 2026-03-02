@@ -2,6 +2,9 @@ import { EventEmitter } from "node:events";
 import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { waitForDiscordGatewayStop } from "../monitor.gateway.js";
+
+type WaitForDiscordGatewayStopParams = Parameters<typeof waitForDiscordGatewayStop>[0];
 
 type WaitForDiscordGatewayStop = typeof import("../monitor.gateway.js").waitForDiscordGatewayStop;
 
@@ -333,7 +336,7 @@ describe("runDiscordGatewayLifecycle", () => {
       };
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (waitParams: { registerForceStop?: (stop: (err: unknown) => void) => void }) =>
+        (waitParams: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((_resolve, reject) => {
             waitParams.registerForceStop?.((err) => reject(err));
           }),
@@ -366,7 +369,7 @@ describe("runDiscordGatewayLifecycle", () => {
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       let resolveWait: (() => void) | undefined;
       waitForDiscordGatewayStopMock.mockImplementationOnce(
-        (waitParams: { registerForceStop?: (stop: (err: unknown) => void) => void }) =>
+        (waitParams: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((resolve, reject) => {
             resolveWait = resolve;
             waitParams.registerForceStop?.((err) => reject(err));
