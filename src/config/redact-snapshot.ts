@@ -1,6 +1,10 @@
-import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  replaceSensitiveValuesInRaw,
+  shouldFallbackToStructuredRawRedaction,
+} from "./redact-snapshot.raw.js";
+import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -22,24 +26,6 @@ function isEnvVarPlaceholder(value: string): boolean {
 function isWholeObjectSensitivePath(path: string): boolean {
   const lowered = path.toLowerCase();
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
-}
-
-function isSecretRefShape(
-  value: Record<string, unknown>,
-): value is Record<string, unknown> & { source: string; id: string } {
-  return typeof value.source === "string" && typeof value.id === "string";
-}
-
-function redactSecretRef(
-  value: Record<string, unknown> & { source: string; id: string },
-  values: string[],
-): Record<string, unknown> {
-  const redacted: Record<string, unknown> = { ...value };
-  if (!isEnvVarPlaceholder(value.id)) {
-    values.push(value.id);
-    redacted.id = REDACTED_SENTINEL;
-  }
-  return redacted;
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -206,7 +192,12 @@ function redactObjectWithLookup(
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
               const objectValue = value as Record<string, unknown>;
               if (isSecretRefShape(objectValue)) {
-                result[key] = redactSecretRef(objectValue, values);
+                result[key] = redactSecretRefId({
+                  value: objectValue,
+                  values,
+                  redactedSentinel: REDACTED_SENTINEL,
+                  isEnvVarPlaceholder,
+                });
               } else {
                 collectSensitiveStrings(objectValue, values);
                 result[key] = REDACTED_SENTINEL;
@@ -320,12 +311,11 @@ function redactObjectGuessing(
  */
 function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): string {
   const sensitiveValues = collectSensitiveValues(config, hints);
-  sensitiveValues.sort((a, b) => b.length - a.length);
-  let result = raw;
-  for (const value of sensitiveValues) {
-    result = result.replaceAll(value, REDACTED_SENTINEL);
-  }
-  return result;
+  return replaceSensitiveValuesInRaw({
+    raw,
+    sensitiveValues,
+    redactedSentinel: REDACTED_SENTINEL,
+  });
 }
 
 let suppressRestoreWarnings = false;
@@ -337,25 +327,6 @@ function withRestoreWarningsSuppressed<T>(fn: () => T): T {
     return fn();
   } finally {
     suppressRestoreWarnings = prev;
-  }
-}
-
-function shouldFallbackToStructuredRawRedaction(params: {
-  redactedRaw: string;
-  originalConfig: unknown;
-  hints?: ConfigUiHints;
-}): boolean {
-  try {
-    const parsed = JSON5.parse(params.redactedRaw);
-    const restored = withRestoreWarningsSuppressed(() =>
-      restoreRedactedValues(parsed, params.originalConfig, params.hints),
-    );
-    if (!restored.ok) {
-      return true;
-    }
-    return !isDeepStrictEqual(restored.result, params.originalConfig);
-  } catch {
-    return true;
   }
 }
 
@@ -410,7 +381,10 @@ export function redactConfigSnapshot(
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
       originalConfig: snapshot.config,
-      hints: uiHints,
+      restoreParsed: (parsed) =>
+        withRestoreWarningsSuppressed(() =>
+          restoreRedactedValues(parsed, snapshot.config, uiHints),
+        ),
     })
   ) {
     redactedRaw = JSON5.stringify(redactedParsed ?? redactedConfig, null, 2);

@@ -46,14 +46,10 @@ import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
-import {
-  resolveSlackAttachmentContent,
-  MAX_SLACK_MEDIA_FILES,
-  resolveSlackMedia,
-  resolveSlackThreadHistory,
-  resolveSlackThreadStarter,
-} from "../media.js";
+import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
+import { resolveSlackMessageContent } from "./prepare-content.js";
+import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -515,87 +511,26 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  // When processing a thread reply, filter out files that belong to the thread
-  // starter (parent message). Slack's Events API includes the parent's `files`
-  // array in every thread reply payload, which causes ghost media attachments
-  // on text-only replies. We eagerly resolve the thread starter here (the result
-  // is cached) and exclude any file IDs that match the parent. (#32203)
-  let ownFiles = message.files;
-  if (isThreadReply && threadTs && message.files?.length) {
-    const starter = await resolveSlackThreadStarter({
-      channelId: message.channel,
-      threadTs,
-      client: ctx.app.client,
-    });
-    if (starter?.files?.length) {
-      const starterFileIds = new Set(starter.files.map((f) => f.id));
-      const filtered = message.files.filter((f) => !f.id || !starterFileIds.has(f.id));
-      if (filtered.length < message.files.length) {
-        logVerbose(
-          `slack: filtered ${message.files.length - filtered.length} inherited parent file(s) from thread reply`,
-        );
-      }
-      ownFiles = filtered.length > 0 ? filtered : undefined;
-    }
-  }
-
-  const media = await resolveSlackMedia({
-    files: ownFiles,
-    token: ctx.botToken,
-    maxBytes: ctx.mediaMaxBytes,
+  const threadStarter =
+    isThreadReply && threadTs
+      ? await resolveSlackThreadStarter({
+          channelId: message.channel,
+          threadTs,
+          client: ctx.app.client,
+        })
+      : null;
+  const resolvedMessageContent = await resolveSlackMessageContent({
+    message,
+    isThreadReply,
+    threadStarter,
+    isBotMessage,
+    botToken: ctx.botToken,
+    mediaMaxBytes: ctx.mediaMaxBytes,
   });
-
-  // Resolve forwarded message content (text + media) from Slack attachments
-  const attachmentContent = await resolveSlackAttachmentContent({
-    attachments: message.attachments,
-    token: ctx.botToken,
-    maxBytes: ctx.mediaMaxBytes,
-  });
-
-  // Merge forwarded media into the message's media array
-  const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
-  const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
-
-  const mediaPlaceholder = effectiveDirectMedia
-    ? effectiveDirectMedia.map((m) => m.placeholder).join(" ")
-    : undefined;
-
-  // When files were attached but all downloads failed, create a fallback
-  // placeholder so the message is still delivered to the agent instead of
-  // being silently dropped (#25064).
-  const fileOnlyFallback =
-    !mediaPlaceholder && (message.files?.length ?? 0) > 0
-      ? message
-          .files!.slice(0, MAX_SLACK_MEDIA_FILES)
-          .map((f) => f.name?.trim() || "file")
-          .join(", ")
-      : undefined;
-  const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
-
-  // Bot messages (e.g. Prometheus, Gatus webhooks) often carry content only in
-  // non-forwarded attachments (is_share !== true).  Extract their text/fallback
-  // so the message isn't silently dropped when `allowBots: true` (#27616).
-  const botAttachmentText =
-    isBotMessage && !attachmentContent?.text
-      ? (message.attachments ?? [])
-          .map((a) => a.text?.trim() || a.fallback?.trim())
-          .filter(Boolean)
-          .join("\n")
-      : undefined;
-
-  const rawBody =
-    [
-      (message.text ?? "").trim(),
-      attachmentContent?.text,
-      botAttachmentText,
-      mediaPlaceholder,
-      fileOnlyPlaceholder,
-    ]
-      .filter(Boolean)
-      .join("\n") || "";
-  if (!rawBody) {
+  if (!resolvedMessageContent) {
     return null;
   }
+  const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
 
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "slack",
@@ -711,99 +646,25 @@ export async function prepareSlackMessage(params: {
     channelConfig,
   });
 
-  let threadStarterBody: string | undefined;
-  let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
-  let threadLabel: string | undefined;
-  let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
-  if (isThreadReply && threadTs) {
-    const starter = await resolveSlackThreadStarter({
-      channelId: message.channel,
-      threadTs,
-      client: ctx.app.client,
-    });
-    if (starter?.text) {
-      // Keep thread starter as raw text; metadata is provided out-of-band in the system prompt.
-      threadStarterBody = starter.text;
-      const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
-      threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
-      // If current message has no files but thread starter does, fetch starter's files
-      if (!effectiveDirectMedia && starter.files && starter.files.length > 0) {
-        threadStarterMedia = await resolveSlackMedia({
-          files: starter.files,
-          token: ctx.botToken,
-          maxBytes: ctx.mediaMaxBytes,
-        });
-        if (threadStarterMedia) {
-          const starterPlaceholders = threadStarterMedia.map((m) => m.placeholder).join(", ");
-          logVerbose(
-            `slack: hydrated thread starter file ${starterPlaceholders} from root message`,
-          );
-        }
-      }
-    } else {
-      threadLabel = `Slack thread ${roomLabel}`;
-    }
-
-    // Fetch full thread history for new thread sessions
-    // This provides context of previous messages (including bot replies) in the thread
-    // Use the thread session key (not base session key) to determine if this is a new session
-    const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
-    threadSessionPreviousTimestamp = readSessionUpdatedAt({
-      storePath,
-      sessionKey, // Thread-specific session key
-    });
-    // Only fetch thread history for NEW sessions (existing sessions already have this context in their transcript)
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
-      const threadHistory = await resolveSlackThreadHistory({
-        channelId: message.channel,
-        threadTs,
-        client: ctx.app.client,
-        currentMessageTs: message.ts,
-        limit: threadInitialHistoryLimit,
-      });
-
-      if (threadHistory.length > 0) {
-        // Batch resolve user names to avoid N sequential API calls
-        const uniqueUserIds = [
-          ...new Set(threadHistory.map((m) => m.userId).filter((id): id is string => Boolean(id))),
-        ];
-        const userMap = new Map<string, { name?: string }>();
-        await Promise.all(
-          uniqueUserIds.map(async (id) => {
-            const user = await ctx.resolveUserName(id);
-            if (user) {
-              userMap.set(id, user);
-            }
-          }),
-        );
-
-        const historyParts: string[] = [];
-        for (const historyMsg of threadHistory) {
-          const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-          const msgSenderName =
-            msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
-          const isBot = Boolean(historyMsg.botId);
-          const role = isBot ? "assistant" : "user";
-          const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${message.channel}]`;
-          historyParts.push(
-            formatInboundEnvelope({
-              channel: "Slack",
-              from: `${msgSenderName} (${role})`,
-              timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
-              body: msgWithId,
-              chatType: "channel",
-              envelope: envelopeOptions,
-            }),
-          );
-        }
-        threadHistoryBody = historyParts.join("\n\n");
-        logVerbose(
-          `slack: populated thread history with ${threadHistory.length} messages for new session`,
-        );
-      }
-    }
-  }
+  const {
+    threadStarterBody,
+    threadHistoryBody,
+    threadSessionPreviousTimestamp,
+    threadLabel,
+    threadStarterMedia,
+  } = await resolveSlackThreadContextData({
+    ctx,
+    account,
+    message,
+    isThreadReply,
+    threadTs,
+    threadStarter,
+    roomLabel,
+    storePath,
+    sessionKey,
+    envelopeOptions,
+    effectiveDirectMedia,
+  });
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
