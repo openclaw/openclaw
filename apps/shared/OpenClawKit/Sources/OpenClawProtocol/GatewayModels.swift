@@ -2822,7 +2822,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
     public let commandargv: [String]?
-    public let systemrunplanv2: [String: AnyCodable]?
+    public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
     public let cwd: AnyCodable?
     public let nodeid: AnyCodable?
@@ -2843,7 +2843,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         id: String?,
         command: String,
         commandargv: [String]?,
-        systemrunplanv2: [String: AnyCodable]?,
+        systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,
         cwd: AnyCodable?,
         nodeid: AnyCodable?,
@@ -2863,7 +2863,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.id = id
         self.command = command
         self.commandargv = commandargv
-        self.systemrunplanv2 = systemrunplanv2
+        self.systemrunplan = systemrunplan
         self.env = env
         self.cwd = cwd
         self.nodeid = nodeid
@@ -2885,7 +2885,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case id
         case command
         case commandargv = "commandArgv"
-        case systemrunplanv2 = "systemRunPlanV2"
+        case systemrunplan = "systemRunPlan"
         case env
         case cwd
         case nodeid = "nodeId"

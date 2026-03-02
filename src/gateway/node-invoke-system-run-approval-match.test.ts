@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildSystemRunApprovalBindingV1 } from "../infra/system-run-approval-binding.js";
+import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
 
 describe("evaluateSystemRunApprovalMatch", () => {
@@ -29,7 +29,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "echo SAFE",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["echo", "SAFE"],
           cwd: null,
           agentId: null,
@@ -51,7 +51,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "echo SAFE",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["echo SAFE"],
           cwd: null,
           agentId: null,
@@ -77,7 +77,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "git diff",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["git", "diff"],
           cwd: null,
           agentId: null,
@@ -104,7 +104,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
       request: {
         host: "node",
         command: "git diff",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["git", "diff"],
           cwd: null,
           agentId: null,
@@ -149,7 +149,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
         host: "node",
         command: "echo STALE",
         commandArgv: ["echo STALE"],
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["echo", "SAFE"],
           cwd: null,
           agentId: null,
