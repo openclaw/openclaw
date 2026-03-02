@@ -20,7 +20,7 @@ import {
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
-import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
+import { isNonEmptyString, isRecord, parseEnvValue, writeTextFileAtomic } from "./shared.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -116,17 +116,6 @@ function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
     throw new Error(`Invalid plan target path for ${target.type}: ${target.path}`);
   }
   return resolved;
-}
-
-function parseEnvValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 function scrubEnvRaw(
