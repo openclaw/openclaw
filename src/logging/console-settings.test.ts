@@ -1,4 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  captureConsoleSnapshot,
+  type ConsoleSnapshot,
+  restoreConsoleSnapshot,
+} from "./test-helpers/console-snapshot.js";
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: () => undefined,
@@ -16,15 +21,6 @@ vi.mock("./logger.js", () => ({
 }));
 
 let loadConfigCalls = 0;
-type ConsoleSnapshot = {
-  log: typeof console.log;
-  info: typeof console.info;
-  warn: typeof console.warn;
-  error: typeof console.error;
-  debug: typeof console.debug;
-  trace: typeof console.trace;
-};
-
 let originalIsTty: boolean | undefined;
 let originalOpenClawTestConsole: string | undefined;
 let snapshot: ConsoleSnapshot;
@@ -38,14 +34,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   loadConfigCalls = 0;
-  snapshot = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-    trace: console.trace,
-  };
+  snapshot = captureConsoleSnapshot();
   originalIsTty = process.stdout.isTTY;
   originalOpenClawTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
   process.env.OPENCLAW_TEST_CONSOLE = "1";
@@ -53,6 +42,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+<<<<<<< HEAD
   console.log = snapshot.log;
   console.info = snapshot.info;
   console.warn = snapshot.warn;
@@ -64,6 +54,16 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_CONSOLE = originalOpenClawTestConsole;
   }
+||||||| parent of 4a741746c (refactor: dedupe agent and reply runtimes)
+  console.log = snapshot.log;
+  console.info = snapshot.info;
+  console.warn = snapshot.warn;
+  console.error = snapshot.error;
+  console.debug = snapshot.debug;
+  console.trace = snapshot.trace;
+=======
+  restoreConsoleSnapshot(snapshot);
+>>>>>>> 4a741746c (refactor: dedupe agent and reply runtimes)
   Object.defineProperty(process.stdout, "isTTY", { value: originalIsTty, configurable: true });
   logging.setConsoleConfigLoaderForTests();
   vi.restoreAllMocks();

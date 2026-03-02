@@ -8,6 +8,7 @@ import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
@@ -766,23 +767,6 @@ describe("image tool MiniMax VLM routing", () => {
 });
 
 describe("image tool response validation", () => {
-  function zeroUsage() {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    };
-  }
-
   function createAssistantMessage(
     overrides: Partial<{
       api: string;
@@ -800,7 +784,7 @@ describe("image tool response validation", () => {
       model: "gpt-5-mini",
       stopReason: "stop",
       timestamp: Date.now(),
-      usage: zeroUsage(),
+      usage: makeZeroUsageSnapshot(),
       content: [] as unknown[],
       ...overrides,
     };
