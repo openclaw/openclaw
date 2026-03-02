@@ -26,7 +26,7 @@ type ToolCatalogEntry = {
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+  defaultProfiles: Array<"none" | "minimal" | "coding" | "messaging" | "full">;
 };
 
 type ToolCatalogGroup = {

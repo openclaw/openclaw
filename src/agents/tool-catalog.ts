@@ -1,4 +1,4 @@
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "none" | "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
   allow?: string[];
@@ -246,6 +246,7 @@ function listCoreToolIdsForProfile(profile: ToolProfileId): string[] {
 }
 
 const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
+  none: { deny: ["*"] },
   minimal: {
     allow: listCoreToolIdsForProfile("minimal"),
   },
@@ -278,6 +279,7 @@ function buildCoreToolGroupMap() {
 export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 
 export const PROFILE_OPTIONS = [
+  { id: "none", label: "None" },
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
