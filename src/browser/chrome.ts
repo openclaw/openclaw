@@ -134,12 +134,29 @@ async function canRunCdpHealthCommand(
       handshakeTimeoutMs: timeoutMs,
     });
     let settled = false;
+    const onMessage = (raw: WebSocket.RawData) => {
+      if (settled) {
+        return;
+      }
+      let parsed: { id?: unknown; result?: unknown } | null = null;
+      try {
+        parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
+      } catch {
+        return;
+      }
+      if (parsed?.id !== 1) {
+        return;
+      }
+      finish(Boolean(parsed.result && typeof parsed.result === "object"));
+    };
+
     const finish = (value: boolean) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
+      ws.off("message", onMessage);
       try {
         ws.close();
       } catch {
@@ -172,21 +189,7 @@ async function canRunCdpHealthCommand(
       }
     });
 
-    ws.on("message", (raw) => {
-      if (settled) {
-        return;
-      }
-      let parsed: { id?: unknown; result?: unknown } | null = null;
-      try {
-        parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
-      } catch {
-        return;
-      }
-      if (parsed?.id !== 1) {
-        return;
-      }
-      finish(Boolean(parsed.result && typeof parsed.result === "object"));
-    });
+    ws.on("message", onMessage);
 
     ws.once("error", () => {
       finish(false);
