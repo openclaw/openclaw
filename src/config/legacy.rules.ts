@@ -202,5 +202,6 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead (auto-migrated on load).",
     match: (value) => isLegacyGatewayBindHostAlias(value),
+    requireSourceLiteral: true,
   },
 ];
