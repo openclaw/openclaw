@@ -46,4 +46,47 @@ describe("runCli exit behavior", () => {
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
+
+  it("applies --profile env before dotenv loading in direct runCli calls", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    const previousProfile = process.env.OPENCLAW_PROFILE;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    delete process.env.OPENCLAW_PROFILE;
+    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
+
+    try {
+      await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
+
+      expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
+      expect(process.env.OPENCLAW_STATE_DIR).toContain(".openclaw-rawdog");
+      expect(process.env.OPENCLAW_CONFIG_PATH).toContain(".openclaw-rawdog");
+      expect(loadDotEnvMock).toHaveBeenCalledWith({ quiet: true });
+      expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    } finally {
+      if (previousProfile === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = previousProfile;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousGatewayPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousGatewayPort;
+      }
+    }
+  });
 });
