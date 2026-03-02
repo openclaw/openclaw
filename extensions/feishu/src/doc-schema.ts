@@ -1,47 +1,49 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { stringEnum } from "./schema-utils.js";
 
-export const FeishuDocSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("read"),
-    doc_token: Type.String({ description: "Document token (extract from URL /docx/XXX)" }),
+const DOC_ACTIONS = [
+  "read",
+  "write",
+  "append",
+  "create",
+  "create_with_content",
+  "list_blocks",
+  "get_block",
+  "update_block",
+  "delete_block",
+] as const;
+
+export type FeishuDocAction = (typeof DOC_ACTIONS)[number];
+
+export const FeishuDocSchema = Type.Object({
+  action: stringEnum(DOC_ACTIONS, {
+    description:
+      "Action to perform: read/write/append/create/create_with_content/list_blocks/get_block/update_block/delete_block",
   }),
-  Type.Object({
-    action: Type.Literal("write"),
-    doc_token: Type.String({ description: "Document token" }),
-    content: Type.String({
-      description: "Markdown content to write (replaces entire document content)",
+  doc_token: Type.Optional(
+    Type.String({
+      description:
+        "Document token (required for read/write/append/list_blocks/get_block/update_block/delete_block; extract from URL /docx/XXX)",
     }),
-  }),
-  Type.Object({
-    action: Type.Literal("append"),
-    doc_token: Type.String({ description: "Document token" }),
-    content: Type.String({ description: "Markdown content to append to end of document" }),
-  }),
-  Type.Object({
-    action: Type.Literal("create"),
-    title: Type.String({ description: "Document title" }),
-    folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
-  }),
-  Type.Object({
-    action: Type.Literal("list_blocks"),
-    doc_token: Type.String({ description: "Document token" }),
-  }),
-  Type.Object({
-    action: Type.Literal("get_block"),
-    doc_token: Type.String({ description: "Document token" }),
-    block_id: Type.String({ description: "Block ID (from list_blocks)" }),
-  }),
-  Type.Object({
-    action: Type.Literal("update_block"),
-    doc_token: Type.String({ description: "Document token" }),
-    block_id: Type.String({ description: "Block ID (from list_blocks)" }),
-    content: Type.String({ description: "New text content" }),
-  }),
-  Type.Object({
-    action: Type.Literal("delete_block"),
-    doc_token: Type.String({ description: "Document token" }),
-    block_id: Type.String({ description: "Block ID" }),
-  }),
-]);
+  ),
+  content: Type.Optional(
+    Type.String({
+      description: "Markdown content (required for write/append/update_block/create_with_content)",
+    }),
+  ),
+  title: Type.Optional(
+    Type.String({
+      description: "Document title (required for create/create_with_content)",
+    }),
+  ),
+  folder_token: Type.Optional(
+    Type.String({ description: "Target folder token (optional for create/create_with_content)" }),
+  ),
+  block_id: Type.Optional(
+    Type.String({
+      description: "Block ID (required for get_block/update_block/delete_block)",
+    }),
+  ),
+});
 
 export type FeishuDocParams = Static<typeof FeishuDocSchema>;

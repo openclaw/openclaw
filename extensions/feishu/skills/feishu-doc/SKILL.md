@@ -30,7 +30,7 @@ Returns: title, plain text content, block statistics. Check `hint` field - if pr
 
 Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
 
-**Limitation:** Markdown tables are NOT supported.
+**Limitation:** Markdown tables are NOT supported via this method. For documents with tables, use the `feishu_drive` upload + import workflow instead.
 
 ### Append Content
 
@@ -51,6 +51,19 @@ With folder:
 ```json
 { "action": "create", "title": "New Document", "folder_token": "fldcnXXX" }
 ```
+
+### Create Document with Content (Recommended)
+
+```json
+{
+  "action": "create_with_content",
+  "title": "New Document",
+  "content": "# Heading\n\nMarkdown content...",
+  "folder_token": "fldcnXXX"
+}
+```
+
+Creates a new document and writes content in a single step. This is the **recommended** way to create documents with content — it avoids the two-step create-then-write pattern that weaker models may fail to complete.
 
 ### List Blocks
 
@@ -88,6 +101,12 @@ Returns full block data including tables, images. Use this to read structured co
 1. Start with `action: "read"` - get plain text + statistics
 2. Check `block_types` in response for Table, Image, Code, etc.
 3. If structured content exists, use `action: "list_blocks"` for full data
+
+## Creating Documents
+
+- **Simple:** Use `create_with_content` for one-step creation with content
+- **Complex / large content with tables:** Use `feishu_drive` upload + import workflow (upload .md file, then import as docx)
+- **Empty:** Use `create` then write later
 
 ## Configuration
 

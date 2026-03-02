@@ -5,7 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
+import { FeishuDocSchema, type FeishuDocParams, type FeishuDocAction } from "./doc-schema.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
@@ -307,6 +307,18 @@ async function writeDoc(client: Lark.Client, docToken: string, markdown: string,
   };
 }
 
+async function createDocWithContent(
+  client: Lark.Client,
+  title: string,
+  markdown: string,
+  maxBytes: number,
+  folderToken?: string,
+) {
+  const doc = await createDoc(client, title, folderToken);
+  const writeResult = await writeDoc(client, doc.document_id!, markdown, maxBytes);
+  return { ...doc, ...writeResult };
+}
+
 async function appendDoc(
   client: Lark.Client,
   docToken: string,
@@ -460,7 +472,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
 
   const registered: string[] = [];
-  type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
+  type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string; action: FeishuDocAction };
 
   const resolveAccount = (
     params: { accountId?: string } | undefined,
@@ -490,7 +502,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           name: "feishu_doc",
           label: "Feishu Doc",
           description:
-            "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block",
+            "Feishu document operations. Actions: read, write, append, create, create_with_content (create + write in one step), list_blocks, get_block, update_block, delete_block",
           parameters: FeishuDocSchema,
           async execute(_toolCallId, params) {
             const p = params as FeishuDocExecuteParams;
@@ -498,13 +510,13 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               const client = getClient(p, defaultAccountId);
               switch (p.action) {
                 case "read":
-                  return json(await readDoc(client, p.doc_token));
+                  return json(await readDoc(client, p.doc_token!));
                 case "write":
                   return json(
                     await writeDoc(
                       client,
-                      p.doc_token,
-                      p.content,
+                      p.doc_token!,
+                      p.content!,
                       getMediaMaxBytes(p, defaultAccountId),
                     ),
                   );
@@ -512,25 +524,33 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json(
                     await appendDoc(
                       client,
-                      p.doc_token,
-                      p.content,
+                      p.doc_token!,
+                      p.content!,
                       getMediaMaxBytes(p, defaultAccountId),
                     ),
                   );
                 case "create":
-                  return json(await createDoc(client, p.title, p.folder_token));
+                  return json(await createDoc(client, p.title!, p.folder_token));
+                case "create_with_content":
+                  return json(
+                    await createDocWithContent(
+                      client,
+                      p.title!,
+                      p.content!,
+                      getMediaMaxBytes(p, defaultAccountId),
+                      p.folder_token,
+                    ),
+                  );
                 case "list_blocks":
-                  return json(await listBlocks(client, p.doc_token));
+                  return json(await listBlocks(client, p.doc_token!));
                 case "get_block":
-                  return json(await getBlock(client, p.doc_token, p.block_id));
+                  return json(await getBlock(client, p.doc_token!, p.block_id!));
                 case "update_block":
-                  return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+                  return json(await updateBlock(client, p.doc_token!, p.block_id!, p.content!));
                 case "delete_block":
-                  return json(await deleteBlock(client, p.doc_token, p.block_id));
-                default: {
-                  const exhaustiveCheck: never = p;
-                  return json({ error: `Unknown action: ${String(exhaustiveCheck)}` });
-                }
+                  return json(await deleteBlock(client, p.doc_token!, p.block_id!));
+                default:
+                  return json({ error: `Unknown action: ${p.action}` });
               }
             } catch (err) {
               return json({ error: err instanceof Error ? err.message : String(err) });

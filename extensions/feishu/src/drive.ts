@@ -2,7 +2,11 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
+import {
+  FeishuDriveSchema,
+  type FeishuDriveParams,
+  type FeishuDriveAction,
+} from "./drive-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
@@ -166,6 +170,80 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
   };
 }
 
+async function uploadFile(
+  client: Lark.Client,
+  fileName: string,
+  content: string,
+  parentNode: string,
+) {
+  const buf = Buffer.from(content, "utf-8");
+  const res = await client.drive.file.uploadAll({
+    data: {
+      file_name: fileName,
+      parent_type: "explorer",
+      parent_node: parentNode,
+      size: buf.length,
+      file: buf,
+    },
+  });
+  if (!res?.file_token) {
+    throw new Error("Upload failed: no file_token returned");
+  }
+  return { file_token: res.file_token };
+}
+
+const IMPORT_POLL_INTERVAL_MS = 2000;
+const IMPORT_MAX_POLLS = 15;
+
+async function importFile(
+  client: Lark.Client,
+  fileToken: string,
+  fileExtension: string,
+  targetType: string,
+  mountKey: string,
+  fileName?: string,
+) {
+  // Only include file_name if defined — undefined fields can cause schema mismatch
+  const data: {
+    file_extension: string;
+    file_token: string;
+    type: string;
+    file_name?: string;
+    point: { mount_type: number; mount_key: string };
+  } = {
+    file_extension: fileExtension,
+    file_token: fileToken,
+    type: targetType,
+    point: { mount_type: 1, mount_key: mountKey },
+  };
+  if (fileName) {
+    data.file_name = fileName;
+  }
+
+  const createRes = await client.drive.importTask.create({ data });
+  if (createRes.code !== 0) {
+    throw new Error(createRes.msg ?? "Failed to create import task");
+  }
+
+  const ticket = createRes.data?.ticket;
+  if (!ticket) {
+    throw new Error("No import task ticket returned");
+  }
+
+  for (let i = 0; i < IMPORT_MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, IMPORT_POLL_INTERVAL_MS));
+    const getRes = await client.drive.importTask.get({ path: { ticket } });
+    const result = getRes.data?.result;
+    if (result?.job_status === 0) {
+      return { token: result.token, url: result.url, type: result.type };
+    }
+    if (result?.job_status === 2) {
+      throw new Error(result.job_error_msg || "Import failed");
+    }
+  }
+  throw new Error("Import timeout after 30s");
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
@@ -194,26 +272,38 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
       name: "feishu_drive",
       label: "Feishu Drive",
       description:
-        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete",
+        "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, upload (upload text content as file), import (convert uploaded file to Feishu doc/sheet)",
       parameters: FeishuDriveSchema,
       async execute(_toolCallId, params) {
-        const p = params as FeishuDriveParams;
+        const p = params as FeishuDriveParams & { action: FeishuDriveAction };
         try {
           const client = getClient();
           switch (p.action) {
             case "list":
               return json(await listFolder(client, p.folder_token));
             case "info":
-              return json(await getFileInfo(client, p.file_token));
+              return json(await getFileInfo(client, p.file_token!));
             case "create_folder":
-              return json(await createFolder(client, p.name, p.folder_token));
+              return json(await createFolder(client, p.name!, p.folder_token));
             case "move":
-              return json(await moveFile(client, p.file_token, p.type, p.folder_token));
+              return json(await moveFile(client, p.file_token!, p.type!, p.folder_token!));
             case "delete":
-              return json(await deleteFile(client, p.file_token, p.type));
+              return json(await deleteFile(client, p.file_token!, p.type!));
+            case "upload":
+              return json(await uploadFile(client, p.file_name!, p.content!, p.folder_token!));
+            case "import":
+              return json(
+                await importFile(
+                  client,
+                  p.file_token!,
+                  p.file_extension!,
+                  p.target_type!,
+                  p.folder_token!,
+                  p.file_name,
+                ),
+              );
             default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+              return json({ error: `Unknown action: ${p.action}` });
           }
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });
