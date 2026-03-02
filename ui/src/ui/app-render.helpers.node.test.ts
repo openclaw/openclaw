@@ -288,13 +288,22 @@ describe("isCronSessionKey", () => {
 });
 
 describe("active agent + workspace context", () => {
+  type ActiveAgentState = Parameters<typeof resolveActiveAgentId>[0];
+  type ActiveWorkspaceState = Parameters<typeof resolveActiveWorkspace>[0];
+
   it("resolves active agent id from agent-scoped session key", () => {
-    const state = { sessionKey: "agent:codex:telegram:direct:abc", agentsList: null } as any;
+    const state = {
+      sessionKey: "agent:codex:telegram:direct:abc",
+      agentsList: null,
+    } as unknown as ActiveAgentState;
     expect(resolveActiveAgentId(state)).toBe("codex");
   });
 
   it("falls back to default agent id for non-agent session keys", () => {
-    const state = { sessionKey: "main", agentsList: { defaultId: "main", agents: [] } } as any;
+    const state = {
+      sessionKey: "main",
+      agentsList: { defaultId: "main", agents: [] },
+    } as unknown as ActiveAgentState;
     expect(resolveActiveAgentId(state)).toBe("main");
   });
 
@@ -306,7 +315,7 @@ describe("active agent + workspace context", () => {
           list: [{ id: "codex", workspace: "~/codex" }],
         },
       },
-    } as any;
+    } as unknown as ActiveWorkspaceState;
     expect(resolveActiveWorkspace(state, "codex")).toBe("~/codex");
   });
 
@@ -318,7 +327,7 @@ describe("active agent + workspace context", () => {
           list: [{ id: "codex" }],
         },
       },
-    } as any;
+    } as unknown as ActiveWorkspaceState;
     expect(resolveActiveWorkspace(state, "codex")).toBe("~/default");
   });
 });
