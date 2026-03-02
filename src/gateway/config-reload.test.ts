@@ -159,6 +159,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
   });
 
+  it("treats diagnostics.stuckSessionWarnMs as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.stuckSessionWarnMs"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);

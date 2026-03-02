@@ -226,6 +226,7 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .onMiss
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+    private static let secureStateDirPermissions = 0o700
 
     static func fileURL() -> URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
@@ -332,6 +333,7 @@ enum ExecApprovalsStore {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(file)
             let url = self.fileURL()
+            self.ensureSecureStateDirectory()
             try FileManager().createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
@@ -343,6 +345,7 @@ enum ExecApprovalsStore {
     }
 
     static func ensureFile() -> ExecApprovalsFile {
+        self.ensureSecureStateDirectory()
         let url = self.fileURL()
         let existed = FileManager().fileExists(atPath: url.path)
         let loaded = self.loadFile()
@@ -522,6 +525,20 @@ enum ExecApprovalsStore {
         var file = self.ensureFile()
         mutate(&file)
         self.saveFile(file)
+    }
+
+    private static func ensureSecureStateDirectory() {
+        let url = OpenClawPaths.stateDirURL
+        do {
+            try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
+            try FileManager().setAttributes(
+                [.posixPermissions: self.secureStateDirPermissions],
+                ofItemAtPath: url.path)
+        } catch {
+            self.logger
+                .warning(
+                    "exec approvals state dir permission hardening failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func generateToken() -> String {

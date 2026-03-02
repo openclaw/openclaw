@@ -1,7 +1,12 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { t } from "../../i18n/index.ts";
-import type { CronFieldErrors, CronFieldKey } from "../controllers/cron.ts";
+import type {
+  CronFieldErrors,
+  CronFieldKey,
+  CronJobsLastStatusFilter,
+  CronJobsScheduleKindFilter,
+} from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
@@ -27,6 +32,8 @@ export type CronProps = {
   jobsHasMore: boolean;
   jobsQuery: string;
   jobsEnabledFilter: CronJobsEnabledFilter;
+  jobsScheduleKindFilter: CronJobsScheduleKindFilter;
+  jobsLastStatusFilter: CronJobsLastStatusFilter;
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
@@ -68,9 +75,12 @@ export type CronProps = {
   onJobsFiltersChange: (patch: {
     cronJobsQuery?: string;
     cronJobsEnabledFilter?: CronJobsEnabledFilter;
+    cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
+    cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
     cronJobsSortBy?: CronJobsSortBy;
     cronJobsSortDir?: CronSortDir;
   }) => void | Promise<void>;
+  onJobsFiltersReset: () => void | Promise<void>;
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
     cronRunsScope?: CronRunScope;
@@ -239,6 +249,12 @@ function inputIdForField(key: CronFieldKey) {
   if (key === "timeoutSeconds") {
     return "cron-timeout-seconds";
   }
+  if (key === "failureAlertAfter") {
+    return "cron-failure-alert-after";
+  }
+  if (key === "failureAlertCooldownSeconds") {
+    return "cron-failure-alert-cooldown-seconds";
+  }
   return "cron-delivery-to";
 }
 
@@ -266,6 +282,8 @@ function fieldLabelForKey(
     payloadThinking: t("cron.form.thinking"),
     timeoutSeconds: t("cron.form.timeoutSeconds"),
     deliveryTo: t("cron.form.to"),
+    failureAlertAfter: "Failure alert after",
+    failureAlertCooldownSeconds: "Failure alert cooldown",
   };
   return labels[key];
 }
@@ -286,6 +304,8 @@ function collectBlockingFields(
     "payloadThinking",
     "timeoutSeconds",
     "deliveryTo",
+    "failureAlertAfter",
+    "failureAlertCooldownSeconds",
   ];
   const fields: BlockingField[] = [];
   for (const key of orderedKeys) {
@@ -356,6 +376,13 @@ export function renderCron(props: CronProps) {
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
   const blockedByValidation = !props.busy && blockingFields.length > 0;
+  const hasActiveJobsFilters =
+    props.jobsQuery.trim().length > 0 ||
+    props.jobsEnabledFilter !== "all" ||
+    props.jobsScheduleKindFilter !== "all" ||
+    props.jobsLastStatusFilter !== "all" ||
+    props.jobsSortBy !== "nextRunAtMs" ||
+    props.jobsSortDir !== "asc";
   const submitDisabledReason =
     blockedByValidation && !props.canSubmit
       ? blockingFields.length === 1
@@ -437,6 +464,40 @@ export function renderCron(props: CronProps) {
               </select>
             </label>
             <label class="field">
+              <span>${t("cron.jobs.schedule")}</span>
+              <select
+                data-test-id="cron-jobs-schedule-filter"
+                .value=${props.jobsScheduleKindFilter}
+                @change=${(e: Event) =>
+                  props.onJobsFiltersChange({
+                    cronJobsScheduleKindFilter: (e.target as HTMLSelectElement)
+                      .value as CronJobsScheduleKindFilter,
+                  })}
+              >
+                <option value="all">${t("cron.jobs.all")}</option>
+                <option value="at">${t("cron.form.at")}</option>
+                <option value="every">${t("cron.form.every")}</option>
+                <option value="cron">${t("cron.form.cronOption")}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>${t("cron.jobs.lastRun")}</span>
+              <select
+                data-test-id="cron-jobs-last-status-filter"
+                .value=${props.jobsLastStatusFilter}
+                @change=${(e: Event) =>
+                  props.onJobsFiltersChange({
+                    cronJobsLastStatusFilter: (e.target as HTMLSelectElement)
+                      .value as CronJobsLastStatusFilter,
+                  })}
+              >
+                <option value="all">${t("cron.jobs.all")}</option>
+                <option value="ok">${t("cron.runs.runStatusOk")}</option>
+                <option value="error">${t("cron.runs.runStatusError")}</option>
+                <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+              </select>
+            </label>
+            <label class="field">
               <span>${t("cron.jobs.sort")}</span>
               <select
                 .value=${props.jobsSortBy}
@@ -462,6 +523,17 @@ export function renderCron(props: CronProps) {
                 <option value="asc">${t("cron.jobs.ascending")}</option>
                 <option value="desc">${t("cron.jobs.descending")}</option>
               </select>
+            </label>
+            <label class="field">
+              <span>${t("cron.jobs.reset")}</span>
+              <button
+                class="btn"
+                data-test-id="cron-jobs-filters-reset"
+                ?disabled=${!hasActiveJobsFilters}
+                @click=${props.onJobsFiltersReset}
+              >
+                ${t("cron.jobs.reset")}
+              </button>
             </label>
           </div>
           ${
@@ -1054,6 +1126,115 @@ export function renderCron(props: CronProps) {
                         />
                         <div class="cron-help">${t("cron.form.thinkingHelp")}</div>
                       </label>
+                    `
+                  : nothing
+              }
+              ${
+                isAgentTurn
+                  ? html`
+                      <label class="field cron-span-2">
+                        ${renderFieldLabel("Failure alerts")}
+                        <select
+                          .value=${props.form.failureAlertMode}
+                          @change=${(e: Event) =>
+                            props.onFormChange({
+                              failureAlertMode: (e.target as HTMLSelectElement)
+                                .value as CronFormState["failureAlertMode"],
+                            })}
+                        >
+                          <option value="inherit">Inherit global setting</option>
+                          <option value="disabled">Disable for this job</option>
+                          <option value="custom">Custom per-job settings</option>
+                        </select>
+                        <div class="cron-help">
+                          Control when this job sends repeated-failure alerts.
+                        </div>
+                      </label>
+                      ${
+                        props.form.failureAlertMode === "custom"
+                          ? html`
+                              <label class="field">
+                                ${renderFieldLabel("Alert after")}
+                                <input
+                                  id="cron-failure-alert-after"
+                                  .value=${props.form.failureAlertAfter}
+                                  aria-invalid=${props.fieldErrors.failureAlertAfter ? "true" : "false"}
+                                  aria-describedby=${ifDefined(
+                                    props.fieldErrors.failureAlertAfter
+                                      ? errorIdForField("failureAlertAfter")
+                                      : undefined,
+                                  )}
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertAfter: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder="2"
+                                />
+                                <div class="cron-help">Consecutive errors before alerting.</div>
+                                ${renderFieldError(
+                                  props.fieldErrors.failureAlertAfter,
+                                  errorIdForField("failureAlertAfter"),
+                                )}
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Cooldown (seconds)")}
+                                <input
+                                  id="cron-failure-alert-cooldown-seconds"
+                                  .value=${props.form.failureAlertCooldownSeconds}
+                                  aria-invalid=${props.fieldErrors.failureAlertCooldownSeconds ? "true" : "false"}
+                                  aria-describedby=${ifDefined(
+                                    props.fieldErrors.failureAlertCooldownSeconds
+                                      ? errorIdForField("failureAlertCooldownSeconds")
+                                      : undefined,
+                                  )}
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertCooldownSeconds: (e.target as HTMLInputElement)
+                                        .value,
+                                    })}
+                                  placeholder="3600"
+                                />
+                                <div class="cron-help">Minimum seconds between alerts.</div>
+                                ${renderFieldError(
+                                  props.fieldErrors.failureAlertCooldownSeconds,
+                                  errorIdForField("failureAlertCooldownSeconds"),
+                                )}
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert channel")}
+                                <select
+                                  .value=${props.form.failureAlertChannel || "last"}
+                                  @change=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertChannel: (e.target as HTMLSelectElement).value,
+                                    })}
+                                >
+                                  ${channelOptions.map(
+                                    (channel) =>
+                                      html`<option value=${channel}>
+                                        ${resolveChannelLabel(props, channel)}
+                                      </option>`,
+                                  )}
+                                </select>
+                              </label>
+                              <label class="field">
+                                ${renderFieldLabel("Alert to")}
+                                <input
+                                  .value=${props.form.failureAlertTo}
+                                  list="cron-delivery-to-suggestions"
+                                  @input=${(e: Event) =>
+                                    props.onFormChange({
+                                      failureAlertTo: (e.target as HTMLInputElement).value,
+                                    })}
+                                  placeholder="+1555... or chat id"
+                                />
+                                <div class="cron-help">
+                                  Optional recipient override for failure alerts.
+                                </div>
+                              </label>
+                            `
+                          : nothing
+                      }
                     `
                   : nothing
               }
