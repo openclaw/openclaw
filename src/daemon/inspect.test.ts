@@ -308,4 +308,31 @@ describe("findExtraGatewayServices (linux)", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("does not treat [Unit] ExecStart text as browser/CDP service signal", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "openclaw-unit-section-execstart.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Unit]",
+        "ExecStart=/snap/bin/chromium --headless --remote-debugging-port=18800",
+        "[Service]",
+        "ExecStart=/usr/local/bin/helper --mode openclaw",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "openclaw-unit-section-execstart.service",
+        detail: "unit: /home/test/.config/systemd/user/openclaw-unit-section-execstart.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
 });

@@ -138,7 +138,16 @@ export function collectSystemdExecStartValues(contents: string): string[] {
   }
 
   const values: string[] = [];
+  let inServiceSection = false;
   for (const line of logicalLines) {
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/);
+    if (sectionMatch) {
+      inServiceSection = sectionMatch[1]?.trim().toLowerCase() === "service";
+      continue;
+    }
+    if (!inServiceSection) {
+      continue;
+    }
     const match = line.match(/^execstart\s*=(.*)$/i);
     if (match) {
       values.push(match[1]?.trim() ?? "");
