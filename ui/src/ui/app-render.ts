@@ -307,15 +307,22 @@ export function renderApp(state: AppViewState) {
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
-          availableUpdate
+          availableUpdate && !state.updateBannerDismissed
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${availableUpdate.latestVersion}
-              (running v${availableUpdate.currentVersion}).
+              <span><strong>Update available:</strong> v${availableUpdate.latestVersion}
+              (running v${availableUpdate.currentVersion}).</span>
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              <button
+                class="update-banner__close"
+                title="Dismiss this notification"
+                @click=${() => {
+                  state.updateBannerDismissed = true;
+                }}
+              >×</button>
             </div>`
             : nothing
         }

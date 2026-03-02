@@ -29,6 +29,24 @@
   background: rgba(239, 68, 68, 0.15);
 }
 
+.update-banner__close {
+  margin-left: 12px;
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.update-banner__close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* ===========================================
    Cards - Refined with depth
    =========================================== */
