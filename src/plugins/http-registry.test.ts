@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { registerPluginHttpRoute, registerPluginWebhookRoute } from "./http-registry.js";
+import {
+  registerPluginHttpRoute,
+  registerPluginWebhookRoute,
+  tryRegisterPluginHttpRoute,
+} from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 describe("registerPluginHttpRoute", () => {
@@ -206,5 +210,36 @@ describe("registerPluginHttpRoute", () => {
     );
     expect(logs).toContain("plugin: refusing duplicate route /shared-hook");
     expect(() => unregister()).not.toThrow();
+  });
+
+  it("returns failure for duplicate default routes via the explicit helper", () => {
+    const registry = createEmptyPluginRegistry();
+    registerPluginHttpRoute({
+      path: "/line/webhook",
+      handler: vi.fn(),
+      registry,
+      pluginId: "line",
+    });
+
+    const logs: string[] = [];
+    const registration = tryRegisterPluginHttpRoute({
+      path: "/line/webhook",
+      handler: vi.fn(),
+      registry,
+      pluginId: "line",
+      log: (msg) => logs.push(msg),
+    });
+
+    expect(registration.ok).toBe(false);
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "line",
+        message: "http route already registered: /line/webhook",
+      }),
+    );
+    expect(logs).toContain("plugin: refusing duplicate route /line/webhook");
+    expect(() => registration.unregister()).not.toThrow();
   });
 });

@@ -8,13 +8,15 @@ type RegisteredRoute = {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 };
 
-const registerPluginHttpRouteMock = vi.fn<(params: RegisteredRoute) => () => void>(() => vi.fn());
+const tryRegisterPluginHttpRouteMock = vi.fn<
+  (params: RegisteredRoute) => { ok: boolean; unregister: () => void }
+>(() => ({ ok: true, unregister: vi.fn() }));
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn().mockResolvedValue({ counts: {} });
 
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
+  tryRegisterPluginHttpRoute: tryRegisterPluginHttpRouteMock,
   buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
   createFixedWindowRateLimiter: vi.fn(() => ({
     isRateLimited: vi.fn(() => false),
@@ -74,7 +76,7 @@ function makeFormBody(fields: Record<string, string>): string {
 
 describe("Synology channel wiring integration", () => {
   beforeEach(() => {
-    registerPluginHttpRouteMock.mockClear();
+    tryRegisterPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
@@ -103,11 +105,11 @@ describe("Synology channel wiring integration", () => {
     };
 
     const started = await plugin.gateway.startAccount(ctx);
-    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
+    expect(tryRegisterPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
-    const firstCall = registerPluginHttpRouteMock.mock.calls[0];
+    const firstCall = tryRegisterPluginHttpRouteMock.mock.calls[0];
     expect(firstCall).toBeTruthy();
-    if (!firstCall) throw new Error("Expected registerPluginHttpRoute to be called");
+    if (!firstCall) throw new Error("Expected tryRegisterPluginHttpRoute to be called");
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
@@ -130,5 +132,36 @@ describe("Synology channel wiring integration", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
 
     started.stop();
+  });
+
+  it("fails closed when route registration is rejected", async () => {
+    tryRegisterPluginHttpRouteMock.mockReturnValueOnce({ ok: false, unregister: vi.fn() });
+
+    const plugin = createSynologyChatPlugin();
+    const ctx = {
+      cfg: {
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            accounts: {
+              alerts: {
+                enabled: true,
+                token: "valid-token",
+                incomingUrl: "https://nas.example.com/incoming",
+                webhookPath: "/webhook/synology-alerts",
+                dmPolicy: "allowlist",
+                allowedUserIds: ["456"],
+              },
+            },
+          },
+        },
+      },
+      accountId: "alerts",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    };
+
+    await expect(plugin.gateway.startAccount(ctx)).rejects.toThrow(
+      "Failed to register HTTP route: /webhook/synology-alerts",
+    );
   });
 });

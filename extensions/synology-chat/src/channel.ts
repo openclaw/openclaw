@@ -7,7 +7,7 @@
 import {
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
-  registerPluginHttpRoute,
+  tryRegisterPluginHttpRoute,
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk";
 import { z } from "zod";
@@ -293,13 +293,17 @@ export function createSynologyChatPlugin() {
           activeRouteUnregisters.delete(routeKey);
         }
 
-        const unregister = registerPluginHttpRoute({
+        const routeRegistration = tryRegisterPluginHttpRoute({
           path: account.webhookPath,
           pluginId: CHANNEL_ID,
           accountId: account.accountId,
           log: (msg: string) => log?.info?.(msg),
           handler,
         });
+        if (!routeRegistration.ok) {
+          throw new Error(`Failed to register HTTP route: ${account.webhookPath}`);
+        }
+        const unregister = routeRegistration.unregister;
         activeRouteUnregisters.set(routeKey, unregister);
 
         log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);

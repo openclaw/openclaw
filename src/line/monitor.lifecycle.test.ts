@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
-  createLineBotMock: vi.fn(() => ({
-    account: { accountId: "default" },
-    handleWebhook: vi.fn(),
-  })),
-  registerPluginHttpRouteMock: vi.fn(),
-  unregisterHttpMock: vi.fn(),
-}));
+const { createLineBotMock, tryRegisterPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(
+  () => ({
+    createLineBotMock: vi.fn(() => ({
+      account: { accountId: "default" },
+      handleWebhook: vi.fn(),
+    })),
+    tryRegisterPluginHttpRouteMock: vi.fn(),
+    unregisterHttpMock: vi.fn(),
+  }),
+);
 
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
@@ -37,7 +39,7 @@ vi.mock("../plugins/http-path.js", () => ({
 }));
 
 vi.mock("../plugins/http-registry.js", () => ({
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
+  tryRegisterPluginHttpRoute: tryRegisterPluginHttpRouteMock,
 }));
 
 vi.mock("./webhook-node.js", () => ({
@@ -78,7 +80,9 @@ describe("monitorLineProvider lifecycle", () => {
   beforeEach(() => {
     createLineBotMock.mockClear();
     unregisterHttpMock.mockClear();
-    registerPluginHttpRouteMock.mockClear().mockReturnValue(unregisterHttpMock);
+    tryRegisterPluginHttpRouteMock
+      .mockClear()
+      .mockReturnValue({ ok: true, unregister: unregisterHttpMock });
   });
 
   it("waits for abort before resolving", async () => {
@@ -97,7 +101,7 @@ describe("monitorLineProvider lifecycle", () => {
       return monitor;
     });
 
-    await vi.waitFor(() => expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(tryRegisterPluginHttpRouteMock).toHaveBeenCalledTimes(1));
     expect(resolved).toBe(false);
 
     abort.abort();
@@ -135,5 +139,23 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
     monitor.stop();
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when route registration is rejected", async () => {
+    const { monitorLineProvider } = await import("./monitor.js");
+    tryRegisterPluginHttpRouteMock.mockReturnValueOnce({ ok: false, unregister: vi.fn() });
+
+    await expect(
+      monitorLineProvider({
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        config: {} as OpenClawConfig,
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+      }),
+    ).rejects.toThrow("line: failed to register webhook handler at /line/webhook");
   });
 });

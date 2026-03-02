@@ -10,7 +10,7 @@ export type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<void> | void;
 
-export type RegisterPluginWebhookRouteResult = {
+export type RegisterPluginHttpRouteResult = {
   ok: boolean;
   unregister: () => void;
 };
@@ -56,7 +56,7 @@ type RegisterPluginHttpRouteParams = {
 
 function registerPluginHttpRouteInternal(
   params: RegisterPluginHttpRouteParams,
-): RegisterPluginWebhookRouteResult {
+): RegisterPluginHttpRouteResult {
   const registry = params.registry ?? requireActivePluginRegistry();
   const routes = registry.httpRoutes ?? [];
   registry.httpRoutes = routes;
@@ -163,8 +163,14 @@ export function registerPluginHttpRoute(params: RegisterPluginHttpRouteParams): 
   return registerPluginHttpRouteInternal(params).unregister;
 }
 
+export function tryRegisterPluginHttpRoute(
+  params: RegisterPluginHttpRouteParams,
+): RegisterPluginHttpRouteResult {
+  return registerPluginHttpRouteInternal(params);
+}
+
 export function registerPluginWebhookRoute(
   params: Omit<RegisterPluginHttpRouteParams, "kind">,
-): RegisterPluginWebhookRouteResult {
-  return registerPluginHttpRouteInternal({ ...params, kind: "webhook" });
+): RegisterPluginHttpRouteResult {
+  return tryRegisterPluginHttpRoute({ ...params, kind: "webhook" });
 }

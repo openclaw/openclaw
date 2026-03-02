@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("openclaw/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
-  registerPluginHttpRoute: vi.fn(() => vi.fn()),
+  tryRegisterPluginHttpRoute: vi.fn(() => ({ ok: true, unregister: vi.fn() })),
   buildChannelConfigSchema: vi.fn((schema: any) => ({ schema })),
   createFixedWindowRateLimiter: vi.fn(() => ({
     isRateLimited: vi.fn(() => false),
@@ -44,7 +44,7 @@ vi.mock("zod", () => ({
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
-const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk");
+const { tryRegisterPluginHttpRoute } = await import("openclaw/plugin-sdk");
 
 describe("createSynologyChatPlugin", () => {
   it("returns a plugin object with all required sections", () => {
@@ -363,7 +363,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const registerMock = vi.mocked(registerPluginHttpRoute);
+      const registerMock = vi.mocked(tryRegisterPluginHttpRoute);
       registerMock.mockClear();
 
       const plugin = createSynologyChatPlugin();
@@ -392,8 +392,10 @@ describe("createSynologyChatPlugin", () => {
     it("deregisters stale route before re-registering same account/path", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
-      const registerMock = vi.mocked(registerPluginHttpRoute);
-      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+      const registerMock = vi.mocked(tryRegisterPluginHttpRoute);
+      registerMock
+        .mockReturnValueOnce({ ok: true, unregister: unregisterFirst })
+        .mockReturnValueOnce({ ok: true, unregister: unregisterSecond });
 
       const plugin = createSynologyChatPlugin();
       const ctx = {

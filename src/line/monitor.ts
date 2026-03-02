@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
-import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { tryRegisterPluginHttpRoute } from "../plugins/http-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
@@ -286,13 +286,19 @@ export async function monitorLineProvider(
 
   // Register HTTP webhook handler
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
-  const unregisterHttp = registerPluginHttpRoute({
+  const routeRegistration = tryRegisterPluginHttpRoute({
     path: normalizedPath,
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
     handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
   });
+  if (!routeRegistration.ok) {
+    const message = `line: failed to register webhook handler at ${normalizedPath}`;
+    runtime.error?.(danger(message));
+    throw new Error(message);
+  }
+  const unregisterHttp = routeRegistration.unregister;
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
