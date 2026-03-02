@@ -428,37 +428,35 @@ async function deliverOutboundPayloadsCore(
       })),
     };
   };
-  const normalizeWhatsAppPayload = (payload: ReplyPayload): ReplyPayload | null => {
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+  const hasMediaPayload = (payload: ReplyPayload): boolean =>
+    Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+  const hasChannelDataPayload = (payload: ReplyPayload): boolean =>
+    Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
+  const normalizePayloadForChannelDelivery = (
+    payload: ReplyPayload,
+    channelId: string,
+  ): ReplyPayload | null => {
+    const hasMedia = hasMediaPayload(payload);
+    const hasChannelData = hasChannelDataPayload(payload);
     const rawText = typeof payload.text === "string" ? payload.text : "";
-    const normalizedText = rawText.replace(/^(?:[ \t]*\r?\n)+/, "");
+    const normalizedText =
+      channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
     if (!normalizedText.trim()) {
-      if (!hasMedia) {
+      if (!hasMedia && !hasChannelData) {
         return null;
       }
       return {
         ...payload,
         text: "",
       };
+    }
+    if (normalizedText === rawText) {
+      return payload;
     }
     return {
       ...payload,
       text: normalizedText,
     };
-  };
-  const normalizeEmptyTextPayload = (payload: ReplyPayload): ReplyPayload | null => {
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const rawText = typeof payload.text === "string" ? payload.text : "";
-    if (!rawText.trim()) {
-      if (!hasMedia) {
-        return null;
-      }
-      return {
-        ...payload,
-        text: "",
-      };
-    }
-    return payload;
   };
   const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads)
     .map((payload) => {
@@ -475,10 +473,7 @@ async function deliverOutboundPayloadsCore(
       return { ...payload, text: sanitizeForPlainText(payload.text) };
     })
     .flatMap((payload) => {
-      const normalized =
-        channel === "whatsapp"
-          ? normalizeWhatsAppPayload(payload)
-          : normalizeEmptyTextPayload(payload);
+      const normalized = normalizePayloadForChannelDelivery(payload, channel);
       return normalized ? [normalized] : [];
     });
   const hookRunner = getGlobalHookRunner();

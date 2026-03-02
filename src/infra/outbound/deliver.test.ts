@@ -855,6 +855,39 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("preserves channelData-only payloads with empty text for non-WhatsApp sendPayload channels", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "line", messageId: "ln-1" });
+    const sendText = vi.fn();
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: " \n\t ", channelData: { mode: "flex" } }],
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "", channelData: { mode: "flex" } }),
+      }),
+    );
+    expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
+  });
+
   it("emits message_sent failure when delivery errors", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));
