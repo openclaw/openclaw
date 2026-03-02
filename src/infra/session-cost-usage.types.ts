@@ -29,6 +29,7 @@ export type ParsedTranscriptEntry = {
   model?: string;
   stopReason?: string;
   toolNames: string[];
+  fileReadPaths: string[];
   toolResultCounts: { total: number; errors: number };
 };
 
@@ -110,6 +111,12 @@ export type SessionToolUsage = {
   tools: Array<{ name: string; count: number }>;
 };
 
+export type SessionFilesRead = {
+  totalReads: number;
+  uniqueFiles: number;
+  files: Array<{ path: string; count: number }>;
+};
+
 export type SessionModelUsage = {
   provider?: string;
   model?: string;
@@ -130,6 +137,7 @@ export type SessionCostSummary = CostUsageTotals & {
   dailyModelUsage?: SessionDailyModelUsage[];
   messageCounts?: SessionMessageCounts;
   toolUsage?: SessionToolUsage;
+  filesRead?: SessionFilesRead;
   modelUsage?: SessionModelUsage[];
   latency?: SessionLatencyStats;
 };

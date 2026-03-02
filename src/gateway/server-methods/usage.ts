@@ -14,6 +14,7 @@ import type {
   SessionMessageCounts,
   SessionLatencyStats,
   SessionModelUsage,
+  SessionFilesRead,
   SessionToolUsage,
 } from "../../infra/session-cost-usage.js";
 import {
@@ -371,6 +372,7 @@ export type SessionsUsageAggregates = {
   tools: SessionToolUsage;
   byModel: SessionModelUsage[];
   byProvider: SessionModelUsage[];
+  filesRead?: SessionFilesRead;
   byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
   byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
   latency?: SessionLatencyStats;
@@ -571,6 +573,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       errors: 0,
     };
     const toolAggregateMap = new Map<string, number>();
+    const filesReadAggregateMap = new Map<string, number>();
     const byModelMap = new Map<string, SessionModelUsage>();
     const byProviderMap = new Map<string, SessionModelUsage>();
     const byAgentMap = new Map<string, CostUsageSummary["totals"]>();
@@ -671,6 +674,15 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (usage.toolUsage) {
           for (const tool of usage.toolUsage.tools) {
             toolAggregateMap.set(tool.name, (toolAggregateMap.get(tool.name) ?? 0) + tool.count);
+          }
+        }
+
+        if (usage.filesRead) {
+          for (const file of usage.filesRead.files) {
+            filesReadAggregateMap.set(
+              file.path,
+              (filesReadAggregateMap.get(file.path) ?? 0) + file.count,
+            );
           }
         }
 
@@ -843,6 +855,15 @@ export const usageHandlers: GatewayRequestHandlers = {
           .map(([name, count]) => ({ name, count }))
           .toSorted((a, b) => b.count - a.count),
       },
+      filesRead: filesReadAggregateMap.size
+        ? {
+            totalReads: Array.from(filesReadAggregateMap.values()).reduce((sum, c) => sum + c, 0),
+            uniqueFiles: filesReadAggregateMap.size,
+            files: Array.from(filesReadAggregateMap.entries())
+              .map(([path, count]) => ({ path, count }))
+              .toSorted((a, b) => b.count - a.count),
+          }
+        : undefined,
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
         const costDiff = b.totals.totalCost - a.totals.totalCost;
         if (costDiff !== 0) {

@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   computeFilteredUsage,
+  extractFilesReadFromLogs,
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
 } from "./usage-render-details.ts";
-import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
+import type { SessionLogEntry, TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
 function makePoint(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   return {
@@ -128,5 +129,55 @@ describe("chart bar sizing", () => {
         expect(barGap).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+});
+
+function makeLog(content: string, role: SessionLogEntry["role"] = "assistant"): SessionLogEntry {
+  return { timestamp: Date.now(), role, content };
+}
+
+describe("extractFilesReadFromLogs", () => {
+  it("returns empty map when no read tool calls present", () => {
+    const logs = [makeLog("Hello world"), makeLog("[Tool: web_search]")];
+    expect(extractFilesReadFromLogs(logs).size).toBe(0);
+  });
+
+  it("extracts a single file path from [Tool: read /path]", () => {
+    const logs = [makeLog("[Tool: read /src/index.ts]")];
+    const result = extractFilesReadFromLogs(logs);
+    expect(result.get("/src/index.ts")).toBe(1);
+  });
+
+  it("extracts file path from [Tool: Read /path] (capitalized)", () => {
+    const logs = [makeLog("[Tool: Read /file.md]")];
+    const result = extractFilesReadFromLogs(logs);
+    expect(result.get("/file.md")).toBe(1);
+  });
+
+  it("counts multiple reads of the same file", () => {
+    const logs = [
+      makeLog("[Tool: read /src/app.ts]\n[Tool: read /src/utils.ts]"),
+      makeLog("[Tool: read /src/app.ts]"),
+    ];
+    const result = extractFilesReadFromLogs(logs);
+    expect(result.get("/src/app.ts")).toBe(2);
+    expect(result.get("/src/utils.ts")).toBe(1);
+  });
+
+  it("extracts from any log role", () => {
+    const logs = [
+      makeLog("[Tool: read /a.ts]", "assistant"),
+      makeLog("[Tool: read /b.ts]", "tool"),
+    ];
+    expect(extractFilesReadFromLogs(logs).size).toBe(2);
+  });
+
+  it("handles empty logs array", () => {
+    expect(extractFilesReadFromLogs([]).size).toBe(0);
+  });
+
+  it("ignores non-read tool calls with paths", () => {
+    const logs = [makeLog("[Tool: write /src/output.ts]")];
+    expect(extractFilesReadFromLogs(logs).size).toBe(0);
   });
 });

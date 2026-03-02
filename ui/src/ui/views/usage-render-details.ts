@@ -315,7 +315,7 @@ function renderSessionDetailPanel(
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(session.contextWeight, usage, contextExpanded, onToggleContextExpanded)}
+          ${renderContextPanel(session.contextWeight, usage, contextExpanded, onToggleContextExpanded, sessionLogs, hasRange ? timeSeriesCursorStart : null, hasRange ? timeSeriesCursorEnd : null)}
         </div>
       </div>
     </div>
@@ -720,6 +720,9 @@ function renderContextPanel(
   usage: UsageSessionEntry["usage"],
   expanded: boolean,
   onToggleExpanded: () => void,
+  sessionLogs?: SessionLogEntry[] | null,
+  cursorStart?: number | null,
+  cursorEnd?: number | null,
 ) {
   if (!contextWeight) {
     return html`
@@ -758,10 +761,12 @@ function renderContextPanel(
   const skillsTop = showAll ? skillsList : skillsList.slice(0, defaultLimit);
   const toolsTop = showAll ? toolsList : toolsList.slice(0, defaultLimit);
   const filesTop = showAll ? filesList : filesList.slice(0, defaultLimit);
+  const filesReadCount = usage?.filesRead?.uniqueFiles ?? 0;
   const hasMore =
     skillsList.length > defaultLimit ||
     toolsList.length > defaultLimit ||
-    filesList.length > defaultLimit;
+    filesList.length > defaultLimit ||
+    filesReadCount > defaultLimit;
 
   return html`
     <div class="context-details-panel">
@@ -874,6 +879,7 @@ function renderContextPanel(
             : nothing
         }
       </div>
+      ${renderFilesReadCard(usage, sessionLogs, cursorStart ?? null, cursorEnd ?? null)}
     </div>
   `;
 }
@@ -1070,10 +1076,182 @@ function renderSessionLogsCompact(
   `;
 }
 
+/**
+ * Extract file paths and read counts from session log entries.
+ * Parses `[Tool: read /path]` or `[Tool: Read /path]` patterns from log content.
+ * Returns a Map of file path → read count.
+ */
+function extractFilesReadFromLogs(logs: SessionLogEntry[]): Map<string, number> {
+  const readFiles = new Map<string, number>();
+  for (const log of logs) {
+    const content = log.content || "";
+    for (const match of content.matchAll(/\[Tool:\s*[rR]ead\s+([^\]\n]+)\]/g)) {
+      const filePath = match[1].trim();
+      // Only count absolute paths (skip relative/garbage matches)
+      if (filePath && filePath.startsWith("/")) {
+        readFiles.set(filePath, (readFiles.get(filePath) || 0) + 1);
+      }
+    }
+  }
+  return readFiles;
+}
+
+/** Find longest common directory prefix across absolute file paths. */
+function findCommonPrefix(paths: string[]): string {
+  if (paths.length === 0) {
+    return "";
+  }
+  // Split into segments, keeping leading empty string for absolute paths
+  const allParts = paths.map((p) => p.split("/"));
+  const first = allParts[0];
+  const common: string[] = [];
+  for (let i = 0; i < first.length; i++) {
+    if (allParts.every((p) => i < p.length && p[i] === first[i])) {
+      common.push(first[i]);
+    } else {
+      break;
+    }
+  }
+  // Don't include filenames in prefix — stop at last dir
+  // common might be ["", "Users", "jgelin", "dev", "openclaw"]
+  // Join back: /Users/jgelin/dev/openclaw
+  const prefix = common.join("/");
+  return prefix || "";
+}
+
+type FileTreeNode = {
+  name: string;
+  count?: number;
+  fullPath?: string;
+  children: Map<string, FileTreeNode>;
+};
+
+/** Build a tree from file paths, stripping common prefix. */
+function buildFileTree(
+  files: Array<{ path: string; count: number }>,
+  prefix: string,
+): FileTreeNode {
+  const root: FileTreeNode = { name: "", children: new Map() };
+  const prefixLen = prefix.length;
+  for (const f of files) {
+    // Strip prefix + separator; handle edge cases
+    let rel = prefixLen > 0 ? f.path.slice(prefixLen) : f.path;
+    if (rel.startsWith("/")) {
+      rel = rel.slice(1);
+    }
+    if (!rel) {
+      continue;
+    }
+    const segs = rel.split("/").filter(Boolean);
+    let node = root;
+    for (const seg of segs) {
+      if (!node.children.has(seg)) {
+        node.children.set(seg, { name: seg, children: new Map() });
+      }
+      node = node.children.get(seg)!;
+    }
+    node.count = f.count;
+    node.fullPath = f.path;
+  }
+  return collapseTree(root);
+}
+
+function collapseTree(node: FileTreeNode): FileTreeNode {
+  for (const [key, child] of node.children) {
+    const collapsed = collapseTree(child);
+    // Collapse: dir with single child dir (no count) → merge names
+    if (collapsed.children.size === 1 && collapsed.count == null) {
+      const [_childKey, grandchild] = [...collapsed.children.entries()][0];
+      const merged: FileTreeNode = {
+        name: `${collapsed.name}/${grandchild.name}`,
+        count: grandchild.count,
+        fullPath: grandchild.fullPath,
+        children: grandchild.children,
+      };
+      node.children.set(key, merged);
+    } else {
+      node.children.set(key, collapsed);
+    }
+  }
+  return node;
+}
+
+function renderFileTree(node: FileTreeNode, depth: number): unknown {
+  const results: unknown[] = [];
+  for (const child of node.children.values()) {
+    const indent = depth * 12;
+    const isDir = child.children.size > 0 && child.count == null;
+    if (isDir) {
+      results.push(html`
+        <div class="context-breakdown-item" style="padding-left:${indent}px">
+          <span class="mono muted">${child.name}/</span>
+        </div>
+      `);
+      results.push(renderFileTree(child, depth + 1));
+    } else {
+      results.push(html`
+        <div class="context-breakdown-item" style="padding-left:${indent}px">
+          <span class="mono" title="${child.fullPath ?? ""}">${child.name}</span>
+          <span class="muted">×${child.count}</span>
+        </div>
+      `);
+      if (child.children.size > 0) {
+        results.push(renderFileTree(child, depth + 1));
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Render a "Files Read" card in the context breakdown panel.
+ * Shows files as a tree grouped by directory.
+ */
+function renderFilesReadCard(
+  usage: UsageSessionEntry["usage"],
+  sessionLogs: SessionLogEntry[] | null | undefined,
+  cursorStart: number | null,
+  cursorEnd: number | null,
+) {
+  // Determine file list: filtered from logs when cursor active, or backend data
+  let files: Array<{ path: string; count: number }>;
+  if (cursorStart != null && cursorEnd != null && sessionLogs) {
+    const filteredLogs = filterLogsByRange(sessionLogs, cursorStart, cursorEnd);
+    const fileCounts = extractFilesReadFromLogs(filteredLogs);
+    files = Array.from(fileCounts.entries())
+      .map(([path, count]) => ({ path, count }))
+      .toSorted((a, b) => b.count - a.count);
+  } else if (usage?.filesRead) {
+    files = usage.filesRead.files;
+  } else {
+    return nothing;
+  }
+
+  if (files.length === 0) {
+    return nothing;
+  }
+
+  // Build tree structure from paths
+  const commonPrefix = findCommonPrefix(files.map((f) => f.path));
+  const tree = buildFileTree(files, commonPrefix);
+
+  return html`
+    <div class="context-breakdown-card">
+      <div class="context-breakdown-title">Files Read (${files.length})</div>
+      <div class="context-breakdown-list files-tree">
+        ${commonPrefix ? html`<div class="files-tree-root mono muted" title="${commonPrefix}">${commonPrefix}/</div>` : nothing}
+        ${renderFileTree(tree, 1)}
+      </div>
+    </div>
+  `;
+}
+
 export {
   computeFilteredUsage,
+  extractFilesReadFromLogs,
   renderContextPanel,
   renderEmptyDetailState,
+  renderFilesReadCard,
   renderSessionDetailPanel,
   renderSessionLogsCompact,
   renderSessionSummary,

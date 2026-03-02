@@ -327,6 +327,10 @@ export const usageStylesPart3 = `
     justify-content: space-between;
     gap: 8px;
   }
+  .files-tree-root {
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
   .context-breakdown-more {
     font-size: 10px;
     color: var(--muted);
