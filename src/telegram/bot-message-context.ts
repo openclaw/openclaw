@@ -67,6 +67,7 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
@@ -867,31 +868,3 @@ export const buildTelegramMessageContext = async ({
 export type TelegramMessageContext = NonNullable<
   Awaited<ReturnType<typeof buildTelegramMessageContext>>
 >;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Telegram forum-topic service-message fields (Bot API). */
-const FORUM_SERVICE_FIELDS = [
-  "forum_topic_created",
-  "forum_topic_edited",
-  "forum_topic_closed",
-  "forum_topic_reopened",
-  "general_forum_topic_hidden",
-  "general_forum_topic_unhidden",
-] as const;
-
-/**
- * Returns `true` when the message is a Telegram forum service message (e.g.
- * "Topic created").  These auto-generated messages carry one of the
- * `forum_topic_*` / `general_forum_topic_*` fields and should not count as
- * regular bot replies for implicit-mention purposes.
- */
-function isTelegramForumServiceMessage(msg: unknown): boolean {
-  if (!msg || typeof msg !== "object") {
-    return false;
-  }
-  const record = msg as Record<string, unknown>;
-  return FORUM_SERVICE_FIELDS.some((f) => record[f] != null);
-}

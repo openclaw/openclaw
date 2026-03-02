@@ -1,16 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { TELEGRAM_FORUM_SERVICE_FIELDS } from "./forum-service-message.js";
 
 describe("buildTelegramMessageContext implicitMention forum service messages", () => {
-  const TELEGRAM_FORUM_SERVICE_FIELDS = [
-    "forum_topic_created",
-    "forum_topic_edited",
-    "forum_topic_closed",
-    "forum_topic_reopened",
-    "general_forum_topic_hidden",
-    "general_forum_topic_unhidden",
-  ] as const;
-
   /**
    * Build a group message context where the user sends a message inside a
    * forum topic that has `reply_to_message` pointing to a message from the
