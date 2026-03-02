@@ -493,7 +493,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses reply_to_message_id when quote text is provided", async () => {
+  it("uses reply_parameters when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 10,
@@ -513,14 +513,7 @@ describe("deliverReplies", () => {
       "123",
       expect.any(String),
       expect.objectContaining({
-        reply_to_message_id: 500,
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.not.objectContaining({
-        reply_parameters: expect.anything(),
+        reply_parameters: { message_id: 500 },
       }),
     );
   });
@@ -591,14 +584,14 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(sendMessage.mock.calls[0][2]).toEqual(
       expect.objectContaining({
-        reply_to_message_id: 77,
+        reply_parameters: { message_id: 77 },
         reply_markup: {
           inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
         },
       }),
     );
     expect(sendMessage.mock.calls[1][2]).not.toEqual(
-      expect.objectContaining({ reply_to_message_id: 77 }),
+      expect.objectContaining({ reply_parameters: { message_id: 77 } }),
     );
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
@@ -645,12 +638,12 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    // First chunk should have reply_to_message_id
+    // First chunk should have reply_parameters
     expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 700 }),
+      expect.objectContaining({ reply_parameters: { message_id: 700 } }),
     );
-    // Second chunk should NOT have reply_to_message_id
-    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    // Second chunk should NOT have reply_parameters
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {
@@ -672,9 +665,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    // Both chunks should have reply_to_message_id
+    // Both chunks should have reply_parameters
     for (const call of sendMessage.mock.calls) {
-      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+      expect(call[2]).toEqual(expect.objectContaining({ reply_parameters: { message_id: 800 } }));
     }
   });
 
@@ -700,12 +693,12 @@ describe("deliverReplies", () => {
     });
 
     expect(sendPhoto).toHaveBeenCalledTimes(2);
-    // First media should have reply_to_message_id
+    // First media should have reply_parameters
     expect(sendPhoto.mock.calls[0][2]).toEqual(
-      expect.objectContaining({ reply_to_message_id: 900 }),
+      expect.objectContaining({ reply_parameters: { message_id: 900 } }),
     );
-    // Second media should NOT have reply_to_message_id
-    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+    // Second media should NOT have reply_parameters
+    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
