@@ -19,6 +19,14 @@ import {
   resolveSharedMatrixClient,
   stopSharedClientForAccount,
 } from "../client.js";
+import { resolveMatrixStoragePaths } from "../client/storage.js";
+import {
+  RecoveryKeyHandler,
+  RecoveryKeyStore,
+  registerMatrixRecoveryKeyHandler,
+  registerMatrixVerificationStore,
+  unregisterMatrixRecoveryKeyHandler,
+} from "../recovery-key/index.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
@@ -379,18 +387,30 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   // @vector-im/matrix-bot-sdk client is already started via resolveSharedMatrixClient
   logger.info(`matrix: logged in as ${auth.userId}`);
 
-  // If E2EE is enabled, trigger device verification
+  // If E2EE is enabled, initialize recovery key handler for device verification
   if (auth.encryption && client.crypto) {
     try {
-      // Request verification from other sessions
-      const verificationRequest = await (
-        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
-      ).requestOwnUserVerification?.();
-      if (verificationRequest) {
-        logger.info("matrix: device verification requested - please verify in another client");
+      const storagePaths = resolveMatrixStoragePaths({
+        homeserver: auth.homeserver,
+        userId: auth.userId,
+        accessToken: auth.accessToken,
+        accountId: opts.accountId,
+      });
+      const recoveryStore = new RecoveryKeyStore(storagePaths.rootDir);
+      await recoveryStore.initialize();
+      const recoveryHandler = new RecoveryKeyHandler(client, recoveryStore, logger);
+      registerMatrixRecoveryKeyHandler(recoveryHandler, opts.accountId);
+      registerMatrixVerificationStore(recoveryStore, opts.accountId);
+
+      if (recoveryStore.isVerified) {
+        logger.info("matrix: device is verified via recovery key");
+      } else {
+        logger.info(
+          "matrix: device not verified — run 'openclaw matrix verify recovery-key <key>' to enable E2EE",
+        );
       }
     } catch (err) {
-      logger.debug?.("Device verification request failed (may already be verified)", {
+      logger.debug?.("Recovery key handler init failed (non-fatal)", {
         error: String(err),
       });
     }
@@ -401,6 +421,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       try {
         logVerboseMessage("matrix: stopping client");
         stopSharedClientForAccount(auth, opts.accountId);
+        unregisterMatrixRecoveryKeyHandler(opts.accountId);
       } finally {
         setActiveMatrixClient(null, opts.accountId);
         resolve();

@@ -116,8 +116,6 @@ Enable with `channels.matrix.encryption: true`:
 
 - If the crypto module loads, encrypted rooms are decrypted automatically.
 - Outbound media is encrypted when sending to encrypted rooms.
-- On first connection, OpenClaw requests device verification from your other sessions.
-- Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
   OpenClaw logs a warning.
 - If you see missing crypto module errors (for example, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -131,10 +129,30 @@ Crypto state is stored per account + access token in
 If the access token (device) changes, a new store is created and the bot must be
 re-verified for encrypted rooms.
 
-**Device verification:**
-When E2EE is enabled, the bot will request verification from your other sessions on startup.
-Open Element (or another client) and approve the verification request to establish trust.
-Once verified, the bot can decrypt messages in encrypted rooms.
+**Device verification via recovery key:**
+
+When E2EE is enabled, the bot needs to be verified so other devices trust its messages.
+OpenClaw uses your Matrix recovery key to sign the bot device with your cross-signing keys.
+
+1. Generate a recovery key in Element (or another client):
+   Settings > Security & Privacy > Set up Secure Backup. Copy the recovery key.
+2. Start the gateway. You will see:
+   `matrix: device not verified — run 'openclaw matrix verify recovery-key <key>' to enable E2EE`
+3. Verify the device:
+
+```bash
+openclaw matrix verify recovery-key "EsTV Enk4 ...(your recovery key)..."
+```
+
+4. Check verification status:
+
+```bash
+openclaw matrix verify status
+```
+
+For multi-account setups, pass `--account <id>` to target a specific account.
+Once verified, the bot can decrypt and send messages in encrypted rooms without
+unverified device warnings.
 
 ## Multi-account
 
