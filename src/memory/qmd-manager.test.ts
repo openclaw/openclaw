@@ -899,6 +899,8 @@ describe("QmdMemoryManager", () => {
       expect(qmdCalls.length).toBeGreaterThan(0);
       for (const call of qmdCalls) {
         expect(call[0]).toBe("qmd.cmd");
+        const options = call[2] as { shell?: boolean } | undefined;
+        expect(options?.shell).toBe(true);
       }
 
       await manager.close();
@@ -1408,6 +1410,8 @@ describe("QmdMemoryManager", () => {
       );
       expect(mcporterCall).toBeDefined();
       expect(mcporterCall?.[0]).toBe("mcporter.cmd");
+      const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
+      expect(options?.shell).toBe(true);
 
       await manager.close();
     } finally {

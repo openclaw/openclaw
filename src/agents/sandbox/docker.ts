@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../../plugin-sdk/windows-spawn.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
@@ -26,13 +30,49 @@ function createAbortError(): Error {
   return err;
 }
 
+type DockerSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_DOCKER_SPAWN_RUNTIME: DockerSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveDockerSpawnInvocation(
+  args: string[],
+  runtime: DockerSpawnRuntime = DEFAULT_DOCKER_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: "docker",
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "docker",
+    allowShellFallback: true,
+  });
+  const resolved = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
+}
+
 export function execDockerRaw(
   args: string[],
   opts?: ExecDockerRawOptions,
 ): Promise<ExecDockerRawResult> {
   return new Promise<ExecDockerRawResult>((resolve, reject) => {
-    const child = spawn("docker", args, {
+    const spawnInvocation = resolveDockerSpawnInvocation(args);
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
