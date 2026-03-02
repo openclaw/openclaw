@@ -631,7 +631,11 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertPathWithinAllowedRoots({ filePath: sandboxPath, cwd: root, roots: allowedRoots });
+        await assertPathWithinAllowedRoots({
+          filePath: sandboxPath,
+          cwd: root,
+          roots: allowedRoots,
+        });
       }
       return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
