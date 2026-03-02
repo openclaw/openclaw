@@ -1097,6 +1097,33 @@ describe("followup queue collect routing", () => {
 });
 
 describe("followup queue drain restart after idle window", () => {
+  it("does not retain stale callbacks when scheduleFollowupDrain runs with an empty queue", async () => {
+    const key = `test-no-stale-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const drained = createDeferred<void>();
+
+    // Simulate finalizeWithFollowup calling schedule without pending queue items.
+    scheduleFollowupDrain(key, async (run) => {
+      staleCalls.push(run);
+    });
+
+    enqueueFollowupRun(key, createRun({ prompt: "after-empty-schedule" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(staleCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, async (run) => {
+      freshCalls.push(run);
+      drained.resolve();
+    });
+    await drained.promise;
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
+  });
+
   it("processes a message enqueued after the drain empties and deletes the queue", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
