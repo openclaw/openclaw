@@ -282,6 +282,14 @@ export const OpenClawSchema = z
                 provider: z.string(),
                 mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
                 email: z.string().optional(),
+                rateLimit: z
+                  .object({
+                    rpm: z.number().positive().optional(),
+                    tpm: z.number().positive().optional(),
+                    rph: z.number().positive().optional(),
+                  })
+                  .strict()
+                  .optional(),
               })
               .strict(),
           )

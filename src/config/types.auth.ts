@@ -1,3 +1,12 @@
+export type AuthProfileRateLimit = {
+  /** Max requests per minute. @default 100 for Anthropic OAuth */
+  rpm?: number;
+  /** Max tokens per minute. @default 40000 for Anthropic OAuth */
+  tpm?: number;
+  /** Max requests per hour (optional stricter limit) */
+  rph?: number;
+};
+
 export type AuthProfileConfig = {
   provider: string;
   /**
@@ -8,6 +17,12 @@ export type AuthProfileConfig = {
    */
   mode: "api_key" | "oauth" | "token";
   email?: string;
+  /**
+   * Provider-specific rate limits for this credential.
+   * Enforced proactively to avoid hitting provider rate limits (especially
+   * Anthropic OAuth which has tight TPM limits during compaction).
+   */
+  rateLimit?: AuthProfileRateLimit;
 };
 
 export type AuthConfig = {
