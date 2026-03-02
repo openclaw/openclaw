@@ -333,8 +333,9 @@ function createProfileContext(
       return;
     }
 
-    // HTTP responds but WebSocket fails - port in use by something else
-    if (!profileState.running) {
+    // HTTP responds but WebSocket fails - port in use by something else.
+    // Skip this check for remote CDP profiles since we never own the remote process.
+    if (!profileState.running && !remoteCdp) {
       throw new Error(
         `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
           `Run action=reset-profile profile=${profile.name} to kill the process.`,
@@ -356,6 +357,14 @@ function createProfileContext(
       );
     }
 
+    // At this point profileState.running is always non-null: the !remoteCdp guard
+    // above throws when running is null, and the remoteCdp path always exits via
+    // the attachOnly/remoteCdp block. Add an explicit guard for TypeScript.
+    if (!profileState.running) {
+      throw new Error(
+        `Unexpected state for profile "${profile.name}": no running process to restart.`,
+      );
+    }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
