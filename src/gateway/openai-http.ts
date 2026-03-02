@@ -5,7 +5,6 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -15,7 +14,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveGatewayRequestContext } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -174,14 +173,6 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   };
 }
 
-function resolveOpenAiSessionKey(params: {
-  req: IncomingMessage;
-  agentId: string;
-  user?: string | undefined;
-}): string {
-  return resolveSessionKey({ ...params, prefix: "openai" });
-}
-
 function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   if (!val || typeof val !== "object") {
     return {};
@@ -226,10 +217,14 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
-  const messageChannel =
-    normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? "webchat";
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+    req,
+    model,
+    user,
+    sessionPrefix: "openai",
+    defaultMessageChannel: "webchat",
+    useMessageChannelHeader: true,
+  });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {

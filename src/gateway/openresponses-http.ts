@@ -34,7 +34,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { resolveGatewayRequestContext } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
   type CreateResponseBody,
@@ -151,14 +151,6 @@ function applyToolChoice(params: {
 
 export { buildAgentPrompt } from "./openresponses-prompt.js";
 
-function resolveOpenResponsesSessionKey(params: {
-  req: IncomingMessage;
-  agentId: string;
-  user?: string | undefined;
-}): string {
-  return resolveSessionKey({ ...params, prefix: "openresponses" });
-}
-
 function createEmptyUsage(): Usage {
   return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
 }
@@ -241,6 +233,7 @@ async function runResponsesAgentCommand(params: {
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
   runId: string;
+  messageChannel: string;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommand(
@@ -253,7 +246,7 @@ async function runResponsesAgentCommand(params: {
       sessionKey: params.sessionKey,
       runId: params.runId,
       deliver: false,
-      messageChannel: "webchat",
+      messageChannel: params.messageChannel,
       bestEffortDeliver: false,
     },
     defaultRuntime,
@@ -412,8 +405,14 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const agentId = resolveAgentIdForRequest({ req, model });
-  const sessionKey = resolveOpenResponsesSessionKey({ req, agentId, user });
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+    req,
+    model,
+    user,
+    sessionPrefix: "openresponses",
+    defaultMessageChannel: "webchat",
+    useMessageChannelHeader: false,
+  });
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -459,6 +458,7 @@ export async function handleOpenResponsesHttpRequest(
         streamParams,
         sessionKey,
         runId: responseId,
+        messageChannel,
         deps,
       });
 
@@ -691,6 +691,7 @@ export async function handleOpenResponsesHttpRequest(
         streamParams,
         sessionKey,
         runId: responseId,
+        messageChannel,
         deps,
       });
 
