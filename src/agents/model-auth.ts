@@ -1,4 +1,3 @@
-import path from "node:path";
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -14,7 +13,6 @@ import {
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
-  resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -24,6 +22,34 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+
+/** Provider → primary env var name. Shared by resolveEnvApiKey and getEnvVarHint. */
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  openai: "OPENAI_API_KEY",
+  google: "GEMINI_API_KEY",
+  voyage: "VOYAGE_API_KEY",
+  groq: "GROQ_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  xai: "XAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  litellm: "LITELLM_API_KEY",
+  "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+  "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  nvidia: "NVIDIA_API_KEY",
+  xiaomi: "XIAOMI_API_KEY",
+  synthetic: "SYNTHETIC_API_KEY",
+  venice: "VENICE_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  opencode: "OPENCODE_API_KEY",
+  together: "TOGETHER_API_KEY",
+  qianfan: "QIANFAN_API_KEY",
+  ollama: "OLLAMA_API_KEY",
+  vllm: "VLLM_API_KEY",
+  kilocode: "KILOCODE_API_KEY",
+};
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -221,19 +247,37 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
+  const envHint = getEnvVarHint(provider);
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      envHint ? `Set ${envHint} or run` : "Run",
+      `${formatCliCommand(`openclaw auth add ${provider}`)} to configure it.`,
     ].join(" "),
   );
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+
+/** Return the primary env var name for a provider (for user-facing hints).
+ *  Covers multi-env-var providers that resolveEnvApiKey handles with early returns. */
+function getEnvVarHint(provider: string): string | undefined {
+  const normalized = normalizeProviderId(provider);
+  const multiEnvProviders: Record<string, string> = {
+    anthropic: "ANTHROPIC_API_KEY",
+    "github-copilot": "GITHUB_TOKEN",
+    zai: "ZAI_API_KEY",
+    huggingface: "HUGGINGFACE_HUB_TOKEN",
+    "qwen-portal": "QWEN_PORTAL_API_KEY",
+    volcengine: "VOLCANO_ENGINE_API_KEY",
+    byteplus: "BYTEPLUS_API_KEY",
+    "minimax-portal": "MINIMAX_API_KEY",
+    "kimi-coding": "KIMI_API_KEY",
+    chutes: "CHUTES_API_KEY",
+  };
+  return multiEnvProviders[normalized] ?? PROVIDER_ENV_MAP[normalized];
+}
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -298,33 +342,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
   }
 
-  const envMap: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    google: "GEMINI_API_KEY",
-    voyage: "VOYAGE_API_KEY",
-    groq: "GROQ_API_KEY",
-    deepgram: "DEEPGRAM_API_KEY",
-    cerebras: "CEREBRAS_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    litellm: "LITELLM_API_KEY",
-    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-    minimax: "MINIMAX_API_KEY",
-    nvidia: "NVIDIA_API_KEY",
-    xiaomi: "XIAOMI_API_KEY",
-    synthetic: "SYNTHETIC_API_KEY",
-    venice: "VENICE_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-    together: "TOGETHER_API_KEY",
-    qianfan: "QIANFAN_API_KEY",
-    ollama: "OLLAMA_API_KEY",
-    vllm: "VLLM_API_KEY",
-    kilocode: "KILOCODE_API_KEY",
-  };
-  const envVar = envMap[normalized];
+  const envVar = PROVIDER_ENV_MAP[normalized];
   if (!envVar) {
     return null;
   }
