@@ -13,6 +13,7 @@ import {
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
@@ -354,11 +355,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       channel: "imessage",
       accountId: decision.route.accountId,
     });
+    const deliveredContentByPayload = new WeakMap<ReplyPayload, string>();
 
     const dispatcher = createReplyDispatcher({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload) => {
+        deliveredContentByPayload.delete(payload);
         const target = ctxPayload.To;
         if (!target) {
           runtime.error?.(danger("imessage: missing delivery target"));
@@ -374,6 +377,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           textLimit,
           sentMessageCache,
         });
+        if (delivery.delivered) {
+          deliveredContentByPayload.set(payload, delivery.deliveredContent ?? payload.text ?? "");
+        }
         return delivery;
       },
       onDelivery: (payload, info) => {
@@ -381,13 +387,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         if (!target) {
           return;
         }
+        const hookContent = deliveredContentByPayload.get(payload) ?? payload.text ?? "";
+        deliveredContentByPayload.delete(payload);
         if (info.success) {
           if (!info.delivered) {
             return;
           }
           emitMessageSentHooks({
             to: target,
-            content: payload.text ?? "",
+            content: hookContent,
             success: true,
             channelId: "imessage",
             accountId: accountInfo.accountId,
@@ -399,7 +407,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         }
         emitMessageSentHooks({
           to: target,
-          content: payload.text ?? "",
+          content: hookContent,
           success: false,
           error: info.error instanceof Error ? info.error.message : String(info.error),
           channelId: "imessage",
