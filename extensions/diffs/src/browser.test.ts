@@ -35,19 +35,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {
-    const pages: Array<{
-      close: ReturnType<typeof vi.fn>;
-      screenshot: ReturnType<typeof vi.fn>;
-      pdf: ReturnType<typeof vi.fn>;
-    }> = [];
-    const browser = createMockBrowser(pages);
-    launchMock.mockResolvedValue(browser);
-    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
-
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
-    });
+    const { pages, browser, screenshotter } = await createScreenshotterHarness();
 
     await screenshotter.screenshotHtml({
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
@@ -106,19 +94,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const pages: Array<{
-      close: ReturnType<typeof vi.fn>;
-      screenshot: ReturnType<typeof vi.fn>;
-      pdf: ReturnType<typeof vi.fn>;
-    }> = [];
-    const browser = createMockBrowser(pages);
-    launchMock.mockResolvedValue(browser);
-    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
-
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
-    });
+    const { pages, browser, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({
@@ -184,19 +160,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("fails fast when maxPixels is still exceeded at scale 1", async () => {
-    const pages: Array<{
-      close: ReturnType<typeof vi.fn>;
-      screenshot: ReturnType<typeof vi.fn>;
-      pdf: ReturnType<typeof vi.fn>;
-    }> = [];
-    const browser = createMockBrowser(pages);
-    launchMock.mockResolvedValue(browser);
-    const { PlaywrightDiffScreenshotter } = await import("./browser.js");
-
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
-    });
+    const { pages, screenshotter } = await createScreenshotterHarness();
 
     await expect(
       screenshotter.screenshotHtml({
@@ -223,6 +187,24 @@ function createConfig(): OpenClawConfig {
       executablePath: process.execPath,
     },
   } as OpenClawConfig;
+}
+
+async function createScreenshotterHarness(options?: {
+  boundingBox?: { x: number; y: number; width: number; height: number };
+}) {
+  const pages: Array<{
+    close: ReturnType<typeof vi.fn>;
+    screenshot: ReturnType<typeof vi.fn>;
+    pdf: ReturnType<typeof vi.fn>;
+  }> = [];
+  const browser = createMockBrowser(pages, options);
+  launchMock.mockResolvedValue(browser);
+  const { PlaywrightDiffScreenshotter } = await import("./browser.js");
+  const screenshotter = new PlaywrightDiffScreenshotter({
+    config: createConfig(),
+    browserIdleMs: 1_000,
+  });
+  return { pages, browser, screenshotter };
 }
 
 function createMockBrowser(

@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
+import type { DiffRenderOptions } from "./types.js";
 
 describe("diffs tool", () => {
   let rootDir: string;
@@ -53,37 +55,21 @@ describe("diffs tool", () => {
 
   it("returns an image artifact in image mode", async () => {
     const cleanupSpy = vi.spyOn(store, "scheduleCleanup");
-    const screenshotter = {
-      screenshotHtml: vi.fn(
-        async ({
-          html,
-          outputPath,
-          image,
-        }: {
-          html: string;
-          outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
-        }) => {
-          expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-          expect(image).toMatchObject({
-            format: "png",
-            qualityPreset: "standard",
-            scale: 2,
-            maxWidth: 960,
-          });
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("png"));
-          return outputPath;
-        },
-      ),
-    };
-
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      screenshotter,
+    const screenshotter = createPngScreenshotter({
+      assertHtml: (html) => {
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
+      },
+      assertImage: (image) => {
+        expect(image).toMatchObject({
+          format: "png",
+          qualityPreset: "standard",
+          scale: 2,
+          maxWidth: 960,
+        });
+      },
     });
+
+    const tool = createToolWithScreenshotter(store, screenshotter);
 
     const result = await tool.execute?.("tool-2", {
       before: "one\n",
@@ -148,21 +134,13 @@ describe("diffs tool", () => {
   });
 
   it("accepts mode=file as an alias for file artifact rendering", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {
+    const screenshotter = createPngScreenshotter({
+      assertOutputPath: (outputPath) => {
         expect(outputPath).toMatch(/preview\.png$/);
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
-
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      screenshotter,
+      },
     });
+
+    const tool = createToolWithScreenshotter(store, screenshotter);
 
     const result = await tool.execute?.("tool-2c", {
       before: "one\n",
@@ -180,20 +158,8 @@ describe("diffs tool", () => {
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
     try {
-      const screenshotter = {
-        screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("png"));
-          return outputPath;
-        }),
-      };
-
-      const tool = createDiffsTool({
-        api: createApi(),
-        store,
-        defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        screenshotter,
-      });
+      const screenshotter = createPngScreenshotter();
+      const tool = createToolWithScreenshotter(store, screenshotter);
 
       const result = await tool.execute?.("tool-2c-ttl", {
         before: "one\n",
@@ -215,33 +181,17 @@ describe("diffs tool", () => {
   });
 
   it("accepts image* tool options for backward compatibility", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(
-        async ({
-          outputPath,
-          image,
-        }: {
-          outputPath: string;
-          image: { qualityPreset: string; scale: number; maxWidth: number };
-        }) => {
-          expect(image).toMatchObject({
-            qualityPreset: "hq",
-            scale: 2.4,
-            maxWidth: 1100,
-          });
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("png"));
-          return outputPath;
-        },
-      ),
-    };
-
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      screenshotter,
+    const screenshotter = createPngScreenshotter({
+      assertImage: (image) => {
+        expect(image).toMatchObject({
+          qualityPreset: "hq",
+          scale: 2.4,
+          maxWidth: 1100,
+        });
+      },
     });
+
+    const tool = createToolWithScreenshotter(store, screenshotter);
 
     const result = await tool.execute?.("tool-2legacy", {
       before: "one\n",
@@ -294,22 +244,10 @@ describe("diffs tool", () => {
   });
 
   it("honors defaults.mode=file when mode is omitted", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {
-        await fs.mkdir(path.dirname(outputPath), { recursive: true });
-        await fs.writeFile(outputPath, Buffer.from("png"));
-        return outputPath;
-      }),
-    };
-
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: {
-        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-        mode: "file",
-      },
-      screenshotter,
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, {
+      ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+      mode: "file",
     });
 
     const result = await tool.execute?.("tool-2d", {
@@ -429,43 +367,27 @@ describe("diffs tool", () => {
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
-    const screenshotter = {
-      screenshotHtml: vi.fn(
-        async ({
-          html,
-          outputPath,
-          image,
-        }: {
-          html: string;
-          outputPath: string;
-          image: { format: string; qualityPreset: string; scale: number; maxWidth: number };
-        }) => {
-          expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
-          expect(image).toMatchObject({
-            format: "png",
-            qualityPreset: "print",
-            scale: 2.75,
-            maxWidth: 1320,
-          });
-          await fs.mkdir(path.dirname(outputPath), { recursive: true });
-          await fs.writeFile(outputPath, Buffer.from("png"));
-          return outputPath;
-        },
-      ),
-    };
-    const tool = createDiffsTool({
-      api: createApi(),
-      store,
-      defaults: {
-        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-        mode: "view",
-        theme: "light",
-        layout: "split",
-        fileQuality: "hq",
-        fileScale: 2.2,
-        fileMaxWidth: 1180,
+    const screenshotter = createPngScreenshotter({
+      assertHtml: (html) => {
+        expect(html).not.toContain("/plugins/diffs/assets/viewer.js");
       },
-      screenshotter,
+      assertImage: (image) => {
+        expect(image).toMatchObject({
+          format: "png",
+          qualityPreset: "print",
+          scale: 2.75,
+          maxWidth: 1320,
+        });
+      },
+    });
+    const tool = createToolWithScreenshotter(store, screenshotter, {
+      ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+      mode: "view",
+      theme: "light",
+      layout: "split",
+      fileQuality: "hq",
+      fileScale: 2.2,
+      fileMaxWidth: 1180,
     });
 
     const result = await tool.execute?.("tool-6", {
@@ -524,6 +446,49 @@ function createApi(): OpenClawPluginApi {
       return input;
     },
     on() {},
+  };
+}
+
+function createToolWithScreenshotter(
+  store: DiffArtifactStore,
+  screenshotter: DiffScreenshotter,
+  defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
+) {
+  return createDiffsTool({
+    api: createApi(),
+    store,
+    defaults,
+    screenshotter,
+  });
+}
+
+function createPngScreenshotter(
+  params: {
+    assertHtml?: (html: string) => void;
+    assertImage?: (image: DiffRenderOptions["image"]) => void;
+    assertOutputPath?: (outputPath: string) => void;
+  } = {},
+): DiffScreenshotter {
+  const screenshotHtml: DiffScreenshotter["screenshotHtml"] = vi.fn(
+    async ({
+      html,
+      outputPath,
+      image,
+    }: {
+      html: string;
+      outputPath: string;
+      image: DiffRenderOptions["image"];
+    }) => {
+      params.assertHtml?.(html);
+      params.assertImage?.(image);
+      params.assertOutputPath?.(outputPath);
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.writeFile(outputPath, Buffer.from("png"));
+      return outputPath;
+    },
+  );
+  return {
+    screenshotHtml,
   };
 }
 
