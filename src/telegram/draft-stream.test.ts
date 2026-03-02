@@ -2,6 +2,12 @@ import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 
+// Mock the sendMessageDraft helper so tests don't hit the real Telegram API.
+vi.mock("./draft-message-api.js", () => ({
+  sendMessageDraft: vi.fn().mockResolvedValue(true),
+}));
+import { sendMessageDraft } from "./draft-message-api.js";
+
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
@@ -370,5 +376,134 @@ describe("draft stream initial message debounce", () => {
 
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hi", undefined);
     });
+  });
+});
+
+describe("sendMessageDraft integration", () => {
+  beforeEach(() => {
+    vi.mocked(sendMessageDraft).mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses sendMessageDraft for in-progress updates by default", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+    });
+
+    stream.update("Thinking...");
+    await stream.flush();
+
+    // sendMessageDraft should have been called for the in-progress update.
+    expect(sendMessageDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ chat_id: 123, text: "Thinking..." }),
+    );
+    // sendMessage should NOT have been called (no final flush yet).
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizes with sendMessage after sendMessageDraft updates", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+    });
+
+    stream.update("Thinking...");
+    await stream.stop();
+    await stream.flush();
+
+    expect(sendMessageDraft).toHaveBeenCalled();
+    // Final stop() triggers sendMessage for the permanent message.
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Thinking...", undefined);
+  });
+
+  it("reuses the same draft_id across multiple updates", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 456,
+    });
+
+    stream.update("Part one");
+    await stream.flush();
+    stream.update("Part one. Part two");
+    await stream.flush();
+
+    const calls = vi.mocked(sendMessageDraft).mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const draftIds = calls.map((c) => c[1].draft_id);
+    // All calls should use the same non-zero draft_id.
+    expect(new Set(draftIds).size).toBe(1);
+    expect(draftIds[0]).toBeGreaterThan(0);
+  });
+
+  it("falls back to legacy send-then-edit when sendMessageDraft returns ok=false", async () => {
+    vi.mocked(sendMessageDraft).mockResolvedValue(false);
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    // Should have fallen back to sendMessage.
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+  });
+
+  it("falls back to legacy send-then-edit when sendMessageDraft throws", async () => {
+    vi.mocked(sendMessageDraft).mockRejectedValue(new Error("Method not found"));
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("falling back to send-then-edit"));
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+  });
+
+  it("respects useSendMessageDraft=false opt-out", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      useSendMessageDraft: false,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(sendMessageDraft).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+  });
+
+  it("passes message_thread_id to sendMessageDraft for threaded chats", async () => {
+    const api = createMockDraftApi();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      thread: { id: 99, scope: "forum" },
+    });
+
+    stream.update("Hello thread");
+    await stream.flush();
+
+    expect(sendMessageDraft).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ message_thread_id: 99 }),
+    );
   });
 });

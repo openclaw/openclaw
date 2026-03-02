@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
+import { sendMessageDraft } from "./draft-message-api.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -26,6 +27,22 @@ type SupersededTelegramPreview = {
   parseMode?: "HTML";
 };
 
+/**
+ * Stable draft ID for a streaming session. Must be a non-zero integer and
+ * must stay the same across all `sendMessageDraft` calls for the same
+ * animated stream. We derive it from the chatId so it is deterministic and
+ * avoids collisions between concurrent streams to different chats.
+ *
+ * Telegram animates the growing text as a typing stream in the client as long
+ * as the same draft_id is reused. On `flush()` we finalize with `sendMessage`
+ * which replaces the draft with a permanent message.
+ */
+function deriveDraftId(chatId: number): number {
+  // Use the lower 31 bits of chatId (always positive, non-zero).
+  const id = Math.abs(chatId) & 0x7fffffff;
+  return id === 0 ? 1 : id;
+}
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: number;
@@ -39,6 +56,12 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /**
+   * When true (default), use `sendMessageDraft` (Bot API 9.5+) for in-progress
+   * streaming previews. The final flush always uses `sendMessage`.
+   * Set to false to fall back to the legacy send-then-edit approach.
+   */
+  useSendMessageDraft?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -54,12 +77,19 @@ export function createTelegramDraftStream(params: {
     params.replyToMessageId != null
       ? { ...threadParams, reply_to_message_id: params.replyToMessageId }
       : threadParams;
+  // Default to using sendMessageDraft; can be disabled via config for older bot tokens.
+  const useSendMessageDraft = params.useSendMessageDraft !== false;
+  const draftId = deriveDraftId(chatId);
 
   const streamState = { stopped: false, final: false };
   let streamMessageId: number | undefined;
   let lastSentText = "";
   let lastSentParseMode: "HTML" | undefined;
   let generation = 0;
+  // Track whether we've successfully used sendMessageDraft at least once.
+  // If the first call fails (e.g. old Bot API version), we fall back to legacy.
+  let draftApiConfirmed = false;
+  let draftApiFailed = false;
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     // Allow final flush even if stopped (e.g., after clear()).
@@ -77,8 +107,6 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     if (renderedText.length > maxChars) {
-      // Telegram text messages/edits cap at 4096 chars.
-      // Stop streaming once we exceed the cap to avoid repeated API failures.
       streamState.stopped = true;
       params.warn?.(
         `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
@@ -88,7 +116,6 @@ export function createTelegramDraftStream(params: {
     if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
       return true;
     }
-    const sendGeneration = generation;
 
     // Debounce first preview send for better push notification quality.
     if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
@@ -97,9 +124,48 @@ export function createTelegramDraftStream(params: {
       }
     }
 
+    const sendGeneration = generation;
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
+
     try {
+      // ----------------------------------------------------------------
+      // In-progress (non-final) update: prefer sendMessageDraft.
+      // On the final flush, streamState.final is true and we fall through
+      // to sendMessage so the draft is replaced with a permanent message.
+      // ----------------------------------------------------------------
+      if (useSendMessageDraft && !streamState.final && !draftApiFailed) {
+        const ok = await sendMessageDraft(params.api, {
+          chat_id: chatId,
+          draft_id: draftId,
+          text: renderedText,
+          ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
+          ...(threadParams?.message_thread_id != null
+            ? { message_thread_id: threadParams.message_thread_id }
+            : {}),
+        });
+        if (ok) {
+          draftApiConfirmed = true;
+          // sendMessageDraft does not return a message_id; the permanent
+          // message_id is only known after the final sendMessage call.
+          return true;
+        }
+        // ok=false means a non-fatal API rejection (rate limit, unknown method,
+        // etc.). Fall through to the legacy path.
+        if (!draftApiConfirmed) {
+          // First call failed — disable for this session to avoid repeated failures.
+          draftApiFailed = true;
+          params.warn?.(
+            "telegram sendMessageDraft returned ok=false; falling back to send-then-edit",
+          );
+        }
+      }
+
+      // ----------------------------------------------------------------
+      // Legacy path: send once, then edit on subsequent updates.
+      // Also used for the final flush when draftApiConfirmed so the draft
+      // is replaced with a permanent message.
+      // ----------------------------------------------------------------
       if (typeof streamMessageId === "number") {
         if (renderedParseMode) {
           await params.api.editMessageText(chatId, streamMessageId, renderedText, {
@@ -111,10 +177,7 @@ export function createTelegramDraftStream(params: {
         return true;
       }
       const sendParams = renderedParseMode
-        ? {
-            ...replyParams,
-            parse_mode: renderedParseMode,
-          }
+        ? { ...replyParams, parse_mode: renderedParseMode }
         : replyParams;
       const sent = await params.api.sendMessage(chatId, renderedText, sendParams);
       const sentMessageId = sent?.message_id;
@@ -135,6 +198,15 @@ export function createTelegramDraftStream(params: {
       streamMessageId = normalizedMessageId;
       return true;
     } catch (err) {
+      if (useSendMessageDraft && !draftApiConfirmed && !draftApiFailed) {
+        // First sendMessageDraft threw — likely unsupported by this bot token.
+        // Disable and allow the lifecycle to retry via the legacy path.
+        draftApiFailed = true;
+        params.warn?.(
+          `telegram sendMessageDraft failed; falling back to send-then-edit: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return false;
+      }
       streamState.stopped = true;
       params.warn?.(
         `telegram stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -172,7 +244,7 @@ export function createTelegramDraftStream(params: {
     loop.resetThrottleWindow();
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, draftApi=${useSendMessageDraft})`);
 
   return {
     update,
