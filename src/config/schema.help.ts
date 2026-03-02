@@ -802,7 +802,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.mcporter.startDaemon":
     "Automatically starts the mcporter daemon when mcporter-backed QMD mode is enabled (default: true). Keep enabled unless process lifecycle is managed externally by your service supervisor.",
   "memory.qmd.searchMode":
-    'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
+    'Selects the QMD retrieval path: "query" (default) uses hybrid retrieval (BM25 + vector expansion + reranking) for best recall with natural-language queries, "search" uses pure BM25 keyword matching (faster on CPU-only systems but may miss multi-word queries), and "vsearch" emphasizes vector retrieval. Switch to "search" if query latency is too high on systems without GPU acceleration.',
   "memory.qmd.includeDefaultMemory":
     "Automatically indexes default memory files (MEMORY.md and memory/**/*.md) into QMD collections. Keep enabled unless you want indexing controlled only through explicit custom paths.",
   "memory.qmd.paths":
