@@ -13,6 +13,7 @@ const DEFAULT_GUARDRAIL_SKIP_PATTERNS = [
   /\.test-helpers\.tsx?$/,
   /\.test-utils\.tsx?$/,
   /\.test-harness\.tsx?$/,
+  /\.suite\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
   /[\\/](?:__tests__|tests|test-utils)[\\/]/,
