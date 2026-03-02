@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-imessage",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Hanzo Bot iMessage channel plugin",
   "type": "module",

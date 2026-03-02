@@ -1,6 +1,6 @@
 {
   "name": "@bot/diffs",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Bot diff viewer plugin",
   "type": "module",

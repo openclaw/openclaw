@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-whatsapp",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Hanzo Bot WhatsApp channel plugin",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-ci-fix-loop",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Autonomous CI failure detection, classification, and fix loop with budget controls",
   "type": "module",

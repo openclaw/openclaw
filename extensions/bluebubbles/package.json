@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-bluebubbles",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "description": "Hanzo Bot BlueBubbles channel plugin",
   "type": "module",
   "devDependencies": {

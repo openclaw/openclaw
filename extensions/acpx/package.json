@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/acpx",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "description": "Bot ACP runtime backend via acpx",
   "type": "module",
   "dependencies": {

@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-nostr",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "description": "Hanzo Bot Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {

@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-continuous-learning",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Continuous learning via GRPO experience management and telemetry feedback",
   "type": "module",

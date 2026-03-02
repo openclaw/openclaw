@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-self-improvement",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "private": true,
   "description": "Self-improvement engine: 4-loop telemetry-driven agent evolution",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@hanzo/bot-zalouser",
-  "version": "2026.2.27",
+  "version": "2026.3.1",
   "description": "Hanzo Bot Zalo Personal Account plugin via zca-cli",
   "type": "module",
   "dependencies": {

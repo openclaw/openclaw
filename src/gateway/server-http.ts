@@ -584,7 +584,6 @@ export function createGatewayHttpServer(opts: {
         // Security headers: prevent token leaks, clickjacking, MIME sniffing.
         res.setHeader("Referrer-Policy", "no-referrer");
         res.setHeader("X-Content-Type-Options", "nosniff");
-        res.setHeader("X-Frame-Options", "DENY");
         res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
         res.setHeader("Cache-Control", "no-store");
         res.setHeader(
@@ -594,7 +593,7 @@ export function createGatewayHttpServer(opts: {
             `script-src 'nonce-${cspNonce}' https://esm.sh`,
             `style-src 'nonce-${cspNonce}'`,
             `connect-src wss://${req.headers.host ?? "*"} ws://localhost:*`,
-            "frame-ancestors 'none'",
+            "frame-ancestors 'self' https://app.hanzo.bot https://gw.hanzo.bot https://bot.hanzo.ai https://hanzo.app",
           ].join("; "),
         );
         res.end(vncViewerHtml(origin, nodeId, token, cspNonce));
