@@ -156,9 +156,16 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe("telegram-work-ref");
     expect(snapshot.config.channels?.slack?.signingSecret).toBe("slack-signing-ref");
     expect(snapshot.config.channels?.slack?.accounts?.work?.botToken).toBe("slack-work-bot-ref");
-    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toBe("slack-work-app-ref");
+    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "SLACK_WORK_APP_TOKEN_REF",
+    });
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.warnings).toHaveLength(3);
+    expect(snapshot.warnings).toHaveLength(4);
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.slack.accounts.work.appToken",
+    );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
       key: "sk-env-openai",
@@ -1154,6 +1161,51 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "channels.slack.signingSecret",
+    );
+  });
+
+  it("treats Slack appToken refs as inactive when mode is http", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          slack: {
+            mode: "http",
+            appToken: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_SLACK_APP_TOKEN",
+            },
+            accounts: {
+              work: {
+                enabled: true,
+                mode: "http",
+                appToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_SLACK_WORK_APP_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.slack?.appToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_SLACK_APP_TOKEN",
+    });
+    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MISSING_SLACK_WORK_APP_TOKEN",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(["channels.slack.appToken", "channels.slack.accounts.work.appToken"]),
     );
   });
 
