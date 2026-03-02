@@ -181,7 +181,15 @@ describe("daemon-cli coverage", () => {
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
-    await runDaemonCommand(["daemon", "install", "--port", "18789", "--json"]);
+    await runDaemonCommand([
+      "daemon",
+      "install",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "--json",
+    ]);
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
     const parsed = parseFirstJsonRuntimeLine<{
