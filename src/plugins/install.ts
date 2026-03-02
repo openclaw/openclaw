@@ -9,7 +9,6 @@ import {
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import {
-  assertCanonicalPathWithinBase,
   resolveSafeInstallDir,
   safeDirName,
   unscopedPackageName,
@@ -19,6 +18,10 @@ import {
   type NpmSpecResolution,
   resolveArchiveSourcePath,
 } from "../infra/install-source-utils.js";
+import {
+  ensureInstallTargetAvailable,
+  resolveCanonicalInstallTarget,
+} from "../infra/install-target.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -224,32 +227,23 @@ async function installPluginFromPackageDir(params: {
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-
-  const targetDirResult = resolveSafeInstallDir({
+  const targetDirResult = await resolveCanonicalInstallTarget({
     baseDir: extensionsDir,
     id: pluginId,
     invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
   }
-  const targetDir = targetDirResult.path;
-  try {
-    await assertCanonicalPathWithinBase({
-      baseDir: extensionsDir,
-      candidatePath: targetDir,
-      boundaryLabel: "extensions directory",
-    });
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return {
-      ok: false,
-      error: `plugin already exists: ${targetDir} (delete it first)`,
-    };
+  const targetDir = targetDirResult.targetDir;
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {
@@ -393,8 +387,13 @@ export async function installPluginFromFile(params: {
   }
   const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
 
-  if (mode === "install" && (await fileExists(targetFile))) {
-    return { ok: false, error: `plugin already exists: ${targetFile} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir: targetFile,
+    alreadyExistsError: `plugin already exists: ${targetFile} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {

@@ -49,6 +49,19 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
 }
 
+async function assertInstallBoundaryPaths(params: {
+  installBaseDir: string;
+  candidatePaths: string[];
+}): Promise<void> {
+  for (const candidatePath of params.candidatePaths) {
+    await assertCanonicalPathWithinBase({
+      baseDir: params.installBaseDir,
+      candidatePath,
+      boundaryLabel: "install directory",
+    });
+  }
+}
+
 export async function installPackageDir(params: {
   sourceDir: string;
   targetDir: string;
@@ -63,20 +76,18 @@ export async function installPackageDir(params: {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   await fs.mkdir(installBaseDir, { recursive: true });
-  await assertCanonicalPathWithinBase({
-    baseDir: installBaseDir,
-    candidatePath: params.targetDir,
-    boundaryLabel: "install directory",
+  await assertInstallBoundaryPaths({
+    installBaseDir,
+    candidatePaths: [params.targetDir],
   });
   let backupDir: string | null = null;
   if (params.mode === "update" && (await fileExists(params.targetDir))) {
     const backupRoot = path.join(path.dirname(params.targetDir), ".openclaw-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(params.targetDir)}-${Date.now()}`);
     await fs.mkdir(backupRoot, { recursive: true });
-    await assertCanonicalPathWithinBase({
-      baseDir: installBaseDir,
-      candidatePath: backupDir,
-      boundaryLabel: "install directory",
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [backupDir],
     });
     await fs.rename(params.targetDir, backupDir);
   }
@@ -85,25 +96,18 @@ export async function installPackageDir(params: {
     if (!backupDir) {
       return;
     }
-    await assertCanonicalPathWithinBase({
-      baseDir: installBaseDir,
-      candidatePath: params.targetDir,
-      boundaryLabel: "install directory",
-    });
-    await assertCanonicalPathWithinBase({
-      baseDir: installBaseDir,
-      candidatePath: backupDir,
-      boundaryLabel: "install directory",
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir, backupDir],
     });
     await fs.rm(params.targetDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.rename(backupDir, params.targetDir).catch(() => undefined);
   };
 
   try {
-    await assertCanonicalPathWithinBase({
-      baseDir: installBaseDir,
-      candidatePath: params.targetDir,
-      boundaryLabel: "install directory",
+    await assertInstallBoundaryPaths({
+      installBaseDir,
+      candidatePaths: [params.targetDir],
     });
     await fs.cp(params.sourceDir, params.targetDir, { recursive: true });
   } catch (err) {
