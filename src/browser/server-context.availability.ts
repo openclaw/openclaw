@@ -1,4 +1,9 @@
 import {
+  PROFILE_ATTACH_RETRY_TIMEOUT_MS,
+  PROFILE_POST_RESTART_WS_TIMEOUT_MS,
+  resolveCdpReachabilityTimeouts,
+} from "./cdp-timeouts.js";
+import {
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -43,38 +48,22 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
-  const resolveRemoteHttpTimeout = (timeoutMs: number | undefined) => {
-    if (profile.cdpIsLoopback) {
-      return timeoutMs ?? 300;
-    }
-    const resolved = state().resolved;
-    if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-      return Math.max(Math.floor(timeoutMs), resolved.remoteCdpTimeoutMs);
-    }
-    return resolved.remoteCdpTimeoutMs;
-  };
-
-  const resolveRemoteWsTimeout = (timeoutMs: number | undefined) => {
-    if (profile.cdpIsLoopback) {
-      const base = timeoutMs ?? 300;
-      return Math.max(200, Math.min(2000, base * 2));
-    }
-    const resolved = state().resolved;
-    if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-      return Math.max(Math.floor(timeoutMs) * 2, resolved.remoteCdpHandshakeTimeoutMs);
-    }
-    return resolved.remoteCdpHandshakeTimeoutMs;
-  };
+  const resolveTimeouts = (timeoutMs: number | undefined) =>
+    resolveCdpReachabilityTimeouts({
+      profileIsLoopback: profile.cdpIsLoopback,
+      timeoutMs,
+      remoteHttpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
+      remoteHandshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
+    });
 
   const isReachable = async (timeoutMs?: number) => {
-    const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
-    const wsTimeout = resolveRemoteWsTimeout(timeoutMs);
-    return await isChromeCdpReady(profile.cdpUrl, httpTimeout, wsTimeout);
+    const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
-    const httpTimeout = resolveRemoteHttpTimeout(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeout);
+    const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
@@ -129,7 +118,7 @@ export function createProfileAvailability({
     if (isExtension) {
       if (!httpReachable) {
         await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
-        if (!(await isHttpReachable(1200))) {
+        if (!(await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
           throw new Error(
             `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
           );
@@ -143,7 +132,7 @@ export function createProfileAvailability({
     if (!httpReachable) {
       if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
-        if (await isHttpReachable(1200)) {
+        if (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
           return;
         }
       }
@@ -176,7 +165,7 @@ export function createProfileAvailability({
     if (attachOnly || remoteCdp) {
       if (opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
-        if (await isReachable(1200)) {
+        if (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
           return;
         }
       }
@@ -201,7 +190,7 @@ export function createProfileAvailability({
     const relaunched = await launchOpenClawChrome(current.resolved, profile);
     attachRunning(relaunched);
 
-    if (!(await isReachable(600))) {
+    if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
       throw new Error(
         `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
       );

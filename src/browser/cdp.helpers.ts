@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 export { isLoopbackHost };
@@ -113,14 +114,18 @@ function createCdpSender(ws: WebSocket) {
   return { send, closeWithError };
 }
 
-export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(
+  url: string,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
+  init?: RequestInit,
+): Promise<T> {
   const res = await fetchCdpChecked(url, timeoutMs, init);
   return (await res.json()) as T;
 }
 
 export async function fetchCdpChecked(
   url: string,
-  timeoutMs = 1500,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
 ): Promise<Response> {
   const ctrl = new AbortController();
@@ -139,7 +144,11 @@ export async function fetchCdpChecked(
   }
 }
 
-export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
+export async function fetchOk(
+  url: string,
+  timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
+  init?: RequestInit,
+): Promise<void> {
   await fetchCdpChecked(url, timeoutMs, init);
 }
 
@@ -151,7 +160,7 @@ export function openCdpWebSocket(
   const handshakeTimeoutMs =
     typeof opts?.handshakeTimeoutMs === "number" && Number.isFinite(opts.handshakeTimeoutMs)
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
-      : 5000;
+      : CDP_WS_HANDSHAKE_TIMEOUT_MS;
   const agent = getDirectAgentForCdp(wsUrl);
   return new WebSocket(wsUrl, {
     handshakeTimeout: handshakeTimeoutMs,
