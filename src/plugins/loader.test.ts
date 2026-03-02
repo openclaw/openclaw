@@ -945,4 +945,25 @@ describe("loadOpenClawPlugins", () => {
     );
     expect(resolved).toBe(srcFile);
   });
+
+  it("marks sqlite native deps as native Jiti modules for plugin loading", () => {
+    const options = __testing.buildPluginJitiOptions({
+      pluginSdkAlias: null,
+      pluginSdkAccountIdAlias: null,
+    });
+
+    expect(options.nativeModules).toEqual(expect.arrayContaining(["sqlite3", "better-sqlite3"]));
+  });
+
+  it("includes plugin-sdk aliases in Jiti options when provided", () => {
+    const options = __testing.buildPluginJitiOptions({
+      pluginSdkAlias: "/tmp/plugin-sdk/index.ts",
+      pluginSdkAccountIdAlias: "/tmp/plugin-sdk/account-id.ts",
+    });
+
+    expect(options.alias).toEqual({
+      "openclaw/plugin-sdk": "/tmp/plugin-sdk/index.ts",
+      "openclaw/plugin-sdk/account-id": "/tmp/plugin-sdk/account-id.ts",
+    });
+  });
 });

@@ -91,8 +91,34 @@ const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
 };
 
+const JITI_NATIVE_MODULES = ["sqlite3", "better-sqlite3"] as const;
+
+const buildPluginJitiOptions = (params: {
+  pluginSdkAlias: string | null;
+  pluginSdkAccountIdAlias: string | null;
+}) => {
+  return {
+    interopDefault: true,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    // Keep native sqlite bindings on Node's native loader path; some plugin
+    // stacks lazily require sqlite during hook execution.
+    nativeModules: [...JITI_NATIVE_MODULES],
+    ...(params.pluginSdkAlias || params.pluginSdkAccountIdAlias
+      ? {
+          alias: {
+            ...(params.pluginSdkAlias ? { "openclaw/plugin-sdk": params.pluginSdkAlias } : {}),
+            ...(params.pluginSdkAccountIdAlias
+              ? { "openclaw/plugin-sdk/account-id": params.pluginSdkAccountIdAlias }
+              : {}),
+          },
+        }
+      : {}),
+  } as const;
+};
+
 export const __testing = {
   resolvePluginSdkAliasFile,
+  buildPluginJitiOptions,
 };
 
 function buildCacheKey(params: {
@@ -435,20 +461,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const pluginSdkAlias = resolvePluginSdkAlias();
     const pluginSdkAccountIdAlias = resolvePluginSdkAccountIdAlias();
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(pluginSdkAlias || pluginSdkAccountIdAlias
-        ? {
-            alias: {
-              ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-              ...(pluginSdkAccountIdAlias
-                ? { "openclaw/plugin-sdk/account-id": pluginSdkAccountIdAlias }
-                : {}),
-            },
-          }
-        : {}),
-    });
+    jitiLoader = createJiti(
+      import.meta.url,
+      buildPluginJitiOptions({
+        pluginSdkAlias,
+        pluginSdkAccountIdAlias,
+      }),
+    );
     return jitiLoader;
   };
 
