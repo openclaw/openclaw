@@ -106,7 +106,11 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
+  // Map from toolCallId -> toolName (for pending tool calls)
   const pending = new Map<string, string | undefined>();
+  // The entry ID of the assistant message that has pending tool calls.
+  // All tool results for this assistant message should have this ID as their parentId.
+  let assistantEntryId: string | null = null;
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
     return transformer ? transformer(message) : message;
@@ -148,6 +152,11 @@ export function installSessionToolResultGuard(
     if (allowSyntheticToolResults) {
       for (const [id, name] of pending.entries()) {
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        // Branch to assistant message before appending each synthetic tool result
+        // so they all have the assistant as their parent
+        if (assistantEntryId) {
+          sessionManager.branch(assistantEntryId);
+        }
         const flushed = applyBeforeWriteHook(
           persistToolResult(persistMessage(synthetic), {
             toolCallId: id,
@@ -161,6 +170,7 @@ export function installSessionToolResultGuard(
       }
     }
     pending.clear();
+    assistantEntryId = null;
   };
 
   const guardedAppend = (message: AgentMessage) => {
@@ -200,7 +210,18 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      // FIX: Branch to assistant message before appending tool result.
+      // This ensures all tool results from the same assistant message have
+      // the assistant message as their parent, not the previous tool result.
+      if (assistantEntryId) {
+        sessionManager.branch(assistantEntryId);
+      }
+      const result = originalAppend(persisted as never);
+      // Clear assistant entry ID when all pending tool results are done
+      if (pending.size === 0) {
+        assistantEntryId = null;
+      }
+      return result;
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
@@ -240,6 +261,8 @@ export function installSessionToolResultGuard(
     }
 
     if (toolCalls.length > 0) {
+      // Store the assistant message's entry ID so tool results can reference it
+      assistantEntryId = sessionManager.getLeafId();
       for (const call of toolCalls) {
         pending.set(call.id, call.name);
       }
