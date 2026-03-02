@@ -36,7 +36,7 @@ vi.mock("node:fs", async (importOriginal) => {
       isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
     readFileSync: (p: string, encoding?: unknown) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // oxlint-disable-next-line typescript/no-explicit-any
         return actual.readFileSync(p as any, encoding as any) as unknown;
       }
       const entry = readFixtureEntry(p);
@@ -47,7 +47,7 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // oxlint-disable-next-line typescript/no-explicit-any
         return actual.statSync(p as any) as unknown;
       }
       const entry = readFixtureEntry(p);

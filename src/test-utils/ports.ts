@@ -66,7 +66,7 @@ export async function getDeterministicFreePortBlock(params?: {
   // so probing every single offset is wasted work and slows large suites.
   for (let attempt = 0; attempt < usable; attempt += blockSize) {
     const start = base + ((nextTestPortOffset + attempt) % usable);
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(
       Boolean,
     );
@@ -79,9 +79,9 @@ export async function getDeterministicFreePortBlock(params?: {
 
   // Fallback: let the OS pick a port block (best effort).
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop
     const port = await getOsFreePort();
-    // eslint-disable-next-line no-await-in-loop
+    // oxlint-disable-next-line no-await-in-loop
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
       Boolean,
     );

@@ -25,7 +25,7 @@ vi.mock("../sticker-cache.js", () => ({
   getCachedSticker: () => null,
 }));
 
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports
+// oxlint-disable-next-line typescript/consistent-type-imports
 const { resolveMedia } = await import("./delivery.js");
 const MAX_MEDIA_BYTES = 10_000_000;
 const BOT_TOKEN = "tok123";

@@ -76,7 +76,7 @@ export async function collectIncludePathsRecursive(params: {
         }
       })();
       if (nestedParsed) {
-        // eslint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop
         await walk(resolved, nestedParsed, depth + 1);
       }
     }

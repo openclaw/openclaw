@@ -37,7 +37,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
         stopReason: "end_turn",
       },
       attemptUsage: { input: 250, output: 100, total: 350 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const result = await runEmbeddedPiAgent({
