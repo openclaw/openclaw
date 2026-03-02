@@ -315,7 +315,10 @@ describe("createPdfTool", () => {
       vi.spyOn(modelDiscovery, "discoverModels").mockReturnValue({ find: () => null } as never);
 
       const modelsConfig = await import("../models-config.js");
-      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
 
       const modelAuth = await import("../model-auth.js");
       vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
@@ -367,7 +370,10 @@ describe("createPdfTool", () => {
       } as never);
 
       const modelsConfig = await import("../models-config.js");
-      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
 
       const modelAuth = await import("../model-auth.js");
       vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
@@ -427,7 +433,10 @@ describe("createPdfTool", () => {
       } as never);
 
       const modelsConfig = await import("../models-config.js");
-      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
 
       const modelAuth = await import("../model-auth.js");
       vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
@@ -478,7 +487,10 @@ describe("createPdfTool", () => {
       } as never);
 
       const modelsConfig = await import("../models-config.js");
-      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue(undefined);
+      vi.spyOn(modelsConfig, "ensureOpenClawModelsJson").mockResolvedValue({
+        agentDir,
+        wrote: false,
+      });
 
       const modelAuth = await import("../model-auth.js");
       vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
@@ -549,6 +561,11 @@ describe("createPdfTool", () => {
 
 describe("native PDF provider API calls", () => {
   const priorFetch = global.fetch;
+  const mockFetchResponse = (response: unknown) => {
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+    return fetchMock;
+  };
 
   afterEach(() => {
     global.fetch = priorFetch;
@@ -556,13 +573,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
     const { anthropicAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
         content: [{ type: "text", text: "Analysis of PDF" }],
       }),
     });
-    global.fetch = fetch;
 
     const result = await anthropicAnalyzePdf({
       apiKey: "test-key",
@@ -573,8 +589,8 @@ describe("native PDF provider API calls", () => {
     });
 
     expect(result).toBe("Analysis of PDF");
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = fetch.mock.calls[0];
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toContain("/v1/messages");
     const body = JSON.parse(opts.body);
     expect(body.model).toBe("claude-opus-4-6");
@@ -586,13 +602,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf throws on API error", async () => {
     const { anthropicAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    mockFetchResponse({
       ok: false,
       status: 400,
       statusText: "Bad Request",
       text: async () => "invalid request",
     });
-    global.fetch = fetch;
 
     await expect(
       anthropicAnalyzePdf({
@@ -606,13 +621,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf throws when response has no text", async () => {
     const { anthropicAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    mockFetchResponse({
       ok: true,
       json: async () => ({
         content: [{ type: "text", text: "   " }],
       }),
     });
-    global.fetch = fetch;
 
     await expect(
       anthropicAnalyzePdf({
@@ -626,7 +640,7 @@ describe("native PDF provider API calls", () => {
 
   it("geminiAnalyzePdf sends correct request shape", async () => {
     const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
         candidates: [
@@ -636,7 +650,6 @@ describe("native PDF provider API calls", () => {
         ],
       }),
     });
-    global.fetch = fetch;
 
     const result = await geminiAnalyzePdf({
       apiKey: "test-key",
@@ -646,8 +659,8 @@ describe("native PDF provider API calls", () => {
     });
 
     expect(result).toBe("Gemini PDF analysis");
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = fetch.mock.calls[0];
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toContain("generateContent");
     expect(url).toContain("gemini-2.5-pro");
     const body = JSON.parse(opts.body);
@@ -658,13 +671,12 @@ describe("native PDF provider API calls", () => {
 
   it("geminiAnalyzePdf throws on API error", async () => {
     const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    mockFetchResponse({
       ok: false,
       status: 500,
       statusText: "Internal Server Error",
       text: async () => "server error",
     });
-    global.fetch = fetch;
 
     await expect(
       geminiAnalyzePdf({
@@ -678,11 +690,10 @@ describe("native PDF provider API calls", () => {
 
   it("geminiAnalyzePdf throws when no candidates returned", async () => {
     const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    mockFetchResponse({
       ok: true,
       json: async () => ({ candidates: [] }),
     });
-    global.fetch = fetch;
 
     await expect(
       geminiAnalyzePdf({
@@ -696,13 +707,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf supports multiple PDFs", async () => {
     const { anthropicAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
         content: [{ type: "text", text: "Multi-doc analysis" }],
       }),
     });
-    global.fetch = fetch;
 
     await anthropicAnalyzePdf({
       apiKey: "test-key",
@@ -714,7 +724,7 @@ describe("native PDF provider API calls", () => {
       ],
     });
 
-    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     // 2 document blocks + 1 text block
     expect(body.messages[0].content).toHaveLength(3);
     expect(body.messages[0].content[0].type).toBe("document");
@@ -724,13 +734,12 @@ describe("native PDF provider API calls", () => {
 
   it("anthropicAnalyzePdf uses custom base URL", async () => {
     const { anthropicAnalyzePdf } = await import("./pdf-native-providers.js");
-    const fetch = vi.fn().mockResolvedValue({
+    const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
         content: [{ type: "text", text: "ok" }],
       }),
     });
-    global.fetch = fetch;
 
     await anthropicAnalyzePdf({
       apiKey: "test-key",
@@ -740,7 +749,7 @@ describe("native PDF provider API calls", () => {
       baseUrl: "https://custom.example.com",
     });
 
-    expect(fetch.mock.calls[0][0]).toContain("https://custom.example.com/v1/messages");
+    expect(fetchMock.mock.calls[0][0]).toContain("https://custom.example.com/v1/messages");
   });
 
   it("anthropicAnalyzePdf requires apiKey", async () => {
