@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { getTailnetHostname } from "../infra/tailscale.js";
 import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [
@@ -59,4 +61,33 @@ export function appendAllowedOrigin(existing: string[] | undefined, origin: stri
     return current;
   }
   return [...current, origin];
+}
+
+export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
+  config: OpenClawConfig;
+  tailscaleMode: string;
+  tailscaleBin?: string | null;
+}): Promise<OpenClawConfig> {
+  if (params.tailscaleMode !== "serve" && params.tailscaleMode !== "funnel") {
+    return params.config;
+  }
+  const tsOrigin = await getTailnetHostname(undefined, params.tailscaleBin ?? undefined)
+    .then((host) => buildTailnetHttpsOrigin(host))
+    .catch(() => null);
+  if (!tsOrigin) {
+    return params.config;
+  }
+
+  const existing = params.config.gateway?.controlUi?.allowedOrigins ?? [];
+  const updatedOrigins = appendAllowedOrigin(existing, tsOrigin);
+  return {
+    ...params.config,
+    gateway: {
+      ...params.config.gateway,
+      controlUi: {
+        ...params.config.gateway?.controlUi,
+        allowedOrigins: updatedOrigins,
+      },
+    },
+  };
 }
