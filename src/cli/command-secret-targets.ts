@@ -18,6 +18,8 @@ const COMMAND_SECRET_TARGETS = {
   agentRuntime: idsByPrefix([
     "channels.",
     "models.providers.",
+    "agents.defaults.memorySearch.remote.",
+    "agents.list[].memorySearch.remote.",
     "skills.entries.",
     "messages.tts.",
     "tools.web.search",
