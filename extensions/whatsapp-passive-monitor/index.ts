@@ -1,11 +1,26 @@
+import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createDebounceManager, type DebounceManager } from "./src/debounce.js";
+import { AgentRepositoryImpl } from "./src/repository/agent-repository.js";
 import {
   MessageRepositoryImpl,
   type MessageRepository,
 } from "./src/repository/message-repository.js";
+import { OllamaRepositoryImpl } from "./src/repository/ollama-repository.js";
 import { SqliteRepositoryImpl } from "./src/repository/sqlite-repository.js";
-import { DEFAULT_CONFIG, type PluginConfig } from "./src/types.js";
+import { setupDetectors } from "./src/setup-detectors.js";
+import { type PluginConfig } from "./src/types.js";
+
+// Default configuration values
+const DEFAULT_CONFIG: PluginConfig = {
+  ollamaUrl: "http://localhost:11434",
+  model: "llama3.1:8b",
+  debounceMs: 5000,
+  cooldownMs: 300000,
+  contextMessageLimit: 20,
+  dbPath: "passive/messages.db",
+  outputDir: "passive",
+};
 
 export default function register(api: OpenClawPluginApi) {
   const raw = (api.pluginConfig ?? {}) as Partial<PluginConfig>;
@@ -23,15 +38,20 @@ export default function register(api: OpenClawPluginApi) {
     return;
   }
 
-  // Debounce callback — placeholder for Part 3/4 (detector pipeline)
+  // Create remaining repos
+  const ollama = new OllamaRepositoryImpl(config.ollamaUrl, config.model);
+  const agentRepo = new AgentRepositoryImpl(runPluginCommandWithTimeout);
+
+  // Initialize all detectors and register them
+  const registry = setupDetectors({ messageRepo, ollama, agentRepo });
+
+  // Debounce fires → run all detectors sequentially
   const onDebouncefire = (conversationId: string) => {
-    const messages = messageRepo.getConversation(conversationId, {
-      limit: config.contextMessageLimit,
-    });
-    api.logger.info?.(
-      `whatsapp-passive-monitor: debounce fired for ${conversationId}, ${messages.length} messages in context`,
-    );
-    // Part 3/4 will wire: detector registry → pre-processor → trigger
+    registry
+      .runAll({ conversationId })
+      .catch((err) =>
+        api.logger.error?.(`whatsapp-passive-monitor: registry error: ${String(err)}`),
+      );
   };
 
   const debounce: DebounceManager = createDebounceManager(config.debounceMs, onDebouncefire);
