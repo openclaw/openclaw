@@ -501,6 +501,46 @@ describe("chrome extension relay server", () => {
     await waitForClose(cdp, 2_000);
   });
 
+  it("stops advertising websocket endpoint after reconnect grace expires", async () => {
+    process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "120";
+
+    const { ext } = await startRelayWithExtension();
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-grace-expire",
+            targetInfo: {
+              targetId: "t-grace-expire",
+              type: "page",
+              title: "Grace expire",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{ id?: string }>,
+      (list) => list.some((entry) => entry.id === "t-grace-expire"),
+    );
+
+    ext.close();
+    await new Promise((r) => setTimeout(r, 250));
+
+    const version = (await fetch(`${cdpUrl}/json/version`, {
+      headers: relayAuthHeaders(cdpUrl),
+    }).then((r) => r.json())) as { webSocketDebuggerUrl?: string };
+    expect(version.webSocketDebuggerUrl).toBeUndefined();
+  });
+
   it("accepts extension websocket access with relay token query param", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
