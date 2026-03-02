@@ -16,7 +16,9 @@ const {
   return {
     attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
     getDiscordGatewayEmitterMock,
-    waitForDiscordGatewayStopMock: vi.fn(() => Promise.resolve()),
+    waitForDiscordGatewayStopMock: vi.fn<(params: Record<string, unknown>) => Promise<void>>(() =>
+      Promise.resolve(),
+    ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
     stopGatewayLoggingMock,
