@@ -102,11 +102,15 @@ export function resolveSessionDeliveryTarget(params: {
   // Thread routing should only use explicit delivery-route fields, not origin metadata.
   // origin.threadId can become stale after top-level turns and must not drive replies.
   const persistedThreadId = params.entry?.lastThreadId ?? params.entry?.deliveryContext?.threadId;
+  const normalizedPersistedThreadId =
+    persistedThreadId != null && persistedThreadId !== ""
+      ? typeof persistedThreadId === "string"
+        ? persistedThreadId.trim() || undefined
+        : persistedThreadId
+      : undefined;
   const lastThreadId = hasTurnSourceChannel
     ? params.turnSourceThreadId
-    : persistedThreadId != null && persistedThreadId !== ""
-      ? context?.threadId
-      : undefined;
+    : normalizedPersistedThreadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
