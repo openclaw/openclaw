@@ -246,6 +246,8 @@ sudo tailscale status
 sudo tailscale up --ssh --hostname=openclaw --reset
 ```
 
+## Oracle Cloud Free Tier Signup
+
 ### Gateway won't start
 
 ```bash
@@ -265,6 +267,7 @@ curl http://localhost:18789
 
 # Restart if needed
 systemctl --user restart openclaw-gateway
+## Tailscale Setup
 ```
 
 ### ARM binary issues
