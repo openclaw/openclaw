@@ -66,3 +66,24 @@ export { telegramUserbotSetupAdapter } from "./adapters/setup.js";
 export { telegramUserbotStatusAdapter } from "./adapters/status.js";
 export type { TelegramUserbotProbe } from "./adapters/status.js";
 export { telegramUserbotSecurityAdapter } from "./adapters/security.js";
+
+// Normalize helpers
+export {
+  CHANNEL_PREFIX,
+  normalizeChatId,
+  formatChannelChatId,
+  parseChannelChatId,
+} from "./normalize.js";
+
+// Message conversion helpers
+export {
+  resolveChatType,
+  resolveSenderName,
+  resolveMediaType,
+  hasDownloadableMedia,
+} from "./helpers.js";
+export type { ChatType } from "./helpers.js";
+
+// Inbound message handler
+export { registerInboundHandlers } from "./inbound.js";
+export type { InboundHandlerConfig, InboundTelegramMessage } from "./inbound.js";
