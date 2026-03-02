@@ -928,9 +928,15 @@ function isContentPolicyErrorMessage(raw: string): boolean {
 
   // JSON-ish Anthropic error payload fragments.
   // e.g. {"error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}
+  // Require explicit content/safety filtering keywords — do NOT match on "policy" alone,
+  // which would swallow org/account policy denials that belong to auth cooldown handling.
   if (
     lower.includes("invalid_request_error") &&
-    (lower.includes("blocked") || lower.includes("policy"))
+    (lower.includes("content filtering") ||
+      lower.includes("content filter") ||
+      lower.includes("content_policy") ||
+      lower.includes("output blocked") ||
+      (lower.includes("blocked") && lower.includes("content")))
   ) {
     return true;
   }
