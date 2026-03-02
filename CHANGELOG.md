@@ -49,6 +49,7 @@ Docs: https://docs.openclaw.ai
 
 - Synology Chat/webhook compatibility: accept JSON and alias payload fields, allow token resolution from body/query/header sources, and ACK webhook requests with `204` to avoid persistent `Processing...` states in Synology Chat clients. (#26635) Thanks @memphislee09-source.
 - Synology Chat/webhook ingress hardening: enforce bounded body reads (size + timeout) via shared request-body guards to prevent unauthenticated slow-body hangs before token validation. (#25831) Thanks @bmendonca3.
+- Synology Chat/reply delivery: resolve webhook usernames to Chat API `user_id` values for outbound chatbot replies, avoiding mismatches between webhook user IDs and `method=chatbot` recipient IDs in multi-account setups. (#23709) Thanks @druide67.
 - Auto-reply/followup queue: avoid stale callback reuse across idle-window restarts by caching the followup runner only when a drain actually starts, preserving enqueue ordering after empty-finalize paths. (#31902) Thanks @Lanfei.
 - Gateway/Heartbeat model reload: treat `models.*` and `agents.defaults.model` config updates as heartbeat hot-reload triggers so heartbeat picks up model changes without a full gateway restart. (#32046) Thanks @stakeswky.
 - Slack/inbound debounce routing: isolate top-level non-DM message debounce keys by message timestamp to avoid cross-thread collisions, preserve DM batching, and flush pending top-level buffers before immediate non-debounce follow-ups to keep ordering stable. (#31951) Thanks @scoootscooob.

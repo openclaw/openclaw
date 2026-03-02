@@ -243,6 +243,10 @@ export function createSynologyChatPlugin() {
             const rt = getSynologyRuntime();
             const currentCfg = await rt.config.loadConfig();
 
+            // The Chat API user_id (for sending) may differ from the webhook
+            // user_id (used for sessions/pairing). Use chatUserId for API calls.
+            const sendUserId = msg.chatUserId ?? msg.from;
+
             // Build MsgContext using SDK's finalizeInboundContext for proper normalization
             const msgCtx = rt.channel.reply.finalizeInboundContext({
               Body: msg.body,
@@ -275,7 +279,7 @@ export function createSynologyChatPlugin() {
                     await sendMessage(
                       account.incomingUrl,
                       text,
-                      msg.from,
+                      sendUserId,
                       account.allowInsecureSsl,
                     );
                   }
