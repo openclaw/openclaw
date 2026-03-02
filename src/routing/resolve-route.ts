@@ -111,21 +111,53 @@ function listAgents(cfg: OpenClawConfig) {
   return Array.isArray(agents) ? agents : [];
 }
 
+type AgentLookupCache = {
+  agentsRef: OpenClawConfig["agents"] | undefined;
+  byNormalizedId: Map<string, string>;
+  fallbackDefaultAgentId: string;
+};
+
+const agentLookupCacheByCfg = new WeakMap<OpenClawConfig, AgentLookupCache>();
+
+function resolveAgentLookupCache(cfg: OpenClawConfig): AgentLookupCache {
+  const agentsRef = cfg.agents;
+  const existing = agentLookupCacheByCfg.get(cfg);
+  if (existing && existing.agentsRef === agentsRef) {
+    return existing;
+  }
+
+  const byNormalizedId = new Map<string, string>();
+  for (const agent of listAgents(cfg)) {
+    const rawId = agent.id?.trim();
+    if (!rawId) {
+      continue;
+    }
+    byNormalizedId.set(normalizeAgentId(rawId), sanitizeAgentId(rawId));
+  }
+  const next: AgentLookupCache = {
+    agentsRef,
+    byNormalizedId,
+    fallbackDefaultAgentId: sanitizeAgentId(resolveDefaultAgentId(cfg)),
+  };
+  agentLookupCacheByCfg.set(cfg, next);
+  return next;
+}
+
 function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string {
+  const lookup = resolveAgentLookupCache(cfg);
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
-    return sanitizeAgentId(resolveDefaultAgentId(cfg));
+    return lookup.fallbackDefaultAgentId;
   }
   const normalized = normalizeAgentId(trimmed);
-  const agents = listAgents(cfg);
-  if (agents.length === 0) {
+  if (lookup.byNormalizedId.size === 0) {
     return sanitizeAgentId(trimmed);
   }
-  const match = agents.find((agent) => normalizeAgentId(agent.id) === normalized);
-  if (match?.id?.trim()) {
-    return sanitizeAgentId(match.id.trim());
+  const resolved = lookup.byNormalizedId.get(normalized);
+  if (resolved) {
+    return resolved;
   }
-  return sanitizeAgentId(resolveDefaultAgentId(cfg));
+  return lookup.fallbackDefaultAgentId;
 }
 
 function matchesChannel(
