@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { detectBinary } from "./onboard-helpers.js";
@@ -35,8 +35,15 @@ function validateGatewayWebSocketUrl(value: string): string | undefined {
   if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
     return "URL must start with ws:// or wss://";
   }
-  if (!isSecureWebSocketUrl(trimmed)) {
-    return "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel.";
+  if (
+    !isSecureWebSocketUrl(trimmed, {
+      allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+    })
+  ) {
+    return (
+      "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel. " +
+      "Break-glass: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 for trusted private networks."
+    );
   }
   return undefined;
 }

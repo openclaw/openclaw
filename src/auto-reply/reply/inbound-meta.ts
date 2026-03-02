@@ -88,21 +88,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
-    message_id: isDirect ? undefined : messageId,
-    message_id_full: isDirect
-      ? undefined
-      : messageIdFull && messageIdFull !== messageId
-        ? messageIdFull
-        : undefined,
+    message_id: isDirect ? undefined : resolvedMessageId,
     reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
     sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: isDirect
       ? undefined
-      : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
+      : (safeTrim(ctx.SenderName) ??
+        safeTrim(ctx.SenderE164) ??
+        safeTrim(ctx.SenderId) ??
+        safeTrim(ctx.SenderUsername)),
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
@@ -131,20 +130,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
-  const senderInfo = isDirect
-    ? undefined
-    : {
-        label: resolveSenderLabel({
-          name: safeTrim(ctx.SenderName),
-          username: safeTrim(ctx.SenderUsername),
-          tag: safeTrim(ctx.SenderTag),
-          e164: safeTrim(ctx.SenderE164),
-        }),
-        name: safeTrim(ctx.SenderName),
-        username: safeTrim(ctx.SenderUsername),
-        tag: safeTrim(ctx.SenderTag),
-        e164: safeTrim(ctx.SenderE164),
-      };
+  const senderInfo = {
+    label: resolveSenderLabel({
+      name: safeTrim(ctx.SenderName),
+      username: safeTrim(ctx.SenderUsername),
+      tag: safeTrim(ctx.SenderTag),
+      e164: safeTrim(ctx.SenderE164),
+      id: safeTrim(ctx.SenderId),
+    }),
+    id: safeTrim(ctx.SenderId),
+    name: safeTrim(ctx.SenderName),
+    username: safeTrim(ctx.SenderUsername),
+    tag: safeTrim(ctx.SenderTag),
+    e164: safeTrim(ctx.SenderE164),
+  };
   if (senderInfo?.label) {
     blocks.push(
       ["Sender (untrusted metadata):", "```json", JSON.stringify(senderInfo, null, 2), "```"].join(

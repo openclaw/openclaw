@@ -3,17 +3,39 @@ import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
+type Delivery = { kind: string; text?: string };
+
+function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) {
+  const deliveries: Delivery[] = [];
+  const projector = createAcpReplyProjector({
+    cfg: createCfg(cfgOverrides),
+    shouldSendToolSummaries: true,
+    deliver: async (kind, payload) => {
+      deliveries.push({ kind, text: payload.text });
+      return true;
+    },
+  });
+  return { deliveries, projector };
+}
+
+function blockDeliveries(deliveries: Delivery[]) {
+  return deliveries.filter((entry) => entry.kind === "block");
+}
+
+function combinedBlockText(deliveries: Delivery[]) {
+  return blockDeliveries(deliveries)
+    .map((entry) => entry.text ?? "")
+    .join("");
+}
+
+function expectToolCallSummary(delivery: Delivery | undefined) {
+  expect(delivery?.kind).toBe("tool");
+  expect(delivery?.text).toContain("Tool Call");
+}
+
 describe("createAcpReplyProjector", () => {
   it("coalesces text deltas into bounded block chunks", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg(),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
-      },
-    });
+    const { deliveries, projector } = createProjectorHarness();
 
     await projector.onEvent({
       type: "text_delta",
@@ -29,22 +51,14 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("does not suppress identical short text across terminal turn boundaries", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            coalesceIdleMs: 0,
-            maxChunkChars: 64,
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -53,7 +67,7 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
     await projector.onEvent({ type: "done", stopReason: "end_turn" });
 
-    expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+    expect(blockDeliveries(deliveries)).toEqual([
       { kind: "block", text: "A" },
       { kind: "block", text: "A" },
     ]);
@@ -62,22 +76,14 @@ describe("createAcpReplyProjector", () => {
   it("flushes staggered live text deltas after idle gaps", async () => {
     vi.useFakeTimers();
     try {
-      const deliveries: Array<{ kind: string; text?: string }> = [];
-      const projector = createAcpReplyProjector({
-        cfg: createCfg({
-          acp: {
-            enabled: true,
-            stream: {
-              deliveryMode: "live",
-              coalesceIdleMs: 50,
-              maxChunkChars: 64,
-            },
+      const { deliveries, projector } = createProjectorHarness({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 50,
+            maxChunkChars: 64,
           },
-        }),
-        shouldSendToolSummaries: true,
-        deliver: async (kind, payload) => {
-          deliveries.push({ kind, text: payload.text });
-          return true;
         },
       });
 
@@ -93,7 +99,7 @@ describe("createAcpReplyProjector", () => {
       await vi.advanceTimersByTimeAsync(760);
       await projector.flush(false);
 
-      expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+      expect(blockDeliveries(deliveries)).toEqual([
         { kind: "block", text: "A" },
         { kind: "block", text: "B" },
         { kind: "block", text: "C" },
@@ -104,22 +110,14 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("splits oversized live text by maxChunkChars", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            coalesceIdleMs: 0,
-            maxChunkChars: 50,
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 50,
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -127,7 +125,7 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+    expect(blockDeliveries(deliveries)).toEqual([
       { kind: "block", text: "a".repeat(50) },
       { kind: "block", text: "b".repeat(50) },
       { kind: "block", text: "c".repeat(20) },
@@ -137,22 +135,14 @@ describe("createAcpReplyProjector", () => {
   it("does not flush short live fragments mid-phrase on idle", async () => {
     vi.useFakeTimers();
     try {
-      const deliveries: Array<{ kind: string; text?: string }> = [];
-      const projector = createAcpReplyProjector({
-        cfg: createCfg({
-          acp: {
-            enabled: true,
-            stream: {
-              deliveryMode: "live",
-              coalesceIdleMs: 100,
-              maxChunkChars: 256,
-            },
+      const { deliveries, projector } = createProjectorHarness({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 100,
+            maxChunkChars: 256,
           },
-        }),
-        shouldSendToolSummaries: true,
-        deliver: async (kind, payload) => {
-          deliveries.push({ kind, text: payload.text });
-          return true;
         },
       });
 
@@ -184,26 +174,18 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 512,
-            deliveryMode: "final_only",
-            tagVisibility: {
-              available_commands_update: true,
-              tool_call: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 512,
+          deliveryMode: "final_only",
+          tagVisibility: {
+            available_commands_update: true,
+            tool_call: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -238,32 +220,23 @@ describe("createAcpReplyProjector", () => {
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
     });
-    expect(deliveries[1]?.kind).toBe("tool");
-    expect(deliveries[1]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[1]);
     expect(deliveries[2]).toEqual({ kind: "block", text: "What now?" });
   });
 
   it("flushes buffered status/tool output on error in deliveryMode=final_only", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 512,
-            deliveryMode: "final_only",
-            tagVisibility: {
-              available_commands_update: true,
-              tool_call: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 512,
+          deliveryMode: "final_only",
+          tagVisibility: {
+            available_commands_update: true,
+            tool_call: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -288,20 +261,11 @@ describe("createAcpReplyProjector", () => {
       kind: "tool",
       text: prefixSystemMessage("available commands updated (7)"),
     });
-    expect(deliveries[1]?.kind).toBe("tool");
-    expect(deliveries[1]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[1]);
   });
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
-    const hidden: Array<{ kind: string; text?: string }> = [];
-    const hiddenProjector = createAcpReplyProjector({
-      cfg: createCfg(),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        hidden.push({ kind, text: payload.text });
-        return true;
-      },
-    });
+    const { deliveries: hidden, projector: hiddenProjector } = createProjectorHarness();
     await hiddenProjector.onEvent({
       type: "status",
       text: "usage updated: 10/100",
@@ -311,25 +275,17 @@ describe("createAcpReplyProjector", () => {
     });
     expect(hidden).toEqual([]);
 
-    const shown: Array<{ kind: string; text?: string }> = [];
-    const shownProjector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 64,
-            deliveryMode: "live",
-            tagVisibility: {
-              usage_update: true,
-            },
+    const { deliveries: shown, projector: shownProjector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+          deliveryMode: "live",
+          tagVisibility: {
+            usage_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        shown.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -362,15 +318,7 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("hides available_commands_update by default", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg(),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
-      },
-    });
+    const { deliveries, projector } = createProjectorHarness();
     await projector.onEvent({
       type: "status",
       text: "available commands updated (7)",
@@ -381,24 +329,16 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            tagVisibility: {
-              tool_call: true,
-              tool_call_update: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          tagVisibility: {
+            tool_call: true,
+            tool_call_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -436,32 +376,22 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries.length).toBe(2);
-    expect(deliveries[0]?.kind).toBe("tool");
-    expect(deliveries[0]?.text).toContain("Tool Call");
-    expect(deliveries[1]?.kind).toBe("tool");
-    expect(deliveries[1]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[0]);
+    expectToolCallSummary(deliveries[1]);
   });
 
   it("keeps terminal tool updates even when rendered summaries are truncated", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            maxSessionUpdateChars: 48,
-            tagVisibility: {
-              tool_call: true,
-              tool_call_update: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          maxSessionUpdateChars: 48,
+          tagVisibility: {
+            tool_call: true,
+            tool_call_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -485,29 +415,21 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries.length).toBe(2);
-    expect(deliveries[0]?.kind).toBe("tool");
-    expect(deliveries[1]?.kind).toBe("tool");
+    expectToolCallSummary(deliveries[0]);
+    expectToolCallSummary(deliveries[1]);
   });
 
   it("renders fallback tool labels without leaking call ids as primary label", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            deliveryMode: "live",
-            tagVisibility: {
-              tool_call: true,
-              tool_call_update: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          tagVisibility: {
+            tool_call: true,
+            tool_call_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -519,33 +441,25 @@ describe("createAcpReplyProjector", () => {
       text: "call_ABC123 (in_progress)",
     });
 
-    expect(deliveries[0]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[0]);
     expect(deliveries[0]?.text).not.toContain("call_ABC123 (");
   });
 
   it("allows repeated status/tool summaries when repeatSuppression is disabled", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            repeatSuppression: false,
-            tagVisibility: {
-              available_commands_update: true,
-              tool_call: true,
-              tool_call_update: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          repeatSuppression: false,
+          tagVisibility: {
+            available_commands_update: true,
+            tool_call: true,
+            tool_call_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -589,31 +503,23 @@ describe("createAcpReplyProjector", () => {
       kind: "tool",
       text: prefixSystemMessage("available commands updated"),
     });
-    expect(deliveries[2]?.text).toContain("Tool Call");
-    expect(deliveries[3]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[2]);
+    expectToolCallSummary(deliveries[3]);
     expect(deliveries[4]).toEqual({ kind: "block", text: "hello" });
   });
 
   it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            tagVisibility: {
-              available_commands_update: true,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          tagVisibility: {
+            available_commands_update: true,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -640,23 +546,15 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("truncates oversized turns once and emits one truncation notice", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            maxOutputChars: 5,
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          maxOutputChars: 5,
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -681,26 +579,18 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("supports tagVisibility overrides for tool updates", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            tagVisibility: {
-              tool_call: true,
-              tool_call_update: false,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          tagVisibility: {
+            tool_call: true,
+            tool_call_update: false,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -722,26 +612,18 @@ describe("createAcpReplyProjector", () => {
     });
 
     expect(deliveries.length).toBe(1);
-    expect(deliveries[0]?.text).toContain("Tool Call");
+    expectToolCallSummary(deliveries[0]);
   });
 
   it("inserts a space boundary before visible text after hidden tool updates by default", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -757,34 +639,22 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("fallback. I don't");
+    expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
   });
 
   it("preserves hidden boundary across nonterminal hidden tool updates", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            tagVisibility: {
-              tool_call: false,
-              tool_call_update: false,
-            },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          tagVisibility: {
+            tool_call: false,
+            tool_call_update: false,
           },
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -808,31 +678,19 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("fallback. I don't");
+    expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
   });
 
   it("supports hiddenBoundarySeparator=space", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            hiddenBoundarySeparator: "space",
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          hiddenBoundarySeparator: "space",
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -848,31 +706,19 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("fallback. I don't");
+    expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
   });
 
   it("supports hiddenBoundarySeparator=none", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            hiddenBoundarySeparator: "none",
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
+          hiddenBoundarySeparator: "none",
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -888,30 +734,18 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("fallback.I don't");
+    expect(combinedBlockText(deliveries)).toBe("fallback.I don't");
   });
 
   it("does not duplicate newlines when previous visible text already ends with newline", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -931,30 +765,18 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("fallback.\nI don't");
+    expect(combinedBlockText(deliveries)).toBe("fallback.\nI don't");
   });
 
   it("does not insert boundary separator for hidden non-tool status updates", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-          },
+    const { deliveries, projector } = createProjectorHarness({
+      acp: {
+        enabled: true,
+        stream: {
+          coalesceIdleMs: 0,
+          maxChunkChars: 256,
+          deliveryMode: "live",
         },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
       },
     });
 
@@ -967,10 +789,6 @@ describe("createAcpReplyProjector", () => {
     await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
     await projector.flush(true);
 
-    const combinedText = deliveries
-      .filter((entry) => entry.kind === "block")
-      .map((entry) => entry.text ?? "")
-      .join("");
-    expect(combinedText).toBe("AB");
+    expect(combinedBlockText(deliveries)).toBe("AB");
   });
 });

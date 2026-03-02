@@ -1,4 +1,15 @@
 import fs from "node:fs";
+import type { ResolvedBrowserProfile } from "./config.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
@@ -9,7 +20,6 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
@@ -21,21 +31,11 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -291,22 +291,15 @@ function createProfileContext(
     if (isExtension) {
       if (!httpReachable) {
         await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
-        if (await isHttpReachable(1200)) {
-          // continue: we still need the extension to connect for CDP websocket.
-        } else {
+        if (!(await isHttpReachable(1200))) {
           throw new Error(
             `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
           );
         }
       }
-
-      if (await isReachable(600)) {
-        return;
-      }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
-      throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
-      );
+      // Browser startup should only ensure relay availability.
+      // Tab attachment is checked when a tab is actually required.
+      return;
     }
 
     if (!httpReachable) {
@@ -333,8 +326,9 @@ function createProfileContext(
       return;
     }
 
-    // HTTP responds but WebSocket fails - port in use by something else
-    if (!profileState.running) {
+    // HTTP responds but WebSocket fails - port in use by something else.
+    // Skip this check for remote CDP profiles since we never own the remote process.
+    if (!profileState.running && !remoteCdp) {
       throw new Error(
         `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
           `Run action=reset-profile profile=${profile.name} to kill the process.`,
@@ -356,6 +350,14 @@ function createProfileContext(
       );
     }
 
+    // At this point profileState.running is always non-null: the !remoteCdp guard
+    // above throws when running is null, and the remoteCdp path always exits via
+    // the attachOnly/remoteCdp block. Add an explicit guard for TypeScript.
+    if (!profileState.running) {
+      throw new Error(
+        `Unexpected state for profile "${profile.name}": no running process to restart.`,
+      );
+    }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 

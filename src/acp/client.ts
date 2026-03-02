@@ -1,10 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -13,6 +6,13 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
@@ -342,6 +342,12 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
   return args;
 }
 
+export function resolveAcpClientSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...baseEnv, OPENCLAW_SHELL: "acp-client" };
+}
+
 function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
@@ -413,6 +419,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
+    env: resolveAcpClientSpawnEnv(),
   });
 
   if (!agent.stdin || !agent.stdout) {

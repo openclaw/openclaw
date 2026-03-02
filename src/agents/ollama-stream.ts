@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -9,7 +8,9 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildStreamErrorAssistantMessage } from "./stream-message-shared.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -521,24 +522,10 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
         stream.push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant" as const,
-            content: [],
-            stopReason: "error" as StopReason,
+          error: buildStreamErrorAssistantMessage({
+            model,
             errorMessage,
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: Date.now(),
-          },
+          }),
         });
       } finally {
         stream.end();

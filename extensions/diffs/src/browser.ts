@@ -63,9 +63,28 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         deviceScaleFactor: 2,
         colorScheme: params.theme,
       });
-      await page.route(`http://127.0.0.1${VIEWER_ASSET_PREFIX}*`, async (route) => {
-        const pathname = new URL(route.request().url()).pathname;
-        const asset = await getServedViewerAsset(pathname);
+      await page.route("**/*", async (route) => {
+        const requestUrl = route.request().url();
+        if (requestUrl === "about:blank" || requestUrl.startsWith("data:")) {
+          await route.continue();
+          return;
+        }
+        let parsed: URL;
+        try {
+          parsed = new URL(requestUrl);
+        } catch {
+          await route.abort();
+          return;
+        }
+        if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+          await route.abort();
+          return;
+        }
+        if (!parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
+          await route.abort();
+          return;
+        }
+        const asset = await getServedViewerAsset(parsed.pathname);
         if (!asset) {
           await route.abort();
           return;

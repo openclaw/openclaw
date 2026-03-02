@@ -1,8 +1,8 @@
 import type { Command } from "commander";
+import type { ProgramContext } from "./context.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import type { ProgramContext } from "./context.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 type CommandRegisterParams = {
@@ -83,7 +83,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "config",
         description:
-          "Non-interactive config helpers (get/set/unset). Default: starts setup wizard.",
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts setup wizard.",
         hasSubcommands: true,
       },
     ],

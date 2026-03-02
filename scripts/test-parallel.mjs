@@ -102,6 +102,8 @@ const useVmForks =
   process.env.OPENCLAW_TEST_VM_FORKS === "1" ||
   (process.env.OPENCLAW_TEST_VM_FORKS !== "0" && !isWindows && supportsVmForks && !lowMemLocalHost);
 const disableIsolation = process.env.OPENCLAW_TEST_NO_ISOLATE === "1";
+const includeGatewaySuite = process.env.OPENCLAW_TEST_INCLUDE_GATEWAY === "1";
+const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
 const runs = [
   ...(useVmForks
     ? [
@@ -135,28 +137,36 @@ const runs = [
           args: ["vitest", "run", "--config", "vitest.unit.config.ts"],
         },
       ]),
-  {
-    name: "extensions",
-    args: [
-      "vitest",
-      "run",
-      "--config",
-      "vitest.extensions.config.ts",
-      ...(useVmForks ? ["--pool=vmForks"] : []),
-    ],
-  },
-  {
-    name: "gateway",
-    args: [
-      "vitest",
-      "run",
-      "--config",
-      "vitest.gateway.config.ts",
-      // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
-      // Keep them on process forks for determinism even when other suites use vmForks.
-      "--pool=forks",
-    ],
-  },
+  ...(includeExtensionsSuite
+    ? [
+        {
+          name: "extensions",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.extensions.config.ts",
+            ...(useVmForks ? ["--pool=vmForks"] : []),
+          ],
+        },
+      ]
+    : []),
+  ...(includeGatewaySuite
+    ? [
+        {
+          name: "gateway",
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.gateway.config.ts",
+            // Gateway tests are sensitive to vmForks behavior (global state + env stubs).
+            // Keep them on process forks for determinism even when other suites use vmForks.
+            "--pool=forks",
+          ],
+        },
+      ]
+    : []),
 ];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =

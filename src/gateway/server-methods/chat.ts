@@ -10,6 +10,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -196,14 +197,6 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     return res.message;
   });
   return changed ? next : messages;
-}
-
-function jsonUtf8Bytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Buffer.byteLength(String(value), "utf8");
-  }
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
