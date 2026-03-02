@@ -189,6 +189,7 @@ vi.mock("./chrome.js", () => ({
       proc,
     };
   }),
+  resolveBrowserExecutable: vi.fn(() => ({ kind: "chrome", path: "/fake/chrome" })),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
   stopOpenClawChrome: vi.fn(async () => {
     state.reachable = false;
