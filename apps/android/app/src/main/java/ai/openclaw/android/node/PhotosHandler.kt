@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.scale
 import ai.openclaw.android.gateway.GatewaySession
 import java.io.ByteArrayOutputStream
 import java.time.Instant
@@ -158,7 +159,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
 
     if (decoded.width <= maxWidth) return decoded
     val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
-    return Bitmap.createScaledBitmap(decoded, maxWidth, targetHeight, true)
+    return decoded.scale(maxWidth, targetHeight, true)
   }
 
   private fun computeInSampleSize(width: Int, maxWidth: Int): Int {
@@ -198,7 +199,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
       val nextWidth = max(240, (working.width * 0.75f).roundToInt())
       if (nextWidth >= working.width) return null
       val nextHeight = max(1, ((working.height.toDouble() * nextWidth) / working.width).roundToInt())
-      working = Bitmap.createScaledBitmap(working, nextWidth, nextHeight, true)
+      working = working.scale(nextWidth, nextHeight, true)
     }
     return null
   }

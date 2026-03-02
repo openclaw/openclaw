@@ -25,7 +25,7 @@ and process access when the model does something dumb.
   - By default, sandbox browser containers use a dedicated Docker network (`openclaw-sandbox-browser`) instead of the global `bridge` network.
     Configure with `agents.defaults.sandbox.browser.network`.
   - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress with a CIDR allowlist (for example `172.21.0.1/32`).
-  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that resolves to the observer session.
+  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with password in URL fragment (not query/header logs).
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
   - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -129,6 +129,16 @@ other runtimes), either bake a custom image or install via
 `sandbox.docker.setupCommand` (requires network egress + writable root +
 root user).
 
+If you want a more functional sandbox image with common tooling (for example
+`curl`, `jq`, `nodejs`, `python3`, `git`), build:
+
+```bash
+scripts/sandbox-common-setup.sh
+```
+
+Then set `agents.defaults.sandbox.docker.image` to
+`openclaw-sandbox-common:bookworm-slim`.
+
 Sandboxed browser image:
 
 ```bash
@@ -146,6 +156,11 @@ Security defaults:
 
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
+
+For Docker gateway deployments, `docker-setup.sh` can bootstrap sandbox config.
+Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
+override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
+reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
 
 ## setupCommand (one-time container setup)
 

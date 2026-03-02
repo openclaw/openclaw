@@ -82,25 +82,42 @@ describe("Ollama provider", () => {
     process.env.OLLAMA_API_KEY = "test-key";
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          models: [
-            { name: "qwen3:32b", modified_at: "", size: 1, digest: "" },
-            { name: "llama3.3:70b", modified_at: "", size: 1, digest: "" },
-          ],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ model_info: { "llama.context_length": 65536 } }),
-      });
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [
+              { name: "qwen3:32b", modified_at: "", size: 1, digest: "" },
+              { name: "llama3.3:70b", modified_at: "", size: 1, digest: "" },
+            ],
+          }),
+        };
+      }
+      if (url.endsWith("/api/show")) {
+        const rawBody = init?.body;
+        const bodyText = typeof rawBody === "string" ? rawBody : "{}";
+        const parsed = JSON.parse(bodyText) as { name?: string };
+        if (parsed.name === "qwen3:32b") {
+          return {
+            ok: true,
+            json: async () => ({ model_info: { "qwen3.context_length": 131072 } }),
+          };
+        }
+        if (parsed.name === "llama3.3:70b") {
+          return {
+            ok: true,
+            json: async () => ({ model_info: { "llama.context_length": 65536 } }),
+          };
+        }
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     try {
@@ -110,7 +127,9 @@ describe("Ollama provider", () => {
       const llama = models.find((model) => model.id === "llama3.3:70b");
       expect(qwen?.contextWindow).toBe(131072);
       expect(llama?.contextWindow).toBe(65536);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      const urls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
+      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(2);
     } finally {
       delete process.env.OLLAMA_API_KEY;
     }
@@ -121,25 +140,37 @@ describe("Ollama provider", () => {
     process.env.OLLAMA_API_KEY = "test-key";
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          models: [{ name: "qwen3:32b", modified_at: "", size: 1, digest: "" }],
-        }),
-      })
-      .mockResolvedValueOnce({
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ name: "qwen3:32b", modified_at: "", size: 1, digest: "" }],
+          }),
+        };
+      }
+      if (url.endsWith("/api/show")) {
+        return {
+          ok: false,
+          status: 500,
+        };
+      }
+      return {
         ok: false,
-        status: 500,
-      });
+        status: 404,
+        json: async () => ({}),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     try {
       const providers = await resolveImplicitProviders({ agentDir });
       const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
       expect(model?.contextWindow).toBe(128000);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const urls = fetchMock.mock.calls.map(([input]) => String(input));
+      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
+      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(1);
     } finally {
       delete process.env.OLLAMA_API_KEY;
     }
@@ -156,7 +187,8 @@ describe("Ollama provider", () => {
       size: 1,
       digest: "",
     }));
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
       if (url.endsWith("/api/tags")) {
         return {
           ok: true,
@@ -173,8 +205,10 @@ describe("Ollama provider", () => {
     try {
       const providers = await resolveImplicitProviders({ agentDir });
       const models = providers?.ollama?.models ?? [];
+      const urls = fetchMock.mock.calls.map(([input]) => String(input));
       // 1 call for /api/tags + 200 capped /api/show calls.
-      expect(fetchMock).toHaveBeenCalledTimes(201);
+      expect(urls.filter((url) => url.endsWith("/api/tags"))).toHaveLength(1);
+      expect(urls.filter((url) => url.endsWith("/api/show"))).toHaveLength(200);
       expect(models).toHaveLength(200);
     } finally {
       delete process.env.OLLAMA_API_KEY;
@@ -225,7 +259,11 @@ describe("Ollama provider", () => {
       },
     });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    const ollamaCalls = fetchMock.mock.calls.filter(([input]) => {
+      const url = String(input);
+      return url.endsWith("/api/tags") || url.endsWith("/api/show");
+    });
+    expect(ollamaCalls).toHaveLength(0);
     expect(providers?.ollama?.models).toEqual(explicitModels);
     expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
     expect(providers?.ollama?.api).toBe("ollama");

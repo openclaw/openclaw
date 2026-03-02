@@ -51,24 +51,24 @@ struct ExecAllowlistTests {
             .appendingPathComponent(filename)
     }
 
-    @Test func matchUsesResolvedPath() {
-        let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
-        let resolution = ExecCommandResolution(
+    private static func homebrewRGResolution() -> ExecCommandResolution {
+        ExecCommandResolution(
             rawExecutable: "rg",
             resolvedPath: "/opt/homebrew/bin/rg",
             executableName: "rg",
             cwd: nil)
+    }
+
+    @Test func matchUsesResolvedPath() {
+        let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
+        let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
         #expect(match?.pattern == entry.pattern)
     }
 
     @Test func matchIgnoresBasenamePattern() {
         let entry = ExecAllowlistEntry(pattern: "rg")
-        let resolution = ExecCommandResolution(
-            rawExecutable: "rg",
-            resolvedPath: "/opt/homebrew/bin/rg",
-            executableName: "rg",
-            cwd: nil)
+        let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
         #expect(match == nil)
     }
@@ -86,22 +86,14 @@ struct ExecAllowlistTests {
 
     @Test func matchIsCaseInsensitive() {
         let entry = ExecAllowlistEntry(pattern: "/OPT/HOMEBREW/BIN/RG")
-        let resolution = ExecCommandResolution(
-            rawExecutable: "rg",
-            resolvedPath: "/opt/homebrew/bin/rg",
-            executableName: "rg",
-            cwd: nil)
+        let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
         #expect(match?.pattern == entry.pattern)
     }
 
     @Test func matchSupportsGlobStar() {
         let entry = ExecAllowlistEntry(pattern: "/opt/**/rg")
-        let resolution = ExecCommandResolution(
-            rawExecutable: "rg",
-            resolvedPath: "/opt/homebrew/bin/rg",
-            executableName: "rg",
-            cwd: nil)
+        let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
         #expect(match?.pattern == entry.pattern)
     }
@@ -200,7 +192,12 @@ struct ExecAllowlistTests {
     }
 
     @Test func resolveForAllowlistUnwrapsEnvShellWrapperChains() {
-        let command = ["/usr/bin/env", "/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let command = [
+            "/usr/bin/env",
+            "/bin/sh",
+            "-lc",
+            "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test",
+        ]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: nil,

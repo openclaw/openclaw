@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import * as mediaFetch from "../../media/fetch.js";
 import type { SavedMedia } from "../../media/store.js";
 import * as mediaStore from "../../media/store.js";
 import { mockPinnedHostnameResolution } from "../../test-helpers/ssrf.js";
@@ -245,6 +246,52 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects HTML auth pages for non-HTML files", async () => {
+    const saveMediaBufferMock = vi.spyOn(mediaStore, "saveMediaBuffer");
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!DOCTYPE html><html><body>login</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("allows expected HTML uploads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/page.html", "text/html"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response("<!doctype html><html><body>ok</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/page.html",
+          name: "page.html",
+          mimetype: "text/html",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.[0]?.path).toBe("/tmp/page.html");
+  });
+
   it("overrides video/* MIME to audio/* for slack_audio voice messages", async () => {
     // saveMediaBuffer re-detects MIME from buffer bytes, so it may return
     // video/mp4 for MP4 containers.  Verify resolveSlackMedia preserves
@@ -426,6 +473,80 @@ describe("resolveSlackMedia", () => {
   });
 });
 
+describe("Slack media SSRF policy", () => {
+  const originalFetchLocal = globalThis.fetch;
+
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    globalThis.fetch = withFetchPreconnect(mockFetch);
+    mockPinnedHostnameResolution();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetchLocal;
+    vi.restoreAllMocks();
+  });
+
+  it("passes ssrfPolicy with Slack CDN allowedHostnames and allowRfc2544BenchmarkRange to file downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("img"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+
+    const policy = spy.mock.calls[0][0].ssrfPolicy;
+    expect(policy?.allowedHostnames).toEqual(
+      expect.arrayContaining(["*.slack.com", "*.slack-edge.com", "*.slack-files.com"]),
+    );
+  });
+
+  it("passes ssrfPolicy to forwarded attachment image downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/fwd.jpg", "image/jpeg"),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      return {
+        hostname: normalized,
+        addresses: ["93.184.216.34"],
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses: ["93.184.216.34"] }),
+      };
+    });
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("fwd"), { status: 200, headers: { "content-type": "image/jpeg" } }),
+    );
+
+    const spy = vi.spyOn(mediaFetch, "fetchRemoteMedia");
+
+    await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+  });
+});
+
 describe("resolveSlackAttachmentContent", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
@@ -525,6 +646,11 @@ describe("resolveSlackAttachmentContent", () => {
         },
       ],
     });
+    const firstCall = mockFetch.mock.calls[0];
+    expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
+    const firstInit = firstCall?.[1];
+    expect(firstInit?.redirect).toBe("manual");
+    expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });
 

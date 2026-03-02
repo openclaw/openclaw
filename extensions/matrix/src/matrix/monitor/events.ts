@@ -5,6 +5,21 @@ import { sendReadReceiptMatrix } from "../send.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
+const matrixMonitorListenerRegistry = (() => {
+  // Prevent duplicate listener registration when both bundled and extension
+  // paths attempt to start monitors against the same shared client.
+  const registeredClients = new WeakSet<object>();
+  return {
+    tryRegister(client: object): boolean {
+      if (registeredClients.has(client)) {
+        return false;
+      }
+      registeredClients.add(client);
+      return true;
+    },
+  };
+})();
+
 function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
   let selfUserId: string | undefined;
   let selfUserIdLookup: Promise<string | undefined> | undefined;
@@ -41,6 +56,11 @@ export function registerMatrixMonitorEvents(params: {
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
 }): void {
+  if (!matrixMonitorListenerRegistry.tryRegister(params.client)) {
+    params.logVerboseMessage("matrix: skipping duplicate listener registration for client");
+    return;
+  }
+
   const {
     client,
     auth,

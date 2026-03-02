@@ -51,6 +51,18 @@ export function normalizeVerb(value?: string): string | undefined {
   return trimmed.replace(/_/g, " ");
 }
 
+export function resolveActionArg(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const actionRaw = (args as Record<string, unknown>).action;
+  if (typeof actionRaw !== "string") {
+    return undefined;
+  }
+  const action = actionRaw.trim();
+  return action || undefined;
+}
+
 export function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
@@ -1117,4 +1129,81 @@ export function resolveDetailFromKeys(
     .slice(0, opts.maxEntries ?? 8)
     .map((entry) => `${entry.label} ${entry.value}`)
     .join(" · ");
+}
+
+export function resolveToolVerbAndDetail(params: {
+  toolKey: string;
+  args?: unknown;
+  meta?: string;
+  action?: string;
+  spec?: ToolDisplaySpec;
+  fallbackDetailKeys?: string[];
+  detailMode: "first" | "summary";
+  detailCoerce?: CoerceDisplayValueOptions;
+  detailMaxEntries?: number;
+  detailFormatKey?: (raw: string) => string;
+}): { verb?: string; detail?: string } {
+  const actionSpec = resolveActionSpec(params.spec, params.action);
+  const fallbackVerb =
+    params.toolKey === "web_search"
+      ? "search"
+      : params.toolKey === "web_fetch"
+        ? "fetch"
+        : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
+
+  let detail: string | undefined;
+  if (params.toolKey === "exec") {
+    detail = resolveExecDetail(params.args);
+  }
+  if (!detail && params.toolKey === "read") {
+    detail = resolveReadDetail(params.args);
+  }
+  if (
+    !detail &&
+    (params.toolKey === "write" || params.toolKey === "edit" || params.toolKey === "attach")
+  ) {
+    detail = resolveWriteDetail(params.toolKey, params.args);
+  }
+  if (!detail && params.toolKey === "web_search") {
+    detail = resolveWebSearchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "web_fetch") {
+    detail = resolveWebFetchDetail(params.args);
+  }
+
+  const detailKeys =
+    actionSpec?.detailKeys ?? params.spec?.detailKeys ?? params.fallbackDetailKeys ?? [];
+  if (!detail && detailKeys.length > 0) {
+    detail = resolveDetailFromKeys(params.args, detailKeys, {
+      mode: params.detailMode,
+      coerce: params.detailCoerce,
+      maxEntries: params.detailMaxEntries,
+      formatKey: params.detailFormatKey,
+    });
+  }
+  if (!detail && params.meta) {
+    detail = params.meta;
+  }
+  return { verb, detail };
+}
+
+export function formatToolDetailText(
+  detail: string | undefined,
+  opts: { prefixWithWith?: boolean } = {},
+): string | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  const normalized = detail.includes(" · ")
+    ? detail
+        .split(" · ")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .join(", ")
+    : detail;
+  if (!normalized) {
+    return undefined;
+  }
+  return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }

@@ -347,21 +347,8 @@ actor GatewayEndpointStore {
 
     /// Explicit action: ensure the remote control tunnel is established and publish the resolved endpoint.
     func ensureRemoteControlTunnel() async throws -> UInt16 {
-        let mode = await self.deps.mode()
-        guard mode == .remote else {
-            throw NSError(
-                domain: "RemoteTunnel",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
-        }
-        let root = OpenClawConfigFile.loadDict()
-        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
-            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
-            }
+        try await self.requireRemoteMode()
+        if let url = try self.resolveDirectRemoteURL() {
             guard let port = GatewayRemoteConfig.defaultPort(for: url),
                   let portInt = UInt16(exactly: port)
             else {
@@ -425,22 +412,9 @@ actor GatewayEndpointStore {
     }
 
     private func ensureRemoteConfig(detail: String) async throws -> GatewayConnection.Config {
-        let mode = await self.deps.mode()
-        guard mode == .remote else {
-            throw NSError(
-                domain: "RemoteTunnel",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
-        }
+        try await self.requireRemoteMode()
 
-        let root = OpenClawConfigFile.loadDict()
-        if GatewayRemoteConfig.resolveTransport(root: root) == .direct {
-            guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
-                throw NSError(
-                    domain: "GatewayEndpoint",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
-            }
+        if let url = try self.resolveDirectRemoteURL() {
             let token = self.deps.token()
             let password = self.deps.password()
             self.cancelRemoteEnsure()
@@ -489,6 +463,27 @@ actor GatewayEndpointStore {
             self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
             throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
+    }
+
+    private func requireRemoteMode() async throws {
+        guard await self.deps.mode() == .remote else {
+            throw NSError(
+                domain: "RemoteTunnel",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+        }
+    }
+
+    private func resolveDirectRemoteURL() throws -> URL? {
+        let root = OpenClawConfigFile.loadDict()
+        guard GatewayRemoteConfig.resolveTransport(root: root) == .direct else { return nil }
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root) else {
+            throw NSError(
+                domain: "GatewayEndpoint",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url missing or invalid"])
+        }
+        return url
     }
 
     private func removeSubscriber(_ id: UUID) {

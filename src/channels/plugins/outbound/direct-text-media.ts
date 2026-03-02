@@ -86,11 +86,44 @@ export function createDirectTextMediaOutbound<
     return { channel: params.channel, ...result };
   };
 
-  return {
+  const outbound: ChannelOutboundAdapter = {
     deliveryMode: "direct",
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (!text && urls.length === 0) {
+        return { channel: params.channel, messageId: "" };
+      }
+      if (urls.length > 0) {
+        let lastResult = await outbound.sendMedia!({
+          ...ctx,
+          text,
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
+          lastResult = await outbound.sendMedia!({
+            ...ctx,
+            text: "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult;
+      }
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       return await sendDirect({
         cfg,
@@ -116,4 +149,5 @@ export function createDirectTextMediaOutbound<
       });
     },
   };
+  return outbound;
 }
