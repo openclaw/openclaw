@@ -89,6 +89,8 @@ describe("media store redirects", () => {
     expect(saved.contentType).toBe("text/plain");
     expect(path.extname(saved.path)).toBe(".txt");
     expect(await fs.readFile(saved.path, "utf8")).toBe("redirected");
+    const stat = await fs.stat(saved.path);
+    expect(stat.mode & 0o777).toBe(0o644);
   });
 
   it("fails when redirect response omits location header", async () => {
