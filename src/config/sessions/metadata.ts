@@ -147,6 +147,17 @@ export function deriveGroupSessionPatch(params: {
     patch.displayName = displayName;
   }
 
+  // Auto-label group/channel sessions with a human-friendly name when no
+  // explicit label has been set yet. This surfaces the channel or group
+  // subject in dashboard label columns (e.g. "#config" or "My Group Chat").
+  if (!params.existing?.label) {
+    const autoLabel =
+      nextGroupChannel ?? params.existing?.groupChannel ?? nextSubject ?? params.existing?.subject;
+    if (autoLabel) {
+      patch.label = autoLabel;
+    }
+  }
+
   return patch;
 }
 
