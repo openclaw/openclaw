@@ -7,6 +7,7 @@ import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js"
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { convertNewlinesForDiscord } from "../newline-breaks.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 
 export type DiscordThreadBindingLookupRecord = {
@@ -179,7 +180,7 @@ export async function deliverDiscordReply(params: {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
-    const text = convertMarkdownTables(rawText, tableMode);
+    const text = convertNewlinesForDiscord(convertMarkdownTables(rawText, tableMode));
     if (!text && mediaList.length === 0) {
       continue;
     }
