@@ -243,7 +243,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("serves unauthenticated liveness/readiness probe routes before plugin/auth handlers", async () => {
+  test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -255,9 +255,6 @@ describe("gateway plugin HTTP auth boundary", () => {
       cfg: { gateway: { trustedProxies: [] } },
       prefix: "openclaw-plugin-http-probes-test-",
       run: async () => {
-        const handlePluginRequest = vi.fn(async (_req: IncomingMessage, _res: ServerResponse) => {
-          return false;
-        });
         const server = createGatewayHttpServer({
           canvasHost: null,
           clients: new Set(),
@@ -266,8 +263,6 @@ describe("gateway plugin HTTP auth boundary", () => {
           openAiChatCompletionsEnabled: false,
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
-          handlePluginRequest,
-          shouldEnforcePluginGatewayAuth: () => true,
           resolvedAuth,
         });
 
@@ -286,8 +281,49 @@ describe("gateway plugin HTTP auth boundary", () => {
             JSON.stringify({ ok: true, status: probeCase.status }),
           );
         }
+      },
+    });
+  });
 
-        expect(handlePluginRequest).not.toHaveBeenCalled();
+  test("does not shadow plugin routes mounted on probe paths", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-probes-shadow-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/healthz") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "plugin-health" }));
+            return true;
+          }
+          return false;
+        });
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const response = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/healthz" }), response.res);
+        expect(response.res.statusCode).toBe(200);
+        expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
   });
