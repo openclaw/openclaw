@@ -120,7 +120,13 @@ describe("archive utils", () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
       const outsideDir = path.join(workDir, "outside");
       await fs.mkdir(outsideDir, { recursive: true });
-      await fs.symlink(outsideDir, path.join(extractDir, "escape"));
+      // Use 'junction' on Windows — junctions target directories without
+      // requiring SeCreateSymbolicLinkPrivilege.
+      await fs.symlink(
+        outsideDir,
+        path.join(extractDir, "escape"),
+        process.platform === "win32" ? "junction" : undefined,
+      );
 
       const zip = new JSZip();
       zip.file("escape/pwn.txt", "owned");
