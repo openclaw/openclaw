@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
+import {
+  resolveBoundaryPath,
+  resolveBoundaryPathSync,
+  type ResolvedBoundaryPath,
+} from "./boundary-path.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
 import {
   openVerifiedFileSync,
@@ -41,6 +45,12 @@ export type OpenBoundaryFileParams = OpenBoundaryFileSyncParams & {
   aliasPolicy?: PathAliasPolicy;
 };
 
+type ResolvedBoundaryFilePath = {
+  absolutePath: string;
+  resolvedPath: string;
+  rootRealPath: string;
+};
+
 export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
   return (
     typeof ioFs.openSync === "function" &&
@@ -56,28 +66,27 @@ export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
 
 export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): BoundaryFileOpenResult {
   const ioFs = params.ioFs ?? fs;
-  const absolutePath = path.resolve(params.absolutePath);
-
-  let resolvedPath: string;
-  let rootRealPath: string;
-  try {
-    const resolved = resolveBoundaryPathSync({
-      absolutePath,
-      rootPath: params.rootPath,
-      rootCanonicalPath: params.rootRealPath,
-      boundaryLabel: params.boundaryLabel,
-      skipLexicalRootCheck: params.skipLexicalRootCheck,
-    });
-    resolvedPath = resolved.canonicalPath;
-    rootRealPath = resolved.rootCanonicalPath;
-  } catch (error) {
-    return { ok: false, reason: "validation", error };
+  const resolved = resolveBoundaryFilePathGeneric({
+    absolutePath: params.absolutePath,
+    resolve: (absolutePath) =>
+      resolveBoundaryPathSync({
+        absolutePath,
+        rootPath: params.rootPath,
+        rootCanonicalPath: params.rootRealPath,
+        boundaryLabel: params.boundaryLabel,
+        skipLexicalRootCheck: params.skipLexicalRootCheck,
+      }),
+  });
+  if (resolved instanceof Promise) {
+    return toBoundaryValidationError(new Error("Unexpected async boundary resolution"));
   }
-
+  if ("ok" in resolved) {
+    return resolved;
+  }
   return openBoundaryFileResolved({
-    absolutePath,
-    resolvedPath,
-    rootRealPath,
+    absolutePath: resolved.absolutePath,
+    resolvedPath: resolved.resolvedPath,
+    rootRealPath: resolved.rootRealPath,
     maxBytes: params.maxBytes,
     rejectHardlinks: params.rejectHardlinks,
     allowedType: params.allowedType,
@@ -118,30 +127,65 @@ export async function openBoundaryFile(
   params: OpenBoundaryFileParams,
 ): Promise<BoundaryFileOpenResult> {
   const ioFs = params.ioFs ?? fs;
-  const absolutePath = path.resolve(params.absolutePath);
-  let resolvedPath: string;
-  let rootRealPath: string;
-  try {
-    const resolved = await resolveBoundaryPath({
-      absolutePath,
-      rootPath: params.rootPath,
-      rootCanonicalPath: params.rootRealPath,
-      boundaryLabel: params.boundaryLabel,
-      policy: params.aliasPolicy,
-      skipLexicalRootCheck: params.skipLexicalRootCheck,
-    });
-    resolvedPath = resolved.canonicalPath;
-    rootRealPath = resolved.rootCanonicalPath;
-  } catch (error) {
-    return { ok: false, reason: "validation", error };
+  const maybeResolved = resolveBoundaryFilePathGeneric({
+    absolutePath: params.absolutePath,
+    resolve: (absolutePath) =>
+      resolveBoundaryPath({
+        absolutePath,
+        rootPath: params.rootPath,
+        rootCanonicalPath: params.rootRealPath,
+        boundaryLabel: params.boundaryLabel,
+        policy: params.aliasPolicy,
+        skipLexicalRootCheck: params.skipLexicalRootCheck,
+      }),
+  });
+  const resolved = maybeResolved instanceof Promise ? await maybeResolved : maybeResolved;
+  if ("ok" in resolved) {
+    return resolved;
   }
   return openBoundaryFileResolved({
-    absolutePath,
-    resolvedPath,
-    rootRealPath,
+    absolutePath: resolved.absolutePath,
+    resolvedPath: resolved.resolvedPath,
+    rootRealPath: resolved.rootRealPath,
     maxBytes: params.maxBytes,
     rejectHardlinks: params.rejectHardlinks,
     allowedType: params.allowedType,
     ioFs,
   });
+}
+
+function toBoundaryValidationError(error: unknown): BoundaryFileOpenResult {
+  return { ok: false, reason: "validation", error };
+}
+
+function mapResolvedBoundaryPath(
+  absolutePath: string,
+  resolved: ResolvedBoundaryPath,
+): ResolvedBoundaryFilePath {
+  return {
+    absolutePath,
+    resolvedPath: resolved.canonicalPath,
+    rootRealPath: resolved.rootCanonicalPath,
+  };
+}
+
+function resolveBoundaryFilePathGeneric(params: {
+  absolutePath: string;
+  resolve: (absolutePath: string) => ResolvedBoundaryPath | Promise<ResolvedBoundaryPath>;
+}):
+  | ResolvedBoundaryFilePath
+  | BoundaryFileOpenResult
+  | Promise<ResolvedBoundaryFilePath | BoundaryFileOpenResult> {
+  const absolutePath = path.resolve(params.absolutePath);
+  try {
+    const resolved = params.resolve(absolutePath);
+    if (resolved instanceof Promise) {
+      return resolved
+        .then((value) => mapResolvedBoundaryPath(absolutePath, value))
+        .catch((error) => toBoundaryValidationError(error));
+    }
+    return mapResolvedBoundaryPath(absolutePath, resolved);
+  } catch (error) {
+    return toBoundaryValidationError(error);
+  }
 }
