@@ -44,8 +44,11 @@ export async function runSilentMessageIngest(params: {
   log: (message: string) => void;
   logPrefix: string;
 }): Promise<boolean> {
+  if (!params.enabled) {
+    return false;
+  }
   const content = sanitizeUserText(params.event.content, DEFAULT_CONTENT_MAX_LENGTH);
-  if (!params.enabled || !content) {
+  if (!content) {
     return false;
   }
 
