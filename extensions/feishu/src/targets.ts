@@ -28,6 +28,9 @@ export function normalizeFeishuTarget(raw: string): string | null {
   if (lowered.startsWith("chat:")) {
     return trimmed.slice("chat:".length).trim() || null;
   }
+  if (lowered.startsWith("group:")) {
+    return trimmed.slice("group:".length).trim() || null;
+  }
   if (lowered.startsWith("user:")) {
     return trimmed.slice("user:".length).trim() || null;
   }
