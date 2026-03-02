@@ -489,7 +489,7 @@ describe("cron model formatting and precedence edge cases", () => {
           cfgOverrides: {
             agents: {
               defaults: {
-                model: "openai/gpt-4.1" as unknown,
+                model: "openai/gpt-4.1",
               },
             },
           },
@@ -506,7 +506,7 @@ describe("cron model formatting and precedence edge cases", () => {
           cfgOverrides: {
             agents: {
               defaults: {
-                model: { primary: "openai/gpt-4.1" } as unknown,
+                model: { primary: "openai/gpt-4.1" },
               },
             },
           },
@@ -523,7 +523,7 @@ describe("cron model formatting and precedence edge cases", () => {
           cfgOverrides: {
             agents: {
               defaults: {
-                model: { primary: "openai/gpt-4.1" } as unknown,
+                model: { primary: "openai/gpt-4.1" },
               },
             },
           },
