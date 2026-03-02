@@ -92,7 +92,7 @@ export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<
     return await fn();
   } finally {
     noProxyRefCount--;
-    if (noProxyRefCount === 0 && isFirst) {
+    if (noProxyRefCount === 0) {
       if (savedNoProxy !== undefined) {
         process.env.NO_PROXY = savedNoProxy;
       } else {
