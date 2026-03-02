@@ -11,6 +11,10 @@ import { runSecurityAudit } from "./audit.js";
 import * as skillScanner from "./skill-scanner.js";
 
 const isWindows = process.platform === "win32";
+const windowsAuditEnv = {
+  USERNAME: "Tester",
+  USERDOMAIN: "DESKTOP-TEST",
+};
 
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
@@ -603,7 +607,7 @@ description: test skill
       stateDir,
       configPath,
       platform: "win32",
-      env: { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" },
+      env: windowsAuditEnv,
       execIcacls,
     });
 
@@ -649,7 +653,7 @@ description: test skill
       stateDir,
       configPath,
       platform: "win32",
-      env: { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" },
+      env: windowsAuditEnv,
       execIcacls,
     });
 
