@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
@@ -25,12 +25,22 @@ export async function getMemorySearchManager(params: {
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+
+    // Check cache first to avoid expensive binary probe on every call
     if (!statusOnly) {
       const cached = QMD_MANAGER_CACHE.get(cacheKey);
       if (cached) {
         return { manager: cached };
       }
     }
+
+    // Check if QMD binary is available before attempting to create manager
+    const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
+    if (!qmdCheck.available) {
+      log.warn(`QMD binary not available: ${qmdCheck.error}`);
+      log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
+    }
+
     try {
       const { QmdMemoryManager } = await import("./qmd-manager.js");
       const primary = await QmdMemoryManager.create({

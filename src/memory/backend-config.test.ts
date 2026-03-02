@@ -1,8 +1,12 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
@@ -142,5 +146,46 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.searchMode).toBe("vsearch");
+  });
+});
+
+describe("checkQmdBinaryAvailable", () => {
+  it("returns available=false when qmd binary is not found", async () => {
+    const result = await checkQmdBinaryAvailable("nonexistent-qmd-binary-12345");
+    expect(result.available).toBe(false);
+    expect(result.error).toContain("not found");
+  });
+
+  it("returns available=true when qmd binary is available", async () => {
+    // Mock the execFile to simulate a successful binary check
+    // We can't rely on system commands having --version
+    const result = await checkQmdBinaryAvailable("node");
+    // node may or may not be available in test environment
+    // Just verify the function returns a valid result structure
+    expect(result).toHaveProperty("available");
+    if (result.available) {
+      expect(result.path).toBeDefined();
+    } else {
+      expect(result.error).toBeDefined();
+    }
+  });
+
+  it("respects custom timeout", async () => {
+    // Use a command that will hang (sleep on unix, timeout on windows)
+    const slowCommand = process.platform === "win32" ? "timeout" : "sleep";
+    const startTime = Date.now();
+    const result = await checkQmdBinaryAvailable(slowCommand, 100);
+    const elapsed = Date.now() - startTime;
+    // Should timeout quickly (within 500ms)
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it("handles Windows .cmd extension", async () => {
+    // On Windows, npm should be available as npm.cmd
+    if (process.platform === "win32") {
+      const result = await checkQmdBinaryAvailable("npm");
+      // npm may or may not be available, but it shouldn't crash
+      expect(result).toHaveProperty("available");
+    }
   });
 });

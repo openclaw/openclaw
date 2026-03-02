@@ -8,6 +8,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const checkQmdBinaryAvailable = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -28,6 +29,7 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
+  checkQmdBinaryAvailable,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -58,22 +60,49 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    checkQmdBinaryAvailable.mockReset();
   });
 
-  it("does not warn when QMD backend is active", async () => {
+  it("does not warn when QMD backend is active and binary is available", async () => {
     resolveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
       citations: "auto",
+      qmd: { command: "qmd" },
     });
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
       local: {},
       remote: {},
     });
+    checkQmdBinaryAvailable.mockResolvedValue({ available: true, path: "qmd" });
 
     await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when QMD backend is active but binary is not available", async () => {
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: { command: "qmd" },
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    checkQmdBinaryAvailable.mockResolvedValue({
+      available: false,
+      error: 'QMD binary "qmd" not found on PATH',
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("QMD binary was not found");
+    expect(message).toContain("memory.backend builtin");
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
