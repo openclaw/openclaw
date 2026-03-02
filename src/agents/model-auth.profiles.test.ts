@@ -183,6 +183,31 @@ describe("getApiKeyForModel", () => {
         }
 
         expect(String(error)).toContain('No API key found for provider "zai".');
+        expect(String(error)).toContain("ZAI_API_KEY");
+        expect(String(error)).toContain("Z_AI_API_KEY");
+      },
+    );
+  });
+
+  it("suggests GEMINI_API_KEY when google API key is missing", async () => {
+    await withEnvAsync(
+      {
+        GEMINI_API_KEY: undefined,
+      },
+      async () => {
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({
+            provider: "google",
+            store: { version: 1, profiles: {} },
+          });
+        } catch (err) {
+          error = err;
+        }
+
+        expect(String(error)).toContain('No API key found for provider "google".');
+        expect(String(error)).toContain("GEMINI_API_KEY");
+        expect(String(error)).toContain("openclaw agents add <id>");
       },
     );
   });

@@ -24,6 +24,32 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+const PROVIDER_API_KEY_ENV_MAP: Record<string, string> = {
+  openai: "OPENAI_API_KEY",
+  google: "GEMINI_API_KEY",
+  voyage: "VOYAGE_API_KEY",
+  groq: "GROQ_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  xai: "XAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  litellm: "LITELLM_API_KEY",
+  "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+  "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  nvidia: "NVIDIA_API_KEY",
+  xiaomi: "XIAOMI_API_KEY",
+  synthetic: "SYNTHETIC_API_KEY",
+  venice: "VENICE_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  opencode: "OPENCODE_API_KEY",
+  together: "TOGETHER_API_KEY",
+  qianfan: "QIANFAN_API_KEY",
+  ollama: "OLLAMA_API_KEY",
+  vllm: "VLLM_API_KEY",
+  kilocode: "KILOCODE_API_KEY",
+};
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -45,6 +71,45 @@ function resolveProviderConfig(
     (providers[normalized] as ModelProviderConfig | undefined) ??
     Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
   );
+}
+
+function resolveProviderApiKeyEnvVarHints(provider: string): string[] {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "github-copilot") {
+    return ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+  }
+  if (normalized === "anthropic") {
+    return ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"];
+  }
+  if (normalized === "chutes") {
+    return ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"];
+  }
+  if (normalized === "zai") {
+    return ["ZAI_API_KEY", "Z_AI_API_KEY"];
+  }
+  if (normalized === "opencode") {
+    return ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"];
+  }
+  if (normalized === "qwen-portal") {
+    return ["QWEN_PORTAL_API_KEY", "QWEN_OAUTH_TOKEN"];
+  }
+  if (normalized === "volcengine" || normalized === "volcengine-plan") {
+    return ["VOLCANO_ENGINE_API_KEY"];
+  }
+  if (normalized === "byteplus" || normalized === "byteplus-plan") {
+    return ["BYTEPLUS_API_KEY"];
+  }
+  if (normalized === "minimax-portal") {
+    return ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"];
+  }
+  if (normalized === "kimi-coding") {
+    return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
+  }
+  if (normalized === "huggingface") {
+    return ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"];
+  }
+  const envVar = PROVIDER_API_KEY_ENV_MAP[normalized];
+  return envVar ? [envVar] : [];
 }
 
 export function getCustomProviderApiKey(
@@ -223,9 +288,17 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
+  const envHints = resolveProviderApiKeyEnvVarHints(provider);
+  const envHintText =
+    envHints.length > 0
+      ? `Set ${envHints.join(" or ")} in your environment.`
+      : normalizeProviderId(provider) === "google-vertex"
+        ? "Authenticate with gcloud ADC (`gcloud auth application-default login`)."
+        : undefined;
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
+      envHintText,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
@@ -298,33 +371,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
   }
 
-  const envMap: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    google: "GEMINI_API_KEY",
-    voyage: "VOYAGE_API_KEY",
-    groq: "GROQ_API_KEY",
-    deepgram: "DEEPGRAM_API_KEY",
-    cerebras: "CEREBRAS_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    litellm: "LITELLM_API_KEY",
-    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-    minimax: "MINIMAX_API_KEY",
-    nvidia: "NVIDIA_API_KEY",
-    xiaomi: "XIAOMI_API_KEY",
-    synthetic: "SYNTHETIC_API_KEY",
-    venice: "VENICE_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-    together: "TOGETHER_API_KEY",
-    qianfan: "QIANFAN_API_KEY",
-    ollama: "OLLAMA_API_KEY",
-    vllm: "VLLM_API_KEY",
-    kilocode: "KILOCODE_API_KEY",
-  };
-  const envVar = envMap[normalized];
+  const envVar = PROVIDER_API_KEY_ENV_MAP[normalized];
   if (!envVar) {
     return null;
   }
