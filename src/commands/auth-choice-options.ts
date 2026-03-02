@@ -36,6 +36,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["token", "apiKey"],
   },
   {
+    value: "claude-sdk",
+    label: "Claude Code SDK",
+    hint: "No API key (uses local claude CLI auth)",
+    choices: ["claude-sdk"],
+  },
+  {
     value: "chutes",
     label: "Chutes",
     hint: "OAuth",
@@ -281,6 +287,11 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Local proxy for VS Code Copilot models",
   },
   { value: "apiKey", label: "Anthropic API key" },
+  {
+    value: "claude-sdk",
+    label: "Claude Code SDK (no API key)",
+    hint: "uses local `claude` CLI authentication (Max subscription)",
+  },
   {
     value: "opencode-zen",
     label: "OpenCode Zen (multi-model proxy)",
