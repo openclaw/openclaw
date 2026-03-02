@@ -54,15 +54,22 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     ask?: "off" | "on-miss" | "always";
     approved?: boolean;
   }) {
-    const runCommand = vi.fn(async () => ({
-      success: true,
-      stdout: "local-ok",
-      stderr: "",
-      timedOut: false,
-      truncated: false,
-      exitCode: 0,
-      error: null,
-    }));
+    const runCommand = vi.fn(
+      async (
+        _command: string[],
+        _cwd?: string,
+        _env?: Record<string, string>,
+        _timeoutMs?: number,
+      ) => ({
+        success: true,
+        stdout: "local-ok",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        exitCode: 0,
+        error: null,
+      }),
+    );
     const runViaMacAppExecHost = vi.fn(async () => params.runViaResponse ?? null);
     const sendInvokeResult = vi.fn(async () => {});
     const sendExecFinishedEvent = vi.fn(async () => {});
@@ -192,7 +199,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       return;
     }
 
-    expect(runCommand).toHaveBeenCalledWith(["tr", "a", "b"], undefined, undefined, undefined);
+    const runArgs = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
+    expect(runArgs).toBeDefined();
+    expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
+    expect(runArgs?.slice(1)).toEqual(["a", "b"]);
     expect(sendInvokeResult).toHaveBeenCalledWith(
       expect.objectContaining({
         ok: true,
@@ -216,6 +226,132 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }),
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "pins PATH-token executable to canonical path for approval-based runs",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-path-pin-"));
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      const expected = fs.realpathSync(link);
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["poccmd", "-n", "SAFE"],
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).toHaveBeenCalledWith(
+          [expected, "-n", "SAFE"],
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+          }),
+        );
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "pins PATH-token executable to canonical path for allowlist runs",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-allowlist-path-pin-"));
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      const expected = fs.realpathSync(link);
+      const oldPath = process.env.PATH;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+      const runCommand = vi.fn(async () => ({
+        success: true,
+        stdout: "local-ok",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        exitCode: 0,
+        error: null,
+      }));
+      const sendInvokeResult = vi.fn(async () => {});
+      const sendNodeEvent = vi.fn(async () => {});
+      try {
+        await withTempApprovalsHome({
+          approvals: {
+            version: 1,
+            defaults: {
+              security: "allowlist",
+              ask: "off",
+              askFallback: "deny",
+            },
+            agents: {
+              main: {
+                allowlist: [{ pattern: link }],
+              },
+            },
+          },
+          run: async () => {
+            await handleSystemRunInvoke({
+              client: {} as never,
+              params: {
+                command: ["poccmd", "-n", "SAFE"],
+                sessionKey: "agent:main:main",
+              },
+              skillBins: {
+                current: async () => [],
+              },
+              execHostEnforced: false,
+              execHostFallbackAllowed: true,
+              resolveExecSecurity: () => "allowlist",
+              resolveExecAsk: () => "off",
+              isCmdExeInvocation: () => false,
+              sanitizeEnv: () => undefined,
+              runCommand,
+              runViaMacAppExecHost: vi.fn(async () => null),
+              sendNodeEvent,
+              buildExecEventPayload: (payload) => payload,
+              sendInvokeResult,
+              sendExecFinishedEvent: vi.fn(async () => {}),
+              preferMacAppExecHost: false,
+            });
+          },
+        });
+        expect(runCommand).toHaveBeenCalledWith(
+          [expected, "-n", "SAFE"],
+          undefined,
+          undefined,
+          undefined,
+        );
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+          }),
+        );
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "denies approval-based execution when cwd is a symlink",

@@ -252,6 +252,10 @@ When a prompt is required, the gateway broadcasts `exec.approval.requested` to o
 The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+For `host=node`, approval requests include a canonical `systemRunPlan` payload. The gateway uses
+that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
+requests.
+
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.

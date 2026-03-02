@@ -138,9 +138,9 @@ describe("resolveExtraParams", () => {
 
 describe("applyExtraParamsToAgent", () => {
   function createOptionsCaptureAgent() {
-    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const calls: Array<(SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push(options);
+      calls.push(options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined);
       return {} as ReturnType<StreamFn>;
     };
     return {
@@ -544,7 +544,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("does not set transport defaults for non-Codex providers", () => {
+  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -558,7 +558,87 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.transport).toBeUndefined();
+    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("lets runtime options override OpenAI default transport", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { transport: "sse" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("sse");
+  });
+
+  it("allows disabling OpenAI websocket warm-up via model params", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
+  });
+
+  it("lets runtime options override configured OpenAI websocket warm-up", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5": {
+              params: {
+                openaiWsWarmup: false,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      openaiWsWarmup: true,
+    } as unknown as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
   it("allows forcing Codex transport to SSE", () => {
@@ -744,6 +824,19 @@ describe("applyExtraParamsToAgent", () => {
       "anthropic-beta":
         "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07",
     });
+  });
+
+  it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+      temperature: 0.2,
+    });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-opus-4-6",
+      options: { headers: { "X-Custom": "1" } },
+    });
+
+    expect(headers).toEqual({ "X-Custom": "1" });
   });
 
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {

@@ -19,6 +19,7 @@ vi.mock("./doctor-memory-search.js", () => ({
 
 vi.mock("./doctor-platform-notes.js", () => ({
   noteDeprecatedLegacyEnvVars: vi.fn(),
+  noteStartupOptimizationHints: vi.fn(),
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
 }));

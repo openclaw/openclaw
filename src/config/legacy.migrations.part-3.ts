@@ -1,4 +1,10 @@
 import {
+  buildDefaultControlUiAllowedOrigins,
+  hasConfiguredControlUiAllowedOrigins,
+  isGatewayNonLoopbackBindMode,
+  resolveGatewayPortWithDefault,
+} from "./gateway-control-ui-origins.js";
+import {
   ensureAgentEntry,
   ensureRecord,
   getAgentsList,
@@ -8,12 +14,57 @@ import {
   mergeMissing,
   resolveDefaultAgentIdFromRaw,
 } from "./legacy.shared.js";
+import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
 // NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
 
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
 
 export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
+  {
+    // v2026.2.26 added a startup guard requiring gateway.controlUi.allowedOrigins (or the
+    // host-header fallback flag) for any non-loopback bind. The onboarding wizard was updated
+    // to seed this for new installs, but existing bind=lan/bind=custom installs that upgrade
+    // crash-loop immediately on next startup with no recovery path (issue #29385).
+    //
+    // This migration runs on every gateway start via migrateLegacyConfig → applyLegacyMigrations
+    // and writes the seeded origins to disk before the startup guard fires, preventing the loop.
+    id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
+    describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bind = gateway.bind;
+      if (!isGatewayNonLoopbackBindMode(bind)) {
+        return;
+      }
+      const controlUi = getRecord(gateway.controlUi) ?? {};
+      if (
+        hasConfiguredControlUiAllowedOrigins({
+          allowedOrigins: controlUi.allowedOrigins,
+          dangerouslyAllowHostHeaderOriginFallback:
+            controlUi.dangerouslyAllowHostHeaderOriginFallback,
+        })
+      ) {
+        return;
+      }
+      const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
+      const origins = buildDefaultControlUiAllowedOrigins({
+        port,
+        bind,
+        customBindHost:
+          typeof gateway.customBindHost === "string" ? gateway.customBindHost : undefined,
+      });
+      gateway.controlUi = { ...controlUi, allowedOrigins: origins };
+      raw.gateway = gateway;
+      changes.push(
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
+          "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
+      );
+    },
+  },
   {
     id: "memorySearch->agents.defaults.memorySearch",
     describe: "Move top-level memorySearch to agents.defaults.memorySearch",

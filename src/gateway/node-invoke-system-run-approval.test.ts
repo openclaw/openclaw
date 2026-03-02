@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  buildSystemRunApprovalBindingV1,
+  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../infra/system-run-approval-binding.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
@@ -30,7 +30,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command,
         commandArgv,
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: effectiveBindingArgv,
           cwd: null,
           agentId: null,
@@ -229,17 +229,16 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
-  test("uses systemRunPlanV2 for forwarded command context and ignores caller tampering", () => {
+  test("uses systemRunPlan for forwarded command context and ignores caller tampering", () => {
     const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
-    record.request.systemRunPlanV2 = {
-      version: 2,
+    record.request.systemRunPlan = {
       argv: ["/usr/bin/echo", "SAFE"],
       cwd: "/real/cwd",
       rawCommand: "/usr/bin/echo SAFE",
       agentId: "main",
       sessionKey: "agent:main:main",
     };
-    record.request.systemRunBindingV1 = buildSystemRunApprovalBindingV1({
+    record.request.systemRunBinding = buildSystemRunApprovalBinding({
       argv: ["/usr/bin/echo", "SAFE"],
       cwd: "/real/cwd",
       agentId: "main",
@@ -297,8 +296,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects env hash mismatch", () => {
     const record = makeRecord("git diff", ["git", "diff"]);
-    record.request.systemRunBindingV1 = {
-      version: 1,
+    record.request.systemRunBinding = {
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
@@ -329,8 +327,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("accepts matching env hash with reordered keys", () => {
     const record = makeRecord("git diff", ["git", "diff"]);
     const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
-    record.request.systemRunBindingV1 = {
-      version: 1,
+    record.request.systemRunBinding = {
       argv: ["git", "diff"],
       cwd: null,
       agentId: null,
@@ -363,7 +360,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command: "echo SAFE",
         commandArgv: ["echo", "SAFE"],
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+        systemRunBinding: buildSystemRunApprovalBinding({
           argv: ["echo", "SAFE"],
           cwd: null,
           agentId: null,

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import {
@@ -9,6 +10,7 @@ import {
 import type {
   CronDelivery,
   CronDeliveryPatch,
+  CronFailureAlert,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -87,6 +89,25 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  }
+}
+
+function assertMainSessionAgentId(
+  job: Pick<CronJob, "sessionTarget" | "agentId">,
+  defaultAgentId: string | undefined,
+) {
+  if (job.sessionTarget !== "main") {
+    return;
+  }
+  if (!job.agentId) {
+    return;
+  }
+  const normalized = normalizeAgentId(job.agentId);
+  const normalizedDefault = normalizeAgentId(defaultAgentId);
+  if (normalized !== normalizedDefault) {
+    throw new Error(
+      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
+    );
   }
 }
 
@@ -208,6 +229,19 @@ function recordScheduleComputeError(params: {
       { jobId: job.id, name: job.name, errorCount, err: errText },
       "cron: auto-disabled job after repeated schedule errors",
     );
+
+    // Notify the user so the auto-disable is not silent (#28861).
+    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    state.deps.enqueueSystemEvent(notifyText, {
+      agentId: job.agentId,
+      sessionKey: job.sessionKey,
+      contextKey: `cron:${job.id}:auto-disabled`,
+    });
+    state.deps.requestHeartbeatNow({
+      reason: `cron:${job.id}:auto-disabled`,
+      agentId: job.agentId,
+      sessionKey: job.sessionKey,
+    });
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -406,17 +440,23 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
+    failureAlert: input.failureAlert,
     state: {
       ...input.state,
     },
   };
   assertSupportedJobSpec(job);
+  assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
 
-export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
+export function applyJobPatch(
+  job: CronJob,
+  patch: CronJobPatch,
+  opts?: { defaultAgentId?: string },
+) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -470,6 +510,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
+  if ("failureAlert" in patch) {
+    job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
@@ -483,6 +526,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
 }
 
@@ -630,6 +674,42 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+
+  return next;
+}
+
+function mergeCronFailureAlert(
+  existing: CronFailureAlert | false | undefined,
+  patch: CronFailureAlert | false | undefined,
+): CronFailureAlert | false | undefined {
+  if (patch === false) {
+    return false;
+  }
+  if (patch === undefined) {
+    return existing;
+  }
+  const base = existing === false || existing === undefined ? {} : existing;
+  const next: CronFailureAlert = { ...base };
+
+  if ("after" in patch) {
+    const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
+    next.after = after > 0 ? Math.floor(after) : undefined;
+  }
+  if ("channel" in patch) {
+    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
+    next.channel = channel ? channel : undefined;
+  }
+  if ("to" in patch) {
+    const to = typeof patch.to === "string" ? patch.to.trim() : "";
+    next.to = to ? to : undefined;
+  }
+  if ("cooldownMs" in patch) {
+    const cooldownMs =
+      typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)
+        ? patch.cooldownMs
+        : -1;
+    next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
   }
 
   return next;
