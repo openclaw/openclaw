@@ -31,6 +31,17 @@ function getSharedWebhookRouteRefCounts(
   return counts;
 }
 
+function createIdempotentUnregister(action: () => void): () => void {
+  let unregistered = false;
+  return () => {
+    if (unregistered) {
+      return;
+    }
+    unregistered = true;
+    action();
+  };
+}
+
 type RegisterPluginHttpRouteParams = {
   path?: string | null;
   fallbackPath?: string | null;
@@ -85,8 +96,11 @@ function registerPluginHttpRouteInternal(
       params.log?.(`plugin: reusing shared webhook path ${normalizedPath}${suffix}${pluginHint}`);
       return {
         ok: true,
-        unregister: () => {
-          const current = counts.get(existing) ?? 1;
+        unregister: createIdempotentUnregister(() => {
+          const current = counts.get(existing);
+          if (current === undefined) {
+            return;
+          }
           if (current > 1) {
             counts.set(existing, current - 1);
             return;
@@ -96,7 +110,7 @@ function registerPluginHttpRouteInternal(
           if (index >= 0) {
             routes.splice(index, 1);
           }
-        },
+        }),
       };
     } else {
       registry.diagnostics.push({
@@ -124,10 +138,13 @@ function registerPluginHttpRouteInternal(
 
   return {
     ok: true,
-    unregister: () => {
+    unregister: createIdempotentUnregister(() => {
       if (kind === "webhook") {
         const counts = getSharedWebhookRouteRefCounts(registry);
-        const current = counts.get(entry) ?? 1;
+        const current = counts.get(entry);
+        if (current === undefined) {
+          return;
+        }
         if (current > 1) {
           counts.set(entry, current - 1);
           return;
@@ -138,7 +155,7 @@ function registerPluginHttpRouteInternal(
       if (index >= 0) {
         routes.splice(index, 1);
       }
-    },
+    }),
   };
 }
 

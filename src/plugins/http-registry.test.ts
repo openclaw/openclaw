@@ -95,6 +95,37 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
+  it("keeps shared webhook routes when one unregister callback is called twice", () => {
+    const registry = createEmptyPluginRegistry();
+    const firstHandler = vi.fn();
+    const secondHandler = vi.fn();
+
+    const unregisterFirst = registerPluginHttpRoute({
+      path: "/synology-webhook",
+      handler: firstHandler,
+      registry,
+      pluginId: "synology-chat",
+      kind: "webhook",
+    });
+
+    const unregisterSecond = registerPluginHttpRoute({
+      path: "/synology-webhook",
+      handler: secondHandler,
+      registry,
+      pluginId: "synology-chat",
+      kind: "webhook",
+    });
+
+    unregisterSecond();
+    unregisterSecond();
+
+    expect(registry.httpRoutes).toHaveLength(1);
+    expect(registry.httpRoutes[0]?.handler).toBe(firstHandler);
+
+    unregisterFirst();
+    expect(registry.httpRoutes).toHaveLength(0);
+  });
+
   it("rejects webhook routes on core-owned paths", () => {
     const registry = createEmptyPluginRegistry();
     const logs: string[] = [];
