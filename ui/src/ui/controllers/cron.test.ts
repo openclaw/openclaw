@@ -160,7 +160,6 @@ describe("cron controller", () => {
       name: "main job",
     });
     expect((addCall?.[1] as { delivery?: unknown } | undefined)?.delivery).toBeUndefined();
-    expect(state.cronForm.deliveryMode).toBe("none");
   });
 
   it("submits cron.update when editing an existing job", async () => {
@@ -213,6 +212,50 @@ describe("cron controller", () => {
       },
     });
     expect(state.cronEditingJobId).toBeNull();
+  });
+
+  it("submits explicit none delivery when editing an isolated job", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-iso" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-iso" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: {
+        request,
+      } as unknown as CronState["client"],
+      cronEditingJobId: "job-iso",
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "isolated none delivery",
+        scheduleKind: "cron",
+        cronExpr: "0 9 * * *",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "updated",
+        deliveryMode: "none",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-iso",
+      patch: {
+        delivery: { mode: "none" },
+      },
+    });
   });
 
   it("maps a cron job into editable form fields", () => {
