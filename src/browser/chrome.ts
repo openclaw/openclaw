@@ -303,9 +303,7 @@ export async function launchOpenClawChrome(
 
   if (!(await isChromeReachable(profile.cdpUrl, 500))) {
     const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
-    const stderrHint = stderrOutput
-      ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}`
-      : "";
+    const stderrHint = stderrOutput ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}` : "";
     const sandboxHint =
       process.platform === "linux" && !resolved.noSandbox
         ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
