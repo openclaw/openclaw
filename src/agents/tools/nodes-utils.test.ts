@@ -8,7 +8,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
+import { listNodes, resolveCanvasNodeIds, resolveNodeIdFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -81,5 +81,52 @@ describe("listNodes", () => {
     await expect(listNodes({})).rejects.toThrow("gateway closed (1008): unauthorized");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {});
+  });
+});
+
+describe("resolveCanvasNodeIds", () => {
+  it("returns all connected canvas-capable nodes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: true },
+        { nodeId: "cli-1", caps: [], connected: true },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["mac-1", "ios-1"]);
+  });
+
+  it("excludes disconnected nodes", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: false },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({});
+    expect(ids).toEqual(["mac-1"]);
+  });
+
+  it("throws when no canvas-capable nodes are connected", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [{ nodeId: "cli-1", caps: [], connected: true }],
+    });
+
+    await expect(resolveCanvasNodeIds({})).rejects.toThrow("no connected canvas-capable nodes");
+  });
+
+  it("resolves to a single node when a query is provided", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      nodes: [
+        { nodeId: "mac-1", caps: ["canvas"], connected: true },
+        { nodeId: "ios-1", caps: ["canvas"], connected: true },
+      ],
+    });
+
+    const ids = await resolveCanvasNodeIds({}, "ios-1");
+    expect(ids).toEqual(["ios-1"]);
   });
 });
