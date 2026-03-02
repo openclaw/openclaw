@@ -34,10 +34,10 @@ describe("ensureConfigReady", () => {
     return await import("./config-guard.js");
   }
 
-  async function runEnsureConfigReady(commandPath: string[]) {
+  async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
     const { ensureConfigReady } = await loadEnsureConfigReady();
-    await ensureConfigReady({ runtime: runtime as never, commandPath });
+    await ensureConfigReady({ runtime: runtime as never, commandPath, suppressDoctorStdout });
     return runtime;
   }
 
@@ -99,5 +99,44 @@ describe("ensureConfigReady", () => {
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
 
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs doctor flow when stdout suppression is enabled", async () => {
+    await runEnsureConfigReady(["message"], true);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prevents preflight stdout noise when suppression is enabled", async () => {
+    const stdoutWrites: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    try {
+      await runEnsureConfigReady(["message"], true);
+      expect(stdoutWrites.join("")).not.toContain("Doctor warnings");
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("allows preflight stdout noise when suppression is not enabled", async () => {
+    const stdoutWrites: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
+      process.stdout.write("Doctor warnings\n");
+    });
+    try {
+      await runEnsureConfigReady(["message"], false);
+      expect(stdoutWrites.join("")).toContain("Doctor warnings");
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });

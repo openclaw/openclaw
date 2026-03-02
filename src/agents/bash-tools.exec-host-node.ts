@@ -13,9 +13,12 @@ import {
 } from "../infra/exec-approvals.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { logInfo } from "../logger.js";
 import {
-  registerExecApprovalRequestForHost,
+  buildExecApprovalRequesterContext,
+  buildExecApprovalTurnSourceContext,
+  registerExecApprovalRequestForHostOrThrow,
   waitForExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import {
@@ -95,6 +98,31 @@ export async function executeNodeHostCommand(
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+    "node.invoke",
+    { timeoutMs: 15_000 },
+    {
+      nodeId,
+      command: "system.run.prepare",
+      params: {
+        command: argv,
+        rawCommand: params.command,
+        cwd: params.workdir,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      },
+      idempotencyKey: crypto.randomUUID(),
+    },
+  );
+  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+  if (!prepared) {
+    throw new Error("invalid system.run.prepare response");
+  }
+  const runArgv = prepared.plan.argv;
+  const runRawCommand = prepared.plan.rawCommand ?? prepared.cmdText;
+  const runCwd = prepared.plan.cwd ?? params.workdir;
+  const runAgentId = prepared.plan.agentId ?? params.agentId;
+  const runSessionKey = prepared.plan.sessionKey ?? params.sessionKey;
 
   const nodeEnv = params.requestedEnv ? { ...params.requestedEnv } : undefined;
   const baseAllowlistEval = evaluateShellAllowlist({
@@ -170,13 +198,13 @@ export async function executeNodeHostCommand(
       nodeId,
       command: "system.run",
       params: {
-        command: argv,
-        rawCommand: params.command,
-        cwd: params.workdir,
+        command: runArgv,
+        rawCommand: runRawCommand,
+        cwd: runCwd,
         env: nodeEnv,
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        agentId: runAgentId,
+        sessionKey: runSessionKey,
         approved: approvedByAsk,
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
@@ -193,30 +221,26 @@ export async function executeNodeHostCommand(
     let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     let preResolvedDecision: string | null | undefined;
 
-    try {
-      // Register first so the returned approval ID is actionable immediately.
-      const registration = await registerExecApprovalRequestForHost({
-        approvalId,
-        command: params.command,
-        commandArgv: argv,
-        env: nodeEnv,
-        workdir: params.workdir,
-        host: "node",
-        nodeId,
-        security: hostSecurity,
-        ask: hostAsk,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        turnSourceChannel: params.turnSourceChannel,
-        turnSourceTo: params.turnSourceTo,
-        turnSourceAccountId: params.turnSourceAccountId,
-        turnSourceThreadId: params.turnSourceThreadId,
-      });
-      expiresAtMs = registration.expiresAtMs;
-      preResolvedDecision = registration.finalDecision;
-    } catch (err) {
-      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
-    }
+    // Register first so the returned approval ID is actionable immediately.
+    const registration = await registerExecApprovalRequestForHostOrThrow({
+      approvalId,
+      command: prepared.cmdText,
+      commandArgv: prepared.plan.argv,
+      systemRunPlan: prepared.plan,
+      env: nodeEnv,
+      workdir: runCwd,
+      host: "node",
+      nodeId,
+      security: hostSecurity,
+      ask: hostAsk,
+      ...buildExecApprovalRequesterContext({
+        agentId: runAgentId,
+        sessionKey: runSessionKey,
+      }),
+      ...buildExecApprovalTurnSourceContext(params),
+    });
+    expiresAtMs = registration.expiresAtMs;
+    preResolvedDecision = registration.finalDecision;
 
     void (async () => {
       let decision: string | null = preResolvedDecision ?? null;

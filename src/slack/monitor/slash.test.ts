@@ -435,6 +435,78 @@ describe("Slack native command argument menus", () => {
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
+  it("falls back to static menus when app.options() throws during registration", async () => {
+    const commands = new Map<string, (args: unknown) => Promise<void>>();
+    const actions = new Map<string, (args: unknown) => Promise<void>>();
+    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const app = {
+      client: { chat: { postEphemeral } },
+      command: (name: string, handler: (args: unknown) => Promise<void>) => {
+        commands.set(name, handler);
+      },
+      action: (id: string, handler: (args: unknown) => Promise<void>) => {
+        actions.set(id, handler);
+      },
+      // Simulate Bolt throwing during options registration (e.g. receiver not initialized)
+      options: () => {
+        throw new Error("Cannot read properties of undefined (reading 'listeners')");
+      },
+    };
+    const ctx = {
+      cfg: { commands: { native: true, nativeSkills: false } },
+      runtime: {},
+      botToken: "bot-token",
+      botUserId: "bot",
+      teamId: "T1",
+      allowFrom: ["*"],
+      dmEnabled: true,
+      dmPolicy: "open",
+      groupDmEnabled: false,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      channelsConfig: undefined,
+      slashCommand: {
+        enabled: true,
+        name: "openclaw",
+        ephemeral: true,
+        sessionPrefix: "slack:slash",
+      },
+      textLimit: 4000,
+      app,
+      isChannelAllowed: () => true,
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+      resolveUserName: async () => ({ name: "Ada" }),
+    } as unknown;
+    const account = {
+      accountId: "acct",
+      config: { commands: { native: true, nativeSkills: false } },
+    } as unknown;
+
+    // Registration should not throw despite app.options() throwing
+    await registerCommands(ctx, account);
+    expect(commands.size).toBeGreaterThan(0);
+    expect(actions.has("openclaw_cmdarg")).toBe(true);
+
+    // The /reportexternal command (140 choices) should fall back to static_select
+    // instead of external_select since options registration failed
+    const handler = commands.get("/reportexternal");
+    expect(handler).toBeDefined();
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      command: createSlashCommand(),
+      ack,
+      respond,
+    });
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const actionsBlock = findFirstActionsBlock(payload);
+    // Should be static_select (fallback) not external_select
+    expect(actionsBlock?.elements?.[0]?.type).toBe("static_select");
+  });
+
   it("shows a button menu when required args are omitted", async () => {
     const { respond } = await runCommandHandler(usageHandler);
     const actions = expectArgMenuLayout(respond);
@@ -628,6 +700,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
@@ -666,6 +739,8 @@ function createPolicyHarness(overrides?: {
     textLimit: 4000,
     app,
     isChannelAllowed: () => true,
+    shouldDropMismatchedSlackEvent: (body: unknown) =>
+      overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     resolveChannelName:
       overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
     resolveUserName: async () => ({ name: "Ada" }),
@@ -678,6 +753,7 @@ function createPolicyHarness(overrides?: {
 
 async function runSlashHandler(params: {
   commands: Map<unknown, (args: unknown) => Promise<void>>;
+  body?: unknown;
   command: Partial<{
     user_id: string;
     user_name: string;
@@ -697,6 +773,7 @@ async function runSlashHandler(params: {
   const ack = vi.fn().mockResolvedValue(undefined);
 
   await handler({
+    body: params.body,
     command: {
       user_id: "U1",
       user_name: "Ada",
@@ -713,6 +790,7 @@ async function runSlashHandler(params: {
 
 async function registerAndRunPolicySlash(params: {
   harness: ReturnType<typeof createPolicyHarness>;
+  body?: unknown;
   command?: Partial<{
     user_id: string;
     user_name: string;
@@ -725,6 +803,7 @@ async function registerAndRunPolicySlash(params: {
   await registerCommands(params.harness.ctx, params.harness.account);
   return await runSlashHandler({
     commands: params.harness.commands,
+    body: params.body,
     command: {
       channel_id: params.command?.channel_id ?? params.harness.channelId,
       channel_name: params.command?.channel_name ?? params.harness.channelName,
@@ -750,6 +829,23 @@ function expectUnauthorizedResponse(respond: ReturnType<typeof vi.fn>) {
 }
 
 describe("slack slash commands channel policy", () => {
+  it("drops mismatched slash payloads before dispatch", async () => {
+    const harness = createPolicyHarness({
+      shouldDropMismatchedSlackEvent: () => true,
+    });
+    const { respond, ack } = await registerAndRunPolicySlash({
+      harness,
+      body: {
+        api_app_id: "A_MISMATCH",
+        team_id: "T_MISMATCH",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("allows unlisted channels when groupPolicy is open", async () => {
     const harness = createPolicyHarness({
       groupPolicy: "open",

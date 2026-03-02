@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -196,14 +197,6 @@ function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
     return res.message;
   });
   return changed ? next : messages;
-}
-
-function jsonUtf8Bytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Buffer.byteLength(String(value), "utf8");
-  }
 }
 
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
@@ -574,20 +567,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const configured = cfg.agents?.defaults?.thinkingDefault;
-      if (configured) {
-        thinkingLevel = configured;
-      } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
-        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        const catalog = await context.loadGatewayModelCatalog();
-        thinkingLevel = resolveThinkingDefault({
-          cfg,
-          provider,
-          model,
-          catalog,
-        });
-      }
+      const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+      const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const catalog = await context.loadGatewayModelCatalog();
+      thinkingLevel = resolveThinkingDefault({
+        cfg,
+        provider,
+        model,
+        catalog,
+      });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
