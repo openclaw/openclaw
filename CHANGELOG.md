@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Thinking defaults: set `adaptive` as the default thinking level for Anthropic Claude 4.6 models (including Bedrock Claude 4.6 refs) while keeping other reasoning-capable models at `low` unless explicitly configured.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
 - Gateway/Container probes: add built-in HTTP liveness/readiness endpoints (`/health`, `/healthz`, `/ready`, `/readyz`) for Docker/Kubernetes health checks, with fallback routing so existing handlers on those paths are not shadowed. (#31272) Thanks @vincentkoc.
+- README/Contributors: rank contributor avatars by composite score (commits + merged PRs + code LOC), excluding docs-only LOC to prevent bulk-generated files from inflating rankings. (#23970) Thanks @tyler6204.
 - Android/Nodes: add `camera.list`, `device.permissions`, `device.health`, and `notifications.actions` (`open`/`dismiss`/`reply`) on Android nodes, plus first-class node-tool actions for the new device/notification commands. (#28260) Thanks @obviyus.
 - Discord/Thread bindings: replace fixed TTL lifecycle with inactivity (`idleHours`, default 24h) plus optional hard `maxAgeHours` lifecycle controls, and add `/session idle` + `/session max-age` commands for focused thread-bound sessions. (#27845) Thanks @osolmaz.
 - Telegram/DM topics: add per-DM `direct` + topic config (allowlists, `dmPolicy`, `skills`, `systemPrompt`, `requireTopic`), route DM topics as distinct inbound/outbound sessions, and enforce topic-aware authorization/debounce for messages, callbacks, commands, and reactions. Landed from contributor PR #30579 by @kesor. Thanks @kesor.
@@ -39,6 +40,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Subagent announce cleanup: keep completion-message runs pending while descendants settle, add a 30 minute hard-expiry backstop to avoid indefinite pending state, and keep retry bookkeeping resumable across deferred wakes. (#23970) Thanks @tyler6204.
+- BlueBubbles/Message metadata: harden send response ID extraction, include sender identity in DM context, and normalize inbound `message_id` selection to avoid duplicate ID metadata. (#23970) Thanks @tyler6204.
+- Gateway/Control UI method guard: allow POST requests to non-UI routes to fall through when no base path is configured, and add POST regression coverage for fallthrough and base-path 405 behavior. (#23970) Thanks @tyler6204.
 - Authentication: classify `permission_error` as `auth_permanent` for profile fallback. (#31324) Thanks @Sid-Qin.
 - Security/Prompt spoofing hardening: stop injecting queued runtime events into user-role prompt text, route them through trusted system-prompt context, and neutralize inbound spoof markers like `[System Message]` and line-leading `System:` in untrusted message content. (#30448)
 - Gateway/Node browser proxy routing: honor `profile` from `browser.request` JSON body when query params omit it, while preserving query-profile precedence when both are present. (#28852) Thanks @Sid-Qin.
