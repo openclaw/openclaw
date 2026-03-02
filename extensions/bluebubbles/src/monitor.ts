@@ -243,7 +243,14 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
         path,
         pluginId: WEBHOOK_ROUTE_PLUGIN_ID,
         source: "bluebubbles-webhook",
-        handler: handleBlueBubblesWebhookRequest,
+        handler: async (req, res) => {
+          const handled = await handleBlueBubblesWebhookRequest(req, res);
+          if (!handled && !res.headersSent) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+          }
+        },
       }),
   });
   return () => {
