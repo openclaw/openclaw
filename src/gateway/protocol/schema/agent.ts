@@ -5,6 +5,7 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 export const AgentEventSchema = Type.Object(
   {
     runId: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),

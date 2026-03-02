@@ -21,6 +21,8 @@ export type ChatEvent = {
 export type AgentEvent = {
   runId: string;
   stream: string;
+  // Gateway sends non-empty sessionKey when available; legacy senders may omit it.
+  sessionKey?: string;
   data?: Record<string, unknown>;
 };
 

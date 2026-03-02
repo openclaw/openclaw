@@ -237,6 +237,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
+    const normalizedCurrentSessionKey = state.currentSessionKey.trim();
+    const normalizedSessionKey = typeof evt.sessionKey === "string" ? evt.sessionKey.trim() : "";
+    const hasSessionKey = normalizedSessionKey.length > 0;
+    if (hasSessionKey && normalizedSessionKey !== normalizedCurrentSessionKey) {
+      return;
+    }
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
@@ -281,6 +287,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "lifecycle") {
+      // Session gating is centralized above; lifecycle keeps runId gating for legacy
+      // events that omit sessionKey.
       if (!isActiveRun) {
         return;
       }

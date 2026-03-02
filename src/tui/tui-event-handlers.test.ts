@@ -108,13 +108,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   };
 
   it("processes tool events when runId matches activeChatRunId (even if sessionId differs)", () => {
-    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+    const { state, chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { currentSessionId: "session-xyz", activeChatRunId: "run-123" },
     });
 
     const evt: AgentEvent = {
       runId: "run-123",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: {
         phase: "start",
         toolCallId: "tc1",
@@ -130,13 +131,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("ignores tool events when runId does not match activeChatRunId", () => {
-    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+    const { state, chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-1" },
     });
 
     const evt: AgentEvent = {
       runId: "run-2",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start", toolCallId: "tc1", name: "exec" },
     };
 
@@ -149,7 +151,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("processes lifecycle events when runId matches activeChatRunId", () => {
     const chatLog = createMockChatLog();
-    const { tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+    const { state, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-9" },
       chatLog,
     });
@@ -157,6 +159,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const evt: AgentEvent = {
       runId: "run-9",
       stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start" },
     };
 
@@ -185,6 +188,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const agentEvt: AgentEvent = {
       runId: "run-42",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start", toolCallId: "tc1", name: "exec" },
     };
 
@@ -212,6 +216,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-old",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start", toolCallId: "tc2", name: "exec" },
     });
 
@@ -234,6 +239,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-final",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start", toolCallId: "tc-final", name: "session_status" },
     });
 
@@ -259,6 +265,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-other",
       stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
       data: { phase: "end" },
     });
 
@@ -266,8 +273,75 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).not.toHaveBeenCalled();
   });
 
+  it("ignores lifecycle updates when runId is active but sessionKey is different", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active" },
+    });
+
+    handleAgentEvent({
+      runId: "run-active",
+      stream: "lifecycle",
+      sessionKey: "agent:main:other",
+      data: { phase: "start" },
+    });
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("running");
+    expect(tui.requestRender).not.toHaveBeenCalled();
+
+    handleAgentEvent({
+      runId: "run-active",
+      stream: "lifecycle",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores tool updates when runId is active but sessionKey is different", () => {
+    const { state, chatLog, tui, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active", sessionInfo: { verboseLevel: "full" } },
+    });
+
+    handleAgentEvent({
+      runId: "run-active",
+      stream: "tool",
+      sessionKey: "agent:main:other",
+      data: { phase: "start", toolCallId: "tc-mismatch", name: "exec" },
+    });
+
+    expect(chatLog.startTool).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+
+    handleAgentEvent({
+      runId: "run-active",
+      stream: "tool",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start", toolCallId: "tc-match", name: "exec" },
+    });
+
+    expect(chatLog.startTool).toHaveBeenCalledWith("tc-match", "exec", undefined);
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts lifecycle updates without sessionKey for active runs", () => {
+    const { tui, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-active" },
+    });
+
+    handleAgentEvent({
+      runId: "run-active",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses tool events when verbose is off", () => {
-    const { chatLog, tui, handleAgentEvent } = createHandlersHarness({
+    const { state, chatLog, tui, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-123",
         sessionInfo: { verboseLevel: "off" },
@@ -277,6 +351,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-123",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: { phase: "start", toolCallId: "tc-off", name: "session_status" },
     });
 
@@ -285,7 +360,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("omits tool output when verbose is on (non-full)", () => {
-    const { chatLog, handleAgentEvent } = createHandlersHarness({
+    const { state, chatLog, handleAgentEvent } = createHandlersHarness({
       state: {
         activeChatRunId: "run-123",
         sessionInfo: { verboseLevel: "on" },
@@ -295,6 +370,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-123",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: {
         phase: "update",
         toolCallId: "tc-on",
@@ -306,6 +382,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleAgentEvent({
       runId: "run-123",
       stream: "tool",
+      sessionKey: state.currentSessionKey,
       data: {
         phase: "result",
         toolCallId: "tc-on",

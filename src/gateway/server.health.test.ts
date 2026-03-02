@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -156,6 +160,8 @@ describe("gateway server health/presence", () => {
     const { ws } = await harness.openClient();
 
     const runId = randomUUID();
+    const sessionKey = `agent:main:health-${runId}`;
+    registerAgentRunContext(runId, { sessionKey });
     const evtPromise = onceMessage<GatewayFrame>(
       ws,
       (o) =>
@@ -164,15 +170,19 @@ describe("gateway server health/presence", () => {
         o.payload?.runId === runId &&
         o.payload?.stream === "lifecycle",
     );
-    emitAgentEvent({ runId, stream: "lifecycle", data: { msg: "hi" } });
-    const evt = await evtPromise;
-    const payload = evt.payload as Record<string, unknown> | undefined;
-    expect(payload?.runId).toBe(runId);
-    expect(typeof evt.seq).toBe("number");
-    const data = payload?.data as Record<string, unknown> | undefined;
-    expect(data?.msg).toBe("hi");
-
-    ws.close();
+    try {
+      emitAgentEvent({ runId, stream: "lifecycle", data: { msg: "hi" } });
+      const evt = await evtPromise;
+      const payload = evt.payload as Record<string, unknown> | undefined;
+      expect(payload?.runId).toBe(runId);
+      expect(payload?.sessionKey).toBe(sessionKey);
+      expect(typeof evt.seq).toBe("number");
+      const data = payload?.data as Record<string, unknown> | undefined;
+      expect(data?.msg).toBe("hi");
+    } finally {
+      clearAgentRunContext(runId);
+      ws.close();
+    }
   });
 
   test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
