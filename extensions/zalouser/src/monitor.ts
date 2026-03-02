@@ -136,6 +136,7 @@ async function processMessage(
   }
 
   const isGroup = message.isGroup;
+  const chatId = message.threadId;
   const senderId = message.senderId?.trim();
   if (!senderId) {
     logVerbose(core, runtime, `zalouser: drop message ${chatId} (missing senderId)`);
@@ -143,7 +144,6 @@ async function processMessage(
   }
   const senderName = message.senderName ?? "";
   const groupName = message.groupName ?? "";
-  const chatId = message.threadId;
 
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
