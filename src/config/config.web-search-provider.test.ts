@@ -50,6 +50,58 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts serper provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "serper",
+        providerConfig: {
+          apiKey: "test-serper-key",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts fallback field", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+            fallback: "serper",
+            apiKey: "test-brave-key",
+            serper: {
+              apiKey: "test-serper-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts serper as fallback for brave", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "serper",
+            fallback: "brave",
+            serper: { apiKey: "test-serper-key" },
+            apiKey: "test-brave-key",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -63,6 +115,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
+    delete process.env.SERPER_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
   });
@@ -94,6 +147,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {
     process.env.PERPLEXITY_API_KEY = "test-perplexity-key";
     expect(resolveSearchProvider({})).toBe("perplexity");
+  });
+
+  it("auto-detects serper when only SERPER_API_KEY is set", () => {
+    process.env.SERPER_API_KEY = "test-serper-key";
+    expect(resolveSearchProvider({})).toBe("serper");
   });
 
   it("auto-detects grok when only XAI_API_KEY is set", () => {

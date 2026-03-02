@@ -430,8 +430,10 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
-      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", "kimi", or "serper"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "serper";
+      /** Fallback provider to use when primary fails (optional). */
+      fallback?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "serper";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -473,6 +475,11 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** Serper-specific configuration (used when provider="serper"). */
+      serper?: {
+        /** API key for Serper (defaults to SERPER_API_KEY env var). */
+        apiKey?: string;
       };
     };
     fetch?: {

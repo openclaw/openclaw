@@ -20,7 +20,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "serper"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -39,6 +39,8 @@ const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
 } as const;
+
+const SERPER_API_ENDPOINT = "https://google.serper.dev/search";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -177,6 +179,25 @@ type KimiSearchResponse = {
     url?: string;
     content?: string;
   }>;
+};
+
+type SerperConfig = {
+  apiKey?: string;
+};
+
+type SerperOrganicResult = {
+  title: string;
+  link: string;
+  snippet: string;
+  date?: string;
+};
+
+type SerperSearchResponse = {
+  organic?: SerperOrganicResult[];
+  knowledgeGraph?: {
+    title?: string;
+    description?: string;
+  };
 };
 
 type PerplexitySearchResponse = {
@@ -324,6 +345,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "serper") {
+    return {
+      error: "missing_serper_api_key",
+      message:
+        "web_search (serper) needs an API key. Set SERPER_API_KEY in the Gateway environment, or configure tools.web.search.serper.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -347,6 +376,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "kimi") {
     return "kimi";
+  }
+  if (raw === "serper") {
+    return "serper";
   }
   if (raw === "brave") {
     return "brave";
@@ -377,7 +409,15 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "kimi";
     }
-    // 4. Perplexity
+    // 4. Serper
+    const serperConfig = resolveSerperConfig(search);
+    if (resolveSerperApiKey(serperConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "serper" from available API keys',
+      );
+      return "serper";
+    }
+    // 5. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -386,7 +426,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 6. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       logVerbose(
@@ -397,6 +437,46 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
 
   return "brave";
+}
+
+function resolveFallbackProvider(
+  search?: WebSearchConfig,
+): (typeof SEARCH_PROVIDERS)[number] | undefined {
+  const raw =
+    search && "fallback" in search && typeof search.fallback === "string"
+      ? search.fallback.trim().toLowerCase()
+      : "";
+  if (!raw) {
+    return undefined;
+  }
+  const validProviders: ReadonlyArray<string> = SEARCH_PROVIDERS;
+  if (validProviders.includes(raw)) {
+    return raw as (typeof SEARCH_PROVIDERS)[number];
+  }
+  return undefined;
+}
+
+/** Resolve API key for any provider type, used by fallback logic. */
+function resolveApiKeyForProvider(
+  providerType: (typeof SEARCH_PROVIDERS)[number],
+  search?: WebSearchConfig,
+): string | undefined {
+  switch (providerType) {
+    case "brave":
+      return resolveSearchApiKey(search);
+    case "perplexity":
+      return resolvePerplexityApiKey(resolvePerplexityConfig(search)).apiKey;
+    case "grok":
+      return resolveGrokApiKey(resolveGrokConfig(search));
+    case "gemini":
+      return resolveGeminiApiKey(resolveGeminiConfig(search));
+    case "kimi":
+      return resolveKimiApiKey(resolveKimiConfig(search));
+    case "serper":
+      return resolveSerperApiKey(resolveSerperConfig(search));
+    default:
+      return undefined;
+  }
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -597,6 +677,23 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveSerperConfig(search?: WebSearchConfig): SerperConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const serper = "serper" in search ? search.serper : undefined;
+  if (!serper || typeof serper !== "object") {
+    return {};
+  }
+  return serper as SerperConfig;
+}
+
+function resolveSerperApiKey(serper?: SerperConfig): string | undefined {
+  const fromConfig = normalizeSecretInput(serper?.apiKey);
+  const fromEnv = normalizeSecretInput(process.env.SERPER_API_KEY);
+  return fromConfig || fromEnv || undefined;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1110,6 +1207,67 @@ async function runKimiSearch(params: {
   };
 }
 
+async function runSerperSearch(params: {
+  query: string;
+  count: number;
+  apiKey: string;
+  timeoutSeconds: number;
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    published?: string;
+    siteName?: string;
+  }>;
+  knowledgeGraph?: { title?: string; description?: string };
+}> {
+  return withTrustedWebSearchEndpoint(
+    {
+      url: SERPER_API_ENDPOINT,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "X-API-KEY": params.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          q: params.query,
+          num: Math.min(10, Math.max(1, params.count)),
+        }),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+        const detail = detailResult.text;
+        throw new Error(`Serper API error (${res.status}): ${detail || res.statusText}`);
+      }
+
+      const data = (await res.json()) as SerperSearchResponse;
+      const organic = data.organic ?? [];
+      const results = organic.slice(0, params.count).map((item) => ({
+        title: item.title ? wrapWebContent(item.title, "web_search") : "",
+        url: item.link,
+        description: item.snippet ? wrapWebContent(item.snippet, "web_search") : "",
+        published: item.date || undefined,
+        siteName: resolveSiteName(item.link),
+      }));
+
+      return {
+        results,
+        knowledgeGraph: data.knowledgeGraph
+          ? {
+              title: data.knowledgeGraph.title,
+              description: data.knowledgeGraph.description,
+            }
+          : undefined,
+      };
+    },
+  );
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -1138,7 +1296,9 @@ async function runWebSearch(params: {
           ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
           : params.provider === "gemini"
             ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
-            : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+            : params.provider === "serper"
+              ? `${params.provider}:${params.query}:${params.count}`
+              : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1256,6 +1416,32 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "serper") {
+    const serperResult = await runSerperSearch({
+      query: params.query,
+      count: params.count,
+      apiKey: params.apiKey,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: serperResult.results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: serperResult.results,
+      knowledgeGraph: serperResult.knowledgeGraph,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1340,10 +1526,12 @@ export function createWebSearchTool(options?: {
   }
 
   const provider = resolveSearchProvider(search);
+  const fallbackProviderType = resolveFallbackProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const serperConfig = resolveSerperConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1354,7 +1542,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "serper"
+              ? "Search the web using Serper (Google Search API). Returns titles, URLs, and snippets for fast research."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1373,7 +1563,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "serper"
+                  ? resolveSerperApiKey(serperConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1423,11 +1615,15 @@ export function createWebSearchTool(options?: {
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
-      const result = await runWebSearch({
+      const baseTimeoutSeconds = resolveTimeoutSeconds(
+        search?.timeoutSeconds,
+        DEFAULT_TIMEOUT_SECONDS,
+      );
+      const searchParams = {
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
         apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+        timeoutSeconds: baseTimeoutSeconds,
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
         country,
@@ -1445,8 +1641,55 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
-      });
-      return jsonResult(result);
+      };
+
+      // No fallback configured — run directly
+      if (!fallbackProviderType) {
+        const result = await runWebSearch(searchParams);
+        return jsonResult(result);
+      }
+
+      // Fallback configured — split timeout 70/30 and try primary then fallback
+      const primaryTimeout = Math.max(1, Math.floor(baseTimeoutSeconds * 0.7));
+      try {
+        const result = await runWebSearch({
+          ...searchParams,
+          timeoutSeconds: primaryTimeout,
+        });
+        return jsonResult(result);
+      } catch (primaryError) {
+        // Try fallback provider
+        const fallbackApiKey = resolveApiKeyForProvider(fallbackProviderType, search);
+        if (!fallbackApiKey) {
+          // Fallback has no API key — rethrow primary error
+          throw primaryError;
+        }
+
+        logVerbose(
+          `web_search: primary provider "${provider}" failed, falling back to "${fallbackProviderType}"`,
+        );
+
+        const fallbackTimeout = Math.max(1, Math.floor(baseTimeoutSeconds * 0.3));
+        try {
+          const fallbackResult = await runWebSearch({
+            ...searchParams,
+            provider: fallbackProviderType,
+            apiKey: fallbackApiKey,
+            timeoutSeconds: fallbackTimeout,
+          });
+          return jsonResult({ ...fallbackResult, fallbackFrom: provider });
+        } catch (fallbackError) {
+          // Both failed — combine errors
+          const primaryMsg =
+            primaryError instanceof Error ? primaryError.message : String(primaryError);
+          const fallbackMsg =
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          return jsonResult({
+            error: "search_failed",
+            message: `Primary provider (${provider}) failed: ${primaryMsg}; Fallback provider (${fallbackProviderType}) also failed: ${fallbackMsg}`,
+          });
+        }
+      }
     },
   };
 }
@@ -1468,5 +1711,8 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveSerperApiKey,
+  resolveSerperConfig,
+  resolveFallbackProvider,
   resolveRedirectUrl: resolveCitationRedirectUrl,
 } as const;

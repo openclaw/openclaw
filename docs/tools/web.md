@@ -1,10 +1,12 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, Gemini Google Search grounding)"
+summary: "Web search + fetch tools (Brave, Perplexity, Gemini, Grok, Kimi, Serper) with provider fallback"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
   - You want to use Perplexity Sonar for web search
   - You want to use Gemini with Google Search grounding
+  - You want to use Grok, Kimi, or Serper for web search
+  - You want to configure provider fallback
 title: "Web Tools"
 ---
 
@@ -12,7 +14,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, or Gemini with Google Search grounding.
+- `web_search` — Search the web via Brave (default), Perplexity Sonar, Gemini, Grok, Kimi, or Serper.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -24,6 +26,9 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
   - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
+  - **Grok**: returns AI-synthesized answers with citations via xAI.
+  - **Kimi**: returns AI-synthesized answers with citations via Moonshot native $web_search.
+  - **Serper**: returns structured Google Search results (title, URL, snippet, knowledge graph).
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -31,11 +36,14 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 ## Choosing a search provider
 
-| Provider            | Pros                                         | Cons                                     | API Key                                      |
-| ------------------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
-| **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
-| **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
+| Provider            | Type       | Pros                                         | Cons                                     | API Key                                      |
+| ------------------- | ---------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| **Brave** (default) | Structured | Fast, free tier, region/language support     | Traditional search results               | `BRAVE_API_KEY`                              |
+| **Perplexity**      | AI-synth   | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **Gemini**          | AI-synth   | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
+| **Grok**            | AI-synth   | xAI model, inline citations support          | Requires xAI API key                     | `XAI_API_KEY`                                |
+| **Kimi**            | AI-synth   | Moonshot native $web_search, large context   | Requires Moonshot API key                | `KIMI_API_KEY` or `MOONSHOT_API_KEY`         |
+| **Serper**          | Structured | Google Search results, knowledge graph       | Requires Serper API key                  | `SERPER_API_KEY`                             |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
@@ -45,8 +53,10 @@ If no `provider` is explicitly set, OpenClaw auto-detects which provider to use 
 
 1. **Brave** — `BRAVE_API_KEY` env var or `search.apiKey` config
 2. **Gemini** — `GEMINI_API_KEY` env var or `search.gemini.apiKey` config
-3. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `search.perplexity.apiKey` config
-4. **Grok** — `XAI_API_KEY` env var or `search.grok.apiKey` config
+3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `search.kimi.apiKey` config
+4. **Serper** — `SERPER_API_KEY` env var or `search.serper.apiKey` config
+5. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `search.perplexity.apiKey` config
+6. **Grok** — `XAI_API_KEY` env var or `search.grok.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -59,7 +69,7 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave", // or "perplexity" or "gemini"
+        provider: "brave", // or "perplexity", "gemini", "grok", "kimi", "serper"
       },
     },
   },
@@ -84,6 +94,29 @@ Example: switch to Perplexity Sonar (direct API):
   },
 }
 ```
+
+### Provider fallback
+
+You can configure a fallback provider that kicks in when the primary provider fails (e.g., rate limit, timeout, API error). The timeout is split 70/30 between primary and fallback.
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "brave",
+        fallback: "serper", // any supported provider
+        apiKey: "BRAVE_KEY",
+        serper: {
+          apiKey: "SERPER_KEY",
+        },
+      },
+    },
+  },
+}
+```
+
+When the primary fails and the fallback succeeds, the result includes a `fallbackFrom` field indicating which provider was originally attempted.
 
 ## Getting a Brave API key
 
@@ -198,6 +231,98 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
+## Using Grok (xAI)
+
+Grok models provide AI-synthesized answers with citations from real-time web search via xAI.
+
+### Getting an xAI API key
+
+1. Go to [xAI Console](https://console.x.ai/)
+2. Create an API key
+3. Set `XAI_API_KEY` in the Gateway environment, or configure `tools.web.search.grok.apiKey`
+
+### Setting up Grok search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "grok",
+        grok: {
+          // API key (optional if XAI_API_KEY is set)
+          apiKey: "xai-...",
+          // Model (defaults to "grok-4-1-fast")
+          model: "grok-4-1-fast",
+          // Include inline citations as markdown links (default: false)
+          inlineCitations: false,
+        },
+      },
+    },
+  },
+}
+```
+
+## Using Kimi (Moonshot)
+
+Kimi by Moonshot uses native `$web_search` to return AI-synthesized answers with citations and a large context window.
+
+### Getting a Moonshot API key
+
+1. Go to [Moonshot Platform](https://platform.moonshot.cn/)
+2. Create an API key
+3. Set `KIMI_API_KEY` or `MOONSHOT_API_KEY` in the Gateway environment, or configure `tools.web.search.kimi.apiKey`
+
+### Setting up Kimi search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "kimi",
+        kimi: {
+          // API key (optional if KIMI_API_KEY or MOONSHOT_API_KEY is set)
+          apiKey: "sk-...",
+          // Base URL (defaults to "https://api.moonshot.ai/v1")
+          baseUrl: "https://api.moonshot.ai/v1",
+          // Model (defaults to "moonshot-v1-128k")
+          model: "moonshot-v1-128k",
+        },
+      },
+    },
+  },
+}
+```
+
+## Using Serper (Google Search API)
+
+Serper provides Google Search results as structured data (titles, URLs, snippets, knowledge graph).
+
+### Getting a Serper API key
+
+1. Go to [Serper](https://serper.dev/)
+2. Create an account and generate an API key
+3. Set `SERPER_API_KEY` in the Gateway environment, or configure `tools.web.search.serper.apiKey`
+
+### Setting up Serper search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "serper",
+        serper: {
+          // API key (optional if SERPER_API_KEY is set)
+          apiKey: "...",
+        },
+      },
+    },
+  },
+}
+```
+
 ## web_search
 
 Search the web using your configured provider.
@@ -208,6 +333,10 @@ Search the web using your configured provider.
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `tools.web.search.apiKey`
   - **Perplexity**: `OPENROUTER_API_KEY`, `PERPLEXITY_API_KEY`, or `tools.web.search.perplexity.apiKey`
+  - **Gemini**: `GEMINI_API_KEY` or `tools.web.search.gemini.apiKey`
+  - **Grok**: `XAI_API_KEY` or `tools.web.search.grok.apiKey`
+  - **Kimi**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `tools.web.search.kimi.apiKey`
+  - **Serper**: `SERPER_API_KEY` or `tools.web.search.serper.apiKey`
 
 ### Config
 
@@ -321,4 +450,4 @@ Notes:
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
-- If the Brave key is missing, `web_search` returns a short setup hint with a docs link.
+- If the API key for the configured provider is missing, `web_search` returns a setup hint with the provider name and a docs link.
