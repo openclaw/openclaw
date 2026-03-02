@@ -201,4 +201,29 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capture.ctx).toBeUndefined();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
+
+  it("drops sync envelopes when syncMessage is present but null", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        syncMessage: null,
+        dataMessage: {
+          message: "replayed sentTranscript envelope",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
 });
