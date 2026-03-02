@@ -25,6 +25,32 @@ const activeBuses = new Map<string, NostrBusHandle>();
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 
+async function sendNostrText(params: {
+  to: string;
+  text: string;
+  accountId?: string | null;
+}): Promise<{ channel: "nostr"; to: string; messageId: string }> {
+  const core = getNostrRuntime();
+  const aid = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const bus = activeBuses.get(aid);
+  if (!bus) {
+    throw new Error(`Nostr bus not running for account ${aid}`);
+  }
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: core.config.loadConfig(),
+    channel: "nostr",
+    accountId: aid,
+  });
+  const message = core.channel.text.convertMarkdownTables(params.text ?? "", tableMode);
+  const normalizedTo = normalizePubkey(params.to);
+  await bus.sendDm(normalizedTo, message);
+  return {
+    channel: "nostr",
+    to: normalizedTo,
+    messageId: `nostr-${Date.now()}`,
+  };
+}
+
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: "nostr",
   meta: {
@@ -135,26 +161,10 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId }) => {
-      const core = getNostrRuntime();
-      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
-      const bus = activeBuses.get(aid);
-      if (!bus) {
-        throw new Error(`Nostr bus not running for account ${aid}`);
-      }
-      const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg: core.config.loadConfig(),
-        channel: "nostr",
-        accountId: aid,
-      });
-      const message = core.channel.text.convertMarkdownTables(text ?? "", tableMode);
-      const normalizedTo = normalizePubkey(to);
-      await bus.sendDm(normalizedTo, message);
-      return {
-        channel: "nostr" as const,
-        to: normalizedTo,
-        messageId: `nostr-${Date.now()}`,
-      };
+    sendText: async ({ to, text, accountId }) => sendNostrText({ to, text, accountId }),
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const mediaText = [text?.trim(), mediaUrl?.trim()].filter(Boolean).join("\n\n");
+      return sendNostrText({ to, text: mediaText, accountId });
     },
   },
 
@@ -274,15 +284,26 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
       );
 
-      // Return cleanup function
-      return {
-        stop: () => {
-          bus.close();
-          activeBuses.delete(account.accountId);
-          metricsSnapshots.delete(account.accountId);
-          ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
-        },
+      const stop = () => {
+        bus.close();
+        activeBuses.delete(account.accountId);
+        metricsSnapshots.delete(account.accountId);
+        ctx.log?.info(`[${account.accountId}] Nostr provider stopped`);
       };
+
+      if (ctx.abortSignal.aborted) {
+        stop();
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          ctx.abortSignal.removeEventListener("abort", onAbort);
+          stop();
+          resolve();
+        };
+        ctx.abortSignal.addEventListener("abort", onAbort, { once: true });
+      });
     },
   },
 };

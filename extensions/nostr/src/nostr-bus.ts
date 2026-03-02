@@ -94,6 +94,17 @@ export interface NostrBusHandle {
   }>;
 }
 
+export function buildDmSubscriptionFilter(
+  pk: string,
+  since: number,
+): {
+  kinds: number[];
+  "#p": string[];
+  since: number;
+} {
+  return { kinds: [4], "#p": [pk], since };
+}
+
 // ============================================================================
 // Circuit Breaker
 // ============================================================================
@@ -490,7 +501,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
+    buildDmSubscriptionFilter(pk, since) as unknown as Parameters<typeof pool.subscribeMany>[1],
     {
       onevent: handleEvent,
       oneose: () => {

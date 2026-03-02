@@ -107,6 +107,10 @@ describe("nostrPlugin", () => {
     it("has reasonable text chunk limit", () => {
       expect(nostrPlugin.outbound?.textChunkLimit).toBe(4000);
     });
+
+    it("provides sendMedia so outbound delivery adapter can be loaded", () => {
+      expect(nostrPlugin.outbound?.sendMedia).toBeTypeOf("function");
+    });
   });
 
   describe("pairing", () => {

@@ -5,6 +5,7 @@ import {
   isValidPubkey,
   normalizePubkey,
   pubkeyToNpub,
+  buildDmSubscriptionFilter,
 } from "./nostr-bus.js";
 
 // Test private key (DO NOT use in production - this is a known test key)
@@ -195,5 +196,20 @@ describe("pubkeyToNpub", () => {
     const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const upper = lower.toUpperCase();
     expect(pubkeyToNpub(lower)).toBe(pubkeyToNpub(upper));
+  });
+});
+
+describe("buildDmSubscriptionFilter", () => {
+  it("returns a single filter object (not a nested filter list)", () => {
+    const filter = buildDmSubscriptionFilter(
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      123,
+    );
+    expect(Array.isArray(filter)).toBe(false);
+    expect(filter).toEqual({
+      kinds: [4],
+      "#p": ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+      since: 123,
+    });
   });
 });
