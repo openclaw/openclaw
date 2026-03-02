@@ -421,7 +421,9 @@ describe("runCronIsolatedAgentTurn", () => {
         })
       ).res;
       expect(res.status).toBe("ok");
-      expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" });
+      // Isolated cron runs force a fresh session and do not reuse persisted
+      // session model overrides from previous runs.
+      expectEmbeddedProviderModel({ provider: "anthropic", model: "claude-opus-4-5" });
 
       vi.mocked(runEmbeddedPiAgent).mockClear();
       vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
