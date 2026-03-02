@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
