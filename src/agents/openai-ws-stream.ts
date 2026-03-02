@@ -183,11 +183,15 @@ export function convertMessagesToInputItems(messages: Message[]): InputItem[] {
       continue;
     }
 
-    if (m.role === "assistant") {
-      const content = m.content;
-      if (Array.isArray(content)) {
-        // Collect text blocks and tool calls separately
-        const textParts: string[] = [];
+        if (m.role === "assistant") {
+          // Ensure the assistant message completed successfully before extracting tool calls.
+          // 'end_turn' is the only state indicating the message was not cut off or filtered.
+          if ((m as any)?.stopReason !== "end_turn") {
+            continue;
+          }
+          const content = m.content;
+          if (Array.isArray(content)) {
+            // Collect text blocks and tool calls separately
         for (const block of content as Array<{
           type?: string;
           text?: string;
