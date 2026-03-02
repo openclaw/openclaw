@@ -75,10 +75,9 @@ export function readSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
+  agentId?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return [];
   }
@@ -299,8 +298,7 @@ export function readSessionTitleFieldsFromTranscript(
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
@@ -424,7 +422,12 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-function findExistingTranscriptPath(
+/**
+ * Returns the path of the first existing transcript file for the given session,
+ * searching store path, explicit session file, and agent-scoped fallback locations.
+ * Returns null if no transcript file is found.
+ */
+export function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
@@ -716,8 +719,7 @@ export function readSessionPreviewItemsFromTranscript(
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return [];
   }

@@ -38,6 +38,7 @@ import {
 import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
+  findExistingTranscriptPath,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
@@ -45,7 +46,6 @@ import {
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -646,12 +646,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const filePath = resolveSessionTranscriptCandidates(
+    const filePath = findExistingTranscriptPath(
       sessionId,
       storePath,
       entry?.sessionFile,
       target.agentId,
-    ).find((candidate) => fs.existsSync(candidate));
+    );
     if (!filePath) {
       respond(
         true,

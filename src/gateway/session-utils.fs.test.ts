@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
+  findExistingTranscriptPath,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readSessionMessages,
@@ -551,6 +552,130 @@ describe("readSessionMessages", () => {
         testCase.sessionFile,
       );
       expect(out).toEqual([testCase.message]);
+    }
+  });
+});
+
+describe("findExistingTranscriptPath", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-find-transcript-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("returns path when transcript exists in store directory", () => {
+    const sessionId = "find-existing-in-store";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      JSON.stringify({ message: { role: "user", content: "hi" } }),
+      "utf-8",
+    );
+
+    const result = findExistingTranscriptPath(sessionId, storePath);
+    expect(result).toBe(transcriptPath);
+  });
+
+  test("returns null when transcript does not exist", () => {
+    const result = findExistingTranscriptPath("find-nonexistent-session", storePath);
+    expect(result).toBeNull();
+  });
+
+  test("finds transcript at agent-scoped path when agentId is provided", () => {
+    const sessionId = "find-agentid-session";
+    vi.stubEnv("OPENCLAW_HOME", tmpDir);
+
+    // The agent-scoped path is {OPENCLAW_HOME}/.openclaw/agents/{agentId}/sessions/{sessionId}.jsonl
+    const agentSessionsDir = path.join(tmpDir, ".openclaw", "agents", "ops", "sessions");
+    fs.mkdirSync(agentSessionsDir, { recursive: true });
+    const agentTranscriptPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      agentTranscriptPath,
+      JSON.stringify({ message: { role: "user", content: "agent" } }),
+      "utf-8",
+    );
+
+    // No storePath — only the agentId path should be found
+    const result = findExistingTranscriptPath(sessionId, undefined, undefined, "ops");
+    expect(result).toBe(agentTranscriptPath);
+  });
+
+  test("prefers explicit sessionFile candidate when it exists", () => {
+    const sessionId = "find-explicit-session-file";
+    const customFile = path.join(tmpDir, "my-custom.jsonl");
+    const defaultFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      customFile,
+      JSON.stringify({ message: { role: "user", content: "custom" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      defaultFile,
+      JSON.stringify({ message: { role: "user", content: "default" } }),
+      "utf-8",
+    );
+
+    const result = findExistingTranscriptPath(sessionId, storePath, customFile);
+    // The explicit sessionFile candidate is resolved first and should win
+    expect(result).toBe(customFile);
+  });
+});
+
+describe("readSessionMessages with agentId", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("reads transcript from agent-scoped path when agentId is provided", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rsm-agentid-test-"));
+    try {
+      vi.stubEnv("OPENCLAW_HOME", tmpDir);
+
+      const sessionId = "rsm-agent-scoped";
+      const agentSessionsDir = path.join(tmpDir, ".openclaw", "agents", "ops", "sessions");
+      fs.mkdirSync(agentSessionsDir, { recursive: true });
+      const transcriptPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(
+        transcriptPath,
+        [
+          JSON.stringify({ message: { role: "user", content: "agent hello" } }),
+          JSON.stringify({ message: { role: "assistant", content: "agent reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const messages = readSessionMessages(sessionId, undefined, undefined, "ops");
+      expect(messages).toEqual([
+        { role: "user", content: "agent hello" },
+        { role: "assistant", content: "agent reply" },
+      ]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("existing calls without agentId continue to work unchanged", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rsm-noagent-test-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const sessionId = "rsm-no-agent";
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(
+        transcriptPath,
+        JSON.stringify({ message: { role: "user", content: "no agent" } }),
+        "utf-8",
+      );
+
+      const messages = readSessionMessages(sessionId, storePath);
+      expect(messages).toEqual([{ role: "user", content: "no agent" }]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });
