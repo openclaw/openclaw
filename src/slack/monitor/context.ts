@@ -78,6 +78,7 @@ export type SlackMonitorContext = {
   groupDmChannels: string[];
   defaultRequireMention: boolean;
   channelsConfig?: SlackChannelConfigEntries;
+  channelsConfigKeys: string[];
   groupPolicy: GroupPolicy;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
@@ -173,6 +174,7 @@ export function createSlackMonitorContext(params: {
   const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
   const defaultRequireMention = params.defaultRequireMention ?? true;
   const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
+  const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
   const markMessageSeen = (channelId: string | undefined, ts?: string) => {
     if (!channelId || !ts) {
@@ -331,6 +333,7 @@ export function createSlackMonitorContext(params: {
         channelId: p.channelId,
         channelName: p.channelName,
         channels: params.channelsConfig,
+        channelKeys: channelsConfigKeys,
         defaultRequireMention,
       });
       const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
@@ -413,6 +416,7 @@ export function createSlackMonitorContext(params: {
     groupDmChannels,
     defaultRequireMention,
     channelsConfig: params.channelsConfig,
+    channelsConfigKeys,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     reactionMode: params.reactionMode,
