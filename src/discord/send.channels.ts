@@ -32,6 +32,9 @@ export async function createChannelDiscord(
   if (payload.nsfw !== undefined) {
     body.nsfw = payload.nsfw;
   }
+  if (payload.permissionOverwrites !== undefined) {
+    body.permission_overwrites = payload.permissionOverwrites;
+  }
   return (await rest.post(Routes.guildChannels(payload.guildId), {
     body,
   })) as APIChannel;
@@ -78,6 +81,9 @@ export async function editChannelDiscord(
       ...(t.emoji_id !== undefined && { emoji_id: t.emoji_id }),
       ...(t.emoji_name !== undefined && { emoji_name: t.emoji_name }),
     }));
+  }
+  if (payload.permissionOverwrites !== undefined) {
+    body.permission_overwrites = payload.permissionOverwrites;
   }
   return (await rest.patch(Routes.channel(payload.channelId), {
     body,

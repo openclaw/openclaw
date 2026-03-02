@@ -697,4 +697,49 @@ describe("handleDiscordAction per-account gating", () => {
       { accountId: "ops" },
     );
   });
+
+  it("passes permission_overwrites through channel create/edit actions", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          actions: { channels: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const overwrites = [
+      { id: "G1", type: 0 as const, deny: "1024" },
+      { id: "U1", type: 1 as const, allow: "1024" },
+    ];
+
+    await handleDiscordAction(
+      {
+        action: "channelCreate",
+        guildId: "G1",
+        name: "private-room",
+        permissionOverwrites: overwrites,
+      },
+      cfg,
+    );
+
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ permissionOverwrites: overwrites }),
+    );
+
+    await handleDiscordAction(
+      {
+        action: "channelEdit",
+        channelId: "C1",
+        permission_overwrites: overwrites,
+      },
+      cfg,
+    );
+
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "C1",
+        permissionOverwrites: overwrites,
+      }),
+    );
+  });
 });

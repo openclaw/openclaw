@@ -376,6 +376,15 @@ function buildPresenceSchema() {
 }
 
 function buildChannelManagementSchema() {
+  const permissionOverwriteSchema = Type.Object({
+    id: Type.String({ description: "Role/user id for permission overwrite." }),
+    type: Type.Union([
+      Type.Number({ description: "0=role, 1=member" }),
+      Type.String({ description: "role|member|0|1" }),
+    ]),
+    allow: Type.Optional(Type.String({ description: "Discord allow bitfield string." })),
+    deny: Type.Optional(Type.String({ description: "Discord deny bitfield string." })),
+  });
   return {
     name: Type.Optional(Type.String()),
     type: Type.Optional(Type.Number()),
@@ -385,6 +394,17 @@ function buildChannelManagementSchema() {
     nsfw: Type.Optional(Type.Boolean()),
     rateLimitPerUser: Type.Optional(Type.Number()),
     categoryId: Type.Optional(Type.String()),
+    permission_overwrites: Type.Optional(
+      Type.Array(permissionOverwriteSchema, {
+        description:
+          "Discord channel permission overwrites for channel-create/channel-edit.",
+      }),
+    ),
+    permissionOverwrites: Type.Optional(
+      Type.Array(permissionOverwriteSchema, {
+        description: "Alias of permission_overwrites.",
+      }),
+    ),
     clearParent: Type.Optional(
       Type.Boolean({
         description: "Clear the parent/category when supported by the provider.",

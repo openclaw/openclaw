@@ -17,6 +17,46 @@ type Ctx = Pick<
   "action" | "params" | "cfg" | "accountId" | "requesterSenderId"
 >;
 
+type PermissionOverwrite = {
+  id: string;
+  type: 0 | 1;
+  allow?: string;
+  deny?: string;
+};
+
+function readPermissionOverwritesParam(
+  params: Record<string, unknown>,
+): PermissionOverwrite[] | undefined {
+  const raw = params.permission_overwrites ?? params.permissionOverwrites;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const parsed: PermissionOverwrite[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      throw new Error("permission_overwrites items must be objects");
+    }
+    const row = item as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id.trim() : "";
+    const typeRaw = row.type;
+    const type =
+      typeRaw === 0 || typeRaw === "0" || typeRaw === "role"
+        ? 0
+        : typeRaw === 1 || typeRaw === "1" || typeRaw === "member"
+          ? 1
+          : undefined;
+    if (!id || type === undefined) {
+      throw new Error(
+        "permission_overwrites entries require id and type (role|member|0|1)",
+      );
+    }
+    const allow = typeof row.allow === "string" ? row.allow : undefined;
+    const deny = typeof row.deny === "string" ? row.deny : undefined;
+    parsed.push({ id, type, allow, deny });
+  }
+  return parsed;
+}
+
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
@@ -161,6 +201,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       integer: true,
     });
     const nsfw = typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
+    const permissionOverwrites = readPermissionOverwritesParam(actionParams);
     return await handleDiscordAction(
       {
         action: "channelCreate",
@@ -172,6 +213,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         topic: topic ?? undefined,
         position: position ?? undefined,
         nsfw,
+        permissionOverwrites,
       },
       cfg,
     );
@@ -197,6 +239,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       integer: true,
     });
     const availableTags = parseAvailableTags(actionParams.availableTags);
+    const permissionOverwrites = readPermissionOverwritesParam(actionParams);
     return await handleDiscordAction(
       {
         action: "channelEdit",
@@ -212,6 +255,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         locked,
         autoArchiveDuration: autoArchiveDuration ?? undefined,
         availableTags,
+        permissionOverwrites,
       },
       cfg,
     );
