@@ -316,18 +316,21 @@ export async function sendStructuredCardFeishu(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
   mentions?: MentionTarget[];
   accountId?: string;
   header?: CardHeaderConfig;
   note?: string;
 }): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, mentions, accountId, header, note } = params;
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId, header, note } =
+    params;
   let cardText = text;
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
   const card = buildStructuredCard(cardText, { header, note });
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
 
 /**
