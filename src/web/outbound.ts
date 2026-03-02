@@ -4,6 +4,7 @@ import { generateSecureUuid } from "../infra/secure-random.js";
 import { getChildLogger } from "../logging/logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stripHtmlForPlainText } from "../markdown/strip-html.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
@@ -36,7 +37,8 @@ export async function sendMessageWhatsApp(
     channel: "whatsapp",
     accountId: resolvedAccountId ?? options.accountId,
   });
-  text = convertMarkdownTables(text ?? "", tableMode);
+  text = stripHtmlForPlainText(text ?? "");
+  text = convertMarkdownTables(text, tableMode);
   text = markdownToWhatsApp(text);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
