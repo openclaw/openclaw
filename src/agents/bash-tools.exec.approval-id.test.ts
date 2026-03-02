@@ -126,6 +126,53 @@ describe("exec approvals", () => {
         interval: 20,
       })
       .toBe(approvalId);
+    expect(
+      (invokeParams as { params?: { wakeOnExit?: boolean } } | undefined)?.params?.wakeOnExit,
+    ).toBeUndefined();
+  });
+
+  it("forwards wakeOnExit only for async approval-pending node runs", async () => {
+    let invokeParams: unknown;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once" };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          invokeParams = params;
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call1b", { command: "ls -la", wakeOnExit: true });
+    expect(result.details.status).toBe("approval-pending");
+
+    await expect
+      .poll(
+        () =>
+          (invokeParams as { params?: { wakeOnExit?: boolean } } | undefined)?.params?.wakeOnExit,
+        {
+          timeout: 2000,
+          interval: 20,
+        },
+      )
+      .toBe(true);
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -149,6 +196,7 @@ describe("exec approvals", () => {
     };
 
     const calls: string[] = [];
+    let systemRunInvokeParams: unknown;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approvals.node.get") {
@@ -158,6 +206,9 @@ describe("exec approvals", () => {
         const invoke = params as { command?: string };
         if (invoke.command === "system.run.prepare") {
           return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          systemRunInvokeParams = params;
         }
         return { payload: { success: true, stdout: "ok" } };
       }
@@ -173,11 +224,16 @@ describe("exec approvals", () => {
 
     const result = await tool.execute("call2", {
       command: `"${exePath}" --help`,
+      wakeOnExit: true,
     });
     expect(result.details.status).toBe("completed");
     expect(calls).toContain("exec.approvals.node.get");
     expect(calls).toContain("node.invoke");
     expect(calls).not.toContain("exec.approval.request");
+    expect(
+      (systemRunInvokeParams as { params?: { wakeOnExit?: boolean } } | undefined)?.params
+        ?.wakeOnExit,
+    ).toBeUndefined();
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {

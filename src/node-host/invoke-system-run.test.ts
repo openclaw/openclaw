@@ -472,6 +472,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       params: {
         command: ["./sh", "-lc", "/bin/echo approved-only"],
         sessionKey: "agent:main:main",
+        wakeOnExit: true,
       },
       skillBins: {
         current: async () => [],
@@ -496,7 +497,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(sendNodeEvent).toHaveBeenCalledWith(
       expect.anything(),
       "exec.denied",
-      expect.objectContaining({ reason: "approval-required" }),
+      expect.objectContaining({ reason: "approval-required", wakeOnExit: true }),
     );
     expect(sendInvokeResult).toHaveBeenCalledWith(
       expect.objectContaining({

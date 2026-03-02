@@ -30,7 +30,9 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  agentId?: string;
   notifyOnExit?: boolean;
+  wakeOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
   child?: ChildProcessWithoutNullStreams;

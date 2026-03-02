@@ -44,6 +44,8 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /** Allow runs with an empty inbound body when system events are queued for this session. */
+  allowEmptyBodyForSystemEvent?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
