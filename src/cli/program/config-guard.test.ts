@@ -28,6 +28,20 @@ function makeRuntime() {
   };
 }
 
+async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
+  const writes: string[] = [];
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await run();
+    return writes.join("");
+  } finally {
+    writeSpy.mockRestore();
+  }
+}
+
 describe("ensureConfigReady", () => {
   async function loadEnsureConfigReady() {
     vi.resetModules();
@@ -107,36 +121,22 @@ describe("ensureConfigReady", () => {
   });
 
   it("prevents preflight stdout noise when suppression is enabled", async () => {
-    const stdoutWrites: string[] = [];
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write);
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       process.stdout.write("Doctor warnings\n");
     });
-    try {
+    const output = await withCapturedStdout(async () => {
       await runEnsureConfigReady(["message"], true);
-      expect(stdoutWrites.join("")).not.toContain("Doctor warnings");
-    } finally {
-      writeSpy.mockRestore();
-    }
+    });
+    expect(output).not.toContain("Doctor warnings");
   });
 
   it("allows preflight stdout noise when suppression is not enabled", async () => {
-    const stdoutWrites: string[] = [];
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write);
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       process.stdout.write("Doctor warnings\n");
     });
-    try {
+    const output = await withCapturedStdout(async () => {
       await runEnsureConfigReady(["message"], false);
-      expect(stdoutWrites.join("")).toContain("Doctor warnings");
-    } finally {
-      writeSpy.mockRestore();
-    }
+    });
+    expect(output).toContain("Doctor warnings");
   });
 });

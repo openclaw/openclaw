@@ -27,6 +27,18 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(overrides, { defaultSelect: "" });
 }
 
+function createSelectPrompter(
+  responses: Partial<Record<string, string>>,
+): WizardPrompter["select"] {
+  return vi.fn(async (params) => {
+    const value = responses[params.message];
+    if (value !== undefined) {
+      return value as never;
+    }
+    return (params.options[0]?.value ?? "") as never;
+  });
+}
+
 describe("promptRemoteGatewayConfig", () => {
   const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
 
@@ -49,17 +61,10 @@ describe("promptRemoteGatewayConfig", () => {
       },
     ]);
 
-    const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Select gateway") {
-        return "0" as never;
-      }
-      if (params.message === "Connection method") {
-        return "direct" as never;
-      }
-      if (params.message === "Gateway auth") {
-        return "token" as never;
-      }
-      return (params.options[0]?.value ?? "") as never;
+    const select = createSelectPrompter({
+      "Select gateway": "0",
+      "Connection method": "direct",
+      "Gateway auth": "token",
     });
 
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
@@ -106,12 +111,7 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Gateway auth") {
-        return "off" as never;
-      }
-      return (params.options[0]?.value ?? "") as never;
-    });
+    const select = createSelectPrompter({ "Gateway auth": "off" });
 
     const cfg = {} as OpenClawConfig;
     const prompter = createPrompter({
@@ -138,12 +138,7 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const select: WizardPrompter["select"] = vi.fn(async (params) => {
-      if (params.message === "Gateway auth") {
-        return "off" as never;
-      }
-      return (params.options[0]?.value ?? "") as never;
-    });
+    const select = createSelectPrompter({ "Gateway auth": "off" });
 
     const cfg = {} as OpenClawConfig;
     const prompter = createPrompter({
