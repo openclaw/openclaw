@@ -1,8 +1,6 @@
-import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  stripHeartbeatToken,
-} from "../../auto-reply/heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = {
   text?: string;
@@ -91,27 +89,7 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
  * Returns true when any payload is a heartbeat ack token and no payload contains media.
  */
 export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
-  if (payloads.length === 0) {
-    return true;
-  }
-  // If any payload has media, deliver regardless — there's real content.
-  const hasAnyMedia = payloads.some(
-    (payload) => (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl),
-  );
-  if (hasAnyMedia) {
-    return false;
-  }
-  // An agent may emit multiple text payloads (narration, tool summaries)
-  // before a final HEARTBEAT_OK. If *any* payload is a heartbeat ack token,
-  // the agent is signaling "nothing needs attention" — the preceding text
-  // payloads are just internal narration and should not be delivered.
-  return payloads.some((payload) => {
-    const result = stripHeartbeatToken(payload.text, {
-      mode: "heartbeat",
-      maxAckChars: ackMaxChars,
-    });
-    return result.shouldSkip;
-  });
+  return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
