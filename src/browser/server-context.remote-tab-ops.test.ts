@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import "./server-context.chrome-test-harness.js";
 import * as cdpModule from "./cdp.js";
+import * as chromeModule from "./chrome.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import type { BrowserServerState } from "./server-context.js";
-import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
 const originalFetch = globalThis.fetch;
@@ -24,6 +25,8 @@ function makeState(
     resolved: {
       enabled: true,
       controlPort: 18791,
+      cdpPortRangeStart: 18800,
+      cdpPortRangeEnd: 18899,
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "browserless.example" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
@@ -96,6 +99,48 @@ function createJsonListFetchMock(entries: JsonListEntry[]) {
 }
 
 describe("browser server-context remote profile tab operations", () => {
+  it("uses profile-level attachOnly when global attachOnly is false", async () => {
+    const state = makeState("openclaw");
+    state.resolved.attachOnly = false;
+    state.resolved.profiles.openclaw = {
+      cdpPort: 18800,
+      attachOnly: true,
+      color: "#FF4500",
+    };
+
+    const reachableMock = vi.mocked(chromeModule.isChromeReachable).mockResolvedValueOnce(false);
+    const launchMock = vi.mocked(chromeModule.launchOpenClawChrome);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
+      /attachOnly is enabled/i,
+    );
+    expect(reachableMock).toHaveBeenCalled();
+    expect(launchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps attachOnly websocket failures off the loopback ownership error path", async () => {
+    const state = makeState("openclaw");
+    state.resolved.attachOnly = false;
+    state.resolved.profiles.openclaw = {
+      cdpPort: 18800,
+      attachOnly: true,
+      color: "#FF4500",
+    };
+
+    const httpReachableMock = vi.mocked(chromeModule.isChromeReachable).mockResolvedValueOnce(true);
+    const wsReachableMock = vi.mocked(chromeModule.isChromeCdpReady).mockResolvedValueOnce(false);
+    const launchMock = vi.mocked(chromeModule.launchOpenClawChrome);
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
+      /attachOnly is enabled and CDP websocket/i,
+    );
+    expect(httpReachableMock).toHaveBeenCalled();
+    expect(wsReachableMock).toHaveBeenCalled();
+    expect(launchMock).not.toHaveBeenCalled();
+  });
+
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
