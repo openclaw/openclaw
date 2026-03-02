@@ -66,13 +66,17 @@ export async function prepareSlackMessage(params: {
     topic?: string;
     purpose?: string;
   } = {};
-  let channelType = message.channel_type;
-  if (!channelType || channelType !== "im") {
+  let resolvedChannelType = normalizeSlackChannelType(message.channel_type, message.channel);
+  // D-prefixed channels are always direct messages. Skip channel lookups in
+  // that common path to avoid an unnecessary API round-trip.
+  if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
     channelInfo = await ctx.resolveChannelName(message.channel);
-    channelType = channelType ?? channelInfo.type;
+    resolvedChannelType = normalizeSlackChannelType(
+      message.channel_type ?? channelInfo.type,
+      message.channel,
+    );
   }
   const channelName = channelInfo?.name;
-  const resolvedChannelType = normalizeSlackChannelType(channelType, message.channel);
   const isDirectMessage = resolvedChannelType === "im";
   const isGroupDm = resolvedChannelType === "mpim";
   const isRoom = resolvedChannelType === "channel" || resolvedChannelType === "group";
