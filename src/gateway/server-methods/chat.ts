@@ -943,8 +943,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
-          if (!agentRunStarted) {
+        .then((dispatchResult) => {
+          if (!agentRunStarted && dispatchResult.queuedFollowup !== true) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)

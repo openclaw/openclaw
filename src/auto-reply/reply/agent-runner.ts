@@ -213,7 +213,7 @@ export async function runReplyAgent(params: {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
-    return undefined;
+    return { internalOutcome: "queued-followup" };
   }
 
   await typingSignals.signalRunStart();

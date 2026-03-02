@@ -69,6 +69,8 @@ export type GetReplyOptions = {
 };
 
 export type ReplyPayload = {
+  /** Internal control outcome used by dispatch paths (never delivered to channels). */
+  internalOutcome?: "queued-followup";
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];

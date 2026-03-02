@@ -96,7 +96,12 @@ const resolveSessionStoreEntry = (
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  queuedFollowup?: boolean;
 };
+
+function isQueuedFollowupOutcome(payload: ReplyPayload): boolean {
+  return payload.internalOutcome === "queued-followup";
+}
 
 export async function dispatchReplyFromConfig(params: {
   ctx: FinalizedMsgContext;
@@ -435,10 +440,19 @@ export async function dispatchReplyFromConfig(params: {
     );
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const finalReplies: ReplyPayload[] = [];
+    let queuedFollowup = false;
+    for (const reply of replies) {
+      if (isQueuedFollowupOutcome(reply)) {
+        queuedFollowup = true;
+        continue;
+      }
+      finalReplies.push(reply);
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    for (const reply of replies) {
+    for (const reply of finalReplies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (shouldSuppressReasoningPayload(reply)) {
@@ -485,7 +499,7 @@ export async function dispatchReplyFromConfig(params: {
     // but we still want TTS audio to be generated from the accumulated block content.
     if (
       ttsMode === "final" &&
-      replies.length === 0 &&
+      finalReplies.length === 0 &&
       blockCount > 0 &&
       accumulatedBlockText.trim()
     ) {
@@ -542,7 +556,7 @@ export async function dispatchReplyFromConfig(params: {
     counts.final += routedFinalCount;
     recordProcessed("completed");
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return queuedFollowup ? { queuedFinal, counts, queuedFollowup: true } : { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
