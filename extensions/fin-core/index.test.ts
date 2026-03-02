@@ -104,7 +104,7 @@ function createFakeApi(): {
       plugins: {
         entries: {
           "fin-core": { enabled: true },
-          "fin-data-bus": { enabled: true },
+          "findoo-datahub-plugin": { enabled: true },
           "fin-monitoring": { enabled: false },
         },
       },

@@ -840,7 +840,9 @@ const plugin = {
           const css = readFileSync(join(dashboardDir, "fund-dashboard.css"), "utf-8");
           // Escape </script> in JSON to prevent XSS
           const safeJson = JSON.stringify(fundData).replace(/<\//g, "<\\/");
-          html = template.replace("/*__FUND_CSS__*/", css).replace("/*__FUND_DATA__*/{}", safeJson);
+          html = template
+            .replace("/*__FUND_CSS__*/", css)
+            .replace(/\/\*__FUND_DATA__\*\/\s*\{\}/, safeJson);
         } catch {
           // Fallback: return JSON data if template not found
           res.writeHead(200, { "Content-Type": "application/json" });

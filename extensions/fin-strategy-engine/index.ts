@@ -532,7 +532,7 @@ const plugin = {
                 );
               }
             } else if (record.level === "L3_LIVE") {
-              const finCore = runtime.services?.get?.("fin-exchange-manager") as
+              const finCore = runtime.services?.get?.("fin-exchange-registry") as
                 | { createOrder?: (...args: unknown[]) => Promise<unknown> }
                 | undefined;
               if (finCore?.createOrder) {

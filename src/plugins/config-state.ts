@@ -20,7 +20,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "talk-voice",
   // OpenFinClaw financial extensions
   "fin-core",
-  "fin-data-bus",
+  "findoo-datahub-plugin",
   "fin-market-data",
   "fin-trading",
   "fin-portfolio",

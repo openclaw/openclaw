@@ -26,14 +26,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 // ── Infrastructure imports ──
 import { ExchangeRegistry } from "../../extensions/fin-core/src/exchange-registry.js";
-import {
-  createCryptoAdapter,
-  type CcxtExchange,
-} from "../../extensions/fin-data-bus/src/adapters/crypto-adapter.js";
-import { OHLCVCache } from "../../extensions/fin-data-bus/src/ohlcv-cache.js";
-import type { OHLCV } from "../../extensions/fin-data-bus/src/types.js";
 import { PaperEngine } from "../../extensions/fin-paper-trading/src/paper-engine.js";
 import { PaperStore } from "../../extensions/fin-paper-trading/src/paper-store.js";
+import type { OHLCV } from "../../extensions/fin-shared-types/src/types.js";
 import { BacktestEngine } from "../../extensions/fin-strategy-engine/src/backtest-engine.js";
 import { createSmaCrossover } from "../../extensions/fin-strategy-engine/src/builtin-strategies/sma-crossover.js";
 import { StrategyRegistry } from "../../extensions/fin-strategy-engine/src/strategy-registry.js";
@@ -43,6 +38,11 @@ import type {
 } from "../../extensions/fin-strategy-engine/src/types.js";
 import { WalkForward } from "../../extensions/fin-strategy-engine/src/walk-forward.js";
 import { CcxtBridge } from "../../extensions/fin-trading/src/ccxt-bridge.js";
+import {
+  createCryptoAdapter,
+  type CcxtExchange,
+} from "../../extensions/findoo-datahub-plugin/src/adapters/crypto-adapter.js";
+import { OHLCVCache } from "../../extensions/findoo-datahub-plugin/src/ohlcv-cache.js";
 
 // ── Constants ──
 const PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"] as const;

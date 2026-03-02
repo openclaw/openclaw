@@ -16,7 +16,7 @@ import type { TradingRiskConfig } from "./types.js";
 
 const FINANCIAL_PLUGIN_IDS = [
   "fin-core",
-  "fin-data-bus",
+  "findoo-datahub-plugin",
   "fin-market-data",
   "fin-trading",
   "fin-portfolio",

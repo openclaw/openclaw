@@ -19,7 +19,7 @@ const DEFAULT_TRADING_LIMITS = {
 
 const FINANCIAL_PLUGIN_IDS = [
   "fin-core",
-  "fin-data-bus",
+  "findoo-datahub-plugin",
   "fin-market-data",
   "fin-trading",
   "fin-portfolio",

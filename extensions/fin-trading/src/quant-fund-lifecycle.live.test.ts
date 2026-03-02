@@ -27,11 +27,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { ExchangeRegistry } from "../../fin-core/src/exchange-registry.js";
-import {
-  createCryptoAdapter,
-  type CcxtExchange,
-} from "../../fin-data-bus/src/adapters/crypto-adapter.js";
-import { OHLCVCache } from "../../fin-data-bus/src/ohlcv-cache.js";
 import { FundManager } from "../../fin-fund-manager/src/fund-manager.js";
 import { PromotionPipeline } from "../../fin-fund-manager/src/promotion-pipeline.js";
 import type { StrategyProfile } from "../../fin-fund-manager/src/types.js";
@@ -42,6 +37,11 @@ import { BacktestEngine } from "../../fin-strategy-engine/src/backtest-engine.js
 import { createSmaCrossover } from "../../fin-strategy-engine/src/builtin-strategies/sma-crossover.js";
 import { StrategyRegistry } from "../../fin-strategy-engine/src/strategy-registry.js";
 import { WalkForward } from "../../fin-strategy-engine/src/walk-forward.js";
+import {
+  createCryptoAdapter,
+  type CcxtExchange,
+} from "../../findoo-datahub-plugin/src/adapters/crypto-adapter.js";
+import { OHLCVCache } from "../../findoo-datahub-plugin/src/ohlcv-cache.js";
 import { CcxtBridge } from "./ccxt-bridge.js";
 
 // ── env gate ───────────────────────────────────────────────────────────────

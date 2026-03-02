@@ -576,7 +576,7 @@ const plugin = {
           const safeJson = JSON.stringify(data).replace(/<\//g, "<\\/");
           const html = template
             .replace("/*__EVO_CSS__*/", css)
-            .replace("/*__EVO_DATA__*/{}", safeJson);
+            .replace(/\/\*__EVO_DATA__\*\/\s*\{\}/, safeJson);
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(html);
         } catch {

@@ -98,7 +98,7 @@
       "fin-expert-sdk": { "enabled": true },
       "fin-info-feed": { "enabled": true },
       "fin-monitoring": { "enabled": true },
-      "fin-data-bus": { "enabled": true },
+      "findoo-datahub-plugin": { "enabled": true },
       "fin-paper-trading": { "enabled": true },
       "fin-strategy-engine": { "enabled": true },
       "fin-strategy-memory": { "enabled": true },

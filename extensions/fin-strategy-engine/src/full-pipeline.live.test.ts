@@ -21,14 +21,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ExchangeRegistry } from "../../fin-core/src/exchange-registry.js";
-import {
-  createCryptoAdapter,
-  type CcxtExchange,
-} from "../../fin-data-bus/src/adapters/crypto-adapter.js";
-import { OHLCVCache } from "../../fin-data-bus/src/ohlcv-cache.js";
 import { PaperEngine } from "../../fin-paper-trading/src/paper-engine.js";
 import { PaperStore } from "../../fin-paper-trading/src/paper-store.js";
 import type { OHLCV } from "../../fin-shared-types/src/types.js";
+import {
+  createCryptoAdapter,
+  type CcxtExchange,
+} from "../../findoo-datahub-plugin/src/adapters/crypto-adapter.js";
+import { OHLCVCache } from "../../findoo-datahub-plugin/src/ohlcv-cache.js";
 import { BacktestEngine } from "./backtest-engine.js";
 import { createSmaCrossover } from "./builtin-strategies/sma-crossover.js";
 import type { BacktestConfig, BacktestResult } from "./types.js";

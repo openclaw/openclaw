@@ -474,7 +474,7 @@ describe("E2E: Full Trading Pipeline", () => {
         signalFound = true;
 
         // At L3_LIVE, order should route to live engine
-        // Simulate what fin_strategy_tick does: route to fin-exchange-manager
+        // Simulate what fin_strategy_tick does: route to fin-exchange-registry
         const quantity = ((signal.sizePct / 100) * ctx.portfolio.equity) / bar.close;
         mockLiveOrders.push({
           symbol: signal.symbol,

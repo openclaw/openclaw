@@ -11,7 +11,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { OHLCVCache } from "../extensions/fin-data-bus/src/ohlcv-cache.js";
 import { CapitalAllocator } from "../extensions/fin-fund-manager/src/capital-allocator.js";
 import { CorrelationMonitor } from "../extensions/fin-fund-manager/src/correlation-monitor.js";
 import { FundManager } from "../extensions/fin-fund-manager/src/fund-manager.js";
@@ -32,6 +31,7 @@ import {
 } from "../extensions/fin-strategy-memory/src/hooks.js";
 import type { AfterToolCallEvent } from "../extensions/fin-strategy-memory/src/hooks.js";
 import { TradeJournal } from "../extensions/fin-strategy-memory/src/trade-journal.js";
+import { OHLCVCache } from "../extensions/findoo-datahub-plugin/src/ohlcv-cache.js";
 import { generateOHLCV } from "./helpers/fin-test-data.js";
 
 // ── Shared Fixtures ──
