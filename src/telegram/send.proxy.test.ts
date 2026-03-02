@@ -31,6 +31,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("./proxy.js", () => ({
   makeProxyFetch,
+  resolveProxyUrl: (configProxy?: string) => configProxy?.trim() || undefined,
 }));
 
 vi.mock("./fetch.js", () => ({

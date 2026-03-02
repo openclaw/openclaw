@@ -1,3 +1,4 @@
+import process from "node:process";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -380,7 +381,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       getTelegramRuntime().channel.telegram.probeTelegram(
         account.token,
         timeoutMs,
-        account.config.proxy,
+        account.config.proxy ||
+          process.env.HTTPS_PROXY ||
+          process.env.https_proxy ||
+          process.env.HTTP_PROXY ||
+          process.env.http_proxy,
       ),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
@@ -471,7 +476,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
           token,
           2500,
-          account.config.proxy,
+          account.config.proxy ||
+            process.env.HTTPS_PROXY ||
+            process.env.https_proxy ||
+            process.env.HTTP_PROXY ||
+            process.env.http_proxy,
         );
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {
