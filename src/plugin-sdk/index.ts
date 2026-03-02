@@ -244,6 +244,7 @@ export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+export { readBooleanParam } from "./boolean-param.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
