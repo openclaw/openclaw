@@ -90,8 +90,15 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+
   beforeEach(() => {
+    envSnapshot.restore();
     resetGatewayCallMocks();
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it.each([
@@ -316,6 +323,23 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
+  });
+
+  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://10.0.0.8:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://10.0.0.8:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {
