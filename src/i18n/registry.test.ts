@@ -5,6 +5,18 @@ import {
   loadLazyLocaleTranslation,
   resolveNavigatorLocale,
 } from "../../ui/src/i18n/lib/registry.ts";
+import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
+
+function getNestedTranslation(map: TranslationMap | null, ...path: string[]): string | undefined {
+  let value: string | TranslationMap | undefined = map ?? undefined;
+  for (const key of path) {
+    if (value === undefined || typeof value === "string") {
+      return undefined;
+    }
+    value = value[key];
+  }
+  return typeof value === "string" ? value : undefined;
+}
 
 describe("ui i18n locale registry", () => {
   function readNestedString(map: Record<string, unknown>, path: string[]): string | undefined {
@@ -34,12 +46,8 @@ describe("ui i18n locale registry", () => {
     const de = await loadLazyLocaleTranslation("de");
     const zhCN = await loadLazyLocaleTranslation("zh-CN");
 
-    expect(readNestedString((de ?? {}) as Record<string, unknown>, ["common", "health"])).toBe(
-      "Status",
-    );
-    expect(readNestedString((zhCN ?? {}) as Record<string, unknown>, ["common", "health"])).toBe(
-      "健康状况",
-    );
+    expect(getNestedTranslation(de, "common", "health")).toBe("Status");
+    expect(getNestedTranslation(zhCN, "common", "health")).toBe("健康状况");
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
   });
 });

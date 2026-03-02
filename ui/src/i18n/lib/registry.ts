@@ -38,7 +38,7 @@ export function isSupportedLocale(value: string | null | undefined): value is Lo
 }
 
 function isLazyLocale(locale: Locale): locale is LazyLocale {
-  return locale !== DEFAULT_LOCALE;
+  return LAZY_LOCALES.includes(locale as LazyLocale);
 }
 
 export function resolveNavigatorLocale(navLang: string): Locale {
@@ -59,9 +59,6 @@ export async function loadLazyLocaleTranslation(locale: Locale): Promise<Transla
     return null;
   }
   const registration = LAZY_LOCALE_REGISTRY[locale];
-  if (!registration) {
-    return null;
-  }
   const module = await registration.loader();
   return module[registration.exportName] ?? null;
 }
