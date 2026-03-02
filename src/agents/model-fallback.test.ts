@@ -1140,6 +1140,39 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
   });
+
+  it("does not inject anthropic into fallback chain (#5790)", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google-antigravity/gemini-3-flash",
+            fallbacks: ["google-antigravity/gemini-3-pro-low", "google-antigravity/gemini-3-flash"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "google-antigravity",
+        model: "gemini-3-flash",
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw Object.assign(new Error("auth failed"), { status: 401 });
+        },
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(calls.every((c) => c.provider !== "anthropic")).toBe(true);
+    expect(calls).toEqual([
+      { provider: "google-antigravity", model: "gemini-3-flash" },
+      { provider: "google-antigravity", model: "gemini-3-pro-low" },
+    ]);
+  });
 });
 
 describe("runWithImageModelFallback", () => {
