@@ -149,21 +149,52 @@ function extractInlineSplitStringValue(token: string): string | null {
   return null;
 }
 
+function isEnvCommandToken(token: string): boolean {
+  const lower = token.toLowerCase();
+  return lower === "env" || lower.endsWith("/env");
+}
+
+function isRemoteDebuggingPortToken(token: string): boolean {
+  return token === "--remote-debugging-port" || token.startsWith("--remote-debugging-port=");
+}
+
+function envOptionConsumesNextValue(token: string): boolean {
+  if (!token.startsWith("-") || token.includes("=")) {
+    return false;
+  }
+  return (
+    token === "-u" ||
+    token === "-C" ||
+    token === "-S" ||
+    token === "--unset" ||
+    token === "--chdir" ||
+    token === "--split-string" ||
+    token === "--argv0"
+  );
+}
+
 function hasRemoteDebuggingPortArg(execStartValue: string): boolean {
-  const pending = parseSystemdExecStart(execStartValue);
+  const tokens = parseSystemdExecStart(execStartValue).map(normalizeExecStartToken).filter(Boolean);
+  if (tokens.length === 0) {
+    return false;
+  }
+
+  const firstToken = normalizeExecStartToken(tokens[0] ?? "");
+  if (!isEnvCommandToken(firstToken)) {
+    return tokens.some(isRemoteDebuggingPortToken);
+  }
+
+  const pending = tokens.slice(1);
   while (pending.length > 0) {
-    const normalized = normalizeExecStartToken(pending.shift() ?? "");
-    if (!normalized) {
+    const token = normalizeExecStartToken(pending.shift() ?? "");
+    if (!token) {
       continue;
     }
-    if (
-      normalized === "--remote-debugging-port" ||
-      normalized.startsWith("--remote-debugging-port=")
-    ) {
+    if (isRemoteDebuggingPortToken(token)) {
       return true;
     }
 
-    const inlineSplitStringValue = extractInlineSplitStringValue(normalized);
+    const inlineSplitStringValue = extractInlineSplitStringValue(token);
     if (inlineSplitStringValue) {
       const expanded = parseSystemdExecStart(normalizeExecStartToken(inlineSplitStringValue));
       if (expanded.length > 0) {
@@ -172,16 +203,26 @@ function hasRemoteDebuggingPortArg(execStartValue: string): boolean {
       continue;
     }
 
-    if (normalized === "-S" || normalized === "--split-string") {
-      const splitStringValue = pending.shift();
-      if (!splitStringValue) {
-        continue;
+    if (envOptionConsumesNextValue(token)) {
+      const optionValue = pending.shift();
+      if ((token === "-S" || token === "--split-string") && optionValue) {
+        const expanded = parseSystemdExecStart(normalizeExecStartToken(optionValue));
+        if (expanded.length > 0) {
+          pending.unshift(...expanded);
+        }
       }
-      const expanded = parseSystemdExecStart(normalizeExecStartToken(splitStringValue));
-      if (expanded.length > 0) {
-        pending.unshift(...expanded);
-      }
+      continue;
     }
+
+    if (token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) {
+      continue;
+    }
+
+    const runtimeTokens = [
+      token,
+      ...pending.map((candidate) => normalizeExecStartToken(candidate)),
+    ];
+    return runtimeTokens.some(isRemoteDebuggingPortToken);
   }
 
   return false;

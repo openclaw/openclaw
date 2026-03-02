@@ -309,6 +309,31 @@ describe("findExtraGatewayServices (linux)", () => {
     ]);
   });
 
+  it("does not expand split-string flags for non-env executables", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue([
+      "openclaw-python-split-string.service",
+    ] as unknown as Awaited<ReturnType<typeof fs.readdir>>);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        'ExecStart=/usr/bin/python -S "/opt/openclaw/helper.py --remote-debugging-port=18800"',
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "openclaw-python-split-string.service",
+        detail: "unit: /home/test/.config/systemd/user/openclaw-python-split-string.service",
+        scope: "user",
+        marker: "openclaw",
+        legacy: false,
+      },
+    ]);
+  });
+
   it("skips browser services when env uses split-string payload", async () => {
     vi.spyOn(fs, "readdir").mockResolvedValue([
       "chromium-env-split-string.service",
