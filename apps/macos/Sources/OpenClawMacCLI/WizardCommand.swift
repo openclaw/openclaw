@@ -23,29 +23,23 @@ struct WizardCliOptions {
             case "--json":
                 opts.json = true
             case "--url":
-                opts.url = self.nextValue(args, index: &i)
+                opts.url = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--token":
-                opts.token = self.nextValue(args, index: &i)
+                opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
-                opts.password = self.nextValue(args, index: &i)
+                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--mode":
-                if let value = nextValue(args, index: &i) {
+                if let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                     opts.mode = value
                 }
             case "--workspace":
-                opts.workspace = self.nextValue(args, index: &i)
+                opts.workspace = CLIArgParsingSupport.nextValue(args, index: &i)
             default:
                 break
             }
             i += 1
         }
         return opts
-    }
-
-    private static func nextValue(_ args: [String], index: inout Int) -> String? {
-        guard index + 1 < args.count else { return nil }
-        index += 1
-        return args[index].trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -338,8 +332,7 @@ actor GatewayWizardClient {
                     let frame = try await self.decodeFrame(message)
                     if case let .event(evt) = frame, evt.event == "connect.challenge",
                        let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                       let nonce = payload["nonce"]?.value as? String,
-                       nonce.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
                     {
                         return nonce
                     }
