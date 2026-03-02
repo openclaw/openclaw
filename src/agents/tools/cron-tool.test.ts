@@ -93,6 +93,53 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("filters cron list to current group context by default", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [
+        { id: "job-1", sessionKey: "agent:main:slack:channel:ops" },
+        { id: "job-2", sessionKey: "agent:main:slack:channel:ops:thread:1234" },
+        { id: "job-3", sessionKey: "agent:main:slack:channel:finance" },
+        { id: "job-4" },
+      ],
+      total: 4,
+      offset: 0,
+      limit: 4,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:slack:channel:ops:thread:1234" });
+    const result = await tool.execute("call-list-filter", { action: "list" });
+
+    const details = result.details as { jobs?: Array<{ id?: string }>; total?: number };
+    expect(details.jobs?.map((job) => job.id)).toEqual(["job-1", "job-2"]);
+    expect(details.total).toBe(2);
+  });
+
+  it("supports listing all cron contexts when allContexts=true", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [
+        { id: "job-1", sessionKey: "agent:main:slack:channel:ops" },
+        { id: "job-2", sessionKey: "agent:main:slack:channel:finance" },
+      ],
+      total: 2,
+      offset: 0,
+      limit: 2,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:slack:channel:ops" });
+    const result = await tool.execute("call-list-all-contexts", {
+      action: "list",
+      allContexts: true,
+    });
+
+    const details = result.details as { jobs?: Array<{ id?: string }>; total?: number };
+    expect(details.jobs?.map((job) => job.id)).toEqual(["job-1", "job-2"]);
+    expect(details.total).toBe(2);
+  });
+
   it.each([
     [
       "update",

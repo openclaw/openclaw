@@ -3,7 +3,11 @@ import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  deriveSessionChatType,
+  parseAgentSessionKey,
+  resolveThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -35,6 +39,7 @@ const CronToolSchema = Type.Object(
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     includeDisabled: Type.Optional(Type.Boolean()),
+    allContexts: Type.Optional(Type.Boolean()),
     job: Type.Optional(Type.Object({}, { additionalProperties: true })),
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
@@ -62,6 +67,19 @@ type CronToolDeps = {
 type ChatMessage = {
   role?: unknown;
   content?: unknown;
+};
+
+type CronListJob = {
+  sessionKey?: unknown;
+};
+
+type CronListResult = {
+  jobs?: unknown;
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
 };
 
 function stripExistingContext(text: string) {
@@ -207,6 +225,81 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   return delivery;
 }
 
+function normalizeSessionKey(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function comparableSessionKeys(rawSessionKey: string): Set<string> {
+  const normalized = normalizeSessionKey(rawSessionKey);
+  if (!normalized) {
+    return new Set();
+  }
+  const keys = new Set<string>([normalized]);
+  const parent = resolveThreadParentSessionKey(normalized);
+  const normalizedParent = normalizeSessionKey(parent);
+  if (normalizedParent) {
+    keys.add(normalizedParent);
+  }
+  return keys;
+}
+
+function sharesSessionContext(a: string, b: string): boolean {
+  const left = comparableSessionKeys(a);
+  const right = comparableSessionKeys(b);
+  for (const key of left) {
+    if (right.has(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function filterCronListToCallerContext(params: {
+  result: unknown;
+  agentSessionKey?: string;
+  allContexts?: boolean;
+}) {
+  if (params.allContexts) {
+    return params.result;
+  }
+  const callerSessionKey = params.agentSessionKey?.trim();
+  if (!callerSessionKey) {
+    return params.result;
+  }
+  const chatType = deriveSessionChatType(callerSessionKey);
+  if (chatType !== "group" && chatType !== "channel") {
+    return params.result;
+  }
+  if (!isRecord(params.result)) {
+    return params.result;
+  }
+  const listResult = params.result as CronListResult;
+  if (!Array.isArray(listResult.jobs)) {
+    return params.result;
+  }
+  const jobs = listResult.jobs as CronListJob[];
+  const filteredJobs = jobs.filter((job) => {
+    const jobSessionKey = normalizeSessionKey(job.sessionKey);
+    if (!jobSessionKey) {
+      return false;
+    }
+    return sharesSessionContext(jobSessionKey, callerSessionKey);
+  });
+  return {
+    ...listResult,
+    jobs: filteredJobs,
+    total: filteredJobs.length,
+    offset: 0,
+    limit: filteredJobs.length,
+    hasMore: false,
+    nextOffset: null,
+  } satisfies CronListResult;
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -217,7 +310,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 
 ACTIONS:
 - status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled)
+- list: List jobs (use includeDisabled:true to include disabled; for group/channel sessions defaults to current context unless allContexts:true)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -284,12 +377,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       switch (action) {
         case "status":
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "list": {
+          const listResult = await callGateway("cron.list", gatewayOpts, {
+            includeDisabled: Boolean(params.includeDisabled),
+          });
           return jsonResult(
-            await callGateway("cron.list", gatewayOpts, {
-              includeDisabled: Boolean(params.includeDisabled),
+            filterCronListToCallerContext({
+              result: listResult,
+              agentSessionKey: opts?.agentSessionKey,
+              allContexts: params.allContexts === true,
             }),
           );
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
