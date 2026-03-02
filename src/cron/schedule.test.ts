@@ -1,7 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { computeNextRunAtMs } from "./schedule.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  clearCronScheduleCacheForTest,
+  computeNextRunAtMs,
+  getCronScheduleCacheSizeForTest,
+} from "./schedule.js";
 
 describe("cron schedule", () => {
+  beforeEach(() => {
+    clearCronScheduleCacheForTest();
+  });
+
   it("computes next run for cron expression with timezone", () => {
     // Saturday, Dec 13 2025 00:00:00Z
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
@@ -81,6 +89,26 @@ describe("cron schedule", () => {
     );
     expect(next).toBeDefined();
     expect(next!).toBeGreaterThan(nowMs);
+  });
+
+  it("reuses compiled cron evaluators for the same expression/timezone", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    expect(getCronScheduleCacheSizeForTest()).toBe(0);
+
+    const first = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    const second = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs + 1_000,
+    );
+    const third = computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs);
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(third).toBeDefined();
+    expect(getCronScheduleCacheSizeForTest()).toBe(2);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {

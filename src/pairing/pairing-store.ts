@@ -24,6 +24,15 @@ const PAIRING_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
+type AllowFromReadCacheEntry = {
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+  entries: string[];
+};
+type AllowFromStatLike = { mtimeMs: number; size: number } | null;
+
+const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
 
 export type PairingChannel = ChannelId;
 
@@ -278,15 +287,99 @@ async function readAllowFromStateForPath(
   return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
 }
 
+function cloneAllowFromCacheEntry(entry: AllowFromReadCacheEntry): AllowFromReadCacheEntry {
+  return {
+    exists: entry.exists,
+    mtimeMs: entry.mtimeMs,
+    size: entry.size,
+    entries: entry.entries.slice(),
+  };
+}
+
+function setAllowFromReadCache(filePath: string, entry: AllowFromReadCacheEntry): void {
+  allowFromReadCache.set(filePath, cloneAllowFromCacheEntry(entry));
+}
+
+function resolveAllowFromReadCacheHit(params: {
+  filePath: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+}): AllowFromReadCacheEntry | null {
+  const cached = allowFromReadCache.get(params.filePath);
+  if (!cached) {
+    return null;
+  }
+  if (cached.exists !== params.exists) {
+    return null;
+  }
+  if (!params.exists) {
+    return cloneAllowFromCacheEntry(cached);
+  }
+  if (cached.mtimeMs !== params.mtimeMs || cached.size !== params.size) {
+    return null;
+  }
+  return cloneAllowFromCacheEntry(cached);
+}
+
+function resolveAllowFromReadCacheOrMissing(
+  filePath: string,
+  stat: AllowFromStatLike,
+): { entries: string[]; exists: boolean } | null {
+  const cached = resolveAllowFromReadCacheHit({
+    filePath,
+    exists: Boolean(stat),
+    mtimeMs: stat?.mtimeMs ?? null,
+    size: stat?.size ?? null,
+  });
+  if (cached) {
+    return { entries: cached.entries, exists: cached.exists };
+  }
+  if (!stat) {
+    setAllowFromReadCache(filePath, {
+      exists: false,
+      mtimeMs: null,
+      size: null,
+      entries: [],
+    });
+    return { entries: [], exists: false };
+  }
+  return null;
+}
+
 async function readAllowFromStateForPathWithExists(
   channel: PairingChannel,
   filePath: string,
 ): Promise<{ entries: string[]; exists: boolean }> {
+  let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
+  }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
+
   const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
     allowFrom: [],
   });
   const entries = normalizeAllowFromList(channel, value);
+  setAllowFromReadCache(filePath, {
+    exists,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    entries,
+  });
   return { entries, exists };
 }
 
@@ -298,6 +391,24 @@ function readAllowFromStateForPathSyncWithExists(
   channel: PairingChannel,
   filePath: string,
 ): { entries: string[]; exists: boolean } {
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      return { entries: [], exists: false };
+    }
+  }
+
+  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
+  if (cachedOrMissing) {
+    return cachedOrMissing;
+  }
+  if (!stat) {
+    return { entries: [], exists: false };
+  }
+
   let raw = "";
   try {
     raw = fs.readFileSync(filePath, "utf8");
@@ -311,9 +422,21 @@ function readAllowFromStateForPathSyncWithExists(
   try {
     const parsed = JSON.parse(raw) as AllowFromStore;
     const entries = normalizeAllowFromList(channel, parsed);
+    setAllowFromReadCache(filePath, {
+      exists: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      entries,
+    });
     return { entries, exists: true };
   } catch {
     // Keep parity with async reads: malformed JSON still means the file exists.
+    setAllowFromReadCache(filePath, {
+      exists: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      entries: [],
+    });
     return { entries: [], exists: true };
   }
 }
@@ -337,6 +460,16 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
     version: 1,
     allowFrom,
   } satisfies AllowFromStore);
+  let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {}
+  setAllowFromReadCache(filePath, {
+    exists: true,
+    mtimeMs: stat?.mtimeMs ?? null,
+    size: stat?.size ?? null,
+    entries: allowFrom.slice(),
+  });
 }
 
 async function readNonDefaultAccountAllowFrom(params: {
@@ -446,6 +579,10 @@ export function readChannelAllowFromStoreSync(
   const legacyPath = resolveAllowFromPath(channel, env);
   const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
+}
+
+export function clearPairingAllowFromReadCacheForTest(): void {
+  allowFromReadCache.clear();
 }
 
 type AllowFromStoreEntryUpdateParams = {

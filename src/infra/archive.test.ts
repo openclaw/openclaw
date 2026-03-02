@@ -4,6 +4,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import type { ArchiveSecurityError } from "./archive.js";
 import { extractArchive, resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
 
@@ -144,6 +145,38 @@ describe("archive utils", () => {
         .then(() => true)
         .catch(() => false);
       expect(outsideExists).toBe(false);
+    });
+  });
+
+  it("does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract", async () => {
+    await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
+      const outsideDir = path.join(workDir, "outside");
+      await fs.mkdir(outsideDir, { recursive: true });
+      const slotDir = path.join(extractDir, "slot");
+      await fs.mkdir(slotDir, { recursive: true });
+
+      const outsideTarget = path.join(outsideDir, "target.txt");
+      await fs.writeFile(outsideTarget, "SAFE");
+
+      const zip = new JSZip();
+      zip.file("slot/target.txt", "owned");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+      await withRealpathSymlinkRebindRace({
+        shouldFlip: (realpathInput) => realpathInput === slotDir,
+        symlinkPath: slotDir,
+        symlinkTarget: outsideDir,
+        timing: "after-realpath",
+        run: async () => {
+          await expect(
+            extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+          ).rejects.toMatchObject({
+            code: "destination-symlink-traversal",
+          } satisfies Partial<ArchiveSecurityError>);
+        },
+      });
+
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("SAFE");
     });
   });
 

@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -10,7 +10,8 @@ import {
   stripArchivePath,
   validateArchiveEntryPath,
 } from "./archive-path.js";
-import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
+import { openWritableFileWithinRoot, SafeOpenError } from "./fs-safe.js";
+import { isNotFoundPathError, isPathInside } from "./path-guards.js";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -64,11 +65,6 @@ const ERROR_ARCHIVE_EXTRACTED_SIZE_EXCEEDS_LIMIT = "archive extracted size excee
 const ERROR_ARCHIVE_ENTRY_TRAVERSES_SYMLINK = "archive entry traverses symlink in destination";
 
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
-const OPEN_WRITE_FLAGS =
-  fsConstants.O_WRONLY |
-  fsConstants.O_CREAT |
-  fsConstants.O_TRUNC |
-  (process.platform !== "win32" && "O_NOFOLLOW" in fsConstants ? fsConstants.O_NOFOLLOW : 0);
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
@@ -275,12 +271,32 @@ async function assertResolvedInsideDestination(params: {
   }
 }
 
-async function openZipOutputFile(outPath: string, originalPath: string) {
+type OpenZipOutputFileResult = {
+  handle: FileHandle;
+  createdForWrite: boolean;
+  openedRealPath: string;
+};
+
+async function openZipOutputFile(params: {
+  relPath: string;
+  originalPath: string;
+  destinationRealDir: string;
+}): Promise<OpenZipOutputFileResult> {
   try {
-    return await fs.open(outPath, OPEN_WRITE_FLAGS, 0o666);
+    return await openWritableFileWithinRoot({
+      rootDir: params.destinationRealDir,
+      relativePath: params.relPath,
+      mkdir: false,
+      mode: 0o666,
+    });
   } catch (err) {
-    if (isSymlinkOpenError(err)) {
-      throw symlinkTraversalError(originalPath);
+    if (
+      err instanceof SafeOpenError &&
+      (err.code === "invalid-path" ||
+        err.code === "outside-workspace" ||
+        err.code === "path-mismatch")
+    ) {
+      throw symlinkTraversalError(params.originalPath);
     }
     throw err;
   }
@@ -376,13 +392,22 @@ async function prepareZipOutputPath(params: {
 
 async function writeZipFileEntry(params: {
   entry: ZipEntry;
-  outPath: string;
+  relPath: string;
+  destinationRealDir: string;
   budget: ZipExtractBudget;
 }): Promise<void> {
-  const handle = await openZipOutputFile(params.outPath, params.entry.name);
+  const opened = await openZipOutputFile({
+    relPath: params.relPath,
+    originalPath: params.entry.name,
+    destinationRealDir: params.destinationRealDir,
+  });
   params.budget.startEntry();
   const readable = await readZipEntryStream(params.entry);
-  const writable = handle.createWriteStream();
+  const writable = opened.handle.createWriteStream();
+  let handleClosedByStream = false;
+  writable.once("close", () => {
+    handleClosedByStream = true;
+  });
 
   try {
     await pipeline(
@@ -391,15 +416,23 @@ async function writeZipFileEntry(params: {
       writable,
     );
   } catch (err) {
-    await cleanupPartialRegularFile(params.outPath).catch(() => undefined);
+    if (opened.createdForWrite) {
+      await fs.rm(opened.openedRealPath, { force: true }).catch(() => undefined);
+    } else {
+      await cleanupPartialRegularFile(opened.openedRealPath).catch(() => undefined);
+    }
     throw err;
+  } finally {
+    if (!handleClosedByStream) {
+      await opened.handle.close().catch(() => undefined);
+    }
   }
 
   // Best-effort permission restore for zip entries created on unix.
   if (typeof params.entry.unixPermissions === "number") {
     const mode = params.entry.unixPermissions & 0o777;
     if (mode !== 0) {
-      await fs.chmod(params.outPath, mode).catch(() => undefined);
+      await fs.chmod(opened.openedRealPath, mode).catch(() => undefined);
     }
   }
 }
@@ -450,7 +483,8 @@ async function extractZip(params: {
 
     await writeZipFileEntry({
       entry,
-      outPath: output.outPath,
+      relPath: output.relPath,
+      destinationRealDir,
       budget,
     });
   }

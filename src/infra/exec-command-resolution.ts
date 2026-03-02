@@ -46,6 +46,33 @@ function tryResolveRealpath(filePath: string | undefined): string | undefined {
   }
 }
 
+function buildCommandResolution(params: {
+  rawExecutable: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  effectiveArgv: string[];
+  wrapperChain: string[];
+  policyBlocked: boolean;
+  blockedWrapper?: string;
+}): CommandResolution {
+  const resolvedPath = resolveExecutableCandidatePath(params.rawExecutable, {
+    cwd: params.cwd,
+    env: params.env,
+  });
+  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : params.rawExecutable;
+  return {
+    rawExecutable: params.rawExecutable,
+    resolvedPath,
+    resolvedRealPath,
+    executableName,
+    effectiveArgv: params.effectiveArgv,
+    wrapperChain: params.wrapperChain,
+    policyBlocked: params.policyBlocked,
+    blockedWrapper: params.blockedWrapper,
+  };
+}
+
 export function resolveCommandResolution(
   command: string,
   cwd?: string,
@@ -55,18 +82,14 @@ export function resolveCommandResolution(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return {
+  return buildCommandResolution({
     rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
     effectiveArgv: [rawExecutable],
     wrapperChain: [],
     policyBlocked: false,
-  };
+    cwd,
+    env,
+  });
 }
 
 export function resolveCommandResolutionFromArgv(
@@ -80,19 +103,15 @@ export function resolveCommandResolutionFromArgv(
   if (!rawExecutable) {
     return null;
   }
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, { cwd, env });
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
-  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return {
+  return buildCommandResolution({
     rawExecutable,
-    resolvedPath,
-    resolvedRealPath,
-    executableName,
     effectiveArgv,
     wrapperChain: plan.wrappers,
     policyBlocked: plan.policyBlocked,
     blockedWrapper: plan.blockedWrapper,
-  };
+    cwd,
+    env,
+  });
 }
 
 function normalizeMatchTarget(value: string): string {
@@ -109,6 +128,10 @@ function tryRealpath(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function escapeRegExpLiteral(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function globToRegExp(pattern: string): RegExp {
@@ -132,7 +155,7 @@ function globToRegExp(pattern: string): RegExp {
       i += 1;
       continue;
     }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
+    regex += escapeRegExpLiteral(ch);
     i += 1;
   }
   regex += "$";

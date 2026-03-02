@@ -18,6 +18,8 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
+    // Anthropic 529 (overloaded) should trigger failover as rate_limit.
+    expect(resolveFailoverReasonFromError({ status: 529 })).toBe("rate_limit");
   });
 
   it("infers format errors from error messages", () => {

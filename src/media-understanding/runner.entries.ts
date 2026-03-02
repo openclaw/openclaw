@@ -13,6 +13,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -20,6 +21,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_AUDIO_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
+  MIN_AUDIO_FILE_BYTES,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
@@ -344,16 +346,18 @@ async function resolveProviderExecutionContext(params: {
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
-  const total = decision.attachments.length;
-  const success = decision.attachments.filter(
-    (entry) => entry.chosen?.outcome === "success",
-  ).length;
-  const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
+  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  const total = attachments.length;
+  const success = attachments.filter((entry) => entry?.chosen?.outcome === "success").length;
+  const chosen = attachments.find((entry) => entry?.chosen)?.chosen;
   const provider = chosen?.provider?.trim();
   const model = chosen?.model?.trim();
   const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
-  const reason = decision.attachments
-    .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+  const reason = attachments
+    .flatMap((entry) => {
+      const attempts = Array.isArray(entry?.attempts) ? entry.attempts : [];
+      return attempts.map((attempt) => attempt?.reason).filter(Boolean);
+    })
     .find(Boolean);
   const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
@@ -400,33 +404,21 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-    const result = provider?.describeImage
-      ? await provider.describeImage({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        })
-      : await describeImageWithModel({
-          buffer: media.buffer,
-          fileName: media.fileName,
-          mime: media.mime,
-          model: modelId,
-          provider: providerId,
-          prompt,
-          timeoutMs,
-          profile: entry.profile,
-          preferredProfile: entry.preferredProfile,
-          agentDir: params.agentDir,
-          cfg: params.cfg,
-        });
+    const imageInput = {
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      model: modelId,
+      provider: providerId,
+      prompt,
+      timeoutMs,
+      profile: entry.profile,
+      preferredProfile: entry.preferredProfile,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+    };
+    const describeImage = provider?.describeImage ?? describeImageWithModel;
+    const result = await describeImage(imageInput);
     return {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
@@ -441,6 +433,10 @@ export async function runProviderEntry(params: {
     throw new Error(`Media provider not available: ${providerId}`);
   }
 
+  // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
+  // so provider HTTP calls are routed through the proxy when configured.
+  const fetchFn = resolveProxyFetchFromEnv();
+
   if (capability === "audio") {
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
@@ -451,6 +447,12 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    if (media.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${media.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
     const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
       providerId,
       cfg,
@@ -480,6 +482,7 @@ export async function runProviderEntry(params: {
           prompt,
           query: providerQuery,
           timeoutMs,
+          fetchFn,
         }),
     });
     return {
@@ -529,6 +532,7 @@ export async function runProviderEntry(params: {
         model: entry.model,
         prompt,
         timeoutMs,
+        fetchFn,
       }),
   });
   return {
@@ -566,6 +570,15 @@ export async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
+  if (capability === "audio") {
+    const stat = await fs.stat(pathResult.path);
+    if (stat.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${stat.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
+  }
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
