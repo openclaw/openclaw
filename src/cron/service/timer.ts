@@ -446,9 +446,18 @@ export function armTimer(state: CronServiceState) {
   }
   const now = state.deps.nowMs();
   const delay = Math.max(nextAt - now, 0);
+  // Floor: when the next wake time is in the past (delay === 0), enforce a
+  // minimum delay to prevent a tight setTimeout(0) loop.  This can happen
+  // when a job has a stuck runningAtMs marker and a past-due nextRunAtMs:
+  // findDueJobs skips the job (blocked by runningAtMs), while
+  // recomputeNextRunsForMaintenance intentionally does not advance the
+  // past-due nextRunAtMs (per #13992).  The finally block in onTimer then
+  // re-invokes armTimer with delay === 0, creating an infinite hot-loop
+  // that saturates the event loop and fills the log file to its size cap.
+  const flooredDelay = delay === 0 ? MIN_REFIRE_GAP_MS : delay;
   // Wake at least once a minute to avoid schedule drift and recover quickly
   // when the process was paused or wall-clock time jumps.
-  const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS);
+  const clampedDelay = Math.min(flooredDelay, MAX_TIMER_DELAY_MS);
   // Intentionally avoid an `async` timer callback:
   // Vitest's fake-timer helpers can await async callbacks, which would block
   // tests that simulate long-running jobs. Runtime behavior is unchanged.
