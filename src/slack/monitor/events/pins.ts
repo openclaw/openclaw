@@ -8,13 +8,15 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 async function handleSlackPinEvent(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
+  trackChannelEvent?: (isChannel: boolean) => void;
   body: unknown;
   event: unknown;
   action: "pinned" | "unpinned";
   contextKeySuffix: "added" | "removed";
   errorLabel: string;
 }): Promise<void> {
-  const { ctx, trackEvent, body, event, action, contextKeySuffix, errorLabel } = params;
+  const { ctx, trackEvent, trackChannelEvent, body, event, action, contextKeySuffix, errorLabel } =
+    params;
 
   try {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
@@ -24,6 +26,8 @@ async function handleSlackPinEvent(params: {
 
     const payload = event as SlackPinEvent;
     const channelId = payload.channel_id;
+    // Pins are typically channel events (not DM)
+    trackChannelEvent?.(true);
     const ingressContext = await authorizeAndResolveSlackSystemEventContext({
       ctx,
       senderId: payload.user,
@@ -52,13 +56,15 @@ async function handleSlackPinEvent(params: {
 export function registerSlackPinEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
+  trackChannelEvent?: (isChannel: boolean) => void;
 }) {
-  const { ctx, trackEvent } = params;
+  const { ctx, trackEvent, trackChannelEvent } = params;
 
   ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
     await handleSlackPinEvent({
       ctx,
       trackEvent,
+      trackChannelEvent,
       body,
       event,
       action: "pinned",
@@ -71,6 +77,7 @@ export function registerSlackPinEvents(params: {
     await handleSlackPinEvent({
       ctx,
       trackEvent,
+      trackChannelEvent,
       body,
       event,
       action: "unpinned",

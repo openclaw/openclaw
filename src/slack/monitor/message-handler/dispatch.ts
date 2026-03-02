@@ -255,6 +255,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
+      // Notify provider about streaming error for degraded state detection
+      ctx.onStreamingError?.();
       await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
     }
   };
@@ -429,11 +431,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
-    try {
-      await stopSlackStream({ session: finalStream });
-    } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
-    }
+      try {
+        await stopSlackStream({ session: finalStream });
+      } catch (err) {
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+        // Notify provider about streaming error for degraded state detection
+        ctx.onStreamingError?.();
+      }
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;

@@ -15,8 +15,9 @@ import type {
 export function registerSlackChannelEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
+  trackChannelEvent?: (isChannel: boolean) => void;
 }) {
-  const { ctx, trackEvent } = params;
+  const { ctx, trackEvent, trackChannelEvent } = params;
 
   const enqueueChannelSystemEvent = (params: {
     kind: "created" | "renamed";
@@ -55,6 +56,8 @@ export function registerSlackChannelEvents(params: {
           return;
         }
         trackEvent?.();
+        // Channel events are always channel events (not DM)
+        trackChannelEvent?.(true);
 
         const payload = event as SlackChannelCreatedEvent;
         const channelId = payload.channel?.id;
@@ -74,6 +77,8 @@ export function registerSlackChannelEvents(params: {
           return;
         }
         trackEvent?.();
+        // Channel events are always channel events (not DM)
+        trackChannelEvent?.(true);
 
         const payload = event as SlackChannelRenamedEvent;
         const channelId = payload.channel?.id;
@@ -93,6 +98,8 @@ export function registerSlackChannelEvents(params: {
           return;
         }
         trackEvent?.();
+        // Channel events are always channel events (not DM)
+        trackChannelEvent?.(true);
 
         const payload = event as SlackChannelIdChangedEvent;
         const oldChannelId = payload.old_channel_id;

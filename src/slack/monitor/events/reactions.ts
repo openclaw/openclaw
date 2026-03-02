@@ -8,8 +8,9 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 export function registerSlackReactionEvents(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
+  trackChannelEvent?: (isChannel: boolean) => void;
 }) {
-  const { ctx, trackEvent } = params;
+  const { ctx, trackEvent, trackChannelEvent } = params;
 
   const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
     try {
@@ -18,6 +19,8 @@ export function registerSlackReactionEvents(params: {
         return;
       }
       trackEvent?.();
+      // Reactions are always channel events (not DM)
+      trackChannelEvent?.(true);
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({
         ctx,

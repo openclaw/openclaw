@@ -14,14 +14,32 @@ export function registerSlackMonitorEvents(params: {
   handleSlackMessage: SlackMessageHandler;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Called on each inbound channel event (not DM) to track channel event liveness. */
+  trackChannelEvent?: (isChannel: boolean) => void;
 }) {
   registerSlackMessageEvents({
     ctx: params.ctx,
     handleSlackMessage: params.handleSlackMessage,
   });
-  registerSlackReactionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackMemberEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackChannelEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackPinEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
+  registerSlackReactionEvents({
+    ctx: params.ctx,
+    trackEvent: params.trackEvent,
+    trackChannelEvent: params.trackChannelEvent,
+  });
+  registerSlackMemberEvents({
+    ctx: params.ctx,
+    trackEvent: params.trackEvent,
+    trackChannelEvent: params.trackChannelEvent,
+  });
+  registerSlackChannelEvents({
+    ctx: params.ctx,
+    trackEvent: params.trackEvent,
+    trackChannelEvent: params.trackChannelEvent,
+  });
+  registerSlackPinEvents({
+    ctx: params.ctx,
+    trackEvent: params.trackEvent,
+    trackChannelEvent: params.trackChannelEvent,
+  });
   registerSlackInteractionEvents({ ctx: params.ctx });
 }

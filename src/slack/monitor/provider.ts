@@ -335,20 +335,96 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ackReactionScope,
     mediaMaxBytes,
     removeAckAfterReply,
+    onStreamingError,
   });
 
   // Wire up event liveness tracking: update lastEventAt on every inbound event
   // so the health monitor can detect "half-dead" sockets that pass health checks
   // but silently stop delivering events.
+  // Also track channel events separately for streaming API degraded state detection.
+  let lastChannelEventAt: number | undefined;
+  let lastStreamingErrorAt: number | undefined;
+  let degradedStateCheckTimer: ReturnType<typeof setTimeout> | undefined;
+  const STREAMING_DEGRADED_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  const STREAMING_DEGRADED_THRESHOLD_MS = 3 * 60 * 1000; // 3 minutes without channel events
+
   const trackEvent = opts.setStatus
     ? () => {
         opts.setStatus!({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
       }
     : undefined;
 
-  const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
+  const trackChannelEvent = (isChannel: boolean) => {
+    if (isChannel) {
+      lastChannelEventAt = Date.now();
+      // Reset degraded state if we receive a channel event after streaming error
+      if (lastStreamingErrorAt !== undefined) {
+        lastStreamingErrorAt = undefined;
+        if (degradedStateCheckTimer) {
+          clearTimeout(degradedStateCheckTimer);
+          degradedStateCheckTimer = undefined;
+        }
+      }
+    }
+    trackEvent?.();
+  };
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
+  // AbortController to trigger reconnect when degraded state is detected
+  let degradedStateAbortController: AbortController | undefined;
+
+  const onStreamingError = () => {
+    if (slackMode !== "socket") {
+      return;
+    }
+    lastStreamingErrorAt = Date.now();
+    // Clear any existing timer
+    if (degradedStateCheckTimer) {
+      clearTimeout(degradedStateCheckTimer);
+    }
+    // Schedule a check for degraded state
+    degradedStateCheckTimer = setTimeout(() => {
+      const now = Date.now();
+      const timeSinceError = now - (lastStreamingErrorAt ?? 0);
+      const timeSinceLastChannelEvent = lastChannelEventAt
+        ? now - lastChannelEventAt
+        : Infinity;
+
+      // If we haven't received channel events for threshold duration after streaming error,
+      // trigger a reconnect
+      if (
+        timeSinceError >= STREAMING_DEGRADED_THRESHOLD_MS &&
+        timeSinceLastChannelEvent >= STREAMING_DEGRADED_THRESHOLD_MS
+      ) {
+        runtime.error?.(
+          `slack socket mode: detected degraded state (no channel events for ${Math.round(timeSinceLastChannelEvent / 1000)}s after streaming API error), triggering reconnect`,
+        );
+        // Trigger reconnect by stopping the app and aborting the waitForSlackSocketDisconnect promise
+        // This will cause the reconnect loop to restart
+        void app.stop().catch(() => undefined);
+        // Also abort the waitForSlackSocketDisconnect to immediately trigger reconnect
+        if (!degradedStateAbortController) {
+          degradedStateAbortController = new AbortController();
+        }
+        degradedStateAbortController.abort();
+      }
+      degradedStateCheckTimer = undefined;
+    }, STREAMING_DEGRADED_CHECK_INTERVAL_MS);
+  };
+
+  const handleSlackMessage = createSlackMessageHandler({
+    ctx,
+    account,
+    trackEvent,
+    trackChannelEvent,
+  });
+
+  registerSlackMonitorEvents({
+    ctx,
+    account,
+    handleSlackMessage,
+    trackEvent,
+    trackChannelEvent,
+  });
   await registerSlackMonitorSlashCommands({ ctx, account });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({

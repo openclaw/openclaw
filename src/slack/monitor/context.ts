@@ -98,6 +98,8 @@ export type SlackMonitorContext = {
     channelId?: string | null;
     channelType?: string | null;
   }) => string;
+  /** Callback to notify when streaming API fails (for degraded state detection). */
+  onStreamingError?: () => void;
   isChannelAllowed: (params: {
     channelId?: string;
     channelName?: string;
@@ -152,6 +154,8 @@ export function createSlackMonitorContext(params: {
   ackReactionScope: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
+  /** Callback to notify when streaming API fails (for degraded state detection). */
+  onStreamingError?: () => void;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
@@ -432,5 +436,6 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    onStreamingError: params.onStreamingError,
   };
 }

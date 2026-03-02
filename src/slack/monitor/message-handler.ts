@@ -21,8 +21,10 @@ export function createSlackMessageHandler(params: {
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Called on each inbound channel event (not DM) to track channel event liveness. */
+  trackChannelEvent?: (isChannel: boolean) => void;
 }): SlackMessageHandler {
-  const { ctx, account, trackEvent } = params;
+  const { ctx, account, trackEvent, trackChannelEvent } = params;
   const debounceMs = resolveInboundDebounceMs({ cfg: ctx.cfg, channel: "slack" });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
 
@@ -116,6 +118,10 @@ export function createSlackMessageHandler(params: {
       return;
     }
     trackEvent?.();
+    // Track channel events separately for degraded state detection
+    const channelType = message.channel_type;
+    const isChannel = channelType !== "im" && channelType !== "mpim";
+    trackChannelEvent?.(isChannel);
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
