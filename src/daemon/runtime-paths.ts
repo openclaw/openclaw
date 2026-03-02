@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -152,44 +153,7 @@ export function renderSystemNodeWarning(
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
 }
-
-/**
- * Homebrew Cellar paths (e.g. /opt/homebrew/Cellar/node/25.7.0/bin/node)
- * break when Homebrew upgrades Node and removes the old version directory.
- * Resolve these to a stable Homebrew-managed path that survives upgrades:
- *   - Default formula "node":  <prefix>/opt/node/bin/node  or  <prefix>/bin/node
- *   - Versioned formula "node@22":  <prefix>/opt/node@22/bin/node  (keg-only)
- */
-export async function resolveStableNodePath(nodePath: string): Promise<string> {
-  const cellarMatch = nodePath.match(/^(.+?)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/);
-  if (!cellarMatch) {
-    return nodePath;
-  }
-  const prefix = cellarMatch[1]; // e.g. /opt/homebrew
-  const formula = cellarMatch[2]; // e.g. "node" or "node@22"
-
-  // Try the Homebrew opt symlink first — works for both default and versioned formulas.
-  const optPath = `${prefix}/opt/${formula}/bin/node`;
-  try {
-    await fs.access(optPath);
-    return optPath;
-  } catch {
-    // fall through
-  }
-
-  // For the default "node" formula, also try the direct bin symlink.
-  if (formula === "node") {
-    const binPath = `${prefix}/bin/node`;
-    try {
-      await fs.access(binPath);
-      return binPath;
-    } catch {
-      // fall through
-    }
-  }
-
-  return nodePath;
-}
+export { resolveStableNodePath };
 
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
