@@ -285,6 +285,42 @@ describe("devices cli local fallback", () => {
     ).rejects.toThrow("pairing required");
     expect(listDevicePairing).not.toHaveBeenCalled();
   });
+
+  it("falls back to local pairing list when URL hostname is localhost", async () => {
+    // Regression test for #31804: when gateway.bind=lan, CLI still connects via 127.0.0.1
+    // but urlSource might indicate a different source; fallback should still work.
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    listDevicePairing.mockResolvedValueOnce({
+      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk", ts: 1 }],
+      paired: [],
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+    buildGatewayConnectionDetails.mockReturnValueOnce({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "cli --url",
+      message: "",
+    });
+
+    await runDevicesCommand(["list"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    expect(listDevicePairing).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+  });
+
+  it("does not fall back to local pairing when URL points to remote host", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    buildGatewayConnectionDetails.mockReturnValueOnce({
+      url: "wss://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+      message: "",
+    });
+
+    await expect(runDevicesCommand(["list", "--json"])).rejects.toThrow("pairing required");
+    expect(listDevicePairing).not.toHaveBeenCalled();
+  });
 });
 
 afterEach(() => {

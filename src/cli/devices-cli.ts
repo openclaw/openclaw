@@ -108,11 +108,15 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
     return false;
   }
   const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return false;
+  // Allow fallback for local loopback connections (legacy check)
+  if (connection.urlSource === "local loopback") {
+    return true;
   }
+  // Also allow fallback when the URL points to a loopback address,
+  // even if urlSource is different (e.g., when bind=lan but CLI connects via 127.0.0.1)
   try {
-    return isLoopbackHost(new URL(connection.url).hostname);
+    const url = new URL(connection.url);
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }
