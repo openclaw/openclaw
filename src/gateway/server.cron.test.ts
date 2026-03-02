@@ -644,6 +644,58 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
+      fetchWithSsrFGuardMock.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const failureDestRes = await rpcReq(ws, "cron.add", {
+        name: "failure destination webhook",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "19098680",
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failure-destination",
+          },
+        },
+      });
+      expect(failureDestRes.ok).toBe(true);
+      const failureDestJobIdValue = (failureDestRes.payload as { id?: unknown } | null)?.id;
+      const failureDestJobId =
+        typeof failureDestJobIdValue === "string" ? failureDestJobIdValue : "";
+      expect(failureDestJobId.length > 0).toBe(true);
+
+      const failureDestRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: failureDestJobId, mode: "force" },
+        20_000,
+      );
+      expect(failureDestRunRes.ok).toBe(true);
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
+      const [failureDestArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
+        {
+          url?: string;
+          init?: {
+            method?: string;
+            headers?: Record<string, string>;
+            body?: string;
+          };
+        },
+      ];
+      expect(failureDestArgs.url).toBe("https://example.invalid/failure-destination");
+      const failureDestBody = JSON.parse(failureDestArgs.init?.body ?? "{}");
+      expect(failureDestBody.message).toBe(
+        'Cron job "failure destination webhook" failed: unknown error',
+      );
+
       cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "" });
       const noSummaryRes = await rpcReq(ws, "cron.add", {
         name: "webhook no summary",
@@ -668,7 +720,7 @@ describe("gateway server cron", () => {
       expect(noSummaryRunRes.ok).toBe(true);
       await yieldToEventLoop();
       await yieldToEventLoop();
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
       await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
     }
