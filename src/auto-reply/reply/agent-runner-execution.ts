@@ -42,6 +42,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveRunDeliveryTarget } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -182,6 +183,26 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
+      // Resolve relay delivery target before the run so tool defaults
+      // point at the relay target (not source) in read-only mode.
+      const deliveryTarget = resolveRunDeliveryTarget({
+        relayMode: params.followupRun.relayMode,
+        relayOutput: params.followupRun.relayOutput,
+        originatingChannel: params.followupRun.originatingChannel,
+        originatingTo: params.followupRun.originatingTo,
+        originatingAccountId: params.followupRun.originatingAccountId,
+        originatingThreadId: params.followupRun.originatingThreadId,
+      });
+      const useRelayRunRouting =
+        deliveryTarget.relayMode === "read-only" && deliveryTarget.viaRelayOutput;
+      const readOnlySource =
+        deliveryTarget.relayMode === "read-only"
+          ? {
+              channel: params.followupRun.originatingChannel,
+              to: params.followupRun.originatingTo,
+              accountId: params.followupRun.originatingAccountId,
+            }
+          : undefined;
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
       const fallbackResult = await runWithModelFallback({
@@ -299,6 +320,17 @@ export async function runAgentTurnWithFallback(params: {
           });
           return runEmbeddedPiAgent({
             ...embeddedContext,
+            // Read-only relay: override run-time routing to relay target
+            // so tool defaults (sessions_spawn, subagent/ACP) target relay.
+            ...(useRelayRunRouting
+              ? {
+                  messageProvider: deliveryTarget.channel,
+                  messageTo: deliveryTarget.to,
+                  agentAccountId: deliveryTarget.accountId ?? embeddedContext.agentAccountId,
+                  messageThreadId: deliveryTarget.threadId ?? embeddedContext.messageThreadId,
+                }
+              : {}),
+            readOnlySource,
             groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
             groupChannel:
               params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),

@@ -136,8 +136,14 @@ export function scheduleFollowupDrain(
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   void (async () => {
     try {
+      // Snapshot routing metadata while items exist so overflow-only
+      // summary followups still carry relay/origin routing context.
+      let lastKnownRouting: OriginRoutingMetadata | undefined;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
+        if (queue.items.length > 0) {
+          lastKnownRouting = resolveOriginRoutingMetadata(queue.items);
+        }
         if (queue.mode === "collect") {
           const groups = resolveCollectGroups(queue.items);
           const currentGroup = groups[0];
@@ -163,6 +169,7 @@ export function scheduleFollowupDrain(
               prompt,
               run,
               enqueuedAt: Date.now(),
+              ...lastKnownRouting,
             });
             clearQueueSummaryState(queue);
             continue;
