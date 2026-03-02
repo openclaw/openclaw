@@ -51,6 +51,11 @@ type ResolutionLimits = {
 
 type ProviderResolutionOutput = Map<string, unknown>;
 
+function isIgnorableStdinWriteError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
+}
+
 function isAbsolutePathname(value: string): boolean {
   return (
     path.isAbsolute(value) ||
@@ -405,7 +410,34 @@ async function runExecResolver(params: {
       });
     });
 
-    child.stdin?.end(params.input);
+    const stdin = child.stdin;
+    if (stdin) {
+      stdin.on("error", (error) => {
+        // Some providers exit before consuming stdin; treat broken-pipe as non-fatal.
+        if (isIgnorableStdinWriteError(error)) {
+          return;
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimers();
+        reject(error);
+      });
+      try {
+        stdin.end(params.input);
+      } catch (error) {
+        if (isIgnorableStdinWriteError(error)) {
+          return;
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimers();
+        reject(error);
+      }
+    }
   });
 }
 
