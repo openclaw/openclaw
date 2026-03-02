@@ -385,6 +385,19 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("applies model overrides with correct precedence", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(loadModelCatalog).mockResolvedValue([
+        {
+          id: "gpt-4.1-mini",
+          name: "GPT-4.1 Mini",
+          provider: "openai",
+        },
+        {
+          id: "claude-opus-4-5",
+          name: "Claude Opus 4.5",
+          provider: "anthropic",
+        },
+      ]);
+
       let res = (
         await runCronTurn(home, {
           jobPayload: {
