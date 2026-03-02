@@ -478,7 +478,10 @@ export const buildTelegramMessageContext = async ({
   const replyFromId = msg.reply_to_message?.from?.id;
   const replyToBotMessage = botId != null && replyFromId === botId;
   const isReplyToSystemMessage =
-    replyToBotMessage && msg.reply_to_message?.from?.is_bot === true && !msg.reply_to_message?.text;
+    replyToBotMessage &&
+    msg.reply_to_message?.from?.is_bot === true &&
+    !msg.reply_to_message?.text &&
+    !msg.reply_to_message?.caption;
   const implicitMention = replyToBotMessage && !isReplyToSystemMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
