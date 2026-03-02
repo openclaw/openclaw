@@ -5,7 +5,6 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
   return {
     ...merged,
     gatewayHandlers: merged.gatewayHandlers ?? {},
-    httpHandlers: merged.httpHandlers ?? [],
     httpRoutes: merged.httpRoutes ?? [],
   };
 };
