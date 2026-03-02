@@ -239,7 +239,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     message.type === "file"
   ) {
     try {
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
+      const fileName = message.type === "file" ? message.fileName : undefined;
+      const media = await downloadLineMedia(
+        message.id,
+        account.channelAccessToken,
+        mediaMaxBytes,
+        fileName,
+      );
       allMedia.push({
         path: media.path,
         contentType: media.contentType,
