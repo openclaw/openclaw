@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import "../cron/isolated-agent.mocks.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
@@ -14,6 +16,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand } from "./agent.js";
+import * as agentDeliveryModule from "./agent/delivery.js";
 
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
@@ -49,6 +52,7 @@ const runtime: RuntimeEnv = {
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
+const deliverAgentCommandResultSpy = vi.spyOn(agentDeliveryModule, "deliverAgentCommandResult");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -146,6 +150,7 @@ beforeEach(() => {
     },
   });
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
 });
 
 describe("agentCommand", () => {
@@ -183,6 +188,30 @@ describe("agentCommand", () => {
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
+    });
+  });
+
+  it("defaults senderIsOwner to true for local agent runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.senderIsOwner).toBe(true);
+    });
+  });
+
+  it("honors explicit senderIsOwner override", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand({ message: "hi", to: "+1555", senderIsOwner: false }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.senderIsOwner).toBe(false);
     });
   });
 
@@ -227,6 +256,35 @@ describe("agentCommand", () => {
       expect(callArgs?.sessionKey).toBe("agent:exec:hook:gmail:thread-1");
       expect(callArgs?.agentId).toBe("exec");
       expect(callArgs?.agentDir).toContain(`${path.sep}agents${path.sep}exec${path.sep}agent`);
+    });
+  });
+
+  it("forwards resolved outbound session context when resuming by sessionId", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      const execStore = path.join(home, "sessions", "exec", "sessions.json");
+      writeSessionStoreSeed(execStore, {
+        "agent:exec:hook:gmail:thread-1": {
+          sessionId: "session-exec-hook",
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      });
+      mockConfig(home, storePattern, undefined, undefined, [
+        { id: "dev" },
+        { id: "exec", default: true },
+      ]);
+
+      await agentCommand({ message: "resume me", sessionId: "session-exec-hook" }, runtime);
+
+      const deliverCall = deliverAgentCommandResultSpy.mock.calls.at(-1)?.[0];
+      expect(deliverCall?.opts.sessionKey).toBeUndefined();
+      expect(deliverCall?.outboundSession).toEqual(
+        expect.objectContaining({
+          key: "agent:exec:hook:gmail:thread-1",
+          agentId: "exec",
+        }),
+      );
     });
   });
 
@@ -409,6 +467,73 @@ describe("agentCommand", () => {
     });
   });
 
+  it("persists cleared model and auth override fields when stored override falls back to default", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:clear-overrides": {
+          sessionId: "session-clear-overrides",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-5",
+          authProfileOverride: "profile-legacy",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-5",
+          fallbackNoticeActiveModel: "openai/gpt-4.1-mini",
+          fallbackNoticeReason: "fallback",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "openai/gpt-4.1-mini" },
+        models: {
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:clear-overrides",
+        },
+        runtime,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-4.1-mini");
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        {
+          providerOverride?: string;
+          modelOverride?: string;
+          authProfileOverride?: string;
+          authProfileOverrideSource?: string;
+          authProfileOverrideCompactionCount?: number;
+          fallbackNoticeSelectedModel?: string;
+          fallbackNoticeActiveModel?: string;
+          fallbackNoticeReason?: string;
+        }
+      >;
+      const entry = saved["agent:main:subagent:clear-overrides"];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.authProfileOverride).toBeUndefined();
+      expect(entry?.authProfileOverrideSource).toBeUndefined();
+      expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
+      expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
+      expect(entry?.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
   it("keeps explicit sessionKey even when sessionId exists elsewhere", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -516,6 +641,66 @@ describe("agentCommand", () => {
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
+  });
+
+  it("clears stale Claude CLI legacy session IDs before retrying after session expiration", async () => {
+    vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(
+      (provider) => provider.trim().toLowerCase() === "claude-cli",
+    );
+    try {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        const sessionKey = "agent:main:subagent:cli-expired";
+        writeSessionStoreSeed(store, {
+          [sessionKey]: {
+            sessionId: "session-cli-123",
+            updatedAt: Date.now(),
+            providerOverride: "claude-cli",
+            modelOverride: "opus",
+            cliSessionIds: { "claude-cli": "stale-cli-session" },
+            claudeCliSessionId: "stale-legacy-session",
+          },
+        });
+        mockConfig(home, store, {
+          model: { primary: "claude-cli/opus", fallbacks: [] },
+          models: { "claude-cli/opus": {} },
+        });
+        runCliAgentSpy
+          .mockRejectedValueOnce(
+            new FailoverError("session expired", {
+              reason: "session_expired",
+              provider: "claude-cli",
+              model: "opus",
+              status: 410,
+            }),
+          )
+          .mockRejectedValue(new Error("retry failed"));
+
+        await expect(agentCommand({ message: "hi", sessionKey }, runtime)).rejects.toThrow(
+          "retry failed",
+        );
+
+        expect(runCliAgentSpy).toHaveBeenCalledTimes(2);
+        const firstCall = runCliAgentSpy.mock.calls[0]?.[0] as
+          | { cliSessionId?: string }
+          | undefined;
+        const secondCall = runCliAgentSpy.mock.calls[1]?.[0] as
+          | { cliSessionId?: string }
+          | undefined;
+        expect(firstCall?.cliSessionId).toBe("stale-cli-session");
+        expect(secondCall?.cliSessionId).toBeUndefined();
+
+        const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+          string,
+          { cliSessionIds?: Record<string, string>; claudeCliSessionId?: string }
+        >;
+        const entry = saved[sessionKey];
+        expect(entry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+        expect(entry?.claudeCliSessionId).toBeUndefined();
+      });
+    } finally {
+      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
+    }
   });
 
   it("rejects unknown agent overrides", async () => {

@@ -706,7 +706,8 @@ describe("runMessageAction sandboxed media validation", () => {
       if (result.kind !== "send") {
         throw new Error("expected send result");
       }
-      expect(result.sendResult?.mediaUrl).toBe(tmpFile);
+      // runMessageAction normalizes media paths through platform resolution.
+      expect(result.sendResult?.mediaUrl).toBe(path.resolve(tmpFile));
       const hostTmpOutsideOpenClaw = path.join(os.tmpdir(), "outside-openclaw", "test-media.png");
       await expect(
         runMessageAction({
@@ -1019,5 +1020,33 @@ describe("runMessageAction accountId defaults", () => {
     }
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
+  });
+
+  it("falls back to the agent's bound account when accountId is omitted", async () => {
+    await runMessageAction({
+      cfg: {
+        bindings: [{ agentId: "agent-b", match: { channel: "discord", accountId: "account-b" } }],
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+      },
+      agentId: "agent-b",
+    });
+
+    expect(handleAction).toHaveBeenCalled();
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          accountId?: string | null;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
+    expect(ctx.accountId).toBe("account-b");
+    expect(ctx.params.accountId).toBe("account-b");
   });
 });

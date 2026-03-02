@@ -14,7 +14,7 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -46,6 +46,7 @@ export function resolveExtraParams(params: {
 type CacheRetention = "none" | "short" | "long";
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
+  openaiWsWarmup?: boolean;
 };
 
 /**
@@ -117,6 +118,16 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  const transport = extraParams.transport;
+  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+    streamParams.transport = transport;
+  } else if (transport != null) {
+    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+    log.warn(`ignoring invalid transport param: ${transportSummary}`);
+  }
+  if (typeof extraParams.openaiWsWarmup === "boolean") {
+    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
@@ -179,15 +190,21 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
+    return false;
   }
 
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com" || host === "chatgpt.com";
+    return (
+      host === "api.openai.com" || host === "chatgpt.com" || host.endsWith(".openai.azure.com")
+    );
   } catch {
     const normalized = baseUrl.toLowerCase();
-    return normalized.includes("api.openai.com") || normalized.includes("chatgpt.com");
+    return (
+      normalized.includes("api.openai.com") ||
+      normalized.includes("chatgpt.com") ||
+      normalized.includes(".openai.azure.com")
+    );
   }
 }
 
@@ -195,7 +212,13 @@ function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
+  compat?: { supportsStore?: boolean };
 }): boolean {
+  // Never force store=true when the model explicitly declares supportsStore=false
+  // (e.g. Azure OpenAI Responses API without server-side persistence).
+  if (model.compat?.supportsStore === false) {
+    return false;
+  }
   if (typeof model.api !== "string" || typeof model.provider !== "string") {
     return false;
   }
@@ -208,23 +231,113 @@ function shouldForceResponsesStore(model: {
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
-function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+  const contextWindow = parsePositiveInteger(model.contextWindow);
+  if (contextWindow) {
+    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  }
+  return 80_000;
+}
+
+function shouldEnableOpenAIResponsesServerCompaction(
+  model: {
+    api?: unknown;
+    provider?: unknown;
+    baseUrl?: unknown;
+    compat?: { supportsStore?: boolean };
+  },
+  extraParams: Record<string, unknown> | undefined,
+): boolean {
+  const configured = extraParams?.responsesServerCompaction;
+  if (configured === false) {
+    return false;
+  }
+  if (!shouldForceResponsesStore(model)) {
+    return false;
+  }
+  if (configured === true) {
+    return true;
+  }
+  // Auto-enable for direct OpenAI Responses models.
+  return model.provider === "openai";
+}
+
+function createOpenAIResponsesContextManagementWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldForceResponsesStore(model)) {
+    const forceStore = shouldForceResponsesStore(model);
+    const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
+    if (!forceStore && !useServerCompaction) {
       return underlying(model, context, options);
     }
 
+    const compactThreshold =
+      parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+      resolveOpenAIResponsesCompactThreshold(model);
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          (payload as { store?: unknown }).store = true;
+          const payloadObj = payload as Record<string, unknown>;
+          if (forceStore) {
+            payloadObj.store = true;
+          }
+          if (useServerCompaction && payloadObj.context_management === undefined) {
+            payloadObj.context_management = [
+              {
+                type: "compaction",
+                compact_threshold: compactThreshold,
+              },
+            ];
+          }
         }
         originalOnPayload?.(payload);
       },
     });
+  };
+}
+
+function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      transport: options?.transport ?? "auto",
+    });
+}
+
+function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const typedOptions = options as
+      | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
+      | undefined;
+    const mergedOptions = {
+      ...options,
+      transport: options?.transport ?? "auto",
+      // Warm-up is optional in OpenAI docs; enabled by default here for lower
+      // first-turn latency on WebSocket sessions. Set params.openaiWsWarmup=false
+      // to disable per model.
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
+    } as SimpleStreamOptions;
+    return underlying(model, context, mergedOptions);
   };
 }
 
@@ -408,6 +521,42 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   return thinkingLevel;
 }
 
+function shouldApplySiliconFlowThinkingOffCompat(params: {
+  provider: string;
+  modelId: string;
+  thinkingLevel?: ThinkLevel;
+}): boolean {
+  return (
+    params.provider === "siliconflow" &&
+    params.thinkingLevel === "off" &&
+    params.modelId.startsWith("Pro/")
+  );
+}
+
+/**
+ * SiliconFlow's Pro/* models reject string thinking modes (including "off")
+ * with HTTP 400 invalid-parameter errors. Normalize to `thinking: null` to
+ * preserve "thinking disabled" intent without sending an invalid enum value.
+ */
+function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.thinking === "off") {
+            payloadObj.thinking = null;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -461,6 +610,94 @@ function createOpenRouterWrapper(
               };
             }
           }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
+function isGemini31Model(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
+}
+
+function mapThinkLevelToGoogleThinkingLevel(
+  thinkingLevel: ThinkLevel,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
+  switch (thinkingLevel) {
+    case "minimal":
+      return "MINIMAL";
+    case "low":
+      return "LOW";
+    case "medium":
+      return "MEDIUM";
+    case "high":
+    case "xhigh":
+      return "HIGH";
+    default:
+      return undefined;
+  }
+}
+
+function sanitizeGoogleThinkingPayload(params: {
+  payload: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.payload || typeof params.payload !== "object") {
+    return;
+  }
+  const payloadObj = params.payload as Record<string, unknown>;
+  const config = payloadObj.config;
+  if (!config || typeof config !== "object") {
+    return;
+  }
+  const configObj = config as Record<string, unknown>;
+  const thinkingConfig = configObj.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    return;
+  }
+  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+  const thinkingBudget = thinkingConfigObj.thinkingBudget;
+  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+    return;
+  }
+
+  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
+  // is invalid for Google-compatible backends and can lead to malformed handling.
+  delete thinkingConfigObj.thinkingBudget;
+
+  if (
+    typeof params.modelId === "string" &&
+    isGemini31Model(params.modelId) &&
+    params.thinkingLevel &&
+    params.thinkingLevel !== "off" &&
+    thinkingConfigObj.thinkingLevel === undefined
+  ) {
+    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+  }
+}
+
+function createGoogleThinkingPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (model.api === "google-generative-ai") {
+          sanitizeGoogleThinkingPayload({
+            payload,
+            modelId: model.id,
+            thinkingLevel,
+          });
         }
         onPayload?.(payload);
       },
@@ -522,6 +759,13 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
+  if (provider === "openai-codex") {
+    // Default Codex to WebSocket-first when nothing else specifies transport.
+    agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+  } else if (provider === "openai") {
+    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+  }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
       ? Object.fromEntries(
@@ -542,6 +786,13 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
+    );
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
   if (provider === "openrouter") {
@@ -572,8 +823,12 @@ export function applyExtraParamsToAgent(
     }
   }
 
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
-  // server-side conversation state is preserved.
-  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+  // Force `store=true` for direct OpenAI Responses models and auto-enable
+  // server-side compaction for compatible OpenAI Responses payloads.
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
 }

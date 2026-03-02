@@ -11,12 +11,20 @@ export function isSilentReplyText(
     return false;
   }
   const escaped = escapeRegExp(token);
-  const prefix = new RegExp(`^\\s*${escaped}(?=$|\\W)`);
-  if (prefix.test(text)) {
-    return true;
-  }
-  const suffix = new RegExp(`\\b${escaped}\\b\\W*$`);
-  return suffix.test(text);
+  // Match only the exact silent token with optional surrounding whitespace.
+  // This prevents
+  // substantive replies ending with NO_REPLY from being suppressed (#19537).
+  return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
+}
+
+/**
+ * Strip a trailing silent reply token from mixed-content text.
+ * Returns the remaining text with the token removed (trimmed).
+ * If the result is empty, the entire message should be treated as silent.
+ */
+export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
+  const escaped = escapeRegExp(token);
+  return text.replace(new RegExp(`(?:^|\\s+)${escaped}\\s*$`), "").trim();
 }
 
 export function isSilentReplyPrefixText(

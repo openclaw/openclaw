@@ -1,4 +1,6 @@
 import type { BrowserFormField } from "./client-actions-core.js";
+import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
+import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -187,7 +189,7 @@ export async function fillFormViaPlaywright(opts: {
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
   for (const field of opts.fields) {
     const ref = field.ref.trim();
-    const type = field.type.trim();
+    const type = (field.type || DEFAULT_FILL_FIELD_TYPE).trim() || DEFAULT_FILL_FIELD_TYPE;
     const rawValue = field.value;
     const value =
       typeof rawValue === "string"
@@ -195,7 +197,7 @@ export async function fillFormViaPlaywright(opts: {
         : typeof rawValue === "number" || typeof rawValue === "boolean"
           ? String(rawValue)
           : "";
-    if (!ref || !type) {
+    if (!ref) {
       continue;
     }
     const locator = refLocator(page, ref);
@@ -626,9 +628,18 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
+  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+    rootDir: DEFAULT_UPLOAD_DIR,
+    requestedPaths: opts.paths,
+    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+  });
+  if (!uploadPathsResult.ok) {
+    throw new Error(uploadPathsResult.error);
+  }
+  const resolvedPaths = uploadPathsResult.paths;
 
   try {
-    await locator.setInputFiles(opts.paths);
+    await locator.setInputFiles(resolvedPaths);
   } catch (err) {
     throw toAIFriendlyError(err, inputRef || element);
   }

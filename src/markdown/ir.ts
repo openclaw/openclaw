@@ -144,8 +144,31 @@ function applySpoilerTokens(tokens: MarkdownToken[]): void {
 }
 
 function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
+  let totalDelims = 0;
+  for (const token of tokens) {
+    if (token.type !== "text") {
+      continue;
+    }
+    const content = token.content ?? "";
+    let i = 0;
+    while (i < content.length) {
+      const next = content.indexOf("||", i);
+      if (next === -1) {
+        break;
+      }
+      totalDelims += 1;
+      i = next + 2;
+    }
+  }
+
+  if (totalDelims < 2) {
+    return tokens;
+  }
+  const usableDelims = totalDelims - (totalDelims % 2);
+
   const result: MarkdownToken[] = [];
   const state = { spoilerOpen: false };
+  let consumedDelims = 0;
 
   for (const token of tokens) {
     if (token.type !== "text") {
@@ -168,9 +191,14 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         }
         break;
       }
+      if (consumedDelims >= usableDelims) {
+        result.push(createTextToken(token, content.slice(index)));
+        break;
+      }
       if (next > index) {
         result.push(createTextToken(token, content.slice(index, next)));
       }
+      consumedDelims += 1;
       state.spoilerOpen = !state.spoilerOpen;
       result.push({
         type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",

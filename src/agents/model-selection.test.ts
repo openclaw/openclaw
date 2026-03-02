@@ -3,10 +3,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
+  inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   buildModelAliasIndex,
-  modelKey,
+  normalizeModelSelection,
   normalizeProviderId,
+  modelKey,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
@@ -134,6 +136,85 @@ describe("model-selection", () => {
     });
   });
 
+  describe("inferUniqueProviderFromConfiguredModels", () => {
+    it("infers provider when configured model match is unique", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "claude-sonnet-4-6",
+        }),
+      ).toBe("anthropic");
+    });
+
+    it("returns undefined when configured matches are ambiguous", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "minimax/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "claude-sonnet-4-6",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined for provider-prefixed model ids", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "anthropic/claude-sonnet-4-6",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("infers provider for slash-containing model id when allowlist match is unique", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "anthropic/claude-sonnet-4-6",
+        }),
+      ).toBe("vercel-ai-gateway");
+    });
+  });
+
   describe("buildModelAliasIndex", () => {
     it("should build alias index from config", () => {
       const cfg: Partial<OpenClawConfig> = {
@@ -224,6 +305,30 @@ describe("model-selection", () => {
         ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
       });
     });
+
+    it("strips trailing auth profile suffix before allowlist matching", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/@cf/openai/gpt-oss-20b": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "openai/@cf/openai/gpt-oss-20b@cf:default",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "openai/@cf/openai/gpt-oss-20b",
+        ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -251,6 +356,78 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("strips trailing profile suffix for simple model refs", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "gpt-5@myprofile",
+        defaultProvider: "openai",
+      });
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-5" });
+    });
+
+    it("strips trailing profile suffix for provider/model refs", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "google/gemini-flash-latest@google:bevfresh",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "google",
+        model: "gemini-flash-latest",
+      });
+    });
+
+    it("preserves Cloudflare @cf model segments", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openai/@cf/openai/gpt-oss-20b",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openai",
+        model: "@cf/openai/gpt-oss-20b",
+      });
+    });
+
+    it("preserves OpenRouter @preset model segments", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openrouter/@preset/kimi-2-5",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openrouter",
+        model: "@preset/kimi-2-5",
+      });
+    });
+
+    it("splits trailing profile suffix after OpenRouter preset paths", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openrouter/@preset/kimi-2-5@work",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openrouter",
+        model: "@preset/kimi-2-5",
+      });
+    });
+
+    it("strips profile suffix before alias resolution", () => {
+      const index = {
+        byAlias: new Map([
+          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "kimi@nvidia:default",
+        defaultProvider: "openai",
+        aliasIndex: index,
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+      expect(resolved?.alias).toBe("kimi");
     });
   });
 
@@ -292,5 +469,33 @@ describe("model-selection", () => {
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
     });
+  });
+});
+
+describe("normalizeModelSelection", () => {
+  it("returns trimmed string for string input", () => {
+    expect(normalizeModelSelection("ollama/llama3.2:3b")).toBe("ollama/llama3.2:3b");
+  });
+
+  it("returns undefined for empty/whitespace string", () => {
+    expect(normalizeModelSelection("")).toBeUndefined();
+    expect(normalizeModelSelection("   ")).toBeUndefined();
+  });
+
+  it("extracts primary from object", () => {
+    expect(normalizeModelSelection({ primary: "google/gemini-2.5-flash" })).toBe(
+      "google/gemini-2.5-flash",
+    );
+  });
+
+  it("returns undefined for object without primary", () => {
+    expect(normalizeModelSelection({ fallbacks: ["a"] })).toBeUndefined();
+    expect(normalizeModelSelection({})).toBeUndefined();
+  });
+
+  it("returns undefined for null/undefined/number", () => {
+    expect(normalizeModelSelection(undefined)).toBeUndefined();
+    expect(normalizeModelSelection(null)).toBeUndefined();
+    expect(normalizeModelSelection(42)).toBeUndefined();
   });
 });

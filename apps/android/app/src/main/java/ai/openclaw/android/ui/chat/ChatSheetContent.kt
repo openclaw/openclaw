@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -122,33 +123,35 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       modifier = Modifier.weight(1f, fill = true),
     )
 
-    ChatComposer(
-      healthOk = healthOk,
-      thinkingLevel = thinkingLevel,
-      pendingRunCount = pendingRunCount,
-      attachments = attachments,
-      onPickImages = { pickImages.launch("image/*") },
-      onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
-      onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
-      onRefresh = {
-        viewModel.refreshChat()
-        viewModel.refreshChatSessions(limit = 200)
-      },
-      onAbort = { viewModel.abortChat() },
-      onSend = { text ->
-        val outgoing =
-          attachments.map { att ->
-            OutgoingAttachment(
-              type = "image",
-              mimeType = att.mimeType,
-              fileName = att.fileName,
-              base64 = att.base64,
-            )
-          }
-        viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
-        attachments.clear()
-      },
-    )
+    Row(modifier = Modifier.fillMaxWidth().imePadding()) {
+      ChatComposer(
+        healthOk = healthOk,
+        thinkingLevel = thinkingLevel,
+        pendingRunCount = pendingRunCount,
+        attachments = attachments,
+        onPickImages = { pickImages.launch("image/*") },
+        onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
+        onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
+        onRefresh = {
+          viewModel.refreshChat()
+          viewModel.refreshChatSessions(limit = 200)
+        },
+        onAbort = { viewModel.abortChat() },
+        onSend = { text ->
+          val outgoing =
+            attachments.map { att ->
+              OutgoingAttachment(
+                type = "image",
+                mimeType = att.mimeType,
+                fileName = att.fileName,
+                base64 = att.base64,
+              )
+            }
+          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          attachments.clear()
+        },
+      )
+    }
   }
 }
 

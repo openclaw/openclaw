@@ -41,6 +41,7 @@ For fastest triage, include all of the following:
 - For exposed-secret reports: proof the credential is OpenClaw-owned (or grants access to OpenClaw-operated infrastructure/services).
 - Explicit statement that the report does not rely on adversarial operators sharing one gateway host/config.
 - Scope check explaining why the report is **not** covered by the Out of Scope section below.
+- For command-risk/parity reports (for example obfuscation detection differences), a concrete boundary-bypass path is required (auth/approval/allowlist/sandbox). Parity-only findings are treated as hardening, not vulnerabilities.
 
 Reports that miss these requirements may be closed as `invalid` or `no-action`.
 
@@ -51,11 +52,15 @@ These are frequently reported but are typically closed with no code change:
 - Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
 - Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
+- Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
+- Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another, such as `node.invoke -> system.run` parity gaps) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
+- Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
 - Missing HSTS findings on default local/loopback deployments.
 - Slack webhook signature findings when HTTP mode already uses signing-secret verification.
 - Discord inbound webhook signature findings for paths not used by this repo's Discord integration.
+- Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
 - Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
 
 ### Duplicate Report Handling
@@ -93,6 +98,14 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - Implicit exec calls (no explicit host in the tool call) follow the same behavior.
 - This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
 
+## Trusted Plugin Concept (Core)
+
+Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
+
+- Installing or enabling a plugin grants it the same trust level as local code running on that gateway host.
+- Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
+- Security reports must show a boundary bypass (for example unauthenticated plugin load, allowlist/policy bypass, or sandbox/path-safety bypass), not only malicious behavior from a trusted-installed plugin.
+
 ## Out of Scope
 
 - Public Internet Exposure
@@ -100,11 +113,15 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - Deployments where mutually untrusted/adversarial operators share one gateway host and config (for example, reports expecting per-operator isolation for `sessions.list`, `sessions.preview`, `chat.history`, or similar control-plane reads)
 - Prompt-injection-only attacks (without a policy/auth/sandbox boundary bypass)
 - Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)
+- Reports where exploitability depends on attacker-controlled pre-existing symlink/hardlink filesystem state in trusted local paths (for example extraction/install target trees) unless a separate untrusted boundary bypass is shown that creates that state.
 - Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
+- Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
+- Reports whose only claim is heuristic/parity drift in command-risk detection (for example obfuscation-pattern checks) across exec surfaces, without a demonstrated trust-boundary bypass. These are hardening-only findings and are not vulnerabilities; triage may close them as `invalid`/`no-action` or track them separately as low/informational hardening.
 - Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
 - Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
+- Reports whose only claim is that a platform-provided upload destination URL is untrusted (for example Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl`) without proving attacker control in an authenticated production flow.
 
 ## Deployment Assumptions
 
@@ -140,6 +157,7 @@ OpenClaw separates routing from execution, but both remain inside the same opera
 - **Gateway** is the control plane. If a caller passes Gateway auth, they are treated as a trusted operator for that Gateway.
 - **Node** is an execution extension of the Gateway. Pairing a node grants operator-level remote capability on that node.
 - **Exec approvals** (allowlist/ask UI) are operator guardrails to reduce accidental command execution, not a multi-tenant authorization boundary.
+- Differences in command-risk warning heuristics between exec surfaces (`gateway`, `node`, `sandbox`) do not, by themselves, constitute a security-boundary bypass.
 - For untrusted-user isolation, split by trust boundary: separate gateways and separate OS users/hosts per boundary.
 
 ## Workspace Memory Trust Boundary
@@ -187,6 +205,14 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 - `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory.
 - Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
+
+### Sub-agent delegation hardening
+
+- Keep `sessions_spawn` denied unless you explicitly need delegated runs.
+- Keep `agents.list[].subagents.allowAgents` narrow, and only include agents with sandbox settings you trust.
+- When delegation must stay sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+  - `sandbox: "require"` rejects the spawn unless the target child runtime is sandboxed.
+  - This prevents a less-restricted session from delegating work into an unsandboxed child by mistake.
 
 ### Web Interface Safety
 

@@ -15,6 +15,19 @@ title: "Tests"
 - `pnpm test:e2e`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `vmForks` + adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.
 - `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
 
+## Local PR gate
+
+For local PR land/gate checks, run:
+
+- `pnpm check`
+- `pnpm build`
+- `pnpm test`
+- `pnpm check:docs`
+
+If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm vitest run <path/to/test>`. For memory-constrained hosts, use:
+
+- `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`
+
 ## Model latency bench (local keys)
 
 Script: [`scripts/bench-model.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-model.ts)
@@ -29,6 +42,26 @@ Last run (2025-12-31, 20 runs):
 
 - minimax median 1279ms (min 1114, max 2431)
 - opus median 2454ms (min 1224, max 3170)
+
+## CLI startup bench
+
+Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-cli-startup.ts)
+
+Usage:
+
+- `pnpm tsx scripts/bench-cli-startup.ts`
+- `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
+
+This benchmarks these commands:
+
+- `--version`
+- `--help`
+- `health --json`
+- `status --json`
+- `status`
+
+Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
 
 ## Onboarding E2E (Docker)
 
