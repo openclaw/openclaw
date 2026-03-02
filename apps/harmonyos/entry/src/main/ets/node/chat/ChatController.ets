@@ -298,8 +298,10 @@ export class ChatController {
 
   private handleAgentEvent(payloadJson: string) {
     const payload = JSON.parse(payloadJson) as Record<string, Object>;
+    const sessionKey = payload.sessionKey as string | undefined;
+    if (sessionKey && sessionKey !== this.sessionKey) return;
+    
     const runId = payload.runId as string | undefined;
-    if (this.sessionId && runId !== this.sessionId) return;
 
     const stream = payload.stream as string | undefined;
     const data = payload.data as Record<string, Object> | undefined;

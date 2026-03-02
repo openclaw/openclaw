@@ -10,8 +10,9 @@ import { webSocket } from '@kit.NetworkKit';
  * HarmonyOS NETSTACK bugs related to Origin header injection and port-stripping.
  */
 export class RawWebSocket {
-  private tcp: socket.TCPSocket | null = null;
+  private socket: socket.TCPSocket | socket.TLSSocket | null = null;
   private isHandshakeComplete = false;
+  private isTls = false;
   private base64 = new util.Base64Helper();
   
   private onOpenCallback?: (err: BusinessError | undefined, value: Object | undefined) => void;
@@ -37,41 +38,61 @@ export class RawWebSocket {
 
   public async connect(url: string, options?: webSocket.WebSocketRequestOptions): Promise<boolean> {
     try {
-      this.tcp = socket.constructTCPSocketInstance();
+      const isWss = url.startsWith('wss://');
+      this.isTls = isWss;
+      if (this.isTls) {
+        this.socket = socket.constructTLSSocketInstance();
+      } else {
+        this.socket = socket.constructTCPSocketInstance();
+      }
       
-      this.tcp.on('message', (value: socket.SocketMessageInfo) => {
+      const socketObj = this.socket as socket.TCPSocket; // Cast to base type if possible
+      socketObj.on('message', (value: socket.SocketMessageInfo) => {
         this.handleTcpData(new Uint8Array(value.message));
       });
       
-      this.tcp.on('close', () => {
-        hilog.info(0x3D00, 'RawWebSocket', "TCP closed");
+      socketObj.on('close', () => {
+        hilog.info(0x3D00, 'RawWebSocket', "Socket closed");
         if (this.onCloseCallback) {
-          this.onCloseCallback(undefined, { code: 1006, reason: 'TCP closed' });
+          this.onCloseCallback(undefined, { code: 1006, reason: 'Socket closed' });
         }
       });
 
-      this.tcp.on('error', (err: Error) => {
-        hilog.error(0x3D00, 'RawWebSocket', "TCP error: " + err.message);
+      socketObj.on('error', (err: Error) => {
+        hilog.error(0x3D00, 'RawWebSocket', "Socket error: " + err.message);
         if (this.onErrorCallback) {
           this.onErrorCallback(err as BusinessError);
         }
       });
 
-      // Parse url. Defaulting to ws:// since TLS is currently manually toggled off.
-      const urlRegex = /ws:\/\/([^:]+):(\d+)(.*)/;
+      // Parse url.
+      const urlRegex = /wss?:\/\/([^:/]+)(?::(\d+))?(.*)/;
       const match = url.match(urlRegex);
-      if (!match) throw new Error("Invalid URL or wss:// not supported in raw mode yet: " + url);
+      if (!match) throw new Error("Invalid WebSocket URL: " + url);
       
       const host = match[1];
-      const port = parseInt(match[2]);
+      const protocolPort = isWss ? 443 : 80;
+      const port = match[2] ? parseInt(match[2]) : protocolPort;
       const path = match[3] || "/";
 
-      hilog.info(0x3D00, 'RawWebSocket', `TCP connecting to ${host}:${port}`);
+      hilog.info(0x3D00, 'RawWebSocket', `Connecting to ${host}:${port} (wss=${this.isTls})`);
       
-      await this.tcp.connect({ address: { address: host, port: port, family: 1 } });
+      if (this.isTls) {
+        const tlsSocket = this.socket as socket.TLSSocket;
+        await tlsSocket.connect({
+          address: { address: host, port: port, family: 1 },
+          secureOptions: {} // Use default OS validation
+        });
+      } else {
+        const tcpSocket = this.socket as socket.TCPSocket;
+        await tcpSocket.connect({
+          address: { address: host, port: port, family: 1 }
+        });
+      }
       
       const headerObj = options?.header as Record<string, string> | undefined;
-      const customOrigin = headerObj?.['Origin'] || `http://${host}:${port}`;
+      const defaultScheme = isWss ? 'https' : 'http';
+      const customOrigin = headerObj?.['Origin'] || `${defaultScheme}://${host}:${port}`;
       const customUA = headerObj?.['User-Agent'] || 'OpenClawNode/1.0.0-dev (Android)';
 
       // Perform HTTP 1.1 Upgrade Handshake
@@ -82,7 +103,7 @@ export class RawWebSocket {
       
       const handshake = 
         `GET ${path} HTTP/1.1\r\n` +
-        `Host: ${host}:${port}\r\n` +
+        `Host: ${host}${match[2] ? ':' + port : ''}\r\n` +
         `Origin: ${customOrigin}\r\n` +
         `Upgrade: websocket\r\n` +
         `Connection: Upgrade\r\n` +
@@ -93,7 +114,12 @@ export class RawWebSocket {
       hilog.info(0x3D00, 'RawWebSocket', `Sending handshake:\n${handshake}`);
 
       const encoder = util.TextEncoder.create('utf-8');
-      await this.tcp.send({ data: encoder.encodeInto(handshake).buffer });
+      const handshakeData = encoder.encodeInto(handshake).buffer;
+      if (this.isTls) {
+        await (this.socket as socket.TLSSocket).send(handshakeData);
+      } else {
+        await (this.socket as socket.TCPSocket).send({ data: handshakeData });
+      }
       return true;
     } catch (err) {
       if (this.onErrorCallback) this.onErrorCallback(err as BusinessError);
@@ -183,7 +209,7 @@ export class RawWebSocket {
   }
 
   public async send(data: string | ArrayBuffer): Promise<boolean> {
-    if (!this.tcp || !this.isHandshakeComplete) return false;
+    if (!this.socket || !this.isHandshakeComplete) return false;
     
     let payloadBytes: Uint8Array;
     
@@ -247,8 +273,13 @@ export class RawWebSocket {
     }
     
     try {
-      if (this.tcp) {
-        await this.tcp.send({ data: frame.buffer });
+      if (this.socket) {
+        const data = frame.buffer;
+        if (this.isTls) {
+           await (this.socket as socket.TLSSocket).send(data);
+        } else {
+           await (this.socket as socket.TCPSocket).send({ data: data });
+        }
         return true;
       }
       return false;
@@ -260,9 +291,13 @@ export class RawWebSocket {
 
   public async close(code?: number, reason?: string): Promise<boolean> {
     try {
-      if (this.tcp) {
-        await this.tcp.close();
-        this.tcp = null;
+      if (this.socket) {
+        if (this.isTls) {
+          await (this.socket as socket.TLSSocket).close();
+        } else {
+          await (this.socket as socket.TCPSocket).close();
+        }
+        this.socket = null;
       }
       this.isHandshakeComplete = false;
       return true;

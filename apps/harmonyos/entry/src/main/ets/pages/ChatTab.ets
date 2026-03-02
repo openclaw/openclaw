@@ -527,7 +527,7 @@ export struct ChatTab {
   }
 
   private canSend(): boolean {
-    return !this.isSending && this.inputText.trim().length > 0 && this.healthOk;
+    return !this.isSending && (this.inputText.trim().length > 0 || this.pendingAttachments.length > 0) && this.healthOk;
   }
 
   private send() {
