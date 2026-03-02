@@ -366,6 +366,41 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies pairing challenge to DM chat_id instead of user:sender id", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "pairing",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          user_id: "u_mobile_only",
+        },
+      },
+      message: {
+        message_id: "msg-pairing-chat-reply",
+        chat_id: "oc_dm_chat_1",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    mockReadAllowFromStore.mockResolvedValue([]);
+    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_dm_chat_1",
+      }),
+    );
+  });
   it("creates pairing request and drops unauthorized DMs in pairing mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockReadAllowFromStore.mockResolvedValue([]);
@@ -410,7 +445,7 @@ describe("handleFeishuMessage command authorization", () => {
     });
     expect(mockSendMessageFeishu).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "user:ou-unapproved",
+        to: "chat:oc-dm",
         accountId: "default",
       }),
     );
