@@ -51,6 +51,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { wrapStreamFnWithRetry } from "../../pi-embedded-helpers/retry.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -869,6 +870,9 @@ export async function runEmbeddedAttempt(
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
       }
+
+      // Wrap primary stream function with retry logic for transient errors (rate limits, 5xx).
+      activeSession.agent.streamFn = wrapStreamFnWithRetry(activeSession.agent.streamFn);
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
       // Otherwise Ollama defaults to a 4096 context window.

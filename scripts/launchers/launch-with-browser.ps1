@@ -3,8 +3,22 @@
 
 $ErrorActionPreference = "Stop"
 $ProjectDir = (Get-Item $PSScriptRoot).Parent.Parent.FullName
+
+# --- Load configuration from .env if present ---
+$EnvFile = Join-Path $ProjectDir ".env"
 $GatewayPort = 18789
-$BrowserUrl  = "http://127.0.0.1:$GatewayPort"
+
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | Where-Object { $_ -match '^([^#=]+)=(.*)$' } | ForEach-Object {
+        $key = $Matches[1].Trim()
+        $value = $Matches[2].Trim()
+        if ($key -eq "OPENCLAW_GATEWAY_PORT") {
+            $GatewayPort = [int]$value
+        }
+    }
+}
+
+$BrowserUrl = "http://127.0.0.1:$GatewayPort"
 
 Write-Host "=================================================" -ForegroundColor Cyan
 Write-Host " OpenClaw Launcher (Browser Auto-Open)" -ForegroundColor Cyan
@@ -12,6 +26,13 @@ Write-Host "=================================================" -ForegroundColor 
 Write-Host "Project: $ProjectDir"
 Write-Host "URL    : $BrowserUrl"
 Write-Host ""
+
+# --- Webhook Integration: Start Ngrok and update .env ---
+$StartNgrokScript = Join-Path $ProjectDir "scripts\launchers\start_ngrok.ps1"
+if (Test-Path $StartNgrokScript) {
+    & powershell.exe -ExecutionPolicy Bypass -File $StartNgrokScript -Port $GatewayPort
+    Write-Host ""
+}
 
 # --- サーバーをバックグラウンドジョブとして起動 ---
 Write-Host "[1/3] OpenClaw サーバーを起動中..." -ForegroundColor Yellow
@@ -24,17 +45,18 @@ $serverJob = Start-Job -ScriptBlock {
     # dist/entry.js が存在すればビルド済みバイナリを使用（高速）
     if (Test-Path (Join-Path $dir "dist\entry.js")) {
         node .\dist\entry.js gateway
-    } else {
+    }
+    else {
         pnpm start
     }
 } -ArgumentList $ProjectDir, $GatewayPort
 
 # --- サーバーの起動を待つ（最大60秒） ---
 Write-Host "[2/3] サーバー起動を待機中..." -ForegroundColor Yellow
-$maxWait   = 60
-$waited    = 0
-$interval  = 2
-$isReady   = $false
+$maxWait = 60
+$waited = 0
+$interval = 2
+$isReady = $false
 
 while ($waited -lt $maxWait) {
     Start-Sleep -Seconds $interval
@@ -45,7 +67,8 @@ while ($waited -lt $maxWait) {
             $isReady = $true
             break
         }
-    } catch {
+    }
+    catch {
         # まだ起動中 — 再試行
     }
     Write-Host "  ... $waited 秒経過 (最大 ${maxWait} 秒)" -ForegroundColor DarkGray
@@ -55,7 +78,8 @@ while ($waited -lt $maxWait) {
 if ($isReady) {
     Write-Host "[3/3] ブラウザを起動します: $BrowserUrl" -ForegroundColor Green
     Start-Process $BrowserUrl
-} else {
+}
+else {
     Write-Host "[!] サーバーが ${maxWait} 秒以内に応答しませんでした。" -ForegroundColor Red
     Write-Host "    ブラウザを手動で開いてください: $BrowserUrl" -ForegroundColor Yellow
     # タイムアウトしてもブラウザは開こうとする
@@ -77,7 +101,8 @@ try {
         }
         Start-Sleep -Milliseconds 500
     }
-} finally {
+}
+finally {
     Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
     Remove-Job -Job $serverJob -ErrorAction SilentlyContinue
     Write-Host "サーバーを停止しました。" -ForegroundColor Gray

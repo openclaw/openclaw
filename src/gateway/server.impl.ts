@@ -18,6 +18,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { deriveDefaultBridgePort } from "../config/port-defaults.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -55,6 +56,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { isPortAvailable, resolveGatewayBindHost } from "./net.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -171,6 +173,27 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+
+  // Pre-flight port availability check to avoid cryptic EADDRINUSE failures later.
+  // We check the main gateway port and the bridge port (port + 1).
+  if (process.env.NODE_ENV !== "test" && !minimalTestGateway) {
+    const bindHost = await resolveGatewayBindHost(opts.bind, opts.host);
+    const bridgePort = deriveDefaultBridgePort(port);
+    const portsToCheck = [
+      { port, name: "Gateway" },
+      { port: bridgePort, name: "Bridge" },
+    ];
+
+    for (const p of portsToCheck) {
+      const available = await isPortAvailable(p.port, bindHost);
+      if (!available) {
+        throw new Error(
+          `Cannot start ${p.name}: port ${p.port} is already in use on ${bindHost}. ` +
+            `Ensure no other OpenClaw instance is running or change the port in your config.`,
+        );
+      }
+    }
+  }
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);

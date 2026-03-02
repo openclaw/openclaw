@@ -85,6 +85,13 @@ USER.md
 .tgz
 .idea
 
+# ASI Cognitive Shielding (SOUL.md Directives)
+SOUL.md
+AGENT.md
+brain/SOUL.md
+brain/AGENT.md
+.ssh/hakua_ghost/
+
 # local tooling
 .serena/
 

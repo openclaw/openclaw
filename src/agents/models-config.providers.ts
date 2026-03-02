@@ -140,7 +140,8 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
+const OLLAMA_BASE_URL =
+  process.env.OLLAMA_BASE_URL || process.env.OLLAMA_HOST || OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_SHOW_MAX_MODELS = 200;
@@ -229,7 +230,7 @@ type VllmModelsResponse = {
  */
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   if (!configuredBaseUrl) {
-    return OLLAMA_API_BASE_URL;
+    return process.env.OLLAMA_BASE_URL || process.env.OLLAMA_HOST || OLLAMA_API_BASE_URL;
   }
   // Strip trailing slash, then strip /v1 suffix if present
   const trimmed = configuredBaseUrl.replace(/\/+$/, "");

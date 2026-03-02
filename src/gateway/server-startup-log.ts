@@ -4,6 +4,8 @@ import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 
 export function logGatewayStartup(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -30,6 +32,20 @@ export function logGatewayStartup(params: {
   const listenEndpoints = hosts.map((host) => `${scheme}://${formatHost(host)}:${params.port}`);
   params.log.info(`listening on ${listenEndpoints.join(", ")} (PID ${process.pid})`);
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+
+  if (params.cfg.gateway?.controlUi?.enabled !== false) {
+    const creds = resolveGatewayCredentialsFromConfig({ cfg: params.cfg });
+    const token = creds.token;
+    const basePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+    const uiPath = basePath ? `${basePath}/` : "/";
+    const dashboardUrl = `http://${params.bindHost}:${params.port}${uiPath}`;
+    const tokenizedUrl = token
+      ? `${dashboardUrl}#token=${encodeURIComponent(token)}`
+      : dashboardUrl;
+    params.log.info(`dashboard: ${tokenizedUrl}`, {
+      consoleMessage: `dashboard: ${chalk.cyanBright(tokenizedUrl)}`,
+    });
+  }
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }

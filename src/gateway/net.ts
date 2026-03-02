@@ -292,6 +292,28 @@ export async function canBindToHost(host: string): Promise<boolean> {
   });
 }
 
+/**
+ * Check if a specific port is available on the given host.
+ */
+export async function isPortAvailable(port: number, host: string = "0.0.0.0"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", (err: unknown) => {
+      if ((err as { code?: string }).code === "EADDRINUSE") {
+        resolve(false);
+      } else {
+        // Other errors (EACCES, etc.) also mean we can't use this port.
+        resolve(false);
+      }
+    });
+    server.once("listening", () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, host);
+  });
+}
+
 export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
