@@ -7,14 +7,12 @@ import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
 const plugin = {
   id: "zalouser",
   name: "Zalo Personal",
-  description: "Zalo personal account messaging via zca-cli",
+  description: "Zalo personal account messaging via native zca-js integration",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setZalouserRuntime(api.runtime);
-    // Register channel plugin (for onboarding & gateway)
     api.registerChannel({ plugin: zalouserPlugin, dock: zalouserDock });
 
-    // Register agent tool
     api.registerTool({
       name: "zalouser",
       label: "Zalo Personal",
