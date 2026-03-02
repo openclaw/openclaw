@@ -204,6 +204,8 @@ export type OpenClawPluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<void> | void;
 
+export type OpenClawPluginHttpRouteKind = "default" | "webhook";
+
 export type OpenClawPluginCliContext = {
   program: Command;
   config: OpenClawConfig;
@@ -266,7 +268,11 @@ export type OpenClawPluginApi = {
     opts?: OpenClawPluginHookOptions,
   ) => void;
   registerHttpHandler: (handler: OpenClawPluginHttpHandler) => void;
-  registerHttpRoute: (params: { path: string; handler: OpenClawPluginHttpRouteHandler }) => void;
+  registerHttpRoute: (params: {
+    path: string;
+    handler: OpenClawPluginHttpRouteHandler;
+    kind?: OpenClawPluginHttpRouteKind;
+  }) => void;
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;

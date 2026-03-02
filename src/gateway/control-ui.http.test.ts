@@ -45,6 +45,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    shouldBypassSpaForPath?: (requestPath: string) => boolean;
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,6 +53,9 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.shouldBypassSpaForPath
+          ? { shouldBypassSpaForPath: params.shouldBypassSpaForPath }
+          : {}),
         root: { kind: "resolved", path: params.rootPath },
       },
     );
@@ -352,6 +356,35 @@ describe("handleControlUiHttpRequest", () => {
           });
           expect(handled, `expected ${pluginPath} to not be handled`).toBe(false);
         }
+      },
+    });
+  });
+
+  it("falls through exact webhook routes that explicitly bypass the root spa", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled } = runControlUiRequest({
+          url: "/bluebubbles-webhook",
+          method: "GET",
+          rootPath: tmp,
+          shouldBypassSpaForPath: (requestPath) => requestPath === "/bluebubbles-webhook",
+        });
+        expect(handled).toBe(false);
+      },
+    });
+  });
+
+  it("still handles control ui routes when only webhook paths are bypassed", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, res } = runControlUiRequest({
+          url: "/chat",
+          method: "GET",
+          rootPath: tmp,
+          shouldBypassSpaForPath: (requestPath) => requestPath === "/bluebubbles-webhook",
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
       },
     });
   });

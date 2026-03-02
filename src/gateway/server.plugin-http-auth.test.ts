@@ -590,6 +590,67 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("lets exact webhook routes bypass the root control ui spa without restoring generic precedence", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-webhook-bypass-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/bluebubbles-webhook") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("plugin-webhook");
+            return true;
+          }
+          if (pathname === "/chat") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("plugin-shadow");
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "missing" },
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          shouldBypassControlUiSpaForPath: (requestPath) => requestPath === "/bluebubbles-webhook",
+          resolvedAuth,
+        });
+
+        const webhookResponse = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/bluebubbles-webhook", method: "POST" }),
+          webhookResponse.res,
+        );
+        expect(webhookResponse.res.statusCode).toBe(200);
+        expect(webhookResponse.getBody()).toBe("plugin-webhook");
+
+        const chatResponse = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/chat" }), chatResponse.res);
+        expect(chatResponse.res.statusCode).toBe(503);
+        expect(chatResponse.getBody()).toContain("Control UI assets not found");
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test("requires gateway auth for canonicalized /api/channels variants", async () => {
     const handlePluginRequest = createCanonicalizedChannelPluginHandler();
 

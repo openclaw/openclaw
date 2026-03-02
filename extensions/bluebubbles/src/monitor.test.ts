@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
@@ -392,6 +394,27 @@ describe("BlueBubbles webhook monitor", () => {
 
   afterEach(() => {
     unregister?.();
+  });
+
+  it("registers an exact webhook route while the target is active", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    unregister = registerBlueBubblesWebhookTarget({
+      account: createMockAccount(),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: createMockRuntime(),
+      path: "/bluebubbles-webhook",
+    });
+
+    expect(registry.httpRoutes).toContainEqual(
+      expect.objectContaining({
+        pluginId: "bluebubbles",
+        path: "/bluebubbles-webhook",
+        kind: "webhook",
+      }),
+    );
   });
 
   describe("webhook parsing + auth handling", () => {

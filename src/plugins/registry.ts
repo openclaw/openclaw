@@ -6,6 +6,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
+import { isCoreOwnedHttpPath } from "../gateway/server/core-http-paths.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -18,6 +19,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginHttpHandler,
+  OpenClawPluginHttpRouteKind,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHookOptions,
   ProviderPlugin,
@@ -59,6 +61,7 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  kind: OpenClawPluginHttpRouteKind;
   source?: string;
 };
 
@@ -299,9 +302,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerHttpRoute = (
     record: PluginRecord,
-    params: { path: string; handler: OpenClawPluginHttpRouteHandler },
+    params: {
+      path: string;
+      handler: OpenClawPluginHttpRouteHandler;
+      kind?: OpenClawPluginHttpRouteKind;
+    },
   ) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
+    const kind = params.kind ?? "default";
     if (!normalizedPath) {
       pushDiagnostic({
         level: "warn",
@@ -320,11 +328,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (kind === "webhook" && isCoreOwnedHttpPath(normalizedPath)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `http webhook route conflicts with core path: ${normalizedPath}`,
+      });
+      return;
+    }
     record.httpHandlers += 1;
     registry.httpRoutes.push({
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      kind,
       source: record.source,
     });
   };

@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeWebhookPath } from "../../plugin-sdk/webhook-path.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { canonicalizePathVariant } from "../security-path.js";
 import { isProtectedPluginRoutePath } from "../security-path.js";
+import { canPluginWebhookRouteBypassControlUi } from "./core-http-paths.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -13,13 +15,19 @@ export type PluginHttpRequestHandler = (
 
 type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
+function matchesRegisteredPluginHttpRoute(entry: PluginHttpRouteEntry, pathname: string): boolean {
+  if (entry.kind === "webhook") {
+    return normalizeWebhookPath(entry.path) === normalizeWebhookPath(pathname);
+  }
+  return canonicalizePathVariant(entry.path) === canonicalizePathVariant(pathname);
+}
+
 export function findRegisteredPluginHttpRoute(
   registry: PluginRegistry,
   pathname: string,
 ): PluginHttpRouteEntry | undefined {
-  const canonicalPath = canonicalizePathVariant(pathname);
   const routes = registry.httpRoutes ?? [];
-  return routes.find((entry) => canonicalizePathVariant(entry.path) === canonicalPath);
+  return routes.find((entry) => matchesRegisteredPluginHttpRoute(entry, pathname));
 }
 
 // Only checks specific routes registered via registerHttpRoute, not wildcard handlers
@@ -39,6 +47,14 @@ export function shouldEnforceGatewayAuthForPluginPath(
   return (
     isProtectedPluginRoutePath(pathname) || isRegisteredPluginHttpRoutePath(registry, pathname)
   );
+}
+
+export function shouldBypassControlUiSpaForPluginPath(
+  registry: PluginRegistry,
+  pathname: string,
+): boolean {
+  const route = findRegisteredPluginHttpRoute(registry, pathname);
+  return route?.kind === "webhook" && canPluginWebhookRouteBypassControlUi(pathname);
 }
 
 export function createGatewayPluginRequestHandler(params: {

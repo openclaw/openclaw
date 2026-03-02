@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
@@ -133,6 +135,34 @@ describe("Google Chat webhook routing", () => {
       expect(sinkB).toHaveBeenCalledTimes(1);
     } finally {
       unregister();
+    }
+  });
+
+  it("registers an exact webhook route while the target is active", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+
+    const unregister = registerGoogleChatWebhookTarget({
+      account: baseAccount("A"),
+      config: {} as OpenClawConfig,
+      runtime: {},
+      core: {} as PluginRuntime,
+      path: "/googlechat",
+      statusSink: vi.fn(),
+      mediaMaxMb: 5,
+    });
+
+    try {
+      expect(registry.httpRoutes).toContainEqual(
+        expect.objectContaining({
+          pluginId: "googlechat",
+          path: "/googlechat",
+          kind: "webhook",
+        }),
+      );
+    } finally {
+      unregister();
+      expect(registry.httpRoutes).toHaveLength(0);
     }
   });
 });

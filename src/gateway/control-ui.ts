@@ -27,6 +27,7 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  shouldBypassSpaForPath?: (requestPath: string) => boolean;
 };
 
 export type ControlUiRootState =
@@ -291,6 +292,9 @@ export function handleControlUiHttpRequest(
       return false;
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
+      return false;
+    }
+    if (opts?.shouldBypassSpaForPath?.(pathname)) {
       return false;
     }
   }

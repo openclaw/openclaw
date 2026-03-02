@@ -371,6 +371,7 @@ export function createGatewayHttpServer(opts: {
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
+  shouldBypassControlUiSpaForPath?: (requestPath: string) => boolean;
   shouldEnforcePluginGatewayAuth?: (requestPath: string) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
@@ -389,6 +390,7 @@ export function createGatewayHttpServer(opts: {
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
+    shouldBypassControlUiSpaForPath,
     shouldEnforcePluginGatewayAuth,
     resolvedAuth,
     rateLimiter,
@@ -503,6 +505,7 @@ export function createGatewayHttpServer(opts: {
             basePath: controlUiBasePath,
             config: configSnapshot,
             root: controlUiRoot,
+            shouldBypassSpaForPath: shouldBypassControlUiSpaForPath,
           })
         ) {
           return;

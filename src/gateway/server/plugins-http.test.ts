@@ -5,6 +5,7 @@ import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
   isRegisteredPluginHttpRoutePath,
+  shouldBypassControlUiSpaForPluginPath,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
@@ -17,12 +18,14 @@ function createPluginLog(): PluginHandlerLog {
 function createRoute(params: {
   path: string;
   pluginId?: string;
+  kind?: "default" | "webhook";
   handler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
     path: params.path,
     handler: params.handler ?? (() => {}),
+    kind: params.kind ?? "default",
     source: params.pluginId ?? "route",
   };
 }
@@ -151,5 +154,57 @@ describe("plugin HTTP registry helpers", () => {
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api//demo")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/api/channels/status")).toBe(true);
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/not-plugin")).toBe(false);
+  });
+
+  it("only bypasses control ui for exact webhook-kind routes on non-core paths", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "bluebubbles",
+          path: "/bluebubbles-webhook",
+          handler: () => {},
+          kind: "webhook",
+          source: "bluebubbles",
+        },
+        {
+          pluginId: "route",
+          path: "/chat",
+          handler: () => {},
+          kind: "default",
+          source: "route",
+        },
+        {
+          pluginId: "route",
+          path: "/plugins/demo",
+          handler: () => {},
+          kind: "webhook",
+          source: "route",
+        },
+      ],
+    });
+
+    expect(shouldBypassControlUiSpaForPluginPath(registry, "/bluebubbles-webhook")).toBe(true);
+    expect(shouldBypassControlUiSpaForPluginPath(registry, "/chat")).toBe(false);
+    expect(shouldBypassControlUiSpaForPluginPath(registry, "/plugins/demo")).toBe(false);
+    expect(shouldBypassControlUiSpaForPluginPath(registry, "/missing")).toBe(false);
+  });
+
+  it("does not canonicalize webhook-kind route matching", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "bluebubbles",
+          path: "/bluebubbles-webhook",
+          handler: () => {},
+          kind: "webhook",
+          source: "bluebubbles",
+        },
+      ],
+    });
+
+    expect(isRegisteredPluginHttpRoutePath(registry, "/bluebubbles-webhook")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/BLUEBUBBLES-WEBHOOK")).toBe(false);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/bluebubbles-webhook/")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/bluebubbles%2Dwebhook")).toBe(false);
   });
 });

@@ -532,8 +532,41 @@ describe("loadOpenClawPlugins", () => {
     const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-route-demo");
     expect(route).toBeDefined();
     expect(route?.path).toBe("/demo");
+    expect(route?.kind).toBe("default");
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-route-demo");
     expect(httpPlugin?.httpHandlers).toBe(1);
+  });
+
+  it("rejects webhook routes on core-owned paths", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "http-route-webhook-core-conflict",
+      body: `export default { id: "http-route-webhook-core-conflict", register(api) {
+  api.registerHttpRoute({ path: "/chat", kind: "webhook", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["http-route-webhook-core-conflict"],
+        },
+      },
+    });
+
+    expect(
+      registry.httpRoutes.find((entry) => entry.pluginId === "http-route-webhook-core-conflict"),
+    ).toBeUndefined();
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "http-route-webhook-core-conflict",
+        message: "http webhook route conflicts with core path: /chat",
+      }),
+    );
   });
 
   it("respects explicit disable in config", () => {

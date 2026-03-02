@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  registerPluginHttpRoute,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
   requestBodyErrorToText,
@@ -235,8 +236,24 @@ function removeDebouncer(target: WebhookTarget): void {
 }
 
 export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => void {
+  const unregisterHttpRoute = registerPluginHttpRoute({
+    path: target.path,
+    handler: async (req, res) => {
+      const handled = await handleBlueBubblesWebhookRequest(req, res);
+      if (!handled && !res.headersSent) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Not Found");
+      }
+    },
+    pluginId: "bluebubbles",
+    kind: "webhook",
+    accountId: target.account.accountId,
+    log: target.runtime.log,
+  });
   const registered = registerWebhookTarget(webhookTargets, target);
   return () => {
+    unregisterHttpRoute();
     registered.unregister();
     // Clean up debouncer when target is unregistered
     removeDebouncer(registered.target);
