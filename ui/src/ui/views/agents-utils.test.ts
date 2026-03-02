@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
+  sortLocaleStrings,
 } from "./agents-utils.ts";
 
 describe("resolveEffectiveModelFallbacks", () => {
@@ -85,5 +86,15 @@ describe("resolveConfiguredCronModelSuggestions", () => {
     expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
       [],
     );
+  });
+});
+
+describe("sortLocaleStrings", () => {
+  it("sorts values using localeCompare without relying on Array.prototype.toSorted", () => {
+    expect(sortLocaleStrings(["z", "b", "a"])).toEqual(["a", "b", "z"]);
+  });
+
+  it("accepts any iterable input, including sets", () => {
+    expect(sortLocaleStrings(new Set(["beta", "alpha"]))).toEqual(["alpha", "beta"]);
   });
 });
