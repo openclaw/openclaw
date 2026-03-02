@@ -82,6 +82,31 @@ describe("exec approvals allowlist matching", () => {
     }
   });
 
+  it("matches literal allowlist paths that include regex metacharacters", () => {
+    const cases = [
+      {
+        pattern: "/usr/bin/g++",
+        resolution: {
+          rawExecutable: "g++",
+          resolvedPath: "/usr/bin/g++",
+          executableName: "g++",
+        },
+      },
+      {
+        pattern: "/opt/tools/(custom)/bin/node",
+        resolution: {
+          rawExecutable: "node",
+          resolvedPath: "/opt/tools/(custom)/bin/node",
+          executableName: "node",
+        },
+      },
+    ];
+    for (const testCase of cases) {
+      const match = matchAllowlist([{ pattern: testCase.pattern }], testCase.resolution);
+      expect(match?.pattern).toBe(testCase.pattern);
+    }
+  });
+
   it("matches bare * wildcard pattern against any resolved path", () => {
     const match = matchAllowlist([{ pattern: "*" }], baseResolution);
     expect(match).not.toBeNull();
