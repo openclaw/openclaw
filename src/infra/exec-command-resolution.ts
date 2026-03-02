@@ -111,6 +111,12 @@ function tryRealpath(value: string): string | null {
   }
 }
 
+const REGEX_LITERAL_ESCAPE_RE = /[.*+?^${}()|[\]\\]/g;
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(REGEX_LITERAL_ESCAPE_RE, "\\$&");
+}
+
 function globToRegExp(pattern: string): RegExp {
   let regex = "^";
   let i = 0;
@@ -132,7 +138,7 @@ function globToRegExp(pattern: string): RegExp {
       i += 1;
       continue;
     }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
+    regex += escapeRegexLiteral(ch);
     i += 1;
   }
   regex += "$";
