@@ -415,7 +415,11 @@ export const buildTelegramMessageContext = async ({
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const implicitMention = botId != null && replyFromId === botId;
+
+  // Exclude forum topic created service messages
+  const isForumTopicCreated = Boolean(msg.reply_to_message?.forum_topic_created);
+
+  const implicitMention = botId != null && replyFromId === botId && !isForumTopicCreated;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup,
@@ -526,7 +530,7 @@ export const buildTelegramMessageContext = async ({
                 ]);
               }
             },
-            // Telegram replaces atomically — no removeReaction needed
+            // Telegram replaces atomically - no removeReaction needed
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis,
