@@ -1068,6 +1068,32 @@ export async function resolveImplicitProviders(params: {
     }
   }
 
+  // llama-cpp provider - native node-llama-cpp integration (opt-in via env).
+  // Uses LLAMA_CPP_MODEL_PATH to auto-register a single GGUF model.
+  if (!params.explicitProviders?.["llama-cpp"]) {
+    const modelPath = process.env.LLAMA_CPP_MODEL_PATH?.trim();
+    if (modelPath) {
+      const path = await import("node:path");
+      const modelId = path.basename(modelPath, ".gguf");
+      providers["llama-cpp"] = {
+        baseUrl: modelPath,
+        api: "llama-cpp",
+        apiKey: "local",
+        models: [
+          {
+            id: modelId,
+            name: modelId,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32768,
+            maxTokens: 8192,
+          },
+        ],
+      };
+    }
+  }
+
   const togetherKey =
     resolveEnvApiKeyVarName("together") ??
     resolveApiKeyFromProfiles({ provider: "together", store: authStore });

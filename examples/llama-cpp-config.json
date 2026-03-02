@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "llama-cpp/qwen-32b",
+        "fallbacks": ["anthropic/claude-opus-4-6"]
+      },
+      "models": {
+        "llama-cpp/qwen-32b": {
+          "alias": "Qwen Local",
+          "params": {
+            "temperature": 0.8,
+            "topP": 0.95
+          }
+        },
+        "anthropic/claude-opus-4-6": {
+          "alias": "Opus"
+        }
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "llama-cpp": {
+        "api": "llama-cpp",
+        "baseUrl": "/models/qwen2.5-coder-32b-instruct-q6_k.gguf",
+        "apiKey": "local",
+        "gpuLayers": "max",
+        "models": [
+          {
+            "id": "qwen-32b",
+            "name": "Qwen 2.5 Coder 32B",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "botToken": "${TELEGRAM_BOT_TOKEN}"
+    }
+  }
+}
