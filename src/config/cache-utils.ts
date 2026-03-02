@@ -25,3 +25,11 @@ export function getFileMtimeMs(filePath: string): number | undefined {
     return undefined;
   }
 }
+
+export function getFileSizeBytes(filePath: string): number | undefined {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return undefined;
+  }
+}
