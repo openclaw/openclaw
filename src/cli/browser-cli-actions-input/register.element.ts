@@ -13,6 +13,31 @@ export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const runElementAction = async (params: {
+    cmd: Command;
+    body: Record<string, unknown>;
+    successMessage: string | ((result: unknown) => string);
+    timeoutMs?: number;
+  }): Promise<void> => {
+    const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
+    try {
+      const result = await callBrowserAct({
+        parent,
+        profile,
+        body: params.body,
+        timeoutMs: params.timeoutMs,
+      });
+      const successMessage =
+        typeof params.successMessage === "function"
+          ? params.successMessage(result)
+          : params.successMessage;
+      logBrowserActionResult(parent, result, successMessage);
+    } catch (err) {
+      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.exit(1);
+    }
+  };
+
   browser
     .command("click")
     .description("Click an element by ref from snapshot")
@@ -22,7 +47,6 @@ export function registerBrowserElementCommands(
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) {
         return;
@@ -33,25 +57,22 @@ export function registerBrowserElementCommands(
             .map((v: string) => v.trim())
             .filter(Boolean)
         : undefined;
-      try {
-        const result = await callBrowserAct<{ url?: string }>({
-          parent,
-          profile,
-          body: {
-            kind: "click",
-            ref: refValue,
-            targetId: opts.targetId?.trim() || undefined,
-            doubleClick: Boolean(opts.double),
-            button: opts.button?.trim() || undefined,
-            modifiers,
-          },
-        });
-        const suffix = result.url ? ` on ${result.url}` : "";
-        logBrowserActionResult(parent, result, `clicked ref ${refValue}${suffix}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "click",
+          ref: refValue,
+          targetId: opts.targetId?.trim() || undefined,
+          doubleClick: Boolean(opts.double),
+          button: opts.button?.trim() || undefined,
+          modifiers,
+        },
+        successMessage: (result) => {
+          const url = (result as { url?: unknown }).url;
+          const suffix = typeof url === "string" && url ? ` on ${url}` : "";
+          return `clicked ref ${refValue}${suffix}`;
+        },
+      });
     });
 
   browser
@@ -63,29 +84,22 @@ export function registerBrowserElementCommands(
     .option("--slowly", "Type slowly (human-like)", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) {
         return;
       }
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: {
-            kind: "type",
-            ref: refValue,
-            text,
-            submit: Boolean(opts.submit),
-            slowly: Boolean(opts.slowly),
-            targetId: opts.targetId?.trim() || undefined,
-          },
-        });
-        logBrowserActionResult(parent, result, `typed into ref ${refValue}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "type",
+          ref: refValue,
+          text,
+          submit: Boolean(opts.submit),
+          slowly: Boolean(opts.slowly),
+          targetId: opts.targetId?.trim() || undefined,
+        },
+        successMessage: `typed into ref ${refValue}`,
+      });
     });
 
   browser
@@ -94,18 +108,11 @@ export function registerBrowserElementCommands(
     .argument("<key>", "Key to press (e.g. Enter)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (key: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: { kind: "press", key, targetId: opts.targetId?.trim() || undefined },
-        });
-        logBrowserActionResult(parent, result, `pressed ${key}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: { kind: "press", key, targetId: opts.targetId?.trim() || undefined },
+        successMessage: `pressed ${key}`,
+      });
     });
 
   browser
@@ -114,18 +121,11 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: { kind: "hover", ref, targetId: opts.targetId?.trim() || undefined },
-        });
-        logBrowserActionResult(parent, result, `hovered ref ${ref}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: { kind: "hover", ref, targetId: opts.targetId?.trim() || undefined },
+        successMessage: `hovered ref ${ref}`,
+      });
     });
 
   browser
@@ -137,28 +137,22 @@ export function registerBrowserElementCommands(
       Number(v),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) {
         return;
       }
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: {
-            kind: "scrollIntoView",
-            ref: refValue,
-            targetId: opts.targetId?.trim() || undefined,
-            timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-          },
-          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
-        });
-        logBrowserActionResult(parent, result, `scrolled into view: ${refValue}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "scrollIntoView",
+          ref: refValue,
+          targetId: opts.targetId?.trim() || undefined,
+          timeoutMs,
+        },
+        timeoutMs,
+        successMessage: `scrolled into view: ${refValue}`,
+      });
     });
 
   browser
@@ -168,23 +162,16 @@ export function registerBrowserElementCommands(
     .argument("<endRef>", "End ref id")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (startRef: string, endRef: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: {
-            kind: "drag",
-            startRef,
-            endRef,
-            targetId: opts.targetId?.trim() || undefined,
-          },
-        });
-        logBrowserActionResult(parent, result, `dragged ${startRef} → ${endRef}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "drag",
+          startRef,
+          endRef,
+          targetId: opts.targetId?.trim() || undefined,
+        },
+        successMessage: `dragged ${startRef} → ${endRef}`,
+      });
     });
 
   browser
@@ -194,22 +181,15 @@ export function registerBrowserElementCommands(
     .argument("<values...>", "Option values to select")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, values: string[], opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const result = await callBrowserAct({
-          parent,
-          profile,
-          body: {
-            kind: "select",
-            ref,
-            values,
-            targetId: opts.targetId?.trim() || undefined,
-          },
-        });
-        logBrowserActionResult(parent, result, `selected ${values.join(", ")}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "select",
+          ref,
+          values,
+          targetId: opts.targetId?.trim() || undefined,
+        },
+        successMessage: `selected ${values.join(", ")}`,
+      });
     });
 }
