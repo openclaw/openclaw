@@ -14,26 +14,29 @@ const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
-const BUNDLED_TELEGRAM_PLUGIN_BODY = `export default { id: "telegram", register(api) {
-  api.registerChannel({
-    plugin: {
-      id: "telegram",
-      meta: {
+const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
+  id: "telegram",
+  register(api) {
+    api.registerChannel({
+      plugin: {
         id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "telegram channel"
+        meta: {
+          id: "telegram",
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          docsPath: "/channels/telegram",
+          blurb: "telegram channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
       },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" })
-      },
-      outbound: { deliveryMode: "direct" }
-    }
-  });
-} };`;
+    });
+  },
+};`;
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -75,6 +78,7 @@ function loadBundledMemoryPluginRegistry(options?: {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledMemoryDir;
     return loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledMemoryDir,
       config: {
         plugins: {
           slots: {
@@ -87,11 +91,11 @@ function loadBundledMemoryPluginRegistry(options?: {
 
   const bundledDir = makeTempDir();
   let pluginDir = bundledDir;
-  let pluginFilename = options?.pluginFilename ?? "memory-core.js";
+  let pluginFilename = options?.pluginFilename ?? "memory-core.cjs";
 
   if (options?.packageMeta) {
     pluginDir = path.join(bundledDir, "memory-core");
-    pluginFilename = "index.js";
+    pluginFilename = options.pluginFilename ?? "index.js";
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -100,7 +104,7 @@ function loadBundledMemoryPluginRegistry(options?: {
           name: options.packageMeta.name,
           version: options.packageMeta.version,
           description: options.packageMeta.description,
-          openclaw: { extensions: ["./index.js"] },
+          openclaw: { extensions: [`./${pluginFilename}`] },
         },
         null,
         2,
@@ -112,7 +116,8 @@ function loadBundledMemoryPluginRegistry(options?: {
   writePlugin({
     id: "memory-core",
     body:
-      options?.pluginBody ?? `export default { id: "memory-core", kind: "memory", register() {} };`,
+      options?.pluginBody ??
+      `module.exports = { id: "memory-core", kind: "memory", register() {} };`,
     dir: pluginDir,
     filename: pluginFilename,
   });
@@ -123,6 +128,7 @@ function loadBundledMemoryPluginRegistry(options?: {
 
   return loadOpenClawPlugins({
     cache: false,
+    workspaceDir: bundledDir,
     config: {
       plugins: {
         slots: {
@@ -140,7 +146,7 @@ function setupBundledTelegramPlugin() {
       id: "telegram",
       body: BUNDLED_TELEGRAM_PLUGIN_BODY,
       dir: cachedBundledTelegramDir,
-      filename: "telegram.js",
+      filename: "telegram.cjs",
     });
   }
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
@@ -264,6 +270,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         plugins: {
           allow: ["telegram"],
@@ -282,6 +289,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         channels: {
           telegram: {
@@ -302,6 +310,7 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadOpenClawPlugins({
       cache: false,
+      workspaceDir: cachedBundledTelegramDir,
       config: {
         channels: {
           telegram: {
@@ -336,7 +345,7 @@ describe("loadOpenClawPlugins", () => {
         description: "Memory plugin package",
       },
       pluginBody:
-        'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
+        'module.exports = { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
     });
 
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
@@ -349,7 +358,13 @@ describe("loadOpenClawPlugins", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "allowed",
-      body: `export default { id: "allowed", register(api) { api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true })); } };`,
+      filename: "allowed.cjs",
+      body: `module.exports = {
+  id: "allowed",
+  register(api) {
+    api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
     });
 
     const registry = loadOpenClawPlugins({
