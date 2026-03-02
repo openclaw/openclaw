@@ -138,6 +138,26 @@ function readActRequestParam(params: Record<string, unknown>) {
   return request as Parameters<typeof browserAct>[1];
 }
 
+function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
+  if (profile !== "chrome") {
+    return false;
+  }
+  const msg = String(err);
+  return msg.includes("404:") && msg.includes("tab not found");
+}
+
+function stripTargetIdFromActRequest(
+  request: Parameters<typeof browserAct>[1],
+): Parameters<typeof browserAct>[1] | null {
+  const targetId = typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+  if (!targetId) {
+    return null;
+  }
+  const retryRequest = { ...request };
+  delete retryRequest.targetId;
+  return retryRequest as Parameters<typeof browserAct>[1];
+}
+
 type BrowserProxyFile = {
   path: string;
   base64: string;
@@ -860,15 +880,11 @@ export function createBrowserTool(opts?: {
                 });
             return jsonResult(result);
           } catch (err) {
-            const msg = String(err);
-            if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
-              const targetId =
-                typeof request.targetId === "string" ? request.targetId.trim() : undefined;
+            if (isChromeStaleTargetError(profile, err)) {
+              const retryRequest = stripTargetIdFromActRequest(request);
               // Some Chrome relay targetIds can go stale between snapshots and actions.
               // Retry once without targetId to let relay use the currently attached tab.
-              if (targetId) {
-                const retryRequest = { ...request };
-                delete retryRequest.targetId;
+              if (retryRequest) {
                 try {
                   const retryResult = proxyRequest
                     ? await proxyRequest({
@@ -877,7 +893,7 @@ export function createBrowserTool(opts?: {
                         profile,
                         body: retryRequest,
                       })
-                    : await browserAct(baseUrl, retryRequest as Parameters<typeof browserAct>[1], {
+                    : await browserAct(baseUrl, retryRequest, {
                         profile,
                       });
                   return jsonResult(retryResult);
