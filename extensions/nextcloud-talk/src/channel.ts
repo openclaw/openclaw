@@ -263,16 +263,20 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
       const urls = ctx.payload.mediaUrls?.length
         ? ctx.payload.mediaUrls
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
+      if (!text && urls.length === 0) {
+        return { channel: "nextcloud-talk", messageId: "" };
+      }
       if (urls.length > 0) {
         // Delegate to sendMedia to preserve "Attachment: <url>" formatting
         let lastResult = await nextcloudTalkPlugin.outbound!.sendMedia!({
           ...ctx,
-          text: ctx.payload.text ?? "",
+          text,
           mediaUrl: urls[0],
         });
         for (let i = 1; i < urls.length; i++) {
@@ -284,7 +288,14 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         }
         return lastResult;
       }
-      return nextcloudTalkPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+      const outbound = nextcloudTalkPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {

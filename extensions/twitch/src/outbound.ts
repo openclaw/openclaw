@@ -106,15 +106,19 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    * });
    */
   sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
     const urls = ctx.payload.mediaUrls?.length
       ? ctx.payload.mediaUrls
       : ctx.payload.mediaUrl
         ? [ctx.payload.mediaUrl]
         : [];
+    if (!text && urls.length === 0) {
+      return { channel: "twitch", messageId: "" };
+    }
     if (urls.length > 0) {
       let lastResult = await twitchOutbound.sendMedia!({
         ...ctx,
-        text: ctx.payload.text ?? "",
+        text,
         mediaUrl: urls[0],
       });
       for (let i = 1; i < urls.length; i++) {
@@ -126,7 +130,13 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return twitchOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+    const limit = twitchOutbound.textChunkLimit;
+    const chunks = limit && twitchOutbound.chunker ? twitchOutbound.chunker(text, limit) : [text];
+    let lastResult: Awaited<ReturnType<NonNullable<typeof twitchOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await twitchOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
   },
 
   sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {

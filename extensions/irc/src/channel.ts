@@ -297,16 +297,20 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     chunkerMode: "markdown",
     textChunkLimit: 350,
     sendPayload: async (ctx) => {
+      const text = ctx.payload.text ?? "";
       const urls = ctx.payload.mediaUrls?.length
         ? ctx.payload.mediaUrls
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
+      if (!text && urls.length === 0) {
+        return { channel: "irc", messageId: "" };
+      }
       if (urls.length > 0) {
         // Delegate to sendMedia to preserve "Attachment: <url>" formatting
         let lastResult = await ircPlugin.outbound!.sendMedia!({
           ...ctx,
-          text: ctx.payload.text ?? "",
+          text,
           mediaUrl: urls[0],
         });
         for (let i = 1; i < urls.length; i++) {
@@ -318,7 +322,14 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         }
         return lastResult;
       }
-      return ircPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+      const outbound = ircPlugin.outbound!;
+      const limit = outbound.textChunkLimit;
+      const chunks = limit && outbound.chunker ? outbound.chunker(text, limit) : [text];
+      let lastResult: Awaited<ReturnType<NonNullable<typeof outbound.sendText>>>;
+      for (const chunk of chunks) {
+        lastResult = await outbound.sendText!({ ...ctx, text: chunk });
+      }
+      return lastResult!;
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageIrc(to, text, {

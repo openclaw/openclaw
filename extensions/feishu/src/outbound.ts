@@ -113,15 +113,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     return { channel: "feishu", ...result };
   },
   sendPayload: async (ctx) => {
+    const text = ctx.payload.text ?? "";
     const urls = ctx.payload.mediaUrls?.length
       ? ctx.payload.mediaUrls
       : ctx.payload.mediaUrl
         ? [ctx.payload.mediaUrl]
         : [];
+    if (!text && urls.length === 0) {
+      return { channel: "feishu", messageId: "" };
+    }
     if (urls.length > 0) {
       let lastResult = await feishuOutbound.sendMedia!({
         ...ctx,
-        text: ctx.payload.text ?? "",
+        text,
         mediaUrl: urls[0],
       });
       for (let i = 1; i < urls.length; i++) {
@@ -133,7 +137,13 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return feishuOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
+    const limit = feishuOutbound.textChunkLimit;
+    const chunks = limit && feishuOutbound.chunker ? feishuOutbound.chunker(text, limit) : [text];
+    let lastResult: Awaited<ReturnType<NonNullable<typeof feishuOutbound.sendText>>>;
+    for (const chunk of chunks) {
+      lastResult = await feishuOutbound.sendText!({ ...ctx, text: chunk });
+    }
+    return lastResult!;
   },
   sendMedia: async ({
     cfg,
