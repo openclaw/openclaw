@@ -13,9 +13,17 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and preserves plugin loading", () => {
+  it("matches status route and always loads plugins for security parity", () => {
     const route = expectRoute(["status"]);
     expect(route?.loadPlugins).toBe(true);
+  });
+
+  it("matches health route and preloads plugins only for text output", () => {
+    const route = expectRoute(["health"]);
+    expect(typeof route?.loadPlugins).toBe("function");
+    const shouldLoad = route?.loadPlugins as (argv: string[]) => boolean;
+    expect(shouldLoad(["node", "openclaw", "health"])).toBe(true);
+    expect(shouldLoad(["node", "openclaw", "health", "--json"])).toBe(false);
   });
 
   it("returns false when status timeout flag value is missing", async () => {

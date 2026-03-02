@@ -82,7 +82,7 @@ type ConnectedTarget = {
 };
 
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
-const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 5_000;
+const DEFAULT_EXTENSION_RECONNECT_GRACE_MS = 20_000;
 const DEFAULT_EXTENSION_COMMAND_RECONNECT_WAIT_MS = 3_000;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -256,6 +256,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const cdpClients = new Set<WebSocket>();
     const connectedTargets = new Map<string, ConnectedTarget>();
     const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
+    const hasConnectedTargets = () => connectedTargets.size > 0;
     let extensionDisconnectCleanupTimer: NodeJS.Timeout | null = null;
     const extensionReconnectWaiters = new Set<(connected: boolean) => void>();
 
@@ -534,8 +535,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
           Browser: "OpenClaw/extension-relay",
           "Protocol-Version": "1.3",
         };
-        // Only advertise the WS URL if a real extension is connected.
-        if (extensionConnected()) {
+        // Keep reporting CDP WS while attached targets are cached, so callers can
+        // reconnect through brief MV3 worker disconnects.
+        if (extensionConnected() || hasConnectedTargets()) {
           payload.webSocketDebuggerUrl = cdpWsUrl;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -658,10 +660,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
           rejectUpgrade(socket, 401, "Unauthorized");
           return;
         }
-        if (!extensionConnected()) {
-          rejectUpgrade(socket, 503, "Extension not connected");
-          return;
-        }
+        // Allow CDP clients to connect even during brief extension worker drops.
+        // Individual commands already wait briefly for extension reconnect.
         wssCdp.handleUpgrade(req, socket, head, (ws) => {
           wssCdp.emit("connection", ws, req);
         });

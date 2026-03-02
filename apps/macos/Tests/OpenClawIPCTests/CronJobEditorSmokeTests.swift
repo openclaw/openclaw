@@ -75,7 +75,7 @@ struct CronJobEditorSmokeTests {
         view.exerciseForTesting()
     }
 
-    @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() throws {
+    @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() {
         let channelsStore = ChannelsStore(isPreview: true)
         let view = CronJobEditor(
             job: nil,

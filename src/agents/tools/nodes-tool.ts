@@ -18,6 +18,7 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { formatExecCommand } from "../../infra/system-run-command.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -119,7 +120,7 @@ const NodesToolSchema = Type.Object({
   delayMs: Type.Optional(Type.Number()),
   deviceId: Type.Optional(Type.String()),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
   fps: Type.Optional(Type.Number()),
@@ -420,12 +421,14 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            const durationMs = Math.min(
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
-                  : 10_000;
+                  : 10_000,
+              300_000,
+            );
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
@@ -530,14 +533,36 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
+            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              gatewayOpts,
+              {
+                nodeId,
+                command: "system.run.prepare",
+                params: {
+                  command,
+                  rawCommand: formatExecCommand(command),
+                  cwd,
+                  agentId,
+                  sessionKey,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
+              },
+            );
+            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            if (!prepared) {
+              throw new Error("invalid system.run.prepare response");
+            }
             const runParams = {
-              command,
-              cwd,
+              command: prepared.plan.argv,
+              rawCommand: prepared.plan.rawCommand ?? prepared.cmdText,
+              cwd: prepared.plan.cwd ?? cwd,
               env,
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
-              agentId,
-              sessionKey,
+              agentId: prepared.plan.agentId ?? agentId,
+              sessionKey: prepared.plan.sessionKey ?? sessionKey,
             };
 
             // First attempt without approval flags.
@@ -560,20 +585,20 @@ export function createNodesTool(options?: {
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
             const APPROVAL_TIMEOUT_MS = 120_000;
-            const cmdText = formatExecCommand(command);
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
               { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
               {
                 id: approvalId,
-                command: cmdText,
-                commandArgv: command,
-                cwd,
+                command: prepared.cmdText,
+                commandArgv: prepared.plan.argv,
+                systemRunPlan: prepared.plan,
+                cwd: prepared.plan.cwd ?? cwd,
                 nodeId,
                 host: "node",
-                agentId,
-                sessionKey,
+                agentId: prepared.plan.agentId ?? agentId,
+                sessionKey: prepared.plan.sessionKey ?? sessionKey,
                 turnSourceChannel,
                 turnSourceTo,
                 turnSourceAccountId,

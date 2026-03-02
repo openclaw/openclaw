@@ -115,6 +115,28 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("merges delivery.accountId from patch and preserves existing", () => {
+    const job = createIsolatedAgentTurnJob("job-acct", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: " coordinator " } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.to).toBe("-100123");
+
+    // Updating other fields preserves accountId
+    applyJobPatch(job, { delivery: { mode: "announce", to: "-100999" } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.to).toBe("-100999");
+
+    // Clearing accountId with empty string
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: "" } });
+    expect(job.delivery?.accountId).toBeUndefined();
+  });
+
   it("rejects webhook delivery without a valid http(s) target URL", () => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
     const cases = [
@@ -235,13 +257,104 @@ describe("applyJobPatch", () => {
   });
 });
 
-function createMockState(now: number): CronServiceState {
+function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
   return {
     deps: {
       nowMs: () => now,
+      defaultAgentId: opts?.defaultAgentId,
     },
   } as unknown as CronServiceState;
 }
+
+describe("createJob rejects sessionTarget main for non-default agents", () => {
+  const now = Date.parse("2026-02-28T12:00:00.000Z");
+
+  const mainJobInput = (agentId?: string) => ({
+    name: "my-main-job",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "tick" },
+    ...(agentId !== undefined ? { agentId } : {}),
+  });
+
+  it("allows creating a main-session job for the default agent", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() => createJob(state, mainJobInput())).not.toThrow();
+    expect(() => createJob(state, mainJobInput("main"))).not.toThrow();
+  });
+
+  it("allows creating a main-session job when defaultAgentId matches (case-insensitive)", () => {
+    const state = createMockState(now, { defaultAgentId: "Main" });
+    expect(() => createJob(state, mainJobInput("MAIN"))).not.toThrow();
+  });
+
+  it("rejects creating a main-session job for a non-default agentId", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
+      'cron: sessionTarget "main" is only valid for the default agent',
+    );
+  });
+
+  it("rejects main-session job for non-default agent even without explicit defaultAgentId", () => {
+    const state = createMockState(now);
+    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
+      'cron: sessionTarget "main" is only valid for the default agent',
+    );
+  });
+
+  it("allows isolated session job for non-default agents", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "isolated-job",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "do it" },
+        agentId: "custom-agent",
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("applyJobPatch rejects sessionTarget main for non-default agents", () => {
+  const now = Date.now();
+
+  const createMainJob = (agentId?: string): CronJob => ({
+    id: "job-main-agent-check",
+    name: "main-agent-check",
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "tick" },
+    state: {},
+    agentId,
+  });
+
+  it("rejects patching agentId to non-default on a main-session job", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(job, { agentId: "custom-agent" } as CronJobPatch, {
+        defaultAgentId: "main",
+      }),
+    ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
+  });
+
+  it("allows patching agentId to the default agent on a main-session job", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(job, { agentId: "main" } as CronJobPatch, {
+        defaultAgentId: "main",
+      }),
+    ).not.toThrow();
+  });
+});
 
 describe("cron stagger defaults", () => {
   it("defaults top-of-hour cron jobs to 5m stagger", () => {

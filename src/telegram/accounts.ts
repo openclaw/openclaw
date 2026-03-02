@@ -6,7 +6,11 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/session-key.js";
 import { resolveTelegramToken } from "./token.js";
 
 const log = createSubsystemLogger("telegram/accounts");
@@ -68,6 +72,13 @@ export function resolveDefaultTelegramAccountId(cfg: OpenClawConfig): string {
   if (boundDefault) {
     return boundDefault;
   }
+  const preferred = normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount);
+  if (
+    preferred &&
+    listTelegramAccountIds(cfg).some((accountId) => normalizeAccountId(accountId) === preferred)
+  ) {
+    return preferred;
+  }
   const ids = listTelegramAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -84,10 +95,29 @@ function resolveAccountConfig(
 }
 
 function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): TelegramAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
-    {}) as TelegramAccountConfig & { accounts?: unknown };
+  const {
+    accounts: _ignored,
+    defaultAccount: _ignoredDefaultAccount,
+    groups: channelGroups,
+    ...base
+  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
+    accounts?: unknown;
+    defaultAccount?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+
+  // In multi-account setups, channel-level `groups` must NOT be inherited by
+  // accounts that don't have their own `groups` config.  A bot that is not a
+  // member of a configured group will fail when handling group messages, and
+  // this failure disrupts message delivery for *all* accounts.
+  // Single-account setups keep backward compat: channel-level groups still
+  // applies when the account has no override.
+  // See: https://github.com/openclaw/openclaw/issues/30673
+  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+  const isMultiAccount = configuredAccountIds.length > 1;
+  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+
+  return { ...base, ...account, groups };
 }
 
 export function createTelegramActionGate(params: {
