@@ -171,7 +171,8 @@ describe("message tool schema scoping", () => {
     expect(buttonItemProps.style).toBeDefined();
     expect(actionEnum).toContain("send");
     expect(actionEnum).toContain("react");
-    expect(actionEnum).not.toContain("poll");
+    // Other channels' actions are included so isolated/cron agents can use them
+    expect(actionEnum).toContain("poll");
   });
 
   it("shows discord components when scoped to discord", () => {
@@ -193,11 +194,16 @@ describe("message tool schema scoping", () => {
     expect(properties.buttons).toBeUndefined();
     expect(actionEnum).toContain("send");
     expect(actionEnum).toContain("poll");
-    expect(actionEnum).not.toContain("react");
+    // Other channels' actions are included so isolated/cron agents can use them
+    expect(actionEnum).toContain("react");
   });
 });
 
 describe("message tool description", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   const bluebubblesPlugin: ChannelPlugin = {
     id: "bluebubbles",
     meta: {
@@ -248,8 +254,78 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("addParticipant");
     expect(tool.description).not.toContain("removeParticipant");
     expect(tool.description).not.toContain("leaveGroup");
+  });
 
-    setActivePluginRegistry(createTestRegistry([]));
+  it("includes other configured channels when currentChannel is set", () => {
+    const signalPlugin: ChannelPlugin = {
+      id: "signal",
+      meta: {
+        id: "signal",
+        label: "Signal",
+        selectionLabel: "Signal",
+        docsPath: "/channels/signal",
+        blurb: "Signal test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({}),
+      },
+      actions: {
+        listActions: () => ["send", "react"] as const,
+      },
+    };
+
+    const telegramPluginFull: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({}),
+      },
+      actions: {
+        listActions: () => ["send", "react", "delete", "edit", "topic-create"] as const,
+      },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPluginFull },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    // Current channel actions are listed
+    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
+    // Other configured channels are also listed
+    expect(tool.description).toContain("Other configured channels:");
+    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+  });
+
+  it("does not include 'Other configured channels' when only one channel is configured", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "bluebubbles",
+    });
+
+    expect(tool.description).toContain("Current channel (bluebubbles) supports:");
+    expect(tool.description).not.toContain("Other configured channels");
   });
 });
 

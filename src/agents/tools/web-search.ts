@@ -721,7 +721,6 @@ async function resolveRedirectUrl(url: string): Promise<string> {
         url,
         init: { method: "HEAD" },
         timeoutMs: REDIRECT_TIMEOUT_MS,
-        policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
       },
       async ({ finalUrl }) => finalUrl || url,
     );

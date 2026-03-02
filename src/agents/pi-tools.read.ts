@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
-import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import {
+  SafeOpenError,
+  openFileWithinRoot,
+  readFileWithinRoot,
+  writeFileWithinRoot,
+} from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -823,15 +828,11 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativePathInRoot(root, absolutePath);
-      const opened = await openFileWithinRoot({
+      const safeRead = await readFileWithinRoot({
         rootDir: root,
         relativePath: relative,
       });
-      try {
-        return await opened.handle.readFile();
-      } finally {
-        await opened.handle.close().catch(() => {});
-      }
+      return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativePathInRoot(root, absolutePath);
@@ -843,7 +844,17 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      let relative: string;
+      try {
+        relative = toRelativePathInRoot(root, absolutePath);
+      } catch {
+        // Path escapes workspace root.  Don't throw here – the upstream
+        // library replaces any `access` error with a misleading "File not
+        // found" message.  By returning silently the subsequent `readFile`
+        // call will throw the same "Path escapes workspace root" error
+        // through a code-path that propagates the original message.
+        return;
+      }
       try {
         const opened = await openFileWithinRoot({
           rootDir: root,
@@ -855,7 +866,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
           throw createFsAccessError("ENOENT", absolutePath);
         }
         if (error instanceof SafeOpenError && error.code === "outside-workspace") {
-          throw createFsAccessError("EACCES", absolutePath);
+          // Don't throw here – see the comment above about the upstream
+          // library swallowing access errors as "File not found".
+          return;
         }
         throw error;
       }
