@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: fix `pnpm ui:build` and `pnpm ui:dev` crashing with `"createRequire" is not exported by "__vite-browser-external"` when building from source. Root cause: `imageResult`/`imageResultFromFile` in `agents/tools/common.ts` transitively imported Node.js-only logging/fs modules into the browser bundle. Extracted these server-only helpers to `agents/tools/image-result.ts` and added a Vite safety-net stub plugin and browser regression test.
 - Docker: pin base images to SHA256 digests in Docker builds to prevent mutable tag drift. (#7734) Thanks @coygeek.
 - Provider/HTTP: treat HTTP 503 as failover-eligible for LLM provider errors. (#21086) Thanks @Protocol-zero-0.
 
