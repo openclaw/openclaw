@@ -366,7 +366,6 @@ describe("applyMediaUnderstanding", () => {
       fileName: "voice-note",
       mediaType: " Audio/Ogg; codecs=opus ",
     });
-    ctx.ChatType = "direct";
     ctx.Surface = "whatsapp";
 
     const cfg: OpenClawConfig = {
@@ -377,10 +376,7 @@ describe("applyMediaUnderstanding", () => {
             maxBytes: 1024 * 1024,
             scope: {
               default: "deny",
-              rules: [
-                { action: "allow", match: { chatType: "direct" } },
-                { action: "allow", match: { channel: "whatsapp" } },
-              ],
+              rules: [{ action: "allow", match: { channel: "whatsapp" } }],
             },
             models: [{ provider: "groq" }],
           },
