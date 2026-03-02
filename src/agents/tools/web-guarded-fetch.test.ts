@@ -1,10 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
 import { withStrictWebToolsEndpoint, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 
-vi.mock("../../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: vi.fn(),
-}));
+vi.mock("../../infra/net/fetch-guard.js", () => {
+  const GUARDED_FETCH_MODE = {
+    STRICT: "strict",
+    TRUSTED_ENV_PROXY: "trusted_env_proxy",
+  } as const;
+  return {
+    GUARDED_FETCH_MODE,
+    fetchWithSsrFGuard: vi.fn(),
+    withStrictGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: GUARDED_FETCH_MODE.STRICT,
+    }),
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    }),
+  };
+});
 
 describe("web-guarded-fetch", () => {
   afterEach(() => {
@@ -27,8 +42,7 @@ describe("web-guarded-fetch", () => {
           dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
         }),
-        proxy: "env",
-        dangerouslyAllowEnvProxyWithoutPinnedDns: true,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       }),
     );
   });
@@ -49,7 +63,6 @@ describe("web-guarded-fetch", () => {
     );
     const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
     expect(call?.policy).toBeUndefined();
-    expect(call?.proxy).toBeUndefined();
-    expect(call?.dangerouslyAllowEnvProxyWithoutPinnedDns).toBeUndefined();
+    expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
   });
 });
