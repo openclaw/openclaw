@@ -49,15 +49,16 @@ export function toAgentStoreSessionKey(params: {
   mainKey?: string | undefined;
 }): string {
   const raw = (params.requestKey ?? "").trim();
-  if (!raw || raw === DEFAULT_MAIN_KEY) {
+  if (!raw || raw.toLowerCase() === DEFAULT_MAIN_KEY) {
     return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (parsed) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
   }
   const lowered = raw.toLowerCase();
   if (lowered.startsWith("agent:")) {
     return lowered;
-  }
-  if (lowered.startsWith("subagent:")) {
-    return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
   }
   return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
 }
@@ -96,6 +97,11 @@ export function normalizeAgentId(value: string | undefined | null): string {
       .replace(TRAILING_DASH_RE, "")
       .slice(0, 64) || DEFAULT_AGENT_ID
   );
+}
+
+export function isValidAgentId(value: string | undefined | null): boolean {
+  const trimmed = (value ?? "").trim();
+  return Boolean(trimmed) && VALID_ID_RE.test(trimmed);
 }
 
 export function sanitizeAgentId(value: string | undefined | null): string {

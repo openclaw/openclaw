@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -7,6 +6,7 @@ import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -23,6 +23,7 @@ import {
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
+const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
@@ -119,6 +120,18 @@ function compactExecEventOutput(raw: string) {
     return normalized;
   }
   const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
+  return `${normalized.slice(0, safe)}…`;
+}
+
+function compactNotificationEventText(raw: string) {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
+    return normalized;
+  }
+  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
   return `${normalized.slice(0, safe)}…`;
 }
 
@@ -232,13 +245,16 @@ async function sendReceiptAck(params: {
   if (!resolved.ok) {
     throw new Error(String(resolved.error));
   }
-  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
   await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
-    agentId,
+    session,
     bestEffort: true,
     deps: createOutboundSendDeps(params.deps),
   });
@@ -300,6 +316,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             sourceChannel: "voice",
             sourceTool: "gateway.voice.transcript",
           },
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
@@ -430,12 +447,53 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           timeout:
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
+          senderIsOwner: false,
         },
         defaultRuntime,
         ctx.deps,
       ).catch((err) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
+      return;
+    }
+    case "notifications.changed": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const change = normalizeNonEmptyString(obj.change)?.toLowerCase();
+      if (change !== "posted" && change !== "removed") {
+        return;
+      }
+      const key = normalizeNonEmptyString(obj.key);
+      if (!key) {
+        return;
+      }
+      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const packageName = normalizeNonEmptyString(obj.packageName);
+      const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
+
+      let summary = `Notification ${change} (node=${nodeId} key=${key}`;
+      if (packageName) {
+        summary += ` package=${packageName}`;
+      }
+      summary += ")";
+      if (change === "posted") {
+        const messageParts = [title, text].filter(Boolean);
+        if (messageParts.length > 0) {
+          summary += `: ${messageParts.join(" - ")}`;
+        }
+      }
+
+      const queued = enqueueSystemEvent(summary, {
+        sessionKey,
+        contextKey: `notification:${key}`,
+      });
+      if (queued) {
+        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+      }
       return;
     }
     case "chat.subscribe": {

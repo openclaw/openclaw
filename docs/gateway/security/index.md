@@ -206,6 +206,7 @@ Use this when auditing access or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
 ## Security Audit Checklist
@@ -685,9 +686,13 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
-protect local WS access.
+Note: `gateway.remote.token` / `.password` are client credential sources. They
+do **not** protect local WS access by themselves.
+Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
+is unset.
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
+Plaintext `ws://` is loopback-only by default. For trusted private-network
+paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
 
 Local device pairing:
 
@@ -720,6 +725,12 @@ and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 still require token/password auth.
+
+Important boundary note:
+
+- Gateway HTTP bearer auth is effectively all-or-nothing operator access.
+- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
@@ -760,7 +771,9 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
-- `agents/<agentId>/agent/auth-profiles.json`: API keys + OAuth tokens (imported from legacy `credentials/oauth.json`).
+- `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
+- `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
 - `extensions/**`: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
@@ -886,6 +899,15 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
 Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+
+### Sub-agent delegation guardrail
+
+If you allow session tools, treat delegated sub-agent runs as another boundary decision:
+
+- Deny `sessions_spawn` unless the agent truly needs delegation.
+- Keep `agents.list[].subagents.allowAgents` restricted to known-safe target agents.
+- For any workflow that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `inherit`).
+- `sandbox: "require"` fails fast when the target child runtime is not sandboxed.
 
 ## Browser control risks
 
@@ -1059,7 +1081,7 @@ If your AI does something bad:
 
 1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
-3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`).
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`, and encrypted secrets payload values when used).
 
 ### Audit
 

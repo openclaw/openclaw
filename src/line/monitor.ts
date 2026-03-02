@@ -288,6 +288,7 @@ export async function monitorLineProvider(
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
+    auth: "plugin",
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
