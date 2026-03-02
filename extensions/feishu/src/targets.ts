@@ -4,6 +4,10 @@ const CHAT_ID_PREFIX = "oc_";
 const OPEN_ID_PREFIX = "ou_";
 const USER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
+function stripProviderPrefix(raw: string): string {
+  return raw.replace(/^(feishu|lark):/i, "").trim();
+}
+
 export function detectIdType(id: string): FeishuIdType | null {
   const trimmed = id.trim();
   if (trimmed.startsWith(CHAT_ID_PREFIX)) {
@@ -24,18 +28,19 @@ export function normalizeFeishuTarget(raw: string): string | null {
     return null;
   }
 
-  const lowered = trimmed.toLowerCase();
+  const withoutProvider = stripProviderPrefix(trimmed);
+  const lowered = withoutProvider.toLowerCase();
   if (lowered.startsWith("chat:")) {
-    return trimmed.slice("chat:".length).trim() || null;
+    return withoutProvider.slice("chat:".length).trim() || null;
   }
   if (lowered.startsWith("user:")) {
-    return trimmed.slice("user:".length).trim() || null;
+    return withoutProvider.slice("user:".length).trim() || null;
   }
   if (lowered.startsWith("open_id:")) {
-    return trimmed.slice("open_id:".length).trim() || null;
+    return withoutProvider.slice("open_id:".length).trim() || null;
   }
 
-  return trimmed;
+  return withoutProvider;
 }
 
 export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
@@ -61,7 +66,7 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
 }
 
 export function looksLikeFeishuId(raw: string): boolean {
-  const trimmed = raw.trim();
+  const trimmed = stripProviderPrefix(raw.trim());
   if (!trimmed) {
     return false;
   }
