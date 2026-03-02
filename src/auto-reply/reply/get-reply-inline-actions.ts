@@ -286,7 +286,8 @@ export async function handleInlineActions(params: {
 
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
-      ? extractInlineSimpleCommand(cleanedBody)
+      ? (extractInlineSimpleCommand(cleanedBody) ??
+        extractInlineSimpleCommand(command.rawBodyNormalized))
       : null;
   if (inlineCommand) {
     cleanedBody = inlineCommand.cleaned;
@@ -361,6 +362,7 @@ export async function handleInlineActions(params: {
       skillCommands,
     });
 
+  const primaryCommandInput = command;
   if (inlineCommand) {
     const inlineCommandContext = {
       ...command,
@@ -368,12 +370,9 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await runCommands(inlineCommandContext);
-    if (inlineResult.reply) {
-      if (!inlineCommand.cleaned) {
-        typing.cleanup();
-        return { kind: "reply", reply: inlineResult.reply };
-      }
-      await sendInlineReply(inlineResult.reply);
+    if (!inlineResult.shouldContinue) {
+      typing.cleanup();
+      return { kind: "reply", reply: inlineResult.reply };
     }
   }
 
@@ -401,7 +400,7 @@ export async function handleInlineActions(params: {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
   }
 
-  const commandResult = await runCommands(command);
+  const commandResult = await runCommands(primaryCommandInput);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: commandResult.reply };

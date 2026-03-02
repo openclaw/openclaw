@@ -221,4 +221,89 @@ describe("handleInlineActions", () => {
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
   });
+
+  it("hard-stops when inline command returns shouldContinue=false", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "help" },
+    });
+
+    const ctx = buildTestCtx({
+      Body: "/help hello",
+      CommandBody: "/help hello",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/help hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-inline",
+          rawBodyNormalized: "/help hello",
+          commandBodyNormalized: "/help hello",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "help" } });
+    expect(typing.cleanup).toHaveBeenCalled();
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({
+          commandBodyNormalized: "/help",
+          rawBodyNormalized: "/help",
+        }),
+      }),
+    );
+  });
+
+  it("detects inline command from rawBodyNormalized fallback", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "help" },
+    });
+
+    const ctx = buildTestCtx({
+      Body: "help panel", // cleaned body can lose slash command on some surfaces
+      CommandBody: "help panel",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "help panel",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-inline-raw",
+          rawBodyNormalized: "/help",
+          commandBodyNormalized: "help panel",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "help" } });
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({
+          commandBodyNormalized: "/help",
+          rawBodyNormalized: "/help",
+        }),
+      }),
+    );
+  });
 });
