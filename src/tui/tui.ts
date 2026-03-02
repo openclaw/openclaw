@@ -794,6 +794,10 @@ export async function runTui(opts: TuiOptions) {
       return;
     }
     exitRequested = true;
+    if (sessionInfoRefreshTimer) {
+      clearInterval(sessionInfoRefreshTimer);
+      sessionInfoRefreshTimer = null;
+    }
     client.stop();
     stopTuiSafely(() => tui.stop());
     process.exit(0);
@@ -842,15 +846,6 @@ export async function runTui(opts: TuiOptions) {
 
   editor.onEscape = () => {
     void abortActive();
-  };
-  const cleanupAndExit = () => {
-    if (sessionInfoRefreshTimer) {
-      clearInterval(sessionInfoRefreshTimer);
-      sessionInfoRefreshTimer = null;
-    }
-    client.stop();
-    tui.stop();
-    process.exit(0);
   };
   const handleCtrlC = () => {
     const now = Date.now();
