@@ -4,9 +4,9 @@
  * prependContext so the agent sees that user's preferences each turn.
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 /** Sanitize session key for use as a filename (e.g. agent:main:dm:alice -> dm_alice). */
 function sanitizeSessionKey(sessionKey: string): string {

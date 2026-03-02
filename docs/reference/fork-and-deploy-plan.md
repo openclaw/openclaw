@@ -119,7 +119,7 @@ Choose one of the following (or both). The goal is: **one canonical way** to go 
 
 ### Option A — Documented steps (no new script)
 
-- **Location**: Keep using the existing [GCP doc](/platforms/gcp) and [GCP VM deployment](/platforms/gcp-vm).
+- **Location**: Keep using the existing [GCP doc](/platforms/gcp) and [Docker install](/install/docker).
 - **Change**: In the “Clone OpenClaw” step, document that for this deployment we clone **the fork** and **branch/tag**:
   - Clone URL: `https://github.com/YOUR_ORG/openclaw.git`
   - Branch or tag: `deploy/gidr-demo` or `v2026.2.1-gidr.1`
@@ -195,7 +195,7 @@ Execute in this order:
 ## 9. Doc links
 
 - [GCP platform guide](/platforms/gcp) — Full GCP setup; includes gidr-demo / openclaw-gateway example.
-- [GCP VM deployment](/platforms/gcp-vm) — Docker Compose, VM layout, **multiple instances** (docker-compose.multi.yml), and **manage-multi.sh** to maintain many containers on one VM.
+- [Docker install](/install/docker) — Docker Compose setup and configuration.
 - [Docker install](/install/docker) — Generic Docker-based install.
 - [Slash commands](/tools/slash-commands) — Includes `/firstlight` when the firstlight skill is loaded.
 
