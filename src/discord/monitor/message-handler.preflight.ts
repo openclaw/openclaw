@@ -176,6 +176,11 @@ export async function preflightDiscordMessage(
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
+  if (allowNameMatching) {
+    logVerbose(
+      "discord: dangerouslyAllowNameMatching is enabled — sender authorization will match mutable display names/tags in addition to immutable user IDs",
+    );
+  }
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (dmPolicy === "disabled") {

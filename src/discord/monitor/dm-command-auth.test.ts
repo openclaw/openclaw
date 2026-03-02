@@ -98,4 +98,59 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.decision).toBe("allow");
     expect(result.commandAuthorized).toBe(true);
   });
+
+  it("rejects sender whose display name matches owner but has different snowflake ID", async () => {
+    // Owner "alice" has snowflake ID "456". An attacker changes their Discord
+    // display name to "alice" but has snowflake ID "123" — must be rejected.
+    const attacker = { id: "123", name: "alice", tag: "alice" };
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "pairing",
+      configuredAllowFrom: ["discord:456"],
+      sender: attacker,
+      allowNameMatching: false,
+      useAccessGroups: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.decision).toBe("pairing");
+    expect(result.commandAuthorized).toBe(false);
+  });
+
+  it("rejects name-only allowlist entries when allowNameMatching is disabled", async () => {
+    // Config has a username "alice" in allowFrom (no numeric ID).
+    // A sender whose username is "alice" but has a different ID must be
+    // rejected when dangerouslyAllowNameMatching is false.
+    const spoofingSender = { id: "999", name: "alice", tag: "alice" };
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "pairing",
+      configuredAllowFrom: ["alice"],
+      sender: spoofingSender,
+      allowNameMatching: false,
+      useAccessGroups: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.decision).toBe("pairing");
+    expect(result.commandAuthorized).toBe(false);
+    expect(result.allowMatch.allowed).toBe(false);
+  });
+
+  it("allows name-matching only when dangerouslyAllowNameMatching is true", async () => {
+    const spoofingSender = { id: "999", name: "alice", tag: "alice" };
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "pairing",
+      configuredAllowFrom: ["alice"],
+      sender: spoofingSender,
+      allowNameMatching: true,
+      useAccessGroups: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.decision).toBe("allow");
+    expect(result.commandAuthorized).toBe(true);
+    expect(result.allowMatch.allowed).toBe(true);
+  });
 });

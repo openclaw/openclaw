@@ -506,6 +506,7 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true } as DiscordChannelConfigResolved,
       sender: { id: "123" },
+      allowNameMatching: false,
     });
 
     expect(result).toBeUndefined();
@@ -515,6 +516,7 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["*"] } as DiscordChannelConfigResolved,
       sender: { id: "123" },
+      allowNameMatching: false,
     });
 
     expect(result).toBeUndefined();
@@ -524,6 +526,7 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["123"] } as DiscordChannelConfigResolved,
       sender: { id: "123" },
+      allowNameMatching: false,
     });
 
     expect(result).toEqual(["123"]);
@@ -533,6 +536,7 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
+      allowNameMatching: false,
     });
     expect(defaultResult).toBeUndefined();
 
@@ -591,6 +595,7 @@ describe("resolveDiscordMemberAllowed", () => {
       roleAllowList: undefined,
       memberRoleIds: [],
       userId: "u1",
+      allowNameMatching: false,
     });
 
     expect(allowed).toBe(true);
@@ -602,6 +607,7 @@ describe("resolveDiscordMemberAllowed", () => {
       roleAllowList: ["456"],
       memberRoleIds: ["999"],
       userId: "123",
+      allowNameMatching: false,
     });
 
     expect(allowed).toBe(true);
@@ -613,6 +619,7 @@ describe("resolveDiscordMemberAllowed", () => {
       roleAllowList: ["456"],
       memberRoleIds: ["456"],
       userId: "123",
+      allowNameMatching: false,
     });
 
     expect(allowed).toBe(true);
@@ -624,6 +631,7 @@ describe("resolveDiscordMemberAllowed", () => {
       roleAllowList: ["role-2"],
       memberRoleIds: ["role-1"],
       userId: "u1",
+      allowNameMatching: false,
     });
 
     expect(allowed).toBe(false);

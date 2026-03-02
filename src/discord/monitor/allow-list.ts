@@ -95,10 +95,15 @@ export function normalizeDiscordSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
+// Security: allowNameMatching is intentionally required (not optional) to force
+// every call site to explicitly decide whether mutable name/tag matching is
+// permitted. Omitting this parameter would silently default to a safe value,
+// but requiring it prevents accidental regressions — callers must consciously
+// pass the result of isDangerousNameMatchingEnabled().
 export function allowListMatches(
   list: DiscordAllowList,
   candidate: { id?: string; name?: string; tag?: string },
-  params?: { allowNameMatching?: boolean },
+  params: { allowNameMatching: boolean },
 ) {
   if (list.allowAll) {
     return true;
@@ -106,7 +111,7 @@ export function allowListMatches(
   if (candidate.id && list.ids.has(candidate.id)) {
     return true;
   }
-  if (params?.allowNameMatching === true) {
+  if (params.allowNameMatching) {
     const slug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
     if (slug && list.names.has(slug)) {
       return true;
@@ -121,7 +126,7 @@ export function allowListMatches(
 export function resolveDiscordAllowListMatch(params: {
   allowList: DiscordAllowList;
   candidate: { id?: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }): DiscordAllowListMatch {
   const { allowList, candidate } = params;
   if (allowList.allowAll) {
@@ -130,7 +135,7 @@ export function resolveDiscordAllowListMatch(params: {
   if (candidate.id && allowList.ids.has(candidate.id)) {
     return { allowed: true, matchKey: candidate.id, matchSource: "id" };
   }
-  if (params.allowNameMatching === true) {
+  if (params.allowNameMatching) {
     const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
     if (nameSlug && allowList.names.has(nameSlug)) {
       return { allowed: true, matchKey: nameSlug, matchSource: "name" };
@@ -148,7 +153,7 @@ export function resolveDiscordUserAllowed(params: {
   userId: string;
   userName?: string;
   userTag?: string;
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }) {
   const allowList = normalizeDiscordAllowList(params.allowList, ["discord:", "user:", "pk:"]);
   if (!allowList) {
@@ -187,7 +192,7 @@ export function resolveDiscordMemberAllowed(params: {
   userId: string;
   userName?: string;
   userTag?: string;
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }) {
   const hasUserRestriction = Array.isArray(params.userAllowList) && params.userAllowList.length > 0;
   const hasRoleRestriction = Array.isArray(params.roleAllowList) && params.roleAllowList.length > 0;
@@ -217,7 +222,7 @@ export function resolveDiscordMemberAccessState(params: {
   guildInfo?: DiscordGuildEntryResolved | null;
   memberRoleIds: string[];
   sender: { id: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }) {
   const channelUsers = params.channelConfig?.users ?? params.guildInfo?.users;
   const channelRoles = params.channelConfig?.roles ?? params.guildInfo?.roles;
@@ -240,7 +245,7 @@ export function resolveDiscordOwnerAllowFrom(params: {
   channelConfig?: DiscordChannelConfigResolved | null;
   guildInfo?: DiscordGuildEntryResolved | null;
   sender: { id: string; name?: string; tag?: string };
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }): string[] | undefined {
   const rawAllowList = params.channelConfig?.users ?? params.guildInfo?.users;
   if (!Array.isArray(rawAllowList) || rawAllowList.length === 0) {
@@ -270,7 +275,7 @@ export function resolveDiscordCommandAuthorized(params: {
   allowFrom?: string[];
   guildInfo?: DiscordGuildEntryResolved | null;
   author: User;
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }) {
   if (!params.isDirectMessage) {
     return true;
@@ -523,7 +528,7 @@ export function shouldEmitDiscordReactionNotification(params: {
   userName?: string;
   userTag?: string;
   allowlist?: string[];
-  allowNameMatching?: boolean;
+  allowNameMatching: boolean;
 }) {
   const mode = params.mode ?? "own";
   if (mode === "off") {

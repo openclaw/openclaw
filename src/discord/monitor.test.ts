@@ -226,14 +226,16 @@ describe("discord allowlist helpers", () => {
     if (!allow) {
       throw new Error("Expected allow list to be normalized");
     }
-    expect(allowListMatches(allow, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
+    expect(allowListMatches(allow, { id: "123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: false })).toBe(false);
+    expect(
+      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: false }),
+    ).toBe(false);
     expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
     expect(
       allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
     ).toBe(true);
-    expect(allowListMatches(allow, { name: "other" })).toBe(false);
+    expect(allowListMatches(allow, { name: "other" }, { allowNameMatching: false })).toBe(false);
   });
 
   it("matches pk-prefixed allowlist entries", () => {
@@ -242,8 +244,62 @@ describe("discord allowlist helpers", () => {
     if (!allow) {
       throw new Error("Expected allow list to be normalized");
     }
-    expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
-    expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+    expect(allowListMatches(allow, { id: "member-123" }, { allowNameMatching: false })).toBe(true);
+    expect(allowListMatches(allow, { id: "member-999" }, { allowNameMatching: false })).toBe(false);
+  });
+
+  it("rejects user with matching display name but different snowflake ID (name spoofing)", () => {
+    // Owner "alice" has snowflake ID "111222333". An attacker changes their
+    // Discord display name to "alice" but has a different snowflake ID.
+    const allow = normalizeDiscordAllowList(["111222333", "alice"], ["discord:", "user:", "pk:"]);
+    expect(allow).not.toBeNull();
+    if (!allow) {
+      throw new Error("Expected allow list to be normalized");
+    }
+
+    // Real owner: ID match succeeds
+    expect(
+      allowListMatches(
+        allow,
+        { id: "111222333", name: "alice", tag: "alice" },
+        { allowNameMatching: false },
+      ),
+    ).toBe(true);
+
+    // Attacker: same display name, different ID — MUST be rejected
+    expect(
+      allowListMatches(
+        allow,
+        { id: "999888777", name: "alice", tag: "alice" },
+        { allowNameMatching: false },
+      ),
+    ).toBe(false);
+
+    // Attacker with name matching explicitly enabled (break-glass) — allowed
+    expect(
+      allowListMatches(
+        allow,
+        { id: "999888777", name: "alice", tag: "alice" },
+        { allowNameMatching: true },
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects user whose tag matches an allowlist entry when name matching is off", () => {
+    const allow = normalizeDiscordAllowList(["owner#1234"], ["discord:", "user:", "pk:"]);
+    expect(allow).not.toBeNull();
+    if (!allow) {
+      throw new Error("Expected allow list to be normalized");
+    }
+
+    // Attacker spoofs tag: different ID, matching tag — rejected
+    expect(
+      allowListMatches(
+        allow,
+        { id: "999", name: "owner", tag: "owner#1234" },
+        { allowNameMatching: false },
+      ),
+    ).toBe(false);
   });
 });
 
@@ -711,6 +767,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-1",
+          allowNameMatching: false,
         },
         expected: true,
       },
@@ -721,6 +778,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
+          allowNameMatching: false,
         },
         expected: false,
       },
@@ -731,6 +789,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-1",
+          allowNameMatching: false,
         },
         expected: false,
       },
@@ -741,6 +800,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "user-1",
           userId: "user-2",
+          allowNameMatching: false,
         },
         expected: true,
       },
@@ -751,6 +811,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "bot-1",
           userId: "user-2",
+          allowNameMatching: false,
         },
         expected: true,
       },
@@ -761,6 +822,7 @@ describe("discord reaction notification gating", () => {
           botId: "bot-1",
           messageAuthorId: "user-2",
           userId: "user-3",
+          allowNameMatching: false,
         },
         expected: false,
       },
@@ -772,6 +834,7 @@ describe("discord reaction notification gating", () => {
           messageAuthorId: "user-1",
           userId: "user-2",
           allowlist: [] as string[],
+          allowNameMatching: false,
         },
         expected: false,
       },
@@ -784,6 +847,7 @@ describe("discord reaction notification gating", () => {
           userId: "123",
           userName: "steipete",
           allowlist: ["123", "other"] as string[],
+          allowNameMatching: false,
         },
         expected: true,
       },
@@ -796,6 +860,7 @@ describe("discord reaction notification gating", () => {
           userId: "999",
           userName: "trusted-user",
           allowlist: ["trusted-user"] as string[],
+          allowNameMatching: false,
         },
         expected: false,
       },
