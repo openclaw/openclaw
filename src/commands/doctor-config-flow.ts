@@ -1267,10 +1267,34 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
 
   const warnings: string[] = [];
 
+  const usesSenderBasedGroupAllowlist = (channelName?: string): boolean => {
+    if (!channelName) {
+      return true;
+    }
+    // These channels enforce group access via channel/space config, not sender-based
+    // groupAllowFrom lists.
+    return !(channelName === "discord" || channelName === "slack" || channelName === "googlechat");
+  };
+
+  const allowsGroupAllowFromFallback = (channelName?: string): boolean => {
+    if (!channelName) {
+      return true;
+    }
+    // Keep doctor warnings aligned with runtime access semantics.
+    return !(
+      channelName === "googlechat" ||
+      channelName === "imessage" ||
+      channelName === "matrix" ||
+      channelName === "msteams" ||
+      channelName === "irc"
+    );
+  };
+
   const checkAccount = (
     account: Record<string, unknown>,
     prefix: string,
     parent?: Record<string, unknown>,
+    channelName?: string,
   ) => {
     const dmEntry = account.dm;
     const dm =
@@ -1289,10 +1313,6 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       (parentDm?.policy as string | undefined) ??
       undefined;
 
-    if (dmPolicy !== "allowlist") {
-      return;
-    }
-
     const topAllowFrom =
       (account.allowFrom as Array<string | number> | undefined) ??
       (parent?.allowFrom as Array<string | number> | undefined);
@@ -1300,13 +1320,40 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
     const effectiveAllowFrom = topAllowFrom ?? nestedAllowFrom ?? parentNestedAllowFrom;
 
-    if (hasAllowFromEntries(effectiveAllowFrom)) {
-      return;
+    if (dmPolicy === "allowlist" && !hasAllowFromEntries(effectiveAllowFrom)) {
+      warnings.push(
+        `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${formatCliCommand("openclaw doctor --fix")}" to auto-migrate from pairing store when entries exist.`,
+      );
     }
 
-    warnings.push(
-      `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${formatCliCommand("openclaw doctor --fix")}" to auto-migrate from pairing store when entries exist.`,
-    );
+    const groupPolicy =
+      (account.groupPolicy as string | undefined) ??
+      (parent?.groupPolicy as string | undefined) ??
+      undefined;
+
+    if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
+      const rawGroupAllowFrom =
+        (account.groupAllowFrom as Array<string | number> | undefined) ??
+        (parent?.groupAllowFrom as Array<string | number> | undefined);
+      // Match runtime semantics: resolveGroupAllowFromSources treats
+      // empty arrays as unset and falls back to allowFrom.
+      const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
+      const fallbackToAllowFrom = allowsGroupAllowFromFallback(channelName);
+      const effectiveGroupAllowFrom =
+        groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
+
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
+        if (fallbackToAllowFrom) {
+          warnings.push(
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
+          );
+        } else {
+          warnings.push(
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+          );
+        }
+      }
+    }
   };
 
   for (const [channelName, channelConfig] of Object.entries(
@@ -1315,7 +1362,7 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`);
+    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
 
     const accounts = channelConfig.accounts;
     if (accounts && typeof accounts === "object") {
@@ -1325,7 +1372,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         if (!account || typeof account !== "object") {
           continue;
         }
-        checkAccount(account, `channels.${channelName}.accounts.${accountId}`, channelConfig);
+        checkAccount(
+          account,
+          `channels.${channelName}.accounts.${accountId}`,
+          channelConfig,
+          channelName,
+        );
       }
     }
   }
