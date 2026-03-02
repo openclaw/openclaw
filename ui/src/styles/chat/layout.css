@@ -176,10 +176,23 @@
   background: var(--bg);
 }
 
-.chat-attachment__img {
+.chat-attachment__img,
+.chat-attachment__file {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.chat-attachment__file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.chat-attachment__file svg {
+  width: 32px;
+  height: 32px;
 }
 
 .chat-attachment__remove {
