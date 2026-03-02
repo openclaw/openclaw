@@ -1,14 +1,9 @@
 import {
   defaultTitle,
+  formatToolDetailText,
   normalizeToolName,
-  normalizeVerb,
-  resolveActionSpec,
-  resolveDetailFromKeys,
-  resolveExecDetail,
-  resolveReadDetail,
-  resolveWebFetchDetail,
-  resolveWebSearchDetail,
-  resolveWriteDetail,
+  resolveActionArg,
+  resolveToolVerbAndDetail,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
@@ -69,50 +64,17 @@ export function resolveToolDisplay(params: {
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const actionRaw =
-    params.args && typeof params.args === "object"
-      ? ((params.args as Record<string, unknown>).action as string | undefined)
-      : undefined;
-  const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
-  const actionSpec = resolveActionSpec(spec, action);
-  const fallbackVerb =
-    key === "web_search"
-      ? "search"
-      : key === "web_fetch"
-        ? "fetch"
-        : key.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
-
-  let detail: string | undefined;
-  if (key === "exec") {
-    detail = resolveExecDetail(params.args);
-  }
-  if (!detail && key === "read") {
-    detail = resolveReadDetail(params.args);
-  }
-  if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(key, params.args);
-  }
-
-  if (!detail && key === "web_search") {
-    detail = resolveWebSearchDetail(params.args);
-  }
-
-  if (!detail && key === "web_fetch") {
-    detail = resolveWebFetchDetail(params.args);
-  }
-
-  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
-  if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(params.args, detailKeys, {
-      mode: "first",
-      coerce: { includeFalse: true, includeZero: true },
-    });
-  }
-
-  if (!detail && params.meta) {
-    detail = params.meta;
-  }
+  const action = resolveActionArg(params.args);
+  let { verb, detail } = resolveToolVerbAndDetail({
+    toolKey: key,
+    args: params.args,
+    meta: params.meta,
+    action,
+    spec,
+    fallbackDetailKeys: FALLBACK.detailKeys,
+    detailMode: "first",
+    detailCoerce: { includeFalse: true, includeZero: true },
+  });
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -129,18 +91,7 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  if (!display.detail) {
-    return undefined;
-  }
-  if (display.detail.includes(" · ")) {
-    const compact = display.detail
-      .split(" · ")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join(", ");
-    return compact ? `with ${compact}` : undefined;
-  }
-  return display.detail;
+  return formatToolDetailText(display.detail, { prefixWithWith: true });
 }
 
 export function formatToolSummary(display: ToolDisplay): string {

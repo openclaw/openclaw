@@ -89,17 +89,29 @@ function makeConfigWithProvider(): Record<string, unknown> {
   };
 }
 
+function getFirstXaiModel(payload: Record<string, unknown>): Record<string, unknown> {
+  const model = payload.models as Record<string, unknown>;
+  const providers = model.providers as Record<string, unknown>;
+  const xai = providers.xai as Record<string, unknown>;
+  const models = xai.models as Array<Record<string, unknown>>;
+  return models[0] ?? {};
+}
+
+function expectNumericModelCore(model: Record<string, unknown>) {
+  expect(typeof model.maxTokens).toBe("number");
+  expect(model.maxTokens).toBe(8192);
+  expect(typeof model.contextWindow).toBe("number");
+  expect(model.contextWindow).toBe(131072);
+}
+
 describe("form-utils preserves numeric types", () => {
   it("serializeConfigForm preserves numbers in JSON output", () => {
     const form = makeConfigWithProvider();
     const raw = serializeConfigForm(form);
     const parsed = JSON.parse(raw);
-    const model = parsed.models.providers.xai.models[0];
+    const model = parsed.models.providers.xai.models[0] as Record<string, unknown>;
 
-    expect(typeof model.maxTokens).toBe("number");
-    expect(model.maxTokens).toBe(8192);
-    expect(typeof model.contextWindow).toBe("number");
-    expect(model.contextWindow).toBe(131072);
+    expectNumericModelCore(model);
     expect(typeof model.cost.input).toBe("number");
     expect(model.cost.input).toBe(0.5);
   });
@@ -108,16 +120,9 @@ describe("form-utils preserves numeric types", () => {
     const form = makeConfigWithProvider();
     const cloned = cloneConfigObject(form);
     setPathValue(cloned, ["gateway", "auth", "token"], "new-token");
+    const first = getFirstXaiModel(cloned);
 
-    const model = cloned.models as Record<string, unknown>;
-    const providers = model.providers as Record<string, unknown>;
-    const xai = providers.xai as Record<string, unknown>;
-    const models = xai.models as Array<Record<string, unknown>>;
-    const first = models[0];
-
-    expect(typeof first.maxTokens).toBe("number");
-    expect(first.maxTokens).toBe(8192);
-    expect(typeof first.contextWindow).toBe("number");
+    expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
   });
@@ -145,16 +150,9 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
+    const first = getFirstXaiModel(coerced);
 
-    expect(typeof first.maxTokens).toBe("number");
-    expect(first.maxTokens).toBe(8192);
-    expect(typeof first.contextWindow).toBe("number");
-    expect(first.contextWindow).toBe(131072);
+    expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     const cost = first.cost as Record<string, number>;
     expect(typeof cost.input).toBe("number");
@@ -170,12 +168,7 @@ describe("coerceFormValues", () => {
   it("preserves already-correct numeric values", () => {
     const form = makeConfigWithProvider();
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
-
+    const first = getFirstXaiModel(coerced);
     expect(typeof first.maxTokens).toBe("number");
     expect(first.maxTokens).toBe(8192);
   });
@@ -199,11 +192,7 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    const first = model[0];
+    const first = getFirstXaiModel(coerced);
 
     expect(first.maxTokens).toBe("not-a-number");
   });
@@ -227,11 +216,8 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    expect(model[0].reasoning).toBe(true);
+    const first = getFirstXaiModel(coerced);
+    expect(first.reasoning).toBe(true);
   });
 
   it("handles empty string for number fields as undefined", () => {
@@ -253,11 +239,8 @@ describe("coerceFormValues", () => {
     };
 
     const coerced = coerceFormValues(form, topLevelSchema) as Record<string, unknown>;
-    const model = (
-      ((coerced.models as Record<string, unknown>).providers as Record<string, unknown>)
-        .xai as Record<string, unknown>
-    ).models as Array<Record<string, unknown>>;
-    expect(model[0].maxTokens).toBeUndefined();
+    const first = getFirstXaiModel(coerced);
+    expect(first.maxTokens).toBeUndefined();
   });
 
   it("passes through null and undefined values untouched", () => {
