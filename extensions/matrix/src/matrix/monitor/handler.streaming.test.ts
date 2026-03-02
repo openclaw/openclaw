@@ -352,9 +352,10 @@ describe("createMatrixRoomMessageHandler streaming behaviour", () => {
     expect(mockDraftStream.finalize).not.toHaveBeenCalled();
   });
 
-  it("streaming enabled: outer finalize() called when deliver did not finalize in-place", async () => {
-    // When getEventId() returns null (stream not started yet), deliver falls through
-    // to normal delivery and the outer finalize() is called to clean up.
+  it("streaming enabled: outer finalize() skipped when no draft event was created (prevents duplicate messages)", async () => {
+    // When getEventId() returns null (reply finished before first throttled send),
+    // deliver() already fell through to deliverMatrixReplies(). Calling finalize()
+    // here would flush pending text as a duplicate second message.
     const draftStreamMock = {
       update: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
@@ -375,8 +376,8 @@ describe("createMatrixRoomMessageHandler streaming behaviour", () => {
     const handler = createMatrixRoomMessageHandler(params);
     await handler("!room:example.org", buildRoomMessageEvent());
 
-    // When stream has no event, outer finalize() should be called
-    expect(draftStreamMock.finalize).toHaveBeenCalledTimes(1);
+    // finalize() must NOT be called when no draft event exists — prevents duplicate messages
+    expect(draftStreamMock.finalize).not.toHaveBeenCalled();
     expect(draftStreamMock.stop).not.toHaveBeenCalled();
   });
 });

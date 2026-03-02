@@ -727,7 +727,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
           }),
       });
-      if (draftStream && !draftFinalized) {
+      // Only finalize if a draft message was actually created (getEventId !== null).
+      // If the reply finished before the first throttled send, deliver() already
+      // fell through to deliverMatrixReplies(); finalizing here would flush pending
+      // text as a duplicate second message.
+      if (draftStream && !draftFinalized && draftStream.getEventId()) {
         await draftStream.finalize();
       }
       if (!queuedFinal) {

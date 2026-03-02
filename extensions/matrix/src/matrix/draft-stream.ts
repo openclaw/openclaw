@@ -48,7 +48,7 @@ export function createMatrixDraftStream(params: {
     if (wire === lastSentText) {
       return;
     }
-    lastSentText = wire;
+    const prevSentText = lastSentText;
     try {
       let result: MatrixSendResult;
       if (eventId === null) {
@@ -63,7 +63,12 @@ export function createMatrixDraftStream(params: {
           accountId: params.accountId,
         });
       }
+      // Only mark as sent after successful network call so transient failures
+      // don't prevent retries (the dedup check compares against lastSentText).
+      lastSentText = wire;
     } catch (err) {
+      // Reset to previous value so the same text can be retried on next update.
+      lastSentText = prevSentText;
       params.warn?.(
         `matrix draft stream error: ${err instanceof Error ? err.message : String(err)}`,
       );

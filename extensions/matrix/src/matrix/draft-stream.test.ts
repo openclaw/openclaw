@@ -296,4 +296,29 @@ describe("createMatrixDraftStream", () => {
     expect(stopResolved).toBe(true);
     // Caller can now safely send the final edit — no concurrent cursor edit
   });
+
+  it("retries update after transient send failure (lastSentText not poisoned)", async () => {
+    const throttleMs = 800;
+    const _send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient network error"))
+      .mockResolvedValueOnce({ messageId: "evt-retry", roomId: ROOM_ID });
+    const _edit = vi.fn().mockResolvedValue({ messageId: "evt-edit", roomId: ROOM_ID });
+    const warn = vi.fn();
+    const stream = createMatrixDraftStream({ roomId: ROOM_ID, throttleMs, _send, _edit, warn });
+
+    // First update fails
+    stream.update("hello");
+    await vi.advanceTimersByTimeAsync(throttleMs);
+    await vi.runAllTimersAsync();
+    expect(_send).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+
+    // Same text update should retry (not be deduped) because lastSentText was reset
+    stream.update("hello");
+    await vi.advanceTimersByTimeAsync(throttleMs);
+    await vi.runAllTimersAsync();
+    expect(_send).toHaveBeenCalledTimes(2);
+    expect(stream.getEventId()).toBe("evt-retry");
+  });
 });
