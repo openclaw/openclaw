@@ -11,8 +11,9 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeChannelId as normalizePluginChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChannelId as normalizeCoreChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
@@ -498,7 +499,25 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+  const normalized = channel?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  // TTS runs in contexts where plugin registry boot may lag behind channel dispatch.
+  // Keep core/voice-bubble channels resolvable without plugin registry data.
+  if (normalized === "lark") {
+    return "feishu";
+  }
+  if (VOICE_BUBBLE_CHANNELS.has(normalized)) {
+    return normalized;
+  }
+
+  const coreChannelId = normalizeCoreChannelId(normalized);
+  if (coreChannelId) {
+    return coreChannelId;
+  }
+  return normalizePluginChannelId(normalized);
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
@@ -955,5 +974,6 @@ export const _test = {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveChannelId,
   resolveEdgeOutputFormat,
 };

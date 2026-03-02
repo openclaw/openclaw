@@ -52,6 +52,7 @@ const {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveChannelId,
   resolveEdgeOutputFormat,
 } = _test;
 
@@ -199,6 +200,24 @@ describe("tts", () => {
         expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
         expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
         expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
+      }
+    });
+  });
+
+  describe("resolveChannelId", () => {
+    it("normalizes core and voice-bubble channels without requiring plugin registry state", () => {
+      const cases = [
+        { input: "whatsapp", expected: "whatsapp" },
+        { input: "Telegram", expected: "telegram" },
+        { input: "feishu", expected: "feishu" },
+        { input: "lark", expected: "feishu" },
+        { input: "discord", expected: "discord" },
+        { input: "   ", expected: null },
+        { input: undefined, expected: null },
+      ] as const;
+
+      for (const testCase of cases) {
+        expect(resolveChannelId(testCase.input), String(testCase.input)).toBe(testCase.expected);
       }
     });
   });
