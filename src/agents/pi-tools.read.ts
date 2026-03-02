@@ -761,7 +761,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
+    // When workspaceOnly is true, enforce workspace boundary
     return {
       mkdir: async (dir: string) => {
         const resolved = path.resolve(dir);
@@ -800,7 +800,7 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
+    // When workspaceOnly is true, enforce workspace boundary
     return {
       readFile: async (absolutePath: string) => {
         const resolved = path.resolve(absolutePath);
