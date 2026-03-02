@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
@@ -288,7 +289,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
   const { server, ws, port, prevToken } = await startServerWithClient();
   const deviceIdentityPath = path.join(
     os.tmpdir(),
-    `openclaw-auth-rate-limit-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    "openclaw-auth-rate-limit-" + randomUUID() + ".json",
   );
   try {
     const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
@@ -322,7 +323,7 @@ async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise
 
   const deviceIdentityPath = path.join(
     os.tmpdir(),
-    `openclaw-auth-device-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    "openclaw-auth-device-" + randomUUID() + ".json",
   );
 
   const res = await connectReq(ws, { token: "secret", deviceIdentityPath });
