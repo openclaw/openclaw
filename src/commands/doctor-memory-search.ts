@@ -44,7 +44,25 @@ export async function noteMemorySearchHealth(
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
       if (hasLocalEmbeddings(resolved.local, true)) {
-        return; // local model file exists (or default model will be auto-downloaded)
+        // Model path looks valid (explicit file, hf: URL, or default model).
+        // If a gateway probe is available and reports not-ready, warn anyway —
+        // the model download or node-llama-cpp setup may have failed at runtime.
+        if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
+          const detail = opts.gatewayMemoryProbe.error?.trim();
+          note(
+            [
+              'Memory search provider is set to "local" and a model path is configured,',
+              "but the gateway reports local embeddings are not ready.",
+              detail ? `Gateway probe: ${detail}` : null,
+              "",
+              `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            "Memory search",
+          );
+        }
+        return;
       }
       note(
         [

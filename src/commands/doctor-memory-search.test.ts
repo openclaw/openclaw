@@ -72,6 +72,37 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("warns when local provider with default model but gateway probe reports not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: false, error: "node-llama-cpp not installed" },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("gateway reports local embeddings are not ready");
+    expect(message).toContain("node-llama-cpp not installed");
+  });
+
+  it("does not warn when local provider with default model and gateway probe is ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when local provider has an explicit hf: modelPath", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
