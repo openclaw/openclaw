@@ -15,7 +15,7 @@ import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
   abortChatRunsForSessionKey,
@@ -794,6 +794,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      const routeChannelCandidate = normalizeMessageChannel(
+        entry?.deliveryContext?.channel ?? entry?.lastChannel,
+      );
+      const routeToCandidate = entry?.deliveryContext?.to ?? entry?.lastTo;
+      const routeAccountIdCandidate =
+        entry?.deliveryContext?.accountId ?? entry?.lastAccountId ?? undefined;
+      const routeThreadIdCandidate = entry?.deliveryContext?.threadId ?? entry?.lastThreadId;
+      const hasDeliverableRoute =
+        routeChannelCandidate &&
+        routeChannelCandidate !== INTERNAL_MESSAGE_CHANNEL &&
+        typeof routeToCandidate === "string" &&
+        routeToCandidate.trim().length > 0;
+      const originatingChannel = hasDeliverableRoute
+        ? routeChannelCandidate
+        : INTERNAL_MESSAGE_CHANNEL;
+      const originatingTo = hasDeliverableRoute ? routeToCandidate : undefined;
+      const accountId = hasDeliverableRoute ? routeAccountIdCandidate : undefined;
+      const messageThreadId = hasDeliverableRoute ? routeThreadIdCandidate : undefined;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -808,7 +826,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         SessionKey: sessionKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+        OriginatingChannel: originatingChannel,
+        OriginatingTo: originatingTo,
+        AccountId: accountId,
+        MessageThreadId: messageThreadId,
         ChatType: "direct",
         CommandAuthorized: true,
         MessageSid: clientRunId,
