@@ -33,7 +33,6 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
-    lightContext: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -269,6 +268,7 @@ export const ToolsWebSearchSchema = z
         z.literal("grok"),
         z.literal("gemini"),
         z.literal("kimi"),
+        z.literal("exa"),
       ])
       .optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -305,6 +305,14 @@ export const ToolsWebSearchSchema = z
         apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    exa: z
+      .object({
+        apiKey: z.string().optional().register(sensitive),
+        numResults: z.number().int().positive().optional(),
+        highlightsMaxChars: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

@@ -48,6 +48,32 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts exa provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "exa",
+        providerConfig: {
+          apiKey: "exa-test-key",
+          numResults: 10,
+          highlightsMaxChars: 5000,
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts exa provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "exa",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -63,6 +89,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.EXA_API_KEY;
   });
 
   afterEach(() => {
@@ -122,6 +149,11 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("gemini");
   });
 
+  it("does not auto-detect exa — requires explicit provider config", () => {
+    process.env.EXA_API_KEY = "test-exa-key";
+    expect(resolveSearchProvider({})).toBe("brave");
+  });
+
   it("explicit provider always wins regardless of keys", () => {
     process.env.BRAVE_API_KEY = "test-brave-key";
     expect(
@@ -129,5 +161,14 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("explicit exa provider wins regardless of other keys", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    expect(
+      resolveSearchProvider({ provider: "exa" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("exa");
   });
 });

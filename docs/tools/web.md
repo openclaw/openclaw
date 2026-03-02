@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, and Kimi providers)"
+summary: "Web search + fetch tools (Perplexity Search API, Brave, Gemini, Grok, Kimi, and Exa providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Perplexity or Brave Search API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, or Kimi.
+- `web_search` — Search the web using Perplexity Search API, Brave Search API, Gemini with Google Search grounding, Grok, Kimi, or Exa.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -20,6 +20,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 ## How it works
 
 - `web_search` calls your configured provider and returns results.
+  - **Exa**: returns structured results with text snippets from web search.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -29,13 +30,14 @@ See [Perplexity Search setup](/perplexity) and [Brave Search setup](/brave-searc
 
 ## Choosing a search provider
 
-| Provider                  | Pros                                                                                          | Cons                                        | API Key                             |
-| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------------------- |
-| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                |
-| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                     |
-| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                    |
-| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                       |
-| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY` |
+| Provider                  | Pros                                                                                          | Cons                                        | API Key                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------- |
+| **Perplexity Search API** | Fast, structured results; domain, language, region, and freshness filters; content extraction | —                                           | `PERPLEXITY_API_KEY`                         |
+| **Brave Search API**      | Fast, structured results                                                                      | Fewer filtering options; AI-use terms apply | `BRAVE_API_KEY`                              |
+| **Gemini**                | Google Search grounding, AI-synthesized                                                       | Requires Gemini API key                     | `GEMINI_API_KEY`                             |
+| **Grok**                  | xAI web-grounded responses                                                                    | Requires xAI API key                        | `XAI_API_KEY`                                |
+| **Kimi**                  | Moonshot web search capability                                                                | Requires Moonshot API key                   | `KIMI_API_KEY` / `MOONSHOT_API_KEY`          |
+| **Exa**                   | Semantic search, text highlights                                                              | Requires Exa API key                        | `EXA_API_KEY`                                |
 
 ### Auto-detection
 
@@ -46,6 +48,7 @@ If no `provider` is explicitly set, OpenClaw auto-detects which provider to use 
 3. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `tools.web.search.kimi.apiKey` config
 4. **Perplexity** — `PERPLEXITY_API_KEY` env var or `tools.web.search.perplexity.apiKey` config
 5. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config
+6. **Exa** — `EXA_API_KEY` env var or `tools.web.search.exa.apiKey` config
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -111,6 +114,48 @@ Brave provides paid plans; check the Brave API portal for the current limits and
 }
 ```
 
+## Using Exa
+
+Exa provides web search that understands meaning, not just keywords.
+It returns structured results with titles, URLs, and text content snippets.
+
+### Getting an Exa API key
+
+1. Get an API key at [dashboard.exa.ai](https://dashboard.exa.ai)
+2. Set `EXA_API_KEY` in the Gateway environment, or configure `tools.web.search.exa.apiKey`
+
+### Setting up Exa search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "exa",
+        exa: {
+          // API key (optional if EXA_API_KEY is set)
+          apiKey: "exa-...",
+          // Number of results to return (default: 5)
+          numResults: 5,
+          // Max characters for highlights text content (default: 8000)
+          highlightsMaxChars: 8000,
+        },
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
+### Notes
+
+- Exa uses `type: "auto"` which automatically chooses the best search strategy.
+- Search results include title, URL, text snippet, published date, and author when available.
+- Returns `numResults` results (default: 5) with highlights and text content.
+- Text content is capped at `highlightsMaxChars` characters (default: 8000).
+
 ## Using Gemini (Google Search grounding)
 
 Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
@@ -150,7 +195,7 @@ For a gateway install, put it in `~/.openclaw/.env`.
 - Citation URLs from Gemini grounding are automatically resolved from Google's
   redirect URLs to direct URLs.
 - Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
-- Redirect resolution uses strict SSRF defaults, so redirects to private/internal targets are blocked.
+- This redirect resolver follows the trusted-network model (private/internal networks allowed by default) to match Gateway operator trust assumptions.
 - The default model (`gemini-2.5-flash`) is fast and cost-effective.
   Any Gemini model that supports grounding can be used.
 
