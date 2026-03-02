@@ -250,6 +250,17 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
+  const requireAgentId =
+    resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
+    cfg.agents?.defaults?.subagents?.requireAgentId ??
+    false;
+  if (requireAgentId && !requestedAgentId?.trim()) {
+    return {
+      status: "forbidden",
+      error:
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+    };
+  }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];

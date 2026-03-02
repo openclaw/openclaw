@@ -160,6 +160,7 @@ Parameters:
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `agents.defaults.subagents.requireAgentId` / `agents.list[].subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId`. Default: false.
 
 Discovery:
 

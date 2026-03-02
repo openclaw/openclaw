@@ -26,6 +26,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
+    requireAgentId?: boolean;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

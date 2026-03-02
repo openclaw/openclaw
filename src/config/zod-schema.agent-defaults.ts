@@ -169,6 +169,7 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

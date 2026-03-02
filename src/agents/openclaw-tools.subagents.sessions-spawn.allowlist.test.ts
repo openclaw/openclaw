@@ -154,4 +154,90 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       acceptedAt: 5200,
     });
   });
+
+  it("sessions_spawn forbids omit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: true },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call11", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("sessions_spawn requires explicit agentId"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("sessions_spawn allows omit agentId when requireAgentId is false", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          subagents: { requireAgentId: false },
+        },
+        list: [{ id: "main" }],
+      },
+    });
+
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call12", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:main:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn allows explicit agentId when requireAgentId is configured", async () => {
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowAgents: ["worker"],
+              requireAgentId: true,
+            },
+          },
+        ],
+      },
+    });
+
+    mockAcceptedSpawn(5400);
+
+    const result = await executeSpawn("call13", "worker");
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(callGatewayMock).toHaveBeenCalled();
+  });
 });
