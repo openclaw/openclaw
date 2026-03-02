@@ -13,7 +13,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { resolveCanvasNodeIds, resolveNodeId } from "./nodes-utils.js";
 
 const CANVAS_ACTIONS = [
   "present",
@@ -89,20 +89,32 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
+      const nodeQuery = readStringParam(params, "node", { trim: true });
 
-      const nodeId = await resolveNodeId(
-        gatewayOpts,
-        readStringParam(params, "node", { trim: true }),
-        true,
-      );
-
-      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
+      const invoke = async (
+        targetNodeId: string,
+        command: string,
+        invokeParams?: Record<string, unknown>,
+      ) =>
         await callGatewayTool("node.invoke", gatewayOpts, {
-          nodeId,
+          nodeId: targetNodeId,
           command,
           params: invokeParams,
           idempotencyKey: crypto.randomUUID(),
         });
+
+      const broadcast = async (command: string, invokeParams?: Record<string, unknown>) => {
+        const nodeIds = await resolveCanvasNodeIds(gatewayOpts, nodeQuery);
+        const results = await Promise.allSettled(
+          nodeIds.map((id) => invoke(id, command, invokeParams)),
+        );
+        const anyOk = results.some((r) => r.status === "fulfilled");
+        if (!anyOk) {
+          // All failed — surface the first error.
+          const first = results.find((r) => r.status === "rejected");
+          throw first?.reason ?? new Error("broadcast failed: all nodes rejected");
+        }
+      };
 
       switch (action) {
         case "present": {
@@ -129,25 +141,26 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           ) {
             invokeParams.placement = placement;
           }
-          await invoke("canvas.present", invokeParams);
+          await broadcast("canvas.present", invokeParams);
           return jsonResult({ ok: true });
         }
         case "hide":
-          await invoke("canvas.hide", undefined);
+          await broadcast("canvas.hide", undefined);
           return jsonResult({ ok: true });
         case "navigate": {
           // Support `target` as an alias so callers can reuse the same field across present/navigate.
           const url =
             readStringParam(params, "url", { trim: true }) ??
             readStringParam(params, "target", { required: true, trim: true, label: "url" });
-          await invoke("canvas.navigate", { url });
+          await broadcast("canvas.navigate", { url });
           return jsonResult({ ok: true });
         }
         case "eval": {
+          const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
           const javaScript = readStringParam(params, "javaScript", {
             required: true,
           });
-          const raw = (await invoke("canvas.eval", { javaScript })) as {
+          const raw = (await invoke(nodeId, "canvas.eval", { javaScript })) as {
             payload?: { result?: string };
           };
           const result = raw?.payload?.result;
@@ -160,6 +173,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           return jsonResult({ ok: true });
         }
         case "snapshot": {
+          const nodeId = await resolveNodeId(gatewayOpts, nodeQuery, true);
           const formatRaw =
             typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
           const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
@@ -171,7 +185,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
             typeof params.quality === "number" && Number.isFinite(params.quality)
               ? params.quality
               : undefined;
-          const raw = (await invoke("canvas.snapshot", {
+          const raw = (await invoke(nodeId, "canvas.snapshot", {
             format,
             maxWidth,
             quality,
@@ -201,11 +215,11 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
           if (!jsonl.trim()) {
             throw new Error("jsonl or jsonlPath required");
           }
-          await invoke("canvas.a2ui.pushJSONL", { jsonl });
+          await broadcast("canvas.a2ui.pushJSONL", { jsonl });
           return jsonResult({ ok: true });
         }
         case "a2ui_reset":
-          await invoke("canvas.a2ui.reset", undefined);
+          await broadcast("canvas.a2ui.reset", undefined);
           return jsonResult({ ok: true });
         default:
           throw new Error(`Unknown action: ${action}`);
