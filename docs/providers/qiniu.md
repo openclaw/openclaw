@@ -24,7 +24,13 @@ Model catalog: [sufy.com/zh-CN/services/ai-inference/models](https://sufy.com/zh
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider qiniu --token "$QINIU_API_KEY"
+openclaw onboard --non-interactive \
+  --auth-choice custom-api-key \
+  --custom-base-url "https://api.qnaigc.com" \
+  --custom-model-id "deepseek-r1" \
+  --custom-api-key "$QINIU_API_KEY" \
+  --custom-compatibility openai \
+  --custom-provider-id qiniu
 ```
 
 ## Config snippet
