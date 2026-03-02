@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import { deleteSession, deleteSessionAndRefresh, loadSessions, type SessionsState } from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -100,5 +100,26 @@ describe("deleteSession", () => {
 
     expect(deleted).toBe(false);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadSessions", () => {
+  it("forwards agentId filter when provided", async () => {
+    const request = vi.fn(async () => undefined);
+    const state = createState(request, {
+      sessionsIncludeGlobal: false,
+      sessionsIncludeUnknown: false,
+      sessionsFilterActive: "0",
+      sessionsFilterLimit: "0",
+    });
+
+    await loadSessions(state, { agentId: "  helper-agent  " });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "helper-agent",
+    });
   });
 });

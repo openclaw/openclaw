@@ -244,6 +244,12 @@ function handleTerminalChatEvent(
   // Keep the latest tool stream visible after terminal events so users can inspect
   // tool calls/results without requiring a manual refresh.
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+  // Always refresh transcript state after final chat events, even when the run
+  // was not explicitly queued for session-list refresh (for example sub-agent
+  // final events that append transcript content without /new or /reset).
+  if (state === "final") {
+    void loadChatHistory(host as unknown as OpenClawApp);
+  }
   const runId = payload?.runId;
   if (!runId || !host.refreshSessionsAfterChat.has(runId)) {
     return;
@@ -254,10 +260,6 @@ function handleTerminalChatEvent(
       activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     });
   }
-  // Keep chat history aligned with transcript updates after terminal events.
-  // Some runs persist tool/result cards near completion, so an explicit reload
-  // avoids requiring a manual refresh in Webchat.
-  void loadChatHistory(host as unknown as OpenClawApp);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {

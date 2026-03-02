@@ -227,11 +227,6 @@ describe("tool-cards", () => {
           name: "web_fetch",
           arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing", mode: "text" },
         },
-        {
-          type: "toolresult",
-          name: "web_fetch",
-          text: "https://api-docs.deepseek.com/quick_start/pricing",
-        },
       ],
     });
 
@@ -256,7 +251,51 @@ describe("tool-cards", () => {
 
     const enriched = enrichToolCardsWithLookup(terseCards, lookup);
     expect(enriched[0]?.text).toContain('"status":200');
-    expect(enriched[1]?.text).toContain('"status":200');
+  });
+
+  it("prefers latest lookup text for shared signatures instead of longest historical text", () => {
+    const terseCards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          name: "web_fetch",
+          arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing", mode: "text" },
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            name: "web_fetch",
+            arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing", mode: "text" },
+          },
+          {
+            type: "toolresult",
+            name: "web_fetch",
+            text: "older verbose output with many details that should no longer win by length",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            name: "web_fetch",
+            arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing", mode: "text" },
+          },
+          { type: "toolresult", name: "web_fetch", text: "latest output" },
+        ],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(terseCards, lookup);
+    expect(enriched[0]?.text).toBe("latest output");
   });
 
   it("enriches tool cards by exact toolCallId match", () => {
@@ -321,5 +360,40 @@ describe("tool-cards", () => {
     const enriched = enrichToolCardsWithLookup(terseCards, lookup);
     expect(enriched[0]?.text).toContain('"status":200');
     expect(enriched[0]?.text).toContain("rich body");
+  });
+
+  it("does not replace non-empty card text from non-id lookup matches", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "toolcall",
+          name: "web_fetch",
+          arguments: { url: "https://api-docs.deepseek.com/quick_start/pricing", mode: "text" },
+        },
+        {
+          type: "toolresult",
+          name: "web_fetch",
+          text: "latest concise summary",
+        },
+      ],
+    });
+
+    const lookup = buildToolCardOutputLookup([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolresult",
+            name: "web_fetch",
+            text: "stale historical output with extra verbose details",
+          },
+        ],
+      },
+    ]);
+
+    const enriched = enrichToolCardsWithLookup(cards, lookup);
+    expect(enriched[0]?.text).toBe("latest concise summary");
+    expect(enriched[1]?.text).toBe("latest concise summary");
   });
 });

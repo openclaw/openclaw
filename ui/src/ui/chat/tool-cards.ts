@@ -21,6 +21,13 @@ export type ToolCardOutputLookup = {
   byResourceHint: Map<string, string>;
 };
 
+type ToolLookupSource = "toolCallId" | "signature" | "resourceHint";
+
+type ToolLookupMatch = {
+  source: ToolLookupSource;
+  text: string;
+};
+
 type ExtractToolCardsOptions = {
   readFallbackText?: string;
 };
@@ -93,18 +100,15 @@ export function buildToolCardOutputLookup(messages: unknown[]): ToolCardOutputLo
       }
       const toolCallId = normalizeToolCallId(card.toolCallId);
       if (toolCallId) {
-        const existing = lookup.byToolCallId.get(toolCallId);
-        lookup.byToolCallId.set(toolCallId, selectRicherOutput(existing, text));
+        lookup.byToolCallId.set(toolCallId, text);
       }
       const signature = buildToolSignature(card.name, card.args);
       if (signature) {
-        const existing = lookup.bySignature.get(signature);
-        lookup.bySignature.set(signature, selectRicherOutput(existing, text));
+        lookup.bySignature.set(signature, text);
       }
       const resourceHint = buildResourceHint(card);
       if (resourceHint) {
-        const existing = lookup.byResourceHint.get(resourceHint);
-        lookup.byResourceHint.set(resourceHint, selectRicherOutput(existing, text));
+        lookup.byResourceHint.set(resourceHint, text);
       }
     }
   }
@@ -120,10 +124,10 @@ export function enrichToolCardsWithLookup(
   }
   return cards.map((card) => {
     const candidate = resolveLookupText(card, lookup);
-    if (!candidate || !shouldReplaceToolText(card.text, candidate)) {
+    if (!candidate || !shouldApplyLookupText(card, candidate)) {
       return card;
     }
-    return { ...card, text: candidate };
+    return { ...card, text: candidate.text };
   });
 }
 
@@ -389,30 +393,23 @@ function normalizeToolText(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function selectRicherOutput(existing: string | undefined, candidate: string): string {
-  if (!existing) {
-    return candidate;
-  }
-  return candidate.length > existing.length ? candidate : existing;
-}
-
-function shouldReplaceToolText(current: string | undefined, candidate: string): boolean {
-  const normalizedCurrent = normalizeToolText(current);
+function shouldApplyLookupText(card: ToolCard, candidate: ToolLookupMatch): boolean {
+  const normalizedCurrent = normalizeToolText(card.text);
   if (!normalizedCurrent) {
     return true;
   }
-  return candidate.length > normalizedCurrent.length;
+  return candidate.source === "toolCallId" && normalizedCurrent !== candidate.text;
 }
 
 function resolveLookupText(
   card: ToolCard,
   lookup: ToolCardOutputLookup,
-): string | undefined {
+): ToolLookupMatch | undefined {
   const toolCallId = normalizeToolCallId(card.toolCallId);
   if (toolCallId) {
     const byId = lookup.byToolCallId.get(toolCallId);
     if (byId) {
-      return byId;
+      return { source: "toolCallId", text: byId };
     }
   }
   const signature = buildToolSignature(card.name, card.args);
@@ -421,17 +418,19 @@ function resolveLookupText(
     if (!resourceHint) {
       return undefined;
     }
-    return lookup.byResourceHint.get(resourceHint);
+    const byResourceHint = lookup.byResourceHint.get(resourceHint);
+    return byResourceHint ? { source: "resourceHint", text: byResourceHint } : undefined;
   }
   const bySignature = lookup.bySignature.get(signature);
   if (bySignature) {
-    return bySignature;
+    return { source: "signature", text: bySignature };
   }
   const resourceHint = buildResourceHint(card);
   if (!resourceHint) {
     return undefined;
   }
-  return lookup.byResourceHint.get(resourceHint);
+  const byResourceHint = lookup.byResourceHint.get(resourceHint);
+  return byResourceHint ? { source: "resourceHint", text: byResourceHint } : undefined;
 }
 
 function buildToolSignature(name: string, args: unknown): string {

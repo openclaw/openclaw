@@ -275,6 +275,44 @@ describe("chat view", () => {
     expect(threadText).toContain("Summary before tool card");
   });
 
+  it("keeps live inline tool cards when toolCallId matches but runId differs", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showInlineToolFlow: true,
+          messages: [
+            {
+              role: "toolresult",
+              runId: "run-history",
+              toolName: "web_fetch",
+              toolCallId: "call_1",
+              content: [{ type: "text", text: "history output" }],
+              timestamp: Date.now() - 10_000,
+            },
+          ],
+          toolMessages: [
+            {
+              role: "toolresult",
+              runId: "run-live",
+              toolName: "web_fetch",
+              toolCallId: "call_1",
+              content: [{ type: "text", text: "live output" }],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const cards = container.querySelectorAll(".chat-tool-card");
+    expect(cards.length).toBe(2);
+    const threadText = container.querySelector(".chat-thread")?.textContent ?? "";
+    expect(threadText).toContain("history output");
+    expect(threadText).toContain("live output");
+  });
+
   it("renders compacting indicator as a badge", () => {
     const container = document.createElement("div");
     render(

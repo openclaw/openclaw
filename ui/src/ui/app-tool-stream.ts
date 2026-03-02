@@ -358,7 +358,7 @@ export function hydrateReadToolOutputFromFinalMessage(
     if (!entry) {
       continue;
     }
-    if (sessionKey && entry.sessionKey && entry.sessionKey !== sessionKey) {
+    if (sessionKey && entry.sessionKey && !sessionKeysEquivalent(entry.sessionKey, sessionKey)) {
       continue;
     }
     if (entry.updatedAt < now - staleWindowMs) {

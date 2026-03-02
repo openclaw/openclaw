@@ -5,6 +5,7 @@ import { connectGateway } from "./app-gateway.ts";
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
   emitClose: (info: {
     code: number;
     reason?: string;
@@ -31,6 +32,7 @@ vi.mock("./gateway.ts", () => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
+    readonly request = vi.fn(async () => ({}));
 
     constructor(
       private opts: {
@@ -46,6 +48,7 @@ vi.mock("./gateway.ts", () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        request: this.request,
         emitClose: (info) => {
           this.opts.onClose?.({
             code: info.code,
@@ -437,5 +440,29 @@ describe("connectGateway", () => {
     const toolResult = content.find((item) => item.type === "toolresult");
     expect(typeof toolResult?.text).toBe("string");
     expect(String(toolResult?.text)).toContain("ResultCode=0");
+  });
+
+  it("reloads chat history for final events even when refreshSessionsAfterChat is not queued", () => {
+    const host = createHost() as unknown as { chatRunId: string | null };
+    host.chatRunId = "run-user";
+
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    (host as unknown as { connected: boolean }).connected = true;
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-announce",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(client.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 200,
+    });
   });
 });

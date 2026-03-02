@@ -85,14 +85,26 @@ export async function syncChatHistoryDuringRun(state: ChatState) {
   if (!state.client || !state.connected || !state.chatRunId) {
     return;
   }
+  const requestClient = state.client;
+  const requestRunId = state.chatRunId;
+  const requestSessionKey = state.sessionKey;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+    const res = await requestClient.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey: requestSessionKey,
         limit: 200,
       },
     );
+    if (!state.client || state.client !== requestClient || !state.connected) {
+      return;
+    }
+    if (!state.chatRunId || state.chatRunId !== requestRunId) {
+      return;
+    }
+    if (!sessionKeysEquivalent(state.sessionKey, requestSessionKey)) {
+      return;
+    }
     const nextMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = nextMessages;
     if (typeof res.thinkingLevel === "string") {

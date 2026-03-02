@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  handleChatEvent,
+  syncChatHistoryDuringRun,
+  type ChatEventPayload,
+  type ChatState,
+} from "./chat.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -298,5 +303,61 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toEqual([existingMessage]);
+  });
+});
+
+describe("syncChatHistoryDuringRun", () => {
+  it("applies history while run/session context is unchanged", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
+      thinkingLevel: "high",
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [],
+      chatThinkingLevel: null,
+    });
+
+    await syncChatHistoryDuringRun(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("high");
+  });
+
+  it("drops stale poll responses when active run changes in flight", async () => {
+    let resolveRequest:
+      | ((value: { messages?: Array<unknown>; thinkingLevel?: string }) => void)
+      | undefined;
+    const request = vi.fn(
+      () =>
+        new Promise<{ messages?: Array<unknown>; thinkingLevel?: string }>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const originalMessages = [{ role: "assistant", content: [{ type: "text", text: "current" }] }];
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: originalMessages,
+      chatThinkingLevel: "medium",
+    });
+
+    const pending = syncChatHistoryDuringRun(state);
+    state.chatRunId = "run-2";
+    resolveRequest?.({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
+      thinkingLevel: "high",
+    });
+    await pending;
+
+    expect(state.chatMessages).toBe(originalMessages);
+    expect(state.chatThinkingLevel).toBe("medium");
   });
 });

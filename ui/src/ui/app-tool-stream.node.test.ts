@@ -224,6 +224,47 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(entry?.output).toContain("ResultCode=0");
   });
 
+  it("hydrates by alias-equivalent session key when runId does not match", () => {
+    const host = createHost({ chatRunId: "run-1", sessionKey: "main" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "read-alias-1",
+        args: { path: "C:/RHDSetup.log" },
+      },
+    });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "read",
+        toolCallId: "read-alias-1",
+      },
+    });
+
+    const hydrated = hydrateReadToolOutputFromFinalMessage(host, {
+      runId: "different-run",
+      sessionKey: "agent:main:main",
+      text: "AliasResult=ok",
+    });
+
+    expect(hydrated).toBe(true);
+    const entry = host.toolStreamById.get("read-alias-1");
+    expect(entry?.output).toContain("AliasResult=ok");
+  });
+
   it("accepts active-run tool events when session key uses a different alias", () => {
     const host = createHost({ chatRunId: "run-1", sessionKey: "main" });
 
