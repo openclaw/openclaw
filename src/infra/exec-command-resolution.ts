@@ -111,6 +111,10 @@ function tryRealpath(value: string): string | null {
   }
 }
 
+function escapeRegExpLiteral(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function globToRegExp(pattern: string): RegExp {
   let regex = "^";
   let i = 0;
@@ -132,7 +136,7 @@ function globToRegExp(pattern: string): RegExp {
       i += 1;
       continue;
     }
-    regex += ch.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&");
+    regex += escapeRegExpLiteral(ch);
     i += 1;
   }
   regex += "$";
