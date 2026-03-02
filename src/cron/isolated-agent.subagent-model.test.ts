@@ -1,23 +1,14 @@
+import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { CronJob } from "./types.js";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
-
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
+import type { CronJob } from "./types.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-cron-submodel-" });
@@ -100,50 +91,93 @@ function mockEmbeddedAgent() {
   });
 }
 
+async function runSubagentModelCase(params: {
+  home: string;
+  cfgOverrides?: Partial<OpenClawConfig>;
+  jobModelOverride?: string;
+}) {
+  const storePath = await writeSessionStore(params.home);
+  mockEmbeddedAgent();
+  const job = makeJob();
+  if (params.jobModelOverride) {
+    job.payload = { kind: "agentTurn", message: "do work", model: params.jobModelOverride };
+  }
+
+  await runCronIsolatedAgentTurn({
+    cfg: makeCfg(params.home, storePath, params.cfgOverrides),
+    deps: makeDeps(),
+    job,
+    message: "do work",
+    sessionKey: "cron:job-sub",
+    lane: "cron",
+  });
+
+  return vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+}
+
 describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
-  it("uses agents.defaults.subagents.model when set", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      mockEmbeddedAgent();
-
-      await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-sonnet-4-5",
-              workspace: path.join(home, "openclaw"),
-              subagents: { model: "ollama/llama3.2:3b" },
-            },
+  it.each([
+    {
+      name: "uses agents.defaults.subagents.model when set",
+      cfgOverrides: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-5",
+            subagents: { model: "ollama/llama3.2:3b" },
           },
-        }),
-        deps: makeDeps(),
-        job: makeJob(),
-        message: "do work",
-        sessionKey: "cron:job-sub",
-        lane: "cron",
-      });
-
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.provider).toBe("ollama");
-      expect(call?.model).toBe("llama3.2:3b");
+        },
+      } satisfies Partial<OpenClawConfig>,
+      expectedProvider: "ollama",
+      expectedModel: "llama3.2:3b",
+    },
+    {
+      name: "falls back to main model when subagents.model is unset",
+      cfgOverrides: undefined,
+      expectedProvider: "anthropic",
+      expectedModel: "claude-sonnet-4-5",
+    },
+    {
+      name: "supports subagents.model with {primary} object format",
+      cfgOverrides: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-sonnet-4-5",
+            subagents: { model: { primary: "google/gemini-2.5-flash" } },
+          },
+        },
+      } satisfies Partial<OpenClawConfig>,
+      expectedProvider: "google",
+      expectedModel: "gemini-2.5-flash",
+    },
+  ])("$name", async ({ cfgOverrides, expectedProvider, expectedModel }) => {
+    await withTempHome(async (home) => {
+      const resolvedCfg =
+        cfgOverrides === undefined
+          ? undefined
+          : ({
+              agents: {
+                defaults: {
+                  ...cfgOverrides.agents?.defaults,
+                  workspace: path.join(home, "openclaw"),
+                },
+              },
+            } satisfies Partial<OpenClawConfig>);
+      const call = await runSubagentModelCase({ home, cfgOverrides: resolvedCfg });
+      expect(call?.provider).toBe(expectedProvider);
+      expect(call?.model).toBe(expectedModel);
     });
   });
 
   it("explicit job model override takes precedence over subagents.model", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      mockEmbeddedAgent();
-
-      const job = makeJob();
-      job.payload = { kind: "agentTurn", message: "do work", model: "openai/gpt-4o" };
-
-      await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, {
+      const call = await runSubagentModelCase({
+        home,
+        cfgOverrides: {
           agents: {
             defaults: {
               model: "anthropic/claude-sonnet-4-5",
@@ -151,65 +185,11 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
               subagents: { model: "ollama/llama3.2:3b" },
             },
           },
-        }),
-        deps: makeDeps(),
-        job,
-        message: "do work",
-        sessionKey: "cron:job-sub",
-        lane: "cron",
+        },
+        jobModelOverride: "openai/gpt-4o",
       });
-
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
       expect(call?.provider).toBe("openai");
       expect(call?.model).toBe("gpt-4o");
-    });
-  });
-
-  it("falls back to main model when subagents.model is unset", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      mockEmbeddedAgent();
-
-      await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath),
-        deps: makeDeps(),
-        job: makeJob(),
-        message: "do work",
-        sessionKey: "cron:job-sub",
-        lane: "cron",
-      });
-
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-sonnet-4-5");
-    });
-  });
-
-  it("supports subagents.model with {primary} object format", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      mockEmbeddedAgent();
-
-      await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, {
-          agents: {
-            defaults: {
-              model: "anthropic/claude-sonnet-4-5",
-              workspace: path.join(home, "openclaw"),
-              subagents: { model: { primary: "google/gemini-2.5-flash" } },
-            },
-          },
-        }),
-        deps: makeDeps(),
-        job: makeJob(),
-        message: "do work",
-        sessionKey: "cron:job-sub",
-        lane: "cron",
-      });
-
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.provider).toBe("google");
-      expect(call?.model).toBe("gemini-2.5-flash");
     });
   });
 });

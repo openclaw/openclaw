@@ -220,6 +220,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
   "browser.attachOnly":
     "Restricts browser mode to attach-only behavior without starting local browser processes. Use this when all browser sessions are externally managed by a remote CDP provider.",
+  "browser.cdpPortRangeStart":
+    "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
@@ -230,6 +232,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode: "clawd" or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
+  "browser.profiles.*.attachOnly":
+    "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
     "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
   "browser.evaluateEnabled":
@@ -922,6 +926,13 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.pdfModel.primary":
+    "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
+  "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
+  "agents.defaults.pdfMaxBytesMb":
+    "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
+  "agents.defaults.pdfMaxPages":
+    "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",

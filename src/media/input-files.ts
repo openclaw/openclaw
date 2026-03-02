@@ -2,44 +2,10 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
+import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
-type CanvasModule = typeof import("@napi-rs/canvas");
-type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
-
-let canvasModulePromise: Promise<CanvasModule> | null = null;
-let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
-
-// Lazy-load optional PDF/image deps so non-PDF paths don't require native installs.
-async function loadCanvasModule(): Promise<CanvasModule> {
-  if (!canvasModulePromise) {
-    canvasModulePromise = import("@napi-rs/canvas").catch((err) => {
-      canvasModulePromise = null;
-      throw new Error(
-        `Optional dependency @napi-rs/canvas is required for PDF image extraction: ${String(err)}`,
-      );
-    });
-  }
-  return canvasModulePromise;
-}
-
-async function loadPdfJsModule(): Promise<PdfJsModule> {
-  if (!pdfJsModulePromise) {
-    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
-      pdfJsModulePromise = null;
-      throw new Error(
-        `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
-      );
-    });
-  }
-  return pdfJsModulePromise;
-}
-
-export type InputImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type InputImageContent = PdfExtractedImage;
 
 export type InputFileExtractResult = {
   filename: string;
@@ -241,65 +207,6 @@ function clampText(text: string, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
-async function extractPdfContent(params: {
-  buffer: Buffer;
-  limits: InputFileLimits;
-}): Promise<{ text: string; images: InputImageContent[] }> {
-  const { buffer, limits } = params;
-  const { getDocument } = await loadPdfJsModule();
-  const pdf = await getDocument({
-    data: new Uint8Array(buffer),
-    disableWorker: true,
-  }).promise;
-  const maxPages = Math.min(pdf.numPages, limits.pdf.maxPages);
-  const textParts: string[] = [];
-
-  for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
-      .filter(Boolean)
-      .join(" ");
-    if (pageText) {
-      textParts.push(pageText);
-    }
-  }
-
-  const text = textParts.join("\n\n");
-  if (text.trim().length >= limits.pdf.minTextChars) {
-    return { text, images: [] };
-  }
-
-  let canvasModule: CanvasModule;
-  try {
-    canvasModule = await loadCanvasModule();
-  } catch (err) {
-    logWarn(`media: PDF image extraction skipped; ${String(err)}`);
-    return { text, images: [] };
-  }
-  const { createCanvas } = canvasModule;
-  const images: InputImageContent[] = [];
-  for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const maxPixels = limits.pdf.maxPixels;
-    const pixelBudget = Math.max(1, maxPixels);
-    const pagePixels = viewport.width * viewport.height;
-    const scale = Math.min(1, Math.sqrt(pixelBudget / pagePixels));
-    const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
-    await page.render({
-      canvas: canvas as unknown as HTMLCanvasElement,
-      viewport: scaled,
-    }).promise;
-    const png = canvas.toBuffer("image/png");
-    images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
-  }
-
-  return { text, images };
-}
-
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -409,7 +316,15 @@ export async function extractFileContentFromSource(params: {
   }
 
   if (mimeType === "application/pdf") {
-    const extracted = await extractPdfContent({ buffer, limits });
+    const extracted = await extractPdfContent({
+      buffer,
+      maxPages: limits.pdf.maxPages,
+      maxPixels: limits.pdf.maxPixels,
+      minTextChars: limits.pdf.minTextChars,
+      onImageExtractionError: (err) => {
+        logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+      },
+    });
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {
       filename,
