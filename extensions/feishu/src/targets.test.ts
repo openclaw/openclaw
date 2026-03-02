@@ -28,6 +28,16 @@ describe("normalizeFeishuTarget", () => {
   it("accepts provider-prefixed raw ids", () => {
     expect(normalizeFeishuTarget("feishu:ou_123")).toBe("ou_123");
   });
+
+  it("strips group: prefix to bare chat id", () => {
+    expect(normalizeFeishuTarget("group:oc_524f00307b58bc1da7bbd046afed326f")).toBe(
+      "oc_524f00307b58bc1da7bbd046afed326f",
+    );
+  });
+
+  it("strips dm: prefix to bare user id", () => {
+    expect(normalizeFeishuTarget("dm:ou_abc123")).toBe("ou_abc123");
+  });
 });
 
 describe("looksLikeFeishuId", () => {
