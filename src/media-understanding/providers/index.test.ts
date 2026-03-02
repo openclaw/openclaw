@@ -24,4 +24,12 @@ describe("media-understanding provider registry", () => {
     expect(provider?.id).toBe("moonshot");
     expect(provider?.capabilities).toEqual(["image", "video"]);
   });
+
+  it("registers the OpenRouter provider", () => {
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("openrouter", registry);
+
+    expect(provider?.id).toBe("openrouter");
+    expect(provider?.capabilities).toEqual(["audio", "video"]);
+  });
 });
