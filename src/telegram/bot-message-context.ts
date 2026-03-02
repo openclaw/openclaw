@@ -504,8 +504,7 @@ export const buildTelegramMessageContext = async ({
       const senderLabelForHook = buildSenderLabel(msg, senderId || chatId);
       const messageIdForHook =
         typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-      const ingestConversationId =
-        resolvedThreadId != null ? `${String(chatId)}:${resolvedThreadId}` : String(chatId);
+      const ingestConversationId = `telegram:${chatId}`;
       void runSilentMessageIngest({
         enabled: ingestEnabled,
         event: {
@@ -518,7 +517,7 @@ export const buildTelegramMessageContext = async ({
             surface: "telegram",
             threadId: resolvedThreadId,
             originatingChannel: "telegram",
-            originatingTo: String(chatId),
+            originatingTo: `telegram:${chatId}`,
             messageId: messageIdForHook,
             senderId: senderId || undefined,
             senderName: buildSenderName(msg),
