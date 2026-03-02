@@ -1,5 +1,12 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type {
+  ChannelGatewayContext,
+  ChannelAccountSnapshot,
+  OpenClawConfig,
+  PluginRuntime,
+  ResolvedLineAccount,
+} from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -26,18 +33,34 @@ function createRuntime() {
   return { runtime, probeLineBot, monitorLineProvider };
 }
 
-function createStartAccountCtx(params: { token: string; secret: string; runtime: unknown }) {
+function createStartAccountCtx(params: {
+  token: string;
+  secret: string;
+  runtime: ReturnType<typeof createRuntimeEnv>;
+  abortSignal?: AbortSignal;
+}): ChannelGatewayContext<ResolvedLineAccount> {
+  const snapshot: ChannelAccountSnapshot = {
+    accountId: "default",
+    configured: true,
+    enabled: true,
+    running: false,
+  };
   return {
+    accountId: "default",
     account: {
       accountId: "default",
+      enabled: true,
       channelAccessToken: params.token,
       channelSecret: params.secret,
-      config: {},
+      tokenSource: "config" as const,
+      config: {} as ResolvedLineAccount["config"],
     },
     cfg: {} as OpenClawConfig,
     runtime: params.runtime,
-    abortSignal: undefined,
-    log: { info: vi.fn(), debug: vi.fn() },
+    abortSignal: params.abortSignal ?? new AbortController().signal,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    getStatus: () => snapshot,
+    setStatus: vi.fn(),
   };
 }
 
@@ -47,12 +70,12 @@ describe("linePlugin gateway.startAccount", () => {
     setLineRuntime(runtime);
 
     await expect(
-      linePlugin.gateway.startAccount(
+      linePlugin.gateway!.startAccount!(
         createStartAccountCtx({
           token: "token",
           secret: "   ",
-          runtime: {},
-        }) as never,
+          runtime: createRuntimeEnv(),
+        }),
       ),
     ).rejects.toThrow(
       'LINE webhook mode requires a non-empty channel secret for account "default".',
@@ -65,12 +88,12 @@ describe("linePlugin gateway.startAccount", () => {
     setLineRuntime(runtime);
 
     await expect(
-      linePlugin.gateway.startAccount(
+      linePlugin.gateway!.startAccount!(
         createStartAccountCtx({
           token: "   ",
           secret: "secret",
-          runtime: {},
-        }) as never,
+          runtime: createRuntimeEnv(),
+        }),
       ),
     ).rejects.toThrow(
       'LINE webhook mode requires a non-empty channel access token for account "default".',
@@ -82,13 +105,18 @@ describe("linePlugin gateway.startAccount", () => {
     const { runtime, monitorLineProvider } = createRuntime();
     setLineRuntime(runtime);
 
-    await linePlugin.gateway.startAccount(
+    const abort = new AbortController();
+    const task = linePlugin.gateway!.startAccount!(
       createStartAccountCtx({
         token: "token",
         secret: "secret",
-        runtime: {},
-      }) as never,
+        runtime: createRuntimeEnv(),
+        abortSignal: abort.signal,
+      }),
     );
+
+    // Allow async internals (probeLineBot await) to flush
+    await new Promise((r) => setTimeout(r, 20));
 
     expect(monitorLineProvider).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -97,5 +125,8 @@ describe("linePlugin gateway.startAccount", () => {
         accountId: "default",
       }),
     );
+
+    abort.abort();
+    await task;
   });
 });

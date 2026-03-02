@@ -1,10 +1,11 @@
-import type { AddressInfo } from "node:net";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
 let cfg: Record<string, unknown> = {};
+let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -34,7 +35,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("./auth.js", () => ({
-  authorizeGatewayConnect: async () => ({ ok: true }),
+  authorizeHttpGatewayConnect: async () => ({ ok: true }),
 }));
 
 vi.mock("../logger.js", () => ({
@@ -57,6 +58,12 @@ vi.mock("../agents/openclaw-tools.js", () => {
     err.name = "ToolInputError";
     return err;
   };
+  const toolAuthorizationError = (message: string) => {
+    const err = new Error(message) as Error & { status?: number };
+    err.name = "ToolAuthorizationError";
+    err.status = 403;
+    return err;
+  };
 
   const tools = [
     {
@@ -72,7 +79,13 @@ vi.mock("../agents/openclaw-tools.js", () => {
     {
       name: "sessions_spawn",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true }),
+      execute: async () => ({
+        ok: true,
+        route: {
+          agentTo: lastCreateOpenClawToolsContext?.agentTo,
+          agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
+        },
+      }),
     },
     {
       name: "sessions_send",
@@ -101,6 +114,9 @@ vi.mock("../agents/openclaw-tools.js", () => {
         if (mode === "input") {
           throw toolInputError("mode invalid");
         }
+        if (mode === "auth") {
+          throw toolAuthorizationError("mode forbidden");
+        }
         if (mode === "crash") {
           throw new Error("boom");
         }
@@ -110,7 +126,10 @@ vi.mock("../agents/openclaw-tools.js", () => {
   ];
 
   return {
-    createOpenClawTools: () => tools,
+    createOpenClawTools: (ctx: Record<string, unknown>) => {
+      lastCreateOpenClawToolsContext = ctx;
+      return tools;
+    },
   };
 });
 
@@ -167,9 +186,11 @@ beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
   cfg = {};
+  lastCreateOpenClawToolsContext = undefined;
 });
 
 const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
+const gatewayAuthHeaders = () => ({ authorization: `Bearer ${resolveGatewayToken()}` });
 
 const allowAgentsListForMain = () => {
   cfg = {
@@ -188,6 +209,17 @@ const allowAgentsListForMain = () => {
   };
 };
 
+const postToolsInvoke = async (params: {
+  port: number;
+  headers?: Record<string, string>;
+  body: Record<string, unknown>;
+}) =>
+  await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...params.headers },
+    body: JSON.stringify(params.body),
+  });
+
 const invokeAgentsList = async (params: {
   port: number;
   headers?: Record<string, string>;
@@ -197,11 +229,7 @@ const invokeAgentsList = async (params: {
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(body),
-  });
+  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
 
 const invokeTool = async (params: {
@@ -222,23 +250,32 @@ const invokeTool = async (params: {
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(body),
-  });
+  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
+
+const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
+  invokeAgentsList({
+    port: sharedPort,
+    headers: gatewayAuthHeaders(),
+    sessionKey: params.sessionKey,
+  });
+
+const invokeToolAuthed = async (params: {
+  tool: string;
+  args?: Record<string, unknown>;
+  action?: string;
+  sessionKey?: string;
+}) =>
+  invokeTool({
+    port: sharedPort,
+    headers: gatewayAuthHeaders(),
+    ...params,
+  });
 
 describe("POST /tools/invoke", () => {
   it("invokes a tool and returns {ok:true,result}", async () => {
     allowAgentsListForMain();
-    const token = resolveGatewayToken();
-
-    const res = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
 
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -253,13 +290,7 @@ describe("POST /tools/invoke", () => {
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
     };
 
-    const token = resolveGatewayToken();
-
-    const resProfile = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const resProfile = await invokeAgentsListAuthed({ sessionKey: "main" });
 
     expect(resProfile.status).toBe(200);
     const profileBody = await resProfile.json();
@@ -270,11 +301,7 @@ describe("POST /tools/invoke", () => {
       tools: { alsoAllow: ["agents_list"] },
     };
 
-    const resImplicit = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const resImplicit = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(resImplicit.status).toBe(200);
     const implicitBody = await resImplicit.json();
     expect(implicitBody.ok).toBe(true);
@@ -289,12 +316,7 @@ describe("POST /tools/invoke", () => {
     allowAgentsListForMain();
     pluginHttpHandlers = [async (req, res) => pluginHandler(req, res)];
 
-    const token = resolveGatewayToken();
-    const res = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
 
     expect(res.status).toBe(200);
     expect(pluginHandler).not.toHaveBeenCalled();
@@ -315,13 +337,7 @@ describe("POST /tools/invoke", () => {
         ],
       },
     };
-    const token = resolveGatewayToken();
-
-    const denyRes = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const denyRes = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(denyRes.status).toBe(404);
 
     allowAgentsListForMain();
@@ -330,11 +346,7 @@ describe("POST /tools/invoke", () => {
       tools: { profile: "minimal" },
     };
 
-    const profileRes = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const profileRes = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(profileRes.status).toBe(404);
   });
 
@@ -352,13 +364,9 @@ describe("POST /tools/invoke", () => {
       },
     };
 
-    const token = resolveGatewayToken();
-
-    const res = await invokeTool({
-      port: sharedPort,
+    const res = await invokeToolAuthed({
       tool: "sessions_spawn",
       args: { task: "test" },
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
 
@@ -366,6 +374,35 @@ describe("POST /tools/invoke", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error.type).toBe("not_found");
+  });
+
+  it("propagates message target/thread headers into tools context for sessions_spawn", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+      },
+      gateway: { tools: { allow: ["sessions_spawn"] } },
+    };
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        ...gatewayAuthHeaders(),
+        "x-openclaw-message-to": "channel:24514",
+        "x-openclaw-thread-id": "thread-24514",
+      },
+      tool: "sessions_spawn",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.route).toEqual({
+      agentTo: "channel:24514",
+      agentThreadId: "thread-24514",
+    });
   });
 
   it("denies sessions_send via HTTP gateway", async () => {
@@ -376,12 +413,8 @@ describe("POST /tools/invoke", () => {
       },
     };
 
-    const token = resolveGatewayToken();
-
-    const res = await invokeTool({
-      port: sharedPort,
+    const res = await invokeToolAuthed({
       tool: "sessions_send",
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
 
@@ -396,12 +429,8 @@ describe("POST /tools/invoke", () => {
       },
     };
 
-    const token = resolveGatewayToken();
-
-    const res = await invokeTool({
-      port: sharedPort,
+    const res = await invokeToolAuthed({
       tool: "gateway",
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
 
@@ -417,12 +446,8 @@ describe("POST /tools/invoke", () => {
       gateway: { tools: { allow: ["gateway"] } },
     };
 
-    const token = resolveGatewayToken();
-
-    const res = await invokeTool({
-      port: sharedPort,
+    const res = await invokeToolAuthed({
       tool: "gateway",
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
 
@@ -442,12 +467,8 @@ describe("POST /tools/invoke", () => {
       gateway: { tools: { allow: ["gateway"], deny: ["gateway"] } },
     };
 
-    const token = resolveGatewayToken();
-
-    const res = await invokeTool({
-      port: sharedPort,
+    const res = await invokeToolAuthed({
       tool: "gateway",
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
 
@@ -477,23 +498,14 @@ describe("POST /tools/invoke", () => {
       session: { mainKey: "primary" },
     };
 
-    const token = resolveGatewayToken();
-
-    const resDefault = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const resDefault = await invokeAgentsListAuthed();
     expect(resDefault.status).toBe(200);
 
-    const resMain = await invokeAgentsList({
-      port: sharedPort,
-      headers: { authorization: `Bearer ${token}` },
-      sessionKey: "main",
-    });
+    const resMain = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(resMain.status).toBe(200);
   });
 
-  it("maps tool input errors to 400 and unexpected execution errors to 500", async () => {
+  it("maps tool input/auth errors to 400/403 and unexpected execution errors to 500", async () => {
     cfg = {
       ...cfg,
       agents: {
@@ -501,13 +513,9 @@ describe("POST /tools/invoke", () => {
       },
     };
 
-    const token = resolveGatewayToken();
-
-    const inputRes = await invokeTool({
-      port: sharedPort,
+    const inputRes = await invokeToolAuthed({
       tool: "tools_invoke_test",
       args: { mode: "input" },
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
     expect(inputRes.status).toBe(400);
@@ -516,11 +524,20 @@ describe("POST /tools/invoke", () => {
     expect(inputBody.error?.type).toBe("tool_error");
     expect(inputBody.error?.message).toBe("mode invalid");
 
-    const crashRes = await invokeTool({
-      port: sharedPort,
+    const authRes = await invokeToolAuthed({
+      tool: "tools_invoke_test",
+      args: { mode: "auth" },
+      sessionKey: "main",
+    });
+    expect(authRes.status).toBe(403);
+    const authBody = await authRes.json();
+    expect(authBody.ok).toBe(false);
+    expect(authBody.error?.type).toBe("tool_error");
+    expect(authBody.error?.message).toBe("mode forbidden");
+
+    const crashRes = await invokeToolAuthed({
       tool: "tools_invoke_test",
       args: { mode: "crash" },
-      headers: { authorization: `Bearer ${token}` },
       sessionKey: "main",
     });
     expect(crashRes.status).toBe(500);

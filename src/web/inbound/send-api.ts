@@ -1,7 +1,21 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
-import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
+import type { ActiveWebSendOptions } from "../active-listener.js";
+
+function recordWhatsAppOutbound(accountId: string) {
+  recordChannelActivity({
+    channel: "whatsapp",
+    accountId,
+    direction: "outbound",
+  });
+}
+
+function resolveOutboundMessageId(result: unknown): string {
+  return typeof result === "object" && result && "key" in result
+    ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
+    : "unknown";
+}
 
 export function createWebSendApi(params: {
   sock: {
@@ -51,15 +65,8 @@ export function createWebSendApi(params: {
       }
       const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId,
-        direction: "outbound",
-      });
-      const messageId =
-        typeof result === "object" && result && "key" in result
-          ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
-          : "unknown";
+      recordWhatsAppOutbound(accountId);
+      const messageId = resolveOutboundMessageId(result);
       return { messageId };
     },
     sendPoll: async (
@@ -74,15 +81,8 @@ export function createWebSendApi(params: {
           selectableCount: poll.maxSelections ?? 1,
         },
       } as AnyMessageContent);
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: params.defaultAccountId,
-        direction: "outbound",
-      });
-      const messageId =
-        typeof result === "object" && result && "key" in result
-          ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
-          : "unknown";
+      recordWhatsAppOutbound(params.defaultAccountId);
+      const messageId = resolveOutboundMessageId(result);
       return { messageId };
     },
     sendReaction: async (

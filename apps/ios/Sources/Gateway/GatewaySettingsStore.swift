@@ -4,6 +4,7 @@ import os
 enum GatewaySettingsStore {
     private static let gatewayService = "ai.openclaw.gateway"
     private static let nodeService = "ai.openclaw.node"
+    private static let talkService = "ai.openclaw.talk"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredGatewayStableIDDefaultsKey = "gateway.preferredStableID"
@@ -24,6 +25,7 @@ enum GatewaySettingsStore {
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey."
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
@@ -143,6 +145,28 @@ enum GatewaySettingsStore {
         case discovered
     }
 
+    static func loadTalkProviderApiKey(provider: String) -> String? {
+        guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
+        let account = self.talkProviderApiKeyAccount(providerId: providerId)
+        let value = KeychainStore.loadString(
+            service: self.talkService,
+            account: account)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveTalkProviderApiKey(_ apiKey: String?, provider: String) {
+        guard let providerId = self.normalizedTalkProviderID(provider) else { return }
+        let account = self.talkProviderApiKeyAccount(providerId: providerId)
+        let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(service: self.talkService, account: account)
+            return
+        }
+        _ = KeychainStore.saveString(trimmed, service: self.talkService, account: account)
+    }
+
     static func saveLastGatewayConnectionManual(host: String, port: Int, useTLS: Bool, stableID: String) {
         let defaults = UserDefaults.standard
         defaults.set(LastGatewayKind.manual.rawValue, forKey: self.lastGatewayKindDefaultsKey)
@@ -182,6 +206,25 @@ enum GatewaySettingsStore {
         // Back-compat: older builds persisted manual-style host/port without a kind marker.
         guard !host.isEmpty, port > 0, port <= 65535 else { return nil }
         return .manual(host: host, port: port, useTLS: useTLS, stableID: stableID)
+    }
+
+    static func clearLastGatewayConnection(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: self.lastGatewayKindDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayHostDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayPortDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayTlsDefaultsKey)
+        defaults.removeObject(forKey: self.lastGatewayStableIDDefaultsKey)
+    }
+
+    static func deleteGatewayCredentials(instanceId: String) {
+        let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayTokenAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayPasswordAccount(instanceId: trimmed))
     }
 
     static func loadGatewayClientIdOverride(stableID: String) -> String? {
@@ -234,6 +277,15 @@ enum GatewaySettingsStore {
 
     private static func gatewayPasswordAccount(instanceId: String) -> String {
         "gateway-password.\(instanceId)"
+    }
+
+    private static func talkProviderApiKeyAccount(providerId: String) -> String {
+        self.talkProviderApiKeyAccountPrefix + providerId
+    }
+
+    private static func normalizedTalkProviderID(_ provider: String) -> String? {
+        let trimmed = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func ensureStableInstanceID() {

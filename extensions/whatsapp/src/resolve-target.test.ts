@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk", () => ({
   getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
@@ -70,8 +71,10 @@ vi.mock("openclaw/plugin-sdk", () => ({
   readStringParam: vi.fn(),
   resolveDefaultWhatsAppAccountId: vi.fn(),
   resolveWhatsAppAccount: vi.fn(),
+  resolveWhatsAppGroupIntroHint: vi.fn(),
   resolveWhatsAppGroupRequireMention: vi.fn(),
   resolveWhatsAppGroupToolPolicy: vi.fn(),
+  resolveWhatsAppMentionStripPatterns: vi.fn(() => []),
   applyAccountNameToChannelSection: vi.fn(),
 }));
 
@@ -100,6 +103,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -111,6 +117,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -122,6 +131,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -133,6 +145,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("120363123456789@g.us");
   });
 
@@ -144,50 +159,14 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resolution to fail");
+    }
     expect(result.error).toBeDefined();
   });
 
-  it("should error on normalization failure with allowlist (implicit mode)", () => {
-    const result = resolveTarget({
-      to: "invalid-target",
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target provided with allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "implicit",
-      allowFrom: ["5511999999999"],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should error when no target and no allowlist", () => {
-    const result = resolveTarget({
-      to: undefined,
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("should handle whitespace-only target", () => {
-    const result = resolveTarget({
-      to: "   ",
-      mode: "explicit",
-      allowFrom: [],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+  installCommonResolveTargetErrorCases({
+    resolveTarget,
+    implicitAllowFrom: ["5511999999999"],
   });
 });

@@ -1,5 +1,5 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { createHash, randomBytes } from "node:crypto";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 
 export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -218,6 +218,7 @@ export async function refreshChutesTokens(params: {
   return {
     ...params.credential,
     access,
+    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
     refresh: newRefresh || refreshToken,
     expires: coerceExpiresAt(expiresIn, now),
     clientId,

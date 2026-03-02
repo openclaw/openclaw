@@ -32,6 +32,11 @@ export type IrcNickServConfig = {
 export type IrcAccountConfig = {
   name?: string;
   enabled?: boolean;
+  /**
+   * Break-glass override: allow nick-only allowlist matching.
+   * Default behavior requires host/user-qualified identities.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   host?: string;
   port?: number;
   tls?: boolean;
@@ -43,6 +48,7 @@ export type IrcAccountConfig = {
   nickserv?: IrcNickServConfig;
   dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
+  defaultTo?: string;
   groupPolicy?: GroupPolicy;
   groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
@@ -62,6 +68,7 @@ export type IrcAccountConfig = {
 
 export type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
+  defaultAccount?: string;
 };
 
 export type CoreConfig = OpenClawConfig & {

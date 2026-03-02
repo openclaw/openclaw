@@ -1,12 +1,13 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import fs from "fs";
-import os from "os";
 import path from "path";
 import { Readable } from "stream";
+import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import { resolveFeishuSendTarget } from "./send-target.js";
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -21,7 +22,7 @@ export type DownloadMessageResourceResult = {
 
 async function readFeishuResponseBuffer(params: {
   response: unknown;
-  tmpPath: string;
+  tmpDirPrefix: string;
   errorPrefix: string;
 }): Promise<Buffer> {
   const { response } = params;
@@ -52,10 +53,10 @@ async function readFeishuResponseBuffer(params: {
     return Buffer.concat(chunks);
   }
   if (typeof responseAny.writeFile === "function") {
-    await responseAny.writeFile(params.tmpPath);
-    const buffer = await fs.promises.readFile(params.tmpPath);
-    await fs.promises.unlink(params.tmpPath).catch(() => {});
-    return buffer;
+    return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
+      await responseAny.writeFile(tmpPath);
+      return await fs.promises.readFile(tmpPath);
+    });
   }
   if (typeof responseAny[Symbol.asyncIterator] === "function") {
     const chunks: Buffer[] = [];
@@ -87,6 +88,10 @@ export async function downloadImageFeishu(params: {
   accountId?: string;
 }): Promise<DownloadImageResult> {
   const { cfg, imageKey, accountId } = params;
+  const normalizedImageKey = normalizeFeishuExternalKey(imageKey);
+  if (!normalizedImageKey) {
+    throw new Error("Feishu image download failed: invalid image_key");
+  }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -95,13 +100,12 @@ export async function downloadImageFeishu(params: {
   const client = createFeishuClient(account);
 
   const response = await client.im.image.get({
-    path: { image_key: imageKey },
+    path: { image_key: normalizedImageKey },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_img_${Date.now()}_${imageKey}`);
   const buffer = await readFeishuResponseBuffer({
     response,
-    tmpPath,
+    tmpDirPrefix: "openclaw-feishu-img-",
     errorPrefix: "Feishu image download failed",
   });
   return { buffer };
@@ -119,6 +123,10 @@ export async function downloadMessageResourceFeishu(params: {
   accountId?: string;
 }): Promise<DownloadMessageResourceResult> {
   const { cfg, messageId, fileKey, type, accountId } = params;
+  const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
+  if (!normalizedFileKey) {
+    throw new Error("Feishu message resource download failed: invalid file_key");
+  }
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -127,14 +135,13 @@ export async function downloadMessageResourceFeishu(params: {
   const client = createFeishuClient(account);
 
   const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: fileKey },
+    path: { message_id: messageId, file_key: normalizedFileKey },
     params: { type },
   });
 
-  const tmpPath = path.join(os.tmpdir(), `feishu_${Date.now()}_${fileKey}`);
   const buffer = await readFeishuResponseBuffer({
     response,
-    tmpPath,
+    tmpDirPrefix: "openclaw-feishu-resource-",
     errorPrefix: "Feishu message resource download failed",
   });
   return { buffer };
@@ -258,21 +265,15 @@ export async function sendImageFeishu(params: {
   to: string;
   imageKey: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const receiveId = normalizeFeishuTarget(to);
-  if (!receiveId) {
-    throw new Error(`Invalid Feishu target: ${to}`);
-  }
-
-  const receiveIdType = resolveReceiveIdType(receiveId);
+  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
@@ -281,17 +282,11 @@ export async function sendImageFeishu(params: {
       data: {
         content,
         msg_type: "image",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-
-    if (response.code !== 0) {
-      throw new Error(`Feishu image reply failed: ${response.msg || `code ${response.code}`}`);
-    }
-
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    return toFeishuSendResult(response, receiveId);
   }
 
   const response = await client.im.message.create({
@@ -302,15 +297,8 @@ export async function sendImageFeishu(params: {
       msg_type: "image",
     },
   });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu image send failed: ${response.msg || `code ${response.code}`}`);
-  }
-
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 /**
@@ -320,25 +308,19 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
-  msgType?: "file" | "media";
+  /** Use "audio" for audio files, "file" for documents and video */
+  msgType?: "file" | "audio";
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const receiveId = normalizeFeishuTarget(to);
-  if (!receiveId) {
-    throw new Error(`Invalid Feishu target: ${to}`);
-  }
-
-  const receiveIdType = resolveReceiveIdType(receiveId);
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {
@@ -347,17 +329,11 @@ export async function sendFileFeishu(params: {
       data: {
         content,
         msg_type: msgType,
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
-
-    if (response.code !== 0) {
-      throw new Error(`Feishu file reply failed: ${response.msg || `code ${response.code}`}`);
-    }
-
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+    return toFeishuSendResult(response, receiveId);
   }
 
   const response = await client.im.message.create({
@@ -368,15 +344,8 @@ export async function sendFileFeishu(params: {
       msg_type: msgType,
     },
   });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu file send failed: ${response.msg || `code ${response.code}`}`);
-  }
-
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
+  return toFeishuSendResult(response, receiveId);
 }
 
 /**
@@ -411,7 +380,9 @@ export function detectFileType(
 }
 
 /**
- * Upload and send media (image or file) from URL, local path, or buffer
+ * Upload and send media (image or file) from URL, local path, or buffer.
+ * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
+ * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -420,9 +391,22 @@ export async function sendMediaFeishu(params: {
   mediaBuffer?: Buffer;
   fileName?: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
+  /** Allowed roots for local path reads; required for local filePath to work. */
+  mediaLocalRoots?: readonly string[];
 }): Promise<SendMediaResult> {
-  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId } = params;
+  const {
+    cfg,
+    to,
+    mediaUrl,
+    mediaBuffer,
+    fileName,
+    replyToMessageId,
+    replyInThread,
+    accountId,
+    mediaLocalRoots,
+  } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -439,6 +423,7 @@ export async function sendMediaFeishu(params: {
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
+      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
@@ -452,7 +437,7 @@ export async function sendMediaFeishu(params: {
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
+    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
@@ -462,14 +447,15 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu API: opus -> "audio", everything else (including video) -> "file"
+    const msgType = fileType === "opus" ? "audio" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
+      replyInThread,
       accountId,
     });
   }

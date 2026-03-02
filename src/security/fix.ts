@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { runExec } from "../process/exec.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 export type SecurityFixChmodAction = {
@@ -366,6 +366,21 @@ async function chmodCredentialsAndAgentState(params: {
     const storePath = path.join(sessionsDir, "sessions.json");
     // eslint-disable-next-line no-await-in-loop
     params.actions.push(await params.applyPerms({ path: storePath, mode: 0o600, require: "file" }));
+
+    // Fix permissions on session transcript files (*.jsonl)
+    // eslint-disable-next-line no-await-in-loop
+    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of sessionEntries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const p = path.join(sessionsDir, entry.name);
+      // eslint-disable-next-line no-await-in-loop
+      params.actions.push(await params.applyPerms({ path: p, mode: 0o600, require: "file" }));
+    }
   }
 }
 
@@ -397,7 +412,11 @@ export async function fixSecurityFootguns(opts?: {
     const fixed = applyConfigFixes({ cfg: snap.config, env });
     changes = fixed.changes;
 
-    const whatsappStoreAllowFrom = await readChannelAllowFromStore("whatsapp", env).catch(() => []);
+    const whatsappStoreAllowFrom = await readChannelAllowFromStore(
+      "whatsapp",
+      env,
+      DEFAULT_ACCOUNT_ID,
+    ).catch(() => []);
     if (whatsappStoreAllowFrom.length > 0) {
       setWhatsAppGroupAllowFromFromStore({
         cfg: fixed.cfg,

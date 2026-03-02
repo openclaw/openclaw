@@ -1,3 +1,4 @@
+import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
 export type FollowupQueueState = {
@@ -19,19 +20,21 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
 export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
 
+export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  return FOLLOWUP_QUEUES.get(cleaned);
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
-    existing.mode = settings.mode;
-    existing.debounceMs =
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : existing.debounceMs;
-    existing.cap =
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : existing.cap;
-    existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    applyQueueRuntimeSettings({
+      target: existing,
+      settings,
+    });
     return existing;
   }
 
@@ -52,16 +55,17 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
   };
+  applyQueueRuntimeSettings({
+    target: created,
+    settings,
+  });
   FOLLOWUP_QUEUES.set(key, created);
   return created;
 }
 
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
-  if (!cleaned) {
-    return 0;
-  }
-  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  const queue = getExistingFollowupQueue(cleaned);
   if (!queue) {
     return 0;
   }

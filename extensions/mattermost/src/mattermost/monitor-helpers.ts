@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import type WebSocket from "ws";
-import { Buffer } from "node:buffer";
-
-export { createDedupeCache } from "openclaw/plugin-sdk";
+import {
+  formatInboundFromLabel as formatInboundFromLabelShared,
+  resolveThreadSessionKeys as resolveThreadSessionKeysShared,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk";
+export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk";
 
 export type ResponsePrefixContext = {
   model?: string;
@@ -18,46 +19,7 @@ export function extractShortModelName(fullModel: string): string {
   return modelPart.replace(/-\d{8}$/, "").replace(/-latest$/, "");
 }
 
-export function formatInboundFromLabel(params: {
-  isGroup: boolean;
-  groupLabel?: string;
-  groupId?: string;
-  directLabel: string;
-  directId?: string;
-  groupFallback?: string;
-}): string {
-  if (params.isGroup) {
-    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
-    const id = params.groupId?.trim();
-    return id ? `${label} id:${id}` : label;
-  }
-
-  const directLabel = params.directLabel.trim();
-  const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) {
-    return directLabel;
-  }
-  return `${directLabel} id:${directId}`;
-}
-
-export function rawDataToString(
-  data: WebSocket.RawData,
-  encoding: BufferEncoding = "utf8",
-): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString(encoding);
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString(encoding);
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString(encoding);
-  }
-  return Buffer.from(String(data)).toString(encoding);
-}
+export const formatInboundFromLabel = formatInboundFromLabelShared;
 
 function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
@@ -103,13 +65,8 @@ export function resolveThreadSessionKeys(params: {
   parentSessionKey?: string;
   useSuffix?: boolean;
 }): { sessionKey: string; parentSessionKey?: string } {
-  const threadId = (params.threadId ?? "").trim();
-  if (!threadId) {
-    return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
-  }
-  const useSuffix = params.useSuffix ?? true;
-  const sessionKey = useSuffix
-    ? `${params.baseSessionKey}:thread:${threadId}`
-    : params.baseSessionKey;
-  return { sessionKey, parentSessionKey: params.parentSessionKey };
+  return resolveThreadSessionKeysShared({
+    ...params,
+    normalizeThreadId: (threadId) => threadId,
+  });
 }

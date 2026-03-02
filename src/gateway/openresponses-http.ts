@@ -6,60 +6,51 @@
  * @see https://www.open-responses.com/
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import type { ImageContent } from "../commands/agent/types.js";
-import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
+import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import {
-  DEFAULT_INPUT_FILE_MAX_BYTES,
-  DEFAULT_INPUT_FILE_MAX_CHARS,
-  DEFAULT_INPUT_FILE_MIMES,
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
   DEFAULT_INPUT_IMAGE_MIMES,
   DEFAULT_INPUT_MAX_REDIRECTS,
-  DEFAULT_INPUT_PDF_MAX_PAGES,
-  DEFAULT_INPUT_PDF_MAX_PIXELS,
-  DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
   DEFAULT_INPUT_TIMEOUT_MS,
   extractFileContentFromSource,
   extractImageContentFromSource,
   normalizeMimeList,
+  resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
-import {
-  buildAgentMessageFromConversationEntries,
-  type ConversationEntry,
-} from "./agent-prompt.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 import {
   CreateResponseBodySchema,
-  type ContentPart,
   type CreateResponseBody,
-  type ItemParam,
   type OutputItem,
   type ResponseResource,
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { buildAgentPrompt } from "./openresponses-prompt.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
   trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 };
 
@@ -69,24 +60,6 @@ const DEFAULT_MAX_URL_PARTS = 8;
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function extractTextContent(content: string | ContentPart[]): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  return content
-    .map((part) => {
-      if (part.type === "input_text") {
-        return part.text;
-      }
-      if (part.type === "output_text") {
-        return part.text;
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n");
 }
 
 type ResolvedResponsesLimits = {
@@ -109,6 +82,7 @@ function resolveResponsesLimits(
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
+  const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     maxUrlParts:
@@ -116,18 +90,8 @@ function resolveResponsesLimits(
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
     files: {
-      allowUrl: files?.allowUrl ?? true,
+      ...fileLimits,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
-      allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
-      maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
-      maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
-      maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
-      timeoutMs: files?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
-      pdf: {
-        maxPages: files?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
-        maxPixels: files?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
-        minTextChars: files?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
-      },
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
@@ -185,52 +149,7 @@ function applyToolChoice(params: {
   return { tools };
 }
 
-export function buildAgentPrompt(input: string | ItemParam[]): {
-  message: string;
-  extraSystemPrompt?: string;
-} {
-  if (typeof input === "string") {
-    return { message: input };
-  }
-
-  const systemParts: string[] = [];
-  const conversationEntries: ConversationEntry[] = [];
-
-  for (const item of input) {
-    if (item.type === "message") {
-      const content = extractTextContent(item.content).trim();
-      if (!content) {
-        continue;
-      }
-
-      if (item.role === "system" || item.role === "developer") {
-        systemParts.push(content);
-        continue;
-      }
-
-      const normalizedRole = item.role === "assistant" ? "assistant" : "user";
-      const sender = normalizedRole === "assistant" ? "Assistant" : "User";
-
-      conversationEntries.push({
-        role: normalizedRole,
-        entry: { sender, body: content },
-      });
-    } else if (item.type === "function_call_output") {
-      conversationEntries.push({
-        role: "tool",
-        entry: { sender: `Tool:${item.call_id}`, body: item.output },
-      });
-    }
-    // Skip reasoning and item_reference for prompt building (Phase 1)
-  }
-
-  const message = buildAgentMessageFromConversationEntries(conversationEntries);
-
-  return {
-    message,
-    extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
-  };
-}
+export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function resolveOpenResponsesSessionKey(params: {
   req: IncomingMessage;
@@ -357,6 +276,7 @@ export async function handleOpenResponsesHttpRequest(
     pathname: "/v1/responses",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     maxBodyBytes,
   });

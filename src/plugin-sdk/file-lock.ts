@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
 export type FileLockOptions = {
   retries: {
@@ -25,18 +26,7 @@ type HeldLock = {
 };
 
 const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
-
-function resolveHeldLocks(): Map<string, HeldLock> {
-  const proc = process as NodeJS.Process & {
-    [HELD_LOCKS_KEY]?: Map<string, HeldLock>;
-  };
-  if (!proc[HELD_LOCKS_KEY]) {
-    proc[HELD_LOCKS_KEY] = new Map<string, HeldLock>();
-  }
-  return proc[HELD_LOCKS_KEY];
-}
-
-const HELD_LOCKS = resolveHeldLocks();
+const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 
 function computeDelayMs(retries: FileLockOptions["retries"], attempt: number): number {
   const base = Math.min(

@@ -1,4 +1,3 @@
-import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
@@ -29,7 +28,14 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
+import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
+
+function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
+  // WhatsApp 440 = session conflict ("Unknown Stream Errored (conflict)").
+  // This is persistent until the operator resolves the conflicting session.
+  return statusCode === 440;
+}
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -154,9 +160,10 @@ export async function monitorWebChannel(
     let _lastInboundMsg: WebInboundMsg | null = null;
     let unregisterUnhandled: (() => void) | null = null;
 
-    // Watchdog to detect stuck message processing (e.g., event emitter died)
-    const MESSAGE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes without any messages
-    const WATCHDOG_CHECK_MS = 60 * 1000; // Check every minute
+    // Watchdog to detect stuck message processing (e.g., event emitter died).
+    // Tuning overrides are test-oriented; production defaults remain unchanged.
+    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1000; // 30m default
+    const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1000; // 1m default
 
     const backgroundTasks = new Set<Promise<unknown>>();
     const onMessage = createWebOnMessageHandler({
@@ -396,6 +403,22 @@ export async function monitorWebChannel(
     if (loggedOut) {
       runtime.error(
         `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
+      );
+      await closeListener();
+      break;
+    }
+
+    if (isNonRetryableWebCloseStatus(statusCode)) {
+      reconnectLogger.warn(
+        {
+          connectionId,
+          status: statusCode,
+          error: errorStr,
+        },
+        "web reconnect: non-retryable close status; stopping monitor",
+      );
+      runtime.error(
+        `WhatsApp Web connection closed (status ${statusCode}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel web")}\`. Stopping web monitoring.`,
       );
       await closeListener();
       break;

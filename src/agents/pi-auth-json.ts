@@ -1,19 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
+import {
+  piCredentialsEqual,
+  resolvePiCredentialMapFromStore,
+  type PiCredential,
+} from "./pi-auth-credentials.js";
 
-type AuthJsonCredential =
-  | {
-      type: "api_key";
-      key: string;
-    }
-  | {
-      type: "oauth";
-      access: string;
-      refresh: string;
-      expires: number;
-      [key: string]: unknown;
-    };
+/**
+ * @deprecated Legacy bridge for older flows that still expect `agentDir/auth.json`.
+ * Runtime auth resolution uses auth-profiles directly and should not depend on this module.
+ */
+type AuthJsonCredential = PiCredential;
 
 type AuthJsonShape = Record<string, AuthJsonCredential>;
 
@@ -31,70 +29,44 @@ async function readAuthJson(filePath: string): Promise<AuthJsonShape> {
 }
 
 /**
- * pi-coding-agent's ModelRegistry/AuthStorage expects OAuth credentials in auth.json.
+ * pi-coding-agent's ModelRegistry/AuthStorage expects credentials in auth.json.
  *
- * OpenClaw stores OAuth credentials in auth-profiles.json instead. This helper
- * bridges a subset of credentials into agentDir/auth.json so pi-coding-agent can
- * (a) consider the provider authenticated and (b) include built-in models in its
+ * OpenClaw stores credentials in auth-profiles.json instead. This helper
+ * bridges all credentials into agentDir/auth.json so pi-coding-agent can
+ * (a) consider providers authenticated and (b) include built-in models in its
  * registry/catalog output.
  *
- * Currently used for openai-codex.
+ * Syncs all credential types: api_key, token (as api_key), and oauth.
+ *
+ * @deprecated Runtime auth now comes from OpenClaw auth-profiles snapshots.
  */
 export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promise<{
   wrote: boolean;
   authPath: string;
 }> {
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const codexProfiles = listProfilesForProvider(store, "openai-codex");
-  if (codexProfiles.length === 0) {
-    return { wrote: false, authPath: path.join(agentDir, "auth.json") };
-  }
-
-  const profileId = codexProfiles[0];
-  const cred = profileId ? store.profiles[profileId] : undefined;
-  if (!cred || cred.type !== "oauth") {
-    return { wrote: false, authPath: path.join(agentDir, "auth.json") };
-  }
-
-  const accessRaw = (cred as { access?: unknown }).access;
-  const refreshRaw = (cred as { refresh?: unknown }).refresh;
-  const expiresRaw = (cred as { expires?: unknown }).expires;
-
-  const access = typeof accessRaw === "string" ? accessRaw.trim() : "";
-  const refresh = typeof refreshRaw === "string" ? refreshRaw.trim() : "";
-  const expires = typeof expiresRaw === "number" ? expiresRaw : Number.NaN;
-
-  if (!access || !refresh || !Number.isFinite(expires) || expires <= 0) {
-    return { wrote: false, authPath: path.join(agentDir, "auth.json") };
-  }
-
   const authPath = path.join(agentDir, "auth.json");
-  const next = await readAuthJson(authPath);
-
-  const existing = next["openai-codex"];
-  const desired: AuthJsonCredential = {
-    type: "oauth",
-    access,
-    refresh,
-    expires,
-  };
-
-  const isSame =
-    existing &&
-    typeof existing === "object" &&
-    (existing as { type?: unknown }).type === "oauth" &&
-    (existing as { access?: unknown }).access === access &&
-    (existing as { refresh?: unknown }).refresh === refresh &&
-    (existing as { expires?: unknown }).expires === expires;
-
-  if (isSame) {
+  const providerCredentials = resolvePiCredentialMapFromStore(store);
+  if (Object.keys(providerCredentials).length === 0) {
     return { wrote: false, authPath };
   }
 
-  next["openai-codex"] = desired;
+  const existing = await readAuthJson(authPath);
+  let changed = false;
+
+  for (const [provider, cred] of Object.entries(providerCredentials)) {
+    if (!piCredentialsEqual(existing[provider], cred)) {
+      existing[provider] = cred;
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return { wrote: false, authPath };
+  }
 
   await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(authPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  await fs.writeFile(authPath, `${JSON.stringify(existing, null, 2)}\n`, { mode: 0o600 });
 
   return { wrote: true, authPath };
 }

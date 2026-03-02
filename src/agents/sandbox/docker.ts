@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -104,14 +106,16 @@ export function execDockerRaw(
   });
 }
 
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { readRegistry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+
+const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
@@ -142,6 +146,25 @@ export async function readDockerContainerLabel(
     return null;
   }
   return raw;
+}
+
+export async function readDockerContainerEnvVar(
+  containerName: string,
+  envVar: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith(`${envVar}=`)) {
+      return line.slice(envVar.length + 1);
+    }
+  }
+  return null;
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -240,9 +263,26 @@ export function buildSandboxCreateArgs(params: {
   createdAtMs?: number;
   labels?: Record<string, string>;
   configHash?: string;
+  includeBinds?: boolean;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity(params.cfg);
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: params.bindSourceRoots,
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
@@ -269,11 +309,15 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  for (const [key, value] of Object.entries(params.cfg.env ?? {})) {
-    if (!key.trim()) {
-      continue;
-    }
-    args.push("--env", key + "=" + value);
+  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
+  if (envSanitization.blocked.length > 0) {
+    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
+  }
+  if (envSanitization.warnings.length > 0) {
+    log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
+  }
+  for (const [key, value] of Object.entries(envSanitization.allowed)) {
+    args.push("--env", `${key}=${value}`);
   }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
@@ -315,12 +359,21 @@ export function buildSandboxCreateArgs(params: {
       args.push("--ulimit", formatted);
     }
   }
-  if (params.cfg.binds?.length) {
+  if (params.includeBinds !== false && params.cfg.binds?.length) {
     for (const bind of params.cfg.binds) {
       args.push("-v", bind);
     }
   }
   return args;
+}
+
+function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
+  if (!cfg.binds?.length) {
+    return;
+  }
+  for (const bind of cfg.binds) {
+    args.push("-v", bind);
+  }
 }
 
 async function createSandboxContainer(params: {
@@ -340,6 +393,8 @@ async function createSandboxContainer(params: {
     cfg,
     scopeKey,
     configHash: params.configHash,
+    includeBinds: false,
+    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
@@ -352,6 +407,7 @@ async function createSandboxContainer(params: {
       `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
     );
   }
+  appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);

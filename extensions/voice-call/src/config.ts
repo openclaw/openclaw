@@ -219,6 +219,17 @@ export const VoiceCallStreamingConfigSchema = z
     vadThreshold: z.number().min(0).max(1).default(0.5),
     /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
+    /**
+     * Close unauthenticated media stream sockets if no valid `start` frame arrives in time.
+     * Protects against pre-auth idle connection hold attacks.
+     */
+    preStartTimeoutMs: z.number().int().positive().default(5000),
+    /** Maximum number of concurrently pending (pre-start) media stream sockets. */
+    maxPendingConnections: z.number().int().positive().default(32),
+    /** Maximum pending media stream sockets per source IP. */
+    maxPendingConnectionsPerIp: z.number().int().positive().default(4),
+    /** Hard cap for all open media stream sockets (pending + active). */
+    maxConnections: z.number().int().positive().default(128),
   })
   .strict()
   .default({
@@ -228,6 +239,10 @@ export const VoiceCallStreamingConfigSchema = z
     silenceDurationMs: 800,
     vadThreshold: 0.5,
     streamPath: "/voice/stream",
+    preStartTimeoutMs: 5000,
+    maxPendingConnections: 32,
+    maxPendingConnectionsPerIp: 4,
+    maxConnections: 128,
   });
 export type VoiceCallStreamingConfig = z.infer<typeof VoiceCallStreamingConfigSchema>;
 
@@ -272,6 +287,14 @@ export const VoiceCallConfigSchema = z
 
     /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
+
+    /**
+     * Maximum age of a call in seconds before it is automatically reaped.
+     * Catches calls stuck in unexpected states (e.g., notify-mode calls that
+     * never receive a terminal webhook). Set to 0 to disable.
+     * Default: 0 (disabled). Recommended: 120-300 for production.
+     */
+    staleCallReaperSeconds: z.number().int().nonnegative().default(0),
 
     /** Silence timeout for end-of-speech detection (ms) */
     silenceTimeoutMs: z.number().int().positive().default(800),

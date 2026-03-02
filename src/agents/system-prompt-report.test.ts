@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
   return {
@@ -13,17 +13,31 @@ function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): Workspac
 }
 
 describe("buildSystemPromptReport", () => {
-  it("counts injected chars when injected file paths are absolute", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = buildSystemPromptReport({
+  const makeReport = (params: {
+    file: WorkspaceBootstrapFile;
+    injectedPath: string;
+    injectedContent: string;
+    bootstrapMaxChars?: number;
+    bootstrapTotalMaxChars?: number;
+  }) =>
+    buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
-      bootstrapMaxChars: 20_000,
+      bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
+      bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [{ path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" }],
+      bootstrapFiles: [params.file],
+      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
       skillsPrompt: "",
       tools: [],
+    });
+
+  it("counts injected chars when injected file paths are absolute", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "/tmp/workspace/policies/AGENTS.md",
+      injectedContent: "trimmed",
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
@@ -31,13 +45,67 @@ describe("buildSystemPromptReport", () => {
 
   it("keeps legacy basename matching for injected files", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "AGENTS.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("marks workspace files truncated when injected chars are smaller than raw chars", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+      content: "abcdefghijklmnopqrstuvwxyz",
+    });
+    const report = makeReport({
+      file,
+      injectedPath: "/tmp/workspace/policies/AGENTS.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
+  });
+
+  it("includes both bootstrap caps in the report payload", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "AGENTS.md",
+      injectedContent: "trimmed",
+      bootstrapMaxChars: 11_111,
+      bootstrapTotalMaxChars: 22_222,
+    });
+
+    expect(report.bootstrapMaxChars).toBe(11_111);
+    expect(report.bootstrapTotalMaxChars).toBe(22_222);
+  });
+
+  it("reports injectedChars=0 when injected file does not match by path or basename", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "/tmp/workspace/policies/OTHER.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(0);
+    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
+  });
+
+  it("ignores malformed injected file paths and still matches valid entries", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
       bootstrapFiles: [file],
-      injectedFiles: [{ path: "AGENTS.md", content: "trimmed" }],
+      injectedFiles: [
+        { path: 123 as unknown as string, content: "bad" },
+        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+      ],
       skillsPrompt: "",
       tools: [],
     });

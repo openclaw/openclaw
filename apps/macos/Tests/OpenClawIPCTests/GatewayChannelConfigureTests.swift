@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import os
 import Testing
 @testable import OpenClaw
@@ -20,7 +20,9 @@ import Testing
             self.helloDelayMs = helloDelayMs
         }
 
-        func snapshotCancelCount() -> Int { self.cancelCount.withLock { $0 } }
+        func snapshotCancelCount() -> Int {
+            self.cancelCount.withLock { $0 }
+        }
 
         func resume() {
             self.state = .running
@@ -45,12 +47,7 @@ import Testing
 
             // First send is the connect handshake request. Subsequent sends are request frames.
             if currentSendCount == 0 {
-                guard case let .data(data) = message else { return }
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   (obj["type"] as? String) == "req",
-                   (obj["method"] as? String) == "connect",
-                   let id = obj["id"] as? String
-                {
+                if let id = GatewayWebSocketTestSupport.connectRequestID(from: message) {
                     self.connectRequestID.withLock { $0 = id }
                 }
                 return
@@ -65,7 +62,7 @@ import Testing
                 return
             }
 
-            let response = Self.responseData(id: id)
+            let response = GatewayWebSocketTestSupport.okResponseData(id: id)
             let handler = self.pendingReceiveHandler.withLock { $0 }
             handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(response)))
         }
@@ -75,7 +72,7 @@ import Testing
                 try await Task.sleep(nanoseconds: UInt64(self.helloDelayMs) * 1_000_000)
             }
             let id = self.connectRequestID.withLock { $0 } ?? "connect"
-            return .data(Self.connectOkData(id: id))
+            return .data(GatewayWebSocketTestSupport.connectOkData(id: id))
         }
 
         func receive(
@@ -88,42 +85,6 @@ import Testing
             let handler = self.pendingReceiveHandler.withLock { $0 }
             handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(data)))
         }
-
-        private static func connectOkData(id: String) -> Data {
-            let json = """
-            {
-              "type": "res",
-              "id": "\(id)",
-              "ok": true,
-              "payload": {
-                "type": "hello-ok",
-                "protocol": 2,
-                "server": { "version": "test", "connId": "test" },
-                "features": { "methods": [], "events": [] },
-                "snapshot": {
-                  "presence": [ { "ts": 1 } ],
-                  "health": {},
-                  "stateVersion": { "presence": 0, "health": 0 },
-                  "uptimeMs": 0
-                },
-                "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
-              }
-            }
-            """
-            return Data(json.utf8)
-        }
-
-        private static func responseData(id: String) -> Data {
-            let json = """
-            {
-              "type": "res",
-              "id": "\(id)",
-              "ok": true,
-              "payload": { "ok": true }
-            }
-            """
-            return Data(json.utf8)
-        }
     }
 
     private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
@@ -135,7 +96,10 @@ import Testing
             self.helloDelayMs = helloDelayMs
         }
 
-        func snapshotMakeCount() -> Int { self.makeCount.withLock { $0 } }
+        func snapshotMakeCount() -> Int {
+            self.makeCount.withLock { $0 }
+        }
+
         func snapshotCancelCount() -> Int {
             self.tasks.withLock { tasks in
                 tasks.reduce(0) { $0 + $1.snapshotCancelCount() }
@@ -162,13 +126,18 @@ import Testing
             self.token.withLock { $0 = token }
         }
 
-        func snapshotToken() -> String? { self.token.withLock { $0 } }
-        func setToken(_ value: String?) { self.token.withLock { $0 = value } }
+        func snapshotToken() -> String? {
+            self.token.withLock { $0 }
+        }
+
+        func setToken(_ value: String?) {
+            self.token.withLock { $0 = value }
+        }
     }
 
     @Test func requestReusesSingleWebSocketForSameConfig() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -184,7 +153,7 @@ import Testing
 
     @Test func requestReconfiguresAndCancelsOnTokenChange() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: "a")
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -201,7 +170,7 @@ import Testing
 
     @Test func concurrentRequestsStillUseSingleWebSocket() async throws {
         let session = FakeWebSocketSession(helloDelayMs: 150)
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -216,7 +185,7 @@ import Testing
 
     @Test func subscribeReplaysLatestSnapshot() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
@@ -237,7 +206,7 @@ import Testing
 
     @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
         let session = FakeWebSocketSession()
-        let url = URL(string: "ws://example.invalid")!
+        let url = try #require(URL(string: "ws://example.invalid"))
         let cfg = ConfigSource(token: nil)
         let conn = GatewayConnection(
             configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },

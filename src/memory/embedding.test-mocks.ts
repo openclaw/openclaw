@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "./test-runtime-mocks.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -23,18 +24,6 @@ export function resetEmbeddingMocks(): void {
   hoisted.embedBatch.mockImplementation(async (texts: string[]) => texts.map(() => [0, 1, 0]));
   hoisted.embedQuery.mockImplementation(async () => [0, 1, 0]);
 }
-
-// Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
-vi.mock("chokidar", () => ({
-  default: {
-    watch: () => ({ on: () => {}, close: async () => {} }),
-  },
-  watch: () => ({ on: () => {}, close: async () => {} }),
-}));
-
-vi.mock("./sqlite-vec.js", () => ({
-  loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
-}));
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: async () => ({

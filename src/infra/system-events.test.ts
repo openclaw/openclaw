@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { prependSystemEvents } from "../auto-reply/reply/session-updates.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
@@ -45,6 +45,14 @@ describe("system events (session routing)", () => {
 
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
+  });
+
+  it("returns false for consecutive duplicate events", () => {
+    const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
+    const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
   });
 });
 

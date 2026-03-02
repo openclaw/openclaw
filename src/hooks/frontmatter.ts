@@ -1,3 +1,14 @@
+import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import {
+  getFrontmatterString,
+  normalizeStringList,
+  parseOpenClawManifestInstallBase,
+  parseFrontmatterBool,
+  resolveOpenClawManifestBlock,
+  resolveOpenClawManifestInstall,
+  resolveOpenClawManifestOs,
+  resolveOpenClawManifestRequires,
+} from "../shared/frontmatter.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,
@@ -5,46 +16,29 @@ import type {
   HookInvocationPolicy,
   ParsedHookFrontmatter,
 } from "./types.js";
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
-import {
-  getFrontmatterString,
-  normalizeStringList,
-  parseFrontmatterBool,
-  resolveOpenClawManifestBlock,
-  resolveOpenClawManifestInstall,
-  resolveOpenClawManifestOs,
-  resolveOpenClawManifestRequires,
-} from "../shared/frontmatter.js";
 
 export function parseFrontmatter(content: string): ParsedHookFrontmatter {
   return parseFrontmatterBlock(content);
 }
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
-  if (!input || typeof input !== "object") {
+  const parsed = parseOpenClawManifestInstallBase(input, ["bundled", "npm", "git"]);
+  if (!parsed) {
     return undefined;
   }
-  const raw = input as Record<string, unknown>;
-  const kindRaw =
-    typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
-  const kind = kindRaw.trim().toLowerCase();
-  if (kind !== "bundled" && kind !== "npm" && kind !== "git") {
-    return undefined;
-  }
-
+  const { raw } = parsed;
   const spec: HookInstallSpec = {
-    kind: kind,
+    kind: parsed.kind as HookInstallSpec["kind"],
   };
 
-  if (typeof raw.id === "string") {
-    spec.id = raw.id;
+  if (parsed.id) {
+    spec.id = parsed.id;
   }
-  if (typeof raw.label === "string") {
-    spec.label = raw.label;
+  if (parsed.label) {
+    spec.label = parsed.label;
   }
-  const bins = normalizeStringList(raw.bins);
-  if (bins.length > 0) {
-    spec.bins = bins;
+  if (parsed.bins) {
+    spec.bins = parsed.bins;
   }
   if (typeof raw.package === "string") {
     spec.package = raw.package;

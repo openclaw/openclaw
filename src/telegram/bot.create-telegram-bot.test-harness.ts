@@ -1,15 +1,12 @@
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
-
-type ReplyOpts =
-  | {
-      onReplyStart?: () => void | Promise<void>;
-    }
-  | undefined;
 
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
@@ -123,6 +120,7 @@ export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
 export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
 export const sendAnimationSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 78 }));
 export const sendPhotoSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 79 }));
+export const getFileSpy: AnyAsyncMock = vi.fn(async () => ({ file_path: "media/file.jpg" }));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -135,6 +133,7 @@ type ApiStub = {
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
+  getFile: typeof getFileSpy;
 };
 
 const apiStub: ApiStub = {
@@ -148,6 +147,7 @@ const apiStub: ApiStub = {
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
+  getFile: getFileSpy,
 };
 
 vi.mock("grammy", () => ({
@@ -185,12 +185,16 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-export const replySpy: MockFn<(ctx: unknown, opts?: ReplyOpts) => Promise<void>> = vi.fn(
-  async (_ctx, opts) => {
-    await opts?.onReplyStart?.();
-    return undefined;
-  },
-);
+export const replySpy: MockFn<
+  (
+    ctx: MsgContext,
+    opts?: GetReplyOptions,
+    configOverride?: OpenClawConfig,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+> = vi.fn(async (_ctx, opts) => {
+  await opts?.onReplyStart?.();
+  return undefined;
+});
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: replySpy,
@@ -289,6 +293,8 @@ beforeEach(() => {
   sendPhotoSpy.mockResolvedValue({ message_id: 79 });
   sendMessageSpy.mockReset();
   sendMessageSpy.mockResolvedValue({ message_id: 77 });
+  getFileSpy.mockReset();
+  getFileSpy.mockResolvedValue({ file_path: "media/file.jpg" });
 
   setMessageReactionSpy.mockReset();
   setMessageReactionSpy.mockResolvedValue(undefined);

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "./runtime.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
@@ -12,6 +11,7 @@ import {
   setLoggerOverride,
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
+import type { RuntimeEnv } from "./runtime.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -122,24 +122,23 @@ describe("globals", () => {
 });
 
 describe("stripRedundantSubsystemPrefixForConsole", () => {
-  it("drops '<subsystem>:' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discord: hello", "discord")).toBe("hello");
-  });
+  it("drops known subsystem prefixes", () => {
+    const cases = [
+      { input: "discord: hello", subsystem: "discord", expected: "hello" },
+      { input: "WhatsApp: hello", subsystem: "whatsapp", expected: "hello" },
+      { input: "discord gateway: closed", subsystem: "discord", expected: "gateway: closed" },
+      {
+        input: "[discord] connection stalled",
+        subsystem: "discord",
+        expected: "connection stalled",
+      },
+    ];
 
-  it("drops '<Subsystem>:' prefix case-insensitively", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("WhatsApp: hello", "whatsapp")).toBe("hello");
-  });
-
-  it("drops '<subsystem> ' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("discord gateway: closed", "discord")).toBe(
-      "gateway: closed",
-    );
-  });
-
-  it("drops '[subsystem]' prefix", () => {
-    expect(stripRedundantSubsystemPrefixForConsole("[discord] connection stalled", "discord")).toBe(
-      "connection stalled",
-    );
+    for (const testCase of cases) {
+      expect(stripRedundantSubsystemPrefixForConsole(testCase.input, testCase.subsystem)).toBe(
+        testCase.expected,
+      );
+    }
   });
 
   it("keeps messages that do not start with the subsystem", () => {

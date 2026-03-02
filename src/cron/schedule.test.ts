@@ -13,6 +13,45 @@ describe("cron schedule", () => {
     expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
+  it("does not roll back year for Asia/Shanghai daily cron schedules (#30351)", () => {
+    // 2026-03-01 08:00:00 in Asia/Shanghai
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+
+    // Next 08:00 local should be the following day, not a past year.
+    expect(next).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    expect(next).toBeGreaterThan(nowMs);
+    expect(new Date(next ?? 0).getUTCFullYear()).toBe(2026);
+  });
+
+  it("throws a clear error when cron expr is missing at runtime", () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    expect(() =>
+      computeNextRunAtMs(
+        {
+          kind: "cron",
+        } as unknown as { kind: "cron"; expr: string; tz?: string },
+        nowMs,
+      ),
+    ).toThrow("invalid cron schedule: expr is required");
+  });
+
+  it("supports legacy cron field when expr is missing", () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      {
+        kind: "cron",
+        cron: "0 9 * * 3",
+        tz: "America/Los_Angeles",
+      } as unknown as { kind: "cron"; expr: string; tz?: string },
+      nowMs,
+    );
+    expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
+  });
+
   it("computes next run for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
@@ -32,6 +71,16 @@ describe("cron schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
+  });
+
+  it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
+    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    expect(next).toBeDefined();
+    expect(next!).toBeGreaterThan(nowMs);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {
@@ -65,6 +114,24 @@ describe("cron schedule", () => {
     it("returns today when nowMs is before the match", () => {
       const next = computeNextRunAtMs(dailyNoon, noonMs - 500);
       expect(next).toBe(noonMs);
+    });
+
+    it("advances to next day when job completes within same second it fired (#17821)", () => {
+      // Regression test for #17821: cron jobs that fire and complete within
+      // the same second (e.g., fire at 12:00:00.014, complete at 12:00:00.021)
+      // were getting nextRunAtMs set to the same second, causing a spin loop.
+      //
+      // Simulating: job scheduled for 12:00:00, fires at .014, completes at .021
+      const completedAtMs = noonMs + 21; // 12:00:00.021
+      const next = computeNextRunAtMs(dailyNoon, completedAtMs);
+      expect(next).toBe(noonMs + 86_400_000); // must be next day, NOT noonMs
+    });
+
+    it("advances to next day when job completes just before second boundary (#17821)", () => {
+      // Edge case: job completes at .999, still within the firing second
+      const completedAtMs = noonMs + 999; // 12:00:00.999
+      const next = computeNextRunAtMs(dailyNoon, completedAtMs);
+      expect(next).toBe(noonMs + 86_400_000); // next day
     });
   });
 });

@@ -1,10 +1,11 @@
+import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { ResponsePrefixContext } from "./response-prefix-template.js";
-import type { TypingController } from "./typing.js";
 import { sleep } from "../../utils.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { ResponsePrefixContext } from "./response-prefix-template.js";
+import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -57,6 +58,7 @@ export type ReplyDispatcherOptions = {
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
+  typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
@@ -209,28 +211,31 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
+  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
+  const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
     },
   });
 
   return {
     dispatcher,
     replyOptions: {
-      onReplyStart,
-      onTypingCleanup: onCleanup,
+      onReplyStart: resolvedOnReplyStart,
+      onTypingCleanup: resolvedOnCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },
     },
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
     },
   };
 }

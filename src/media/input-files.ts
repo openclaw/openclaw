@@ -1,7 +1,7 @@
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
-import { estimateBase64DecodedBytes } from "./base64.js";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
@@ -62,6 +62,20 @@ export type InputFileLimits = {
   maxRedirects: number;
   timeoutMs: number;
   pdf: InputPdfLimits;
+};
+
+export type InputFileLimitsConfig = {
+  allowUrl?: boolean;
+  allowedMimes?: string[];
+  maxBytes?: number;
+  maxChars?: number;
+  maxRedirects?: number;
+  timeoutMs?: number;
+  pdf?: {
+    maxPages?: number;
+    maxPixels?: number;
+    minTextChars?: number;
+  };
 };
 
 export type InputImageLimits = {
@@ -152,6 +166,22 @@ export function parseContentType(value: string | undefined): {
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
   return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+}
+
+export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
+  return {
+    allowUrl: config?.allowUrl ?? true,
+    allowedMimes: normalizeMimeList(config?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    maxBytes: config?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
+    maxChars: config?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
+    maxRedirects: config?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
+    timeoutMs: config?.timeoutMs ?? DEFAULT_INPUT_TIMEOUT_MS,
+    pdf: {
+      maxPages: config?.pdf?.maxPages ?? DEFAULT_INPUT_PDF_MAX_PAGES,
+      maxPixels: config?.pdf?.maxPixels ?? DEFAULT_INPUT_PDF_MAX_PIXELS,
+      minTextChars: config?.pdf?.minTextChars ?? DEFAULT_INPUT_PDF_MIN_TEXT_CHARS,
+    },
+  };
 }
 
 export async function fetchWithGuard(params: {
@@ -279,17 +309,21 @@ export async function extractImageContentFromSource(
       throw new Error("input_image base64 source missing 'data' field");
     }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "Image" });
+    const canonicalData = canonicalizeBase64(source.data);
+    if (!canonicalData) {
+      throw new Error("input_image base64 source has invalid 'data' field");
+    }
     const mimeType = normalizeMimeType(source.mediaType) ?? "image/png";
     if (!limits.allowedMimes.has(mimeType)) {
       throw new Error(`Unsupported image MIME type: ${mimeType}`);
     }
-    const buffer = Buffer.from(source.data, "base64");
+    const buffer = Buffer.from(canonicalData, "base64");
     if (buffer.byteLength > limits.maxBytes) {
       throw new Error(
         `Image too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`,
       );
     }
-    return { type: "image", data: source.data, mimeType };
+    return { type: "image", data: canonicalData, mimeType };
   }
 
   if (source.type === "url" && source.url) {
@@ -332,10 +366,14 @@ export async function extractFileContentFromSource(params: {
       throw new Error("input_file base64 source missing 'data' field");
     }
     rejectOversizedBase64Payload({ data: source.data, maxBytes: limits.maxBytes, label: "File" });
+    const canonicalData = canonicalizeBase64(source.data);
+    if (!canonicalData) {
+      throw new Error("input_file base64 source has invalid 'data' field");
+    }
     const parsed = parseContentType(source.mediaType);
     mimeType = parsed.mimeType;
     charset = parsed.charset;
-    buffer = Buffer.from(source.data, "base64");
+    buffer = Buffer.from(canonicalData, "base64");
   } else if (source.type === "url" && source.url) {
     if (!limits.allowUrl) {
       throw new Error("input_file URL sources are disabled by config");

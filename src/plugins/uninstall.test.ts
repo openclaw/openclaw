@@ -10,6 +10,97 @@ import {
   uninstallPlugin,
 } from "./uninstall.js";
 
+async function createInstalledNpmPluginFixture(params: {
+  baseDir: string;
+  pluginId?: string;
+}): Promise<{
+  pluginId: string;
+  extensionsDir: string;
+  pluginDir: string;
+  config: OpenClawConfig;
+}> {
+  const pluginId = params.pluginId ?? "my-plugin";
+  const extensionsDir = path.join(params.baseDir, "extensions");
+  const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+
+  return {
+    pluginId,
+    extensionsDir,
+    pluginDir,
+    config: {
+      plugins: {
+        entries: {
+          [pluginId]: { enabled: true },
+        },
+        installs: {
+          [pluginId]: {
+            source: "npm",
+            spec: `${pluginId}@1.0.0`,
+            installPath: pluginDir,
+          },
+        },
+      },
+    },
+  };
+}
+
+type UninstallResult = Awaited<ReturnType<typeof uninstallPlugin>>;
+
+async function runDeleteInstalledNpmPluginFixture(baseDir: string): Promise<{
+  pluginDir: string;
+  result: UninstallResult;
+}> {
+  const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
+    baseDir,
+  });
+  const result = await uninstallPlugin({
+    config,
+    pluginId,
+    deleteFiles: true,
+    extensionsDir,
+  });
+  return { pluginDir, result };
+}
+
+function createSinglePluginEntries(pluginId = "my-plugin") {
+  return {
+    [pluginId]: { enabled: true },
+  };
+}
+
+function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
+  return {
+    plugins: {
+      entries: createSinglePluginEntries(),
+      slots: {},
+    },
+  };
+}
+
+function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
+  return {
+    plugins: {
+      entries: createSinglePluginEntries(),
+      installs: {
+        "my-plugin": {
+          source: "npm",
+          spec: "my-plugin@1.0.0",
+          installPath,
+        },
+      },
+    },
+  };
+}
+
+async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
+  const pluginDir = path.join(baseDir, pluginId);
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+  return pluginDir;
+}
+
 describe("removePluginFromConfig", () => {
   it("removes plugin from entries", () => {
     const config: OpenClawConfig = {
@@ -139,14 +230,7 @@ describe("removePluginFromConfig", () => {
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        slots: {},
-      },
-    };
+    const config = createSinglePluginWithEmptySlotsConfig();
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
@@ -154,14 +238,7 @@ describe("removePluginFromConfig", () => {
   });
 
   it("cleans up empty slots object", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        slots: {},
-      },
-    };
+    const config = createSinglePluginWithEmptySlotsConfig();
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
@@ -286,35 +363,9 @@ describe("uninstallPlugin", () => {
   });
 
   it("deletes directory when deleteFiles is true", async () => {
-    const pluginId = "my-plugin";
-    const extensionsDir = path.join(tempDir, "extensions");
-    const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
-
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          [pluginId]: { enabled: true },
-        },
-        installs: {
-          [pluginId]: {
-            source: "npm",
-            spec: `${pluginId}@1.0.0`,
-            installPath: pluginDir,
-          },
-        },
-      },
-    };
+    const { pluginDir, result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
     try {
-      const result = await uninstallPlugin({
-        config,
-        pluginId,
-        deleteFiles: true,
-        extensionsDir,
-      });
-
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.actions.directory).toBe(true);
@@ -326,15 +377,11 @@ describe("uninstallPlugin", () => {
   });
 
   it("preserves directory for linked plugins", async () => {
-    const pluginDir = path.join(tempDir, "my-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+    const pluginDir = await createPluginDirFixture(tempDir);
 
     const config: OpenClawConfig = {
       plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
+        entries: createSinglePluginEntries(),
         installs: {
           "my-plugin": {
             source: "path",
@@ -364,24 +411,9 @@ describe("uninstallPlugin", () => {
   });
 
   it("does not delete directory when deleteFiles is false", async () => {
-    const pluginDir = path.join(tempDir, "my-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
+    const pluginDir = await createPluginDirFixture(tempDir);
 
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        installs: {
-          "my-plugin": {
-            source: "npm",
-            spec: "my-plugin@1.0.0",
-            installPath: pluginDir,
-          },
-        },
-      },
-    };
+    const config = createSingleNpmInstallConfig(pluginDir);
 
     const result = await uninstallPlugin({
       config,
@@ -398,20 +430,7 @@ describe("uninstallPlugin", () => {
   });
 
   it("succeeds even if directory does not exist", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        installs: {
-          "my-plugin": {
-            source: "npm",
-            spec: "my-plugin@1.0.0",
-            installPath: "/nonexistent/path",
-          },
-        },
-      },
-    };
+    const config = createSingleNpmInstallConfig("/nonexistent/path");
 
     const result = await uninstallPlugin({
       config,
@@ -428,35 +447,9 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {
-    const pluginId = "my-plugin";
-    const extensionsDir = path.join(tempDir, "extensions");
-    const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
-
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          [pluginId]: { enabled: true },
-        },
-        installs: {
-          [pluginId]: {
-            source: "npm",
-            spec: `${pluginId}@1.0.0`,
-            installPath: pluginDir,
-          },
-        },
-      },
-    };
-
     const rmSpy = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("permission denied"));
     try {
-      const result = await uninstallPlugin({
-        config,
-        pluginId,
-        deleteFiles: true,
-        extensionsDir,
-      });
+      const { result } = await runDeleteInstalledNpmPluginFixture(tempDir);
 
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -475,20 +468,7 @@ describe("uninstallPlugin", () => {
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.writeFile(path.join(outsideDir, "index.js"), "// keep me");
 
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        installs: {
-          "my-plugin": {
-            source: "npm",
-            spec: "my-plugin@1.0.0",
-            installPath: outsideDir,
-          },
-        },
-      },
-    };
+    const config = createSingleNpmInstallConfig(outsideDir);
 
     const result = await uninstallPlugin({
       config,

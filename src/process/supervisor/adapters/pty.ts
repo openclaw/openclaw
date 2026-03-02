@@ -1,6 +1,8 @@
-import type { ManagedRunStdin } from "../types.js";
 import { killProcessTree } from "../../kill-tree.js";
+import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
+
+const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyDisposable = { dispose: () => void };
@@ -30,15 +32,7 @@ type PtyModule = {
   };
 };
 
-export type PtyAdapter = {
-  pid?: number;
-  stdin?: ManagedRunStdin;
-  onStdout: (listener: (chunk: string) => void) => void;
-  onStderr: (listener: (chunk: string) => void) => void;
-  wait: () => Promise<{ code: number | null; signal: NodeJS.Signals | number | null }>;
-  kill: (signal?: NodeJS.Signals) => void;
-  dispose: () => void;
-};
+export type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
   shell: string;
@@ -70,17 +64,37 @@ export async function createPtyAdapter(params: {
     | null = null;
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
     null;
+  let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+
+  const clearForceKillWaitFallback = () => {
+    if (!forceKillWaitFallbackTimer) {
+      return;
+    }
+    clearTimeout(forceKillWaitFallbackTimer);
+    forceKillWaitFallbackTimer = null;
+  };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | number | null }) => {
     if (waitResult) {
       return;
     }
+    clearForceKillWaitFallback();
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
       resolveWait = null;
       resolve(value);
     }
+  };
+
+  const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
+    clearForceKillWaitFallback();
+    // Some PTY hosts fail to emit onExit after kill; use a delayed fallback
+    // so callers can still unblock without marking termination immediately.
+    forceKillWaitFallbackTimer = setTimeout(() => {
+      settleWait({ code: null, signal });
+    }, FORCE_KILL_WAIT_FALLBACK_MS);
+    forceKillWaitFallbackTimer.unref();
   };
 
   exitListener =
@@ -151,9 +165,10 @@ export async function createPtyAdapter(params: {
     } catch {
       // ignore kill errors
     }
-    // Some PTY hosts do not emit `onExit` reliably after kill.
-    // Ensure waiters can progress on forced termination.
-    settleWait({ code: null, signal });
+
+    if (signal === "SIGKILL") {
+      scheduleForceKillWaitFallback(signal);
+    }
   };
 
   const dispose = () => {
@@ -167,6 +182,7 @@ export async function createPtyAdapter(params: {
     } catch {
       // ignore disposal errors
     }
+    clearForceKillWaitFallback();
     dataListener = null;
     exitListener = null;
     settleWait({ code: null, signal: null });

@@ -8,6 +8,7 @@ import {
   resolveEffectiveHomeDir,
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
+import { isPlainObject } from "./infra/plain-object.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -54,18 +55,7 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
-/**
- * Type guard for plain objects (not arrays, null, Date, RegExp, etc.).
- * Uses Object.prototype.toString for maximum safety.
- */
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  );
-}
+export { isPlainObject };
 
 /**
  * Type guard for Record<string, unknown> (less strict than isPlainObject).
@@ -293,6 +283,9 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
 }
 
 export function resolveUserPath(input: string): string {
+  if (!input) {
+    return "";
+  }
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;

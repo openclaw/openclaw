@@ -42,6 +42,8 @@ export type UsageProps = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
+  timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
+  timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
   sessionLogsExpanded: boolean;
@@ -76,6 +78,7 @@ export type UsageProps = {
   onDailyChartModeChange: (mode: "total" | "by-type") => void;
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
   onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
+  onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
   onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
   onSelectHour: (hour: number, shiftKey: boolean) => void;
   onClearDays: () => void;

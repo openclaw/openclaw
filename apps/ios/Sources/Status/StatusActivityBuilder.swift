@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum StatusActivityBuilder {
+    @MainActor
     static func build(
         appModel: NodeAppModel,
         voiceWakeEnabled: Bool,

@@ -136,7 +136,11 @@ _clawdock_ensure_dir() {
 # Wrapper to run docker compose commands
 _clawdock_compose() {
   _clawdock_ensure_dir || return 1
-  command docker compose -f "${CLAWDOCK_DIR}/docker-compose.yml" "$@"
+  local compose_args=(-f "${CLAWDOCK_DIR}/docker-compose.yml")
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
+  fi
+  command docker compose "${compose_args[@]}" "$@"
 }
 
 _clawdock_read_env_token() {

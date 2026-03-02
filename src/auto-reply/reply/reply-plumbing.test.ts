@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { TemplateContext } from "../templating.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
+import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
 import {
@@ -60,6 +60,39 @@ describe("buildThreadingToolContext", () => {
     });
 
     expect(result.currentChannelId).toBe("chat:99");
+  });
+
+  it("normalizes signal direct targets for tool context", () => {
+    const sessionCtx = {
+      Provider: "signal",
+      ChatType: "direct",
+      From: "signal:+15550001",
+      To: "signal:+15550002",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("+15550001");
+  });
+
+  it("preserves signal group ids for tool context", () => {
+    const sessionCtx = {
+      Provider: "signal",
+      ChatType: "group",
+      To: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
   });
 
   it("uses the sender handle for iMessage direct chats", () => {
@@ -173,7 +206,7 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeUndefined();
   });
 
-  it("keeps explicit tags for Slack when off mode allows tags", () => {
+  it("strips explicit tags for Slack when off mode disallows tags", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "[[reply_to_current]]A" }],
       replyToMode: "off",
@@ -182,8 +215,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
+    expect(result[0].replyToId).toBeUndefined();
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {

@@ -256,6 +256,29 @@ describe("createInboundDebouncer", () => {
 
     vi.useRealTimers();
   });
+
+  it("supports per-item debounce windows when default debounce is disabled", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
+    await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
+
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
@@ -370,6 +393,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
@@ -394,6 +418,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",

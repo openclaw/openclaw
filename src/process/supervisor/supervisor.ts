@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import { getShellConfig } from "../../agents/shell-utils.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createChildAdapter } from "./adapters/child.js";
+import { createPtyAdapter } from "./adapters/pty.js";
+import { createRunRegistry } from "./registry.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -7,11 +12,6 @@ import type {
   SpawnInput,
   TerminationReason,
 } from "./types.js";
-import { getShellConfig } from "../../agents/shell-utils.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createChildAdapter } from "./adapters/child.js";
-import { createPtyAdapter } from "./adapters/pty.js";
-import { createRunRegistry } from "./registry.js";
 
 const log = createSubsystemLogger("process/supervisor");
 

@@ -76,6 +76,44 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("passes applied_tags for forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildForum });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "tagged post", appliedTags: ["tag1", "tag2"] },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: {
+          name: "tagged post",
+          message: { content: "tagged post" },
+          applied_tags: ["tag1", "tag2"],
+        },
+      }),
+    );
+  });
+
+  it("omits applied_tags for non-forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", appliedTags: ["tag1"] },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.not.objectContaining({ applied_tags: expect.anything() }),
+      }),
+    );
+  });
+
   it("falls back when channel lookup is unavailable", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockRejectedValue(new Error("lookup failed"));
@@ -103,6 +141,61 @@ describe("sendMessageDiscord", () => {
       Routes.threads("chan1"),
       expect.objectContaining({
         body: expect.objectContaining({ name: "thread", type: ChannelType.PrivateThread }),
+      }),
+    );
+  });
+
+  it("sends initial message for non-forum threads with content", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", content: "Hello thread!" },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledTimes(2);
+    // First call: create thread
+    expect(postMock).toHaveBeenNthCalledWith(
+      1,
+      Routes.threads("chan1"),
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "thread", type: ChannelType.PublicThread }),
+      }),
+    );
+    // Second call: send message to thread
+    expect(postMock).toHaveBeenNthCalledWith(
+      2,
+      Routes.channelMessages("t1"),
+      expect.objectContaining({
+        body: { content: "Hello thread!" },
+      }),
+    );
+  });
+
+  it("sends initial message for message-attached threads with content", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", messageId: "m1", content: "Discussion here" },
+      { rest, token: "t" },
+    );
+    // Should not detect channel type for message-attached threads
+    expect(getMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(2);
+    // First call: create thread from message
+    expect(postMock).toHaveBeenNthCalledWith(
+      1,
+      Routes.threads("chan1", "m1"),
+      expect.objectContaining({ body: { name: "thread" } }),
+    );
+    // Second call: send message to thread
+    expect(postMock).toHaveBeenNthCalledWith(
+      2,
+      Routes.channelMessages("t1"),
+      expect.objectContaining({
+        body: { content: "Discussion here" },
       }),
     );
   });

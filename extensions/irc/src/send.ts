@@ -1,10 +1,11 @@
-import type { IrcClient } from "./client.js";
-import type { CoreConfig } from "./types.js";
 import { resolveIrcAccount } from "./accounts.js";
+import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
+import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
 import { makeIrcMessageId } from "./protocol.js";
 import { getIrcRuntime } from "./runtime.js";
+import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
   accountId?: string;
@@ -65,23 +66,11 @@ export async function sendMessageIrc(
   if (client?.isReady()) {
     client.sendPrivmsg(target, payload);
   } else {
-    const transient = await connectIrcClient({
-      host: account.host,
-      port: account.port,
-      tls: account.tls,
-      nick: account.nick,
-      username: account.username,
-      realname: account.realname,
-      password: account.password,
-      nickserv: {
-        enabled: account.config.nickserv?.enabled,
-        service: account.config.nickserv?.service,
-        password: account.config.nickserv?.password,
-        register: account.config.nickserv?.register,
-        registerEmail: account.config.nickserv?.registerEmail,
-      },
-      connectTimeoutMs: 12000,
-    });
+    const transient = await connectIrcClient(
+      buildIrcConnectOptions(account, {
+        connectTimeoutMs: 12000,
+      }),
+    );
     transient.sendPrivmsg(target, payload);
     transient.quit("sent");
   }

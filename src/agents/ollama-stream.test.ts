@@ -104,6 +104,22 @@ describe("buildAssistantMessage", () => {
     expect(result.usage.totalTokens).toBe(15);
   });
 
+  it("falls back to reasoning when content is empty", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        reasoning: "Reasoning output",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "Reasoning output" }]);
+  });
+
   it("builds response with tool calls", () => {
     const response = {
       model: "qwen3:32b",
@@ -228,63 +244,141 @@ describe("parseNdjsonStream", () => {
     // Final done:true chunk has no tool_calls
     expect(chunks[2].message.tool_calls).toBeUndefined();
   });
+
+  it("preserves unsafe integer tool arguments as exact strings", async () => {
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"target":1234567890123456789,"nested":{"thread":9223372036854775807}}}}]},"done":false}',
+    ]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
+      | { target?: unknown; nested?: { thread?: unknown } }
+      | undefined;
+    expect(args?.target).toBe("1234567890123456789");
+    expect(args?.nested?.thread).toBe("9223372036854775807");
+  });
+
+  it("keeps safe integer tool arguments as numbers", async () => {
+    const reader = mockNdjsonReader([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"send","arguments":{"retries":3,"delayMs":2500}}}]},"done":false}',
+    ]);
+
+    const chunks = [];
+    for await (const chunk of parseNdjsonStream(reader)) {
+      chunks.push(chunk);
+    }
+
+    const args = chunks[0]?.message.tool_calls?.[0]?.function.arguments as
+      | { retries?: unknown; delayMs?: unknown }
+      | undefined;
+    expect(args?.retries).toBe(3);
+    expect(args?.delayMs).toBe(2500);
+  });
 });
+
+async function withMockNdjsonFetch(
+  lines: string[],
+  run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const fetchMock = vi.fn(async () => {
+    const payload = lines.join("\n");
+    return new Response(`${payload}\n`, {
+      status: 200,
+      headers: { "Content-Type": "application/x-ndjson" },
+    });
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  try {
+    await run(fetchMock);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function createOllamaTestStream(params: {
+  baseUrl: string;
+  options?: { maxTokens?: number; signal?: AbortSignal };
+}) {
+  const streamFn = createOllamaStreamFn(params.baseUrl);
+  return streamFn(
+    {
+      id: "qwen3:32b",
+      api: "ollama",
+      provider: "custom-ollama",
+      contextWindow: 131072,
+    } as unknown as Parameters<typeof streamFn>[0],
+    {
+      messages: [{ role: "user", content: "hello" }],
+    } as unknown as Parameters<typeof streamFn>[1],
+    (params.options ?? {}) as unknown as Parameters<typeof streamFn>[2],
+  );
+}
+
+async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
+  const events: T[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
 
 describe("createOllamaStreamFn", () => {
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
-    const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn(async () => {
-      const payload = [
+    await withMockNdjsonFetch(
+      [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
-      ].join("\n");
-      return new Response(`${payload}\n`, {
-        status: 200,
-        headers: { "Content-Type": "application/x-ndjson" },
-      });
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+      ],
+      async (fetchMock) => {
+        const signal = new AbortController().signal;
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434/v1/",
+          options: { maxTokens: 123, signal },
+        });
 
-    try {
-      const streamFn = createOllamaStreamFn("http://ollama-host:11434/v1/");
-      const signal = new AbortController().signal;
-      const stream = streamFn(
-        {
-          id: "qwen3:32b",
-          api: "ollama",
-          provider: "custom-ollama",
-          contextWindow: 131072,
-        } as unknown as Parameters<typeof streamFn>[0],
-        {
-          messages: [{ role: "user", content: "hello" }],
-        } as unknown as Parameters<typeof streamFn>[1],
-        {
-          maxTokens: 123,
-          signal,
-        } as unknown as Parameters<typeof streamFn>[2],
-      );
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
 
-      const events = [];
-      for await (const event of stream) {
-        events.push(event);
-      }
-      expect(events.at(-1)?.type).toBe("done");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe("http://ollama-host:11434/api/chat");
+        expect(requestInit.signal).toBe(signal);
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, requestInit] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toBe("http://ollama-host:11434/api/chat");
-      expect(requestInit.signal).toBe(signal);
-      if (typeof requestInit.body !== "string") {
-        throw new Error("Expected string request body");
-      }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: { num_ctx?: number; num_predict?: number };
+        };
+        expect(requestBody.options.num_ctx).toBe(131072);
+        expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
 
-      const requestBody = JSON.parse(requestInit.body) as {
-        options: { num_ctx?: number; num_predict?: number };
-      };
-      expect(requestBody.options.num_ctx).toBe(131072);
-      expect(requestBody.options.num_predict).toBe(123);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  it("accumulates reasoning chunks when content is empty", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":"reasoned"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","reasoning":" output"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
+        const events = await collectStreamEvents(stream);
+
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.message.content).toEqual([{ type: "text", text: "reasoned output" }]);
+      },
+    );
   });
 });

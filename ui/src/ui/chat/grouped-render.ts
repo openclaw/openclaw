@@ -1,9 +1,10 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
-import type { MessageGroup } from "../types/chat-types.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -200,6 +201,10 @@ function renderMessageImages(images: ImageBlock[]) {
     return nothing;
   }
 
+  const openImage = (url: string) => {
+    openExternalUrlSafe(url, { allowDataImage: true });
+  };
+
   return html`
     <div class="chat-message-images">
       ${images.map(
@@ -208,7 +213,7 @@ function renderMessageImages(images: ImageBlock[]) {
             src=${img.url}
             alt=${img.alt ?? "Attached image"}
             class="chat-message-image"
-            @click=${() => window.open(img.url, "_blank")}
+            @click=${() => openImage(img.url)}
           />
         `,
       )}

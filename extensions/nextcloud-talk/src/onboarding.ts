@@ -1,6 +1,7 @@
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptAccountId,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -9,12 +10,12 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig, DmPolicy } from "./types.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
+import type { CoreConfig, DmPolicy } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
 
@@ -99,7 +100,7 @@ async function promptNextcloudTalkAllowFrom(params: {
     ...existingAllowFrom.map((item) => String(item).trim().toLowerCase()).filter(Boolean),
     ...resolvedIds,
   ];
-  const unique = [...new Set(merged)];
+  const unique = mergeAllowFromEntries(undefined, merged);
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {

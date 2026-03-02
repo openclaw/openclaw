@@ -28,7 +28,7 @@ describe("thread-ownership plugin", () => {
     process.env.SLACK_BOT_USER_ID = "U999";
 
     originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn();
+    globalThis.fetch = vi.fn() as unknown as typeof globalThis.fetch;
   });
 
   afterEach(() => {

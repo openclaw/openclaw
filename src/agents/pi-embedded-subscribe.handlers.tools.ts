@@ -1,18 +1,19 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  ToolCallSummary,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import type {
+  ToolCallSummary,
+  ToolHandlerContext,
+} from "./pi-embedded-subscribe.handlers.types.js";
 import {
+  extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultMediaPaths,
   extractToolResultText,
-  extractMessagingToolSend,
+  filterToolResultMediaUrls,
   isToolResultError,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
@@ -22,6 +23,14 @@ import { normalizeToolName } from "./tool-policy.js";
 
 /** Track tool execution start times and args for after_tool_call hook */
 const toolStartData = new Map<string, { startTime: number; args: unknown }>();
+
+function isCronAddAction(args: unknown): boolean {
+  if (!args || typeof args !== "object") {
+    return false;
+  }
+  const action = (args as Record<string, unknown>).action;
+  return typeof action === "string" && action.trim().toLowerCase() === "add";
+}
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
   const mutation = buildToolMutationState(toolName, args, meta);
@@ -55,14 +64,117 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
+function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  pushUniqueMediaUrl(urls, seen, record.media);
+  pushUniqueMediaUrl(urls, seen, record.mediaUrl);
+  pushUniqueMediaUrl(urls, seen, record.path);
+  pushUniqueMediaUrl(urls, seen, record.filePath);
+
+  const mediaUrls = record.mediaUrls;
+  if (Array.isArray(mediaUrls)) {
+    for (const mediaUrl of mediaUrls) {
+      pushUniqueMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+
+  return urls;
+}
+
+function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const appendFromRecord = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
+    for (const url of extracted) {
+      if (seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      urls.push(url);
+    }
+  };
+
+  appendFromRecord(result);
+  if (result && typeof result === "object") {
+    appendFromRecord((result as Record<string, unknown>).details);
+  }
+
+  const outputText = extractToolResultText(result);
+  if (outputText) {
+    try {
+      appendFromRecord(JSON.parse(outputText));
+    } catch {
+      // Ignore non-JSON tool output.
+    }
+  }
+
+  return urls;
+}
+
+function emitToolResultOutput(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  meta?: string;
+  isToolError: boolean;
+  result: unknown;
+  sanitizedResult: unknown;
+}) {
+  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+  if (!ctx.params.onToolResult) {
+    return;
+  }
+
+  if (ctx.shouldEmitToolOutput()) {
+    const outputText = extractToolResultText(sanitizedResult);
+    if (outputText) {
+      ctx.emitToolOutput(toolName, meta, outputText);
+    }
+    return;
+  }
+
+  if (isToolError) {
+    return;
+  }
+
+  // emitToolOutput() already handles MEDIA: directives when enabled; this path
+  // only sends raw media URLs for non-verbose delivery mode.
+  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  if (mediaPaths.length === 0) {
+    return;
+  }
+  try {
+    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+  } catch {
+    // ignore delivery failures
+  }
+}
+
 export async function handleToolExecutionStart(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+    await ctx.params.onBlockReplyFlush();
   }
 
   const rawToolName = String(evt.toolName);
@@ -137,12 +249,17 @@ export async function handleToolExecutionStart(
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
+      // Track media URLs from messaging tool args (pending until tool_execution_end).
+      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
+      if (mediaUrls.length > 0) {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
+      }
     }
   }
 }
 
 export function handleToolExecutionUpdate(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
@@ -174,7 +291,7 @@ export function handleToolExecutionUpdate(
 }
 
 export async function handleToolExecutionEnd(
-  ctx: EmbeddedPiSubscribeContext,
+  ctx: ToolHandlerContext,
   evt: AgentEvent & {
     toolName: string;
     toolCallId: string;
@@ -188,6 +305,8 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const startData = toolStartData.get(toolCallId);
+  toolStartData.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
@@ -238,6 +357,30 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
+  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
+  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+  const startArgs =
+    startData?.args && typeof startData.args === "object"
+      ? (startData.args as Record<string, unknown>)
+      : {};
+  const isMessagingSend =
+    pendingMediaUrls.length > 0 ||
+    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  if (!isToolError && isMessagingSend) {
+    const committedMediaUrls = [
+      ...pendingMediaUrls,
+      ...collectMessagingMediaUrlsFromToolResult(result),
+    ];
+    if (committedMediaUrls.length > 0) {
+      ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+      ctx.trimMessagingToolSent();
+    }
+  }
+
+  // Track committed reminders only when cron.add completed successfully.
+  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+    ctx.state.successfulCronAdds += 1;
+  }
 
   emitAgentEvent({
     runId: ctx.params.runId,
@@ -266,32 +409,11 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
-    if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText);
-    }
-  }
-
-  // Deliver media from tool results when the verbose emitToolOutput path is off.
-  // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
-  // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
-  if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
-    const mediaPaths = extractToolResultMediaPaths(result);
-    if (mediaPaths.length > 0) {
-      try {
-        void ctx.params.onToolResult({ mediaUrls: mediaPaths });
-      } catch {
-        // ignore delivery failures
-      }
-    }
-  }
+  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const startData = toolStartData.get(toolCallId);
-    toolStartData.delete(toolCallId);
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
@@ -310,7 +432,5 @@ export async function handleToolExecutionEnd(
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
-  } else {
-    toolStartData.delete(toolCallId);
   }
 }
