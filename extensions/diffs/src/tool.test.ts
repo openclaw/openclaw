@@ -175,6 +175,45 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeUndefined();
   });
 
+  it("honors ttlSeconds for artifact-only file output", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    try {
+      const screenshotter = {
+        screenshotHtml: vi.fn(async ({ outputPath }: { outputPath: string }) => {
+          await fs.mkdir(path.dirname(outputPath), { recursive: true });
+          await fs.writeFile(outputPath, Buffer.from("png"));
+          return outputPath;
+        }),
+      };
+
+      const tool = createDiffsTool({
+        api: createApi(),
+        store,
+        defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        screenshotter,
+      });
+
+      const result = await tool.execute?.("tool-2c-ttl", {
+        before: "one\n",
+        after: "two\n",
+        mode: "file",
+        ttlSeconds: 1,
+      });
+      const filePath = (result?.details as Record<string, unknown>).filePath as string;
+      await expect(fs.stat(filePath)).resolves.toBeDefined();
+
+      vi.setSystemTime(new Date(now.getTime() + 2_000));
+      await store.cleanupExpired();
+      await expect(fs.stat(filePath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts image* tool options for backward compatibility", async () => {
     const screenshotter = {
       screenshotHtml: vi.fn(

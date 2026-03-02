@@ -98,6 +98,25 @@ describe("DiffArtifactStore", () => {
     expect(filePath).toContain(rootDir);
   });
 
+  it("expires standalone file artifacts using ttl metadata", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+
+    const standalone = await store.createStandaloneFileArtifact({
+      format: "png",
+      ttlMs: 1_000,
+    });
+    await fs.writeFile(standalone.filePath, Buffer.from("png"));
+
+    vi.setSystemTime(new Date(now.getTime() + 2_000));
+    await store.cleanupExpired();
+
+    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("supports image path aliases for backward compatibility", async () => {
     const artifact = await store.createArtifact({
       html: "<html>demo</html>",

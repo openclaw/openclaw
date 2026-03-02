@@ -180,8 +180,8 @@ export function createDiffsTool(params: {
           html: rendered.imageHtml,
           theme,
           image,
+          ttlMs,
         });
-        params.store.scheduleCleanup();
 
         return {
           content: [
@@ -334,10 +334,16 @@ async function renderDiffArtifactFile(params: {
   html: string;
   theme: DiffTheme;
   image: DiffRenderOptions["image"];
+  ttlMs?: number;
 }): Promise<{ path: string; bytes: number }> {
   const outputPath = params.artifactId
     ? params.store.allocateFilePath(params.artifactId, params.image.format)
-    : params.store.allocateStandaloneFilePath(params.image.format);
+    : (
+        await params.store.createStandaloneFileArtifact({
+          format: params.image.format,
+          ttlMs: params.ttlMs,
+        })
+      ).filePath;
 
   await params.screenshotter.screenshotHtml({
     html: params.html,

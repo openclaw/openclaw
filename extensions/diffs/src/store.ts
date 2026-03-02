@@ -18,6 +18,19 @@ type CreateArtifactParams = {
   ttlMs?: number;
 };
 
+type CreateStandaloneFileArtifactParams = {
+  format?: DiffOutputFormat;
+  ttlMs?: number;
+};
+
+type StandaloneFileMeta = {
+  kind: "standalone_file";
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  filePath: string;
+};
+
 export class DiffArtifactStore {
   private readonly rootDir: string;
   private readonly logger?: PluginLogger;
@@ -115,6 +128,36 @@ export class DiffArtifactStore {
     return path.join(this.artifactDir(id), `preview.${format}`);
   }
 
+  async createStandaloneFileArtifact(
+    params: CreateStandaloneFileArtifactParams = {},
+  ): Promise<{ id: string; filePath: string; expiresAt: string }> {
+    await this.ensureRoot();
+
+    const id = crypto.randomBytes(10).toString("hex");
+    const artifactDir = this.artifactDir(id);
+    const format = params.format ?? "png";
+    const filePath = path.join(artifactDir, `preview.${format}`);
+    const ttlMs = normalizeTtlMs(params.ttlMs);
+    const createdAt = new Date();
+    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    const meta: StandaloneFileMeta = {
+      kind: "standalone_file",
+      id,
+      createdAt: createdAt.toISOString(),
+      expiresAt,
+      filePath: this.normalizeStoredPath(filePath, "filePath"),
+    };
+
+    await fs.mkdir(artifactDir, { recursive: true });
+    await this.writeStandaloneMeta(meta);
+    this.scheduleCleanup();
+    return {
+      id,
+      filePath: meta.filePath,
+      expiresAt: meta.expiresAt,
+    };
+  }
+
   allocateImagePath(id: string, format: DiffOutputFormat = "png"): string {
     return this.allocateFilePath(id, format);
   }
@@ -140,6 +183,14 @@ export class DiffArtifactStore {
           const meta = await this.readMeta(id);
           if (meta) {
             if (isExpired(meta)) {
+              await this.deleteArtifact(id);
+            }
+            return;
+          }
+
+          const standaloneMeta = await this.readStandaloneMeta(id);
+          if (standaloneMeta) {
+            if (isExpired(standaloneMeta)) {
               await this.deleteArtifact(id);
             }
             return;
@@ -190,6 +241,10 @@ export class DiffArtifactStore {
     return path.join(this.artifactDir(id), "meta.json");
   }
 
+  private standaloneMetaPath(id: string): string {
+    return path.join(this.artifactDir(id), "file-meta.json");
+  }
+
   private async writeMeta(meta: DiffArtifactMeta): Promise<void> {
     await fs.writeFile(this.metaPath(meta.id), JSON.stringify(meta, null, 2), "utf8");
   }
@@ -203,6 +258,39 @@ export class DiffArtifactStore {
         return null;
       }
       this.logger?.warn(`Failed to read diff artifact metadata for ${id}: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private async writeStandaloneMeta(meta: StandaloneFileMeta): Promise<void> {
+    await fs.writeFile(this.standaloneMetaPath(meta.id), JSON.stringify(meta, null, 2), "utf8");
+  }
+
+  private async readStandaloneMeta(id: string): Promise<StandaloneFileMeta | null> {
+    try {
+      const raw = await fs.readFile(this.standaloneMetaPath(id), "utf8");
+      const parsed = JSON.parse(raw) as Partial<StandaloneFileMeta>;
+      if (
+        parsed.kind !== "standalone_file" ||
+        typeof parsed.id !== "string" ||
+        typeof parsed.createdAt !== "string" ||
+        typeof parsed.expiresAt !== "string" ||
+        typeof parsed.filePath !== "string"
+      ) {
+        return null;
+      }
+      return {
+        kind: parsed.kind,
+        id: parsed.id,
+        createdAt: parsed.createdAt,
+        expiresAt: parsed.expiresAt,
+        filePath: this.normalizeStoredPath(parsed.filePath, "filePath"),
+      };
+    } catch (error) {
+      if (isFileNotFound(error)) {
+        return null;
+      }
+      this.logger?.warn(`Failed to read standalone diff metadata for ${id}: ${String(error)}`);
       return null;
     }
   }
