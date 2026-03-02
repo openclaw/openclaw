@@ -515,8 +515,32 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  // When processing a thread reply, filter out files that belong to the thread
+  // starter (parent message). Slack's Events API includes the parent's `files`
+  // array in every thread reply payload, which causes ghost media attachments
+  // on text-only replies. We eagerly resolve the thread starter here (the result
+  // is cached) and exclude any file IDs that match the parent. (#32203)
+  let ownFiles = message.files;
+  if (isThreadReply && threadTs && message.files?.length) {
+    const starter = await resolveSlackThreadStarter({
+      channelId: message.channel,
+      threadTs,
+      client: ctx.app.client,
+    });
+    if (starter?.files?.length) {
+      const starterFileIds = new Set(starter.files.map((f) => f.id));
+      const filtered = message.files.filter((f) => !f.id || !starterFileIds.has(f.id));
+      if (filtered.length < message.files.length) {
+        logVerbose(
+          `slack: filtered ${message.files.length - filtered.length} inherited parent file(s) from thread reply`,
+        );
+      }
+      ownFiles = filtered.length > 0 ? filtered : undefined;
+    }
+  }
+
   const media = await resolveSlackMedia({
-    files: message.files,
+    files: ownFiles,
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
