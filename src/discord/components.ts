@@ -662,7 +662,7 @@ export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentPar
 }
 
 export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*" || id === "__openclaw_discord_component_modal_wildcard__") {
+  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);
