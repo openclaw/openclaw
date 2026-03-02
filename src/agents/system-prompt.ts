@@ -93,6 +93,24 @@ function buildOwnerIdentityLine(
   return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
+function buildPromptIdentityLine(params: { runtimeAgentId?: string; ownerDisplaySecret?: string }) {
+  const agentId = params.runtimeAgentId?.trim();
+  if (agentId) {
+    return `You are ${agentId}, a personal assistant running inside OpenClaw.`;
+  }
+
+  const secret = params.ownerDisplaySecret?.trim();
+  if (secret) {
+    const installationFingerprint = createHmac("sha256", secret)
+      .update("openclaw-system-prompt-identity")
+      .digest("hex")
+      .slice(0, 12);
+    return `You are a personal assistant running inside OpenClaw. Installation: ${installationFingerprint}.`;
+  }
+
+  return "You are a personal assistant running inside OpenClaw.";
+}
+
 function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
@@ -408,14 +426,18 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const identityLine = buildPromptIdentityLine({
+    runtimeAgentId: params.runtimeInfo?.agentId,
+    ownerDisplaySecret: params.ownerDisplaySecret,
+  });
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return identityLine;
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    identityLine,
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",

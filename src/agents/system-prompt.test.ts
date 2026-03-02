@@ -5,6 +5,196 @@ import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
+  it("uses runtime agent id in the identity line when available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { agentId: "agent:main" },
+    });
+
+    expect(
+      prompt.startsWith("You are agent:main, a personal assistant running inside OpenClaw."),
+    ).toBe(true);
+  });
+
+  it("uses ownerDisplaySecret to derive a stable installation fingerprint in identity line", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "owner-secret-1",
+    });
+
+    expect(prompt).toMatch(
+      /^You are a personal assistant running inside OpenClaw\. Installation: [a-f0-9]{12}\./,
+    );
+  });
+
+  it("keeps installation fingerprint stable for the same ownerDisplaySecret", () => {
+    const promptA = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "same-secret",
+    });
+    const promptB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "same-secret",
+    });
+
+    const lineA = promptA.split("\n", 1)[0];
+    const lineB = promptB.split("\n", 1)[0];
+    expect(lineA).toBe(lineB);
+  });
+
+  it("changes installation fingerprint when ownerDisplaySecret changes", () => {
+    const promptA = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "secret-a",
+    });
+    const promptB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "secret-b",
+    });
+
+    const lineA = promptA.split("\n", 1)[0];
+    const lineB = promptB.split("\n", 1)[0];
+    expect(lineA).not.toBe(lineB);
+  });
+
+  it("uses derived identity line for none prompt mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      runtimeInfo: { agentId: "agent:none" },
+    });
+
+    expect(prompt).toBe("You are agent:none, a personal assistant running inside OpenClaw.");
+  });
+
+  it("prefers runtime agent id over installation fingerprint when both are present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { agentId: "agent:preferred" },
+      ownerDisplaySecret: "owner-secret",
+    });
+
+    expect(
+      prompt.startsWith("You are agent:preferred, a personal assistant running inside OpenClaw."),
+    ).toBe(true);
+    expect(prompt).not.toContain("Installation:");
+  });
+
+  it("falls back to generic identity line when no differentiator is available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+    });
+
+    expect(prompt).toBe("You are a personal assistant running inside OpenClaw.");
+  });
+
+  it("ignores blank runtime agent id and falls back to installation fingerprint", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { agentId: "   " },
+      ownerDisplaySecret: "owner-secret-fallback",
+    });
+
+    expect(prompt).toMatch(
+      /^You are a personal assistant running inside OpenClaw\. Installation: [a-f0-9]{12}\./,
+    );
+  });
+
+  it("ignores blank ownerDisplaySecret and keeps generic identity line", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "   ",
+      promptMode: "none",
+    });
+
+    expect(prompt).toBe("You are a personal assistant running inside OpenClaw.");
+  });
+
+  it("does not expose raw ownerDisplaySecret in prompt output", () => {
+    const secret = "super-sensitive-owner-secret";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: secret,
+    });
+
+    expect(prompt).not.toContain(secret);
+  });
+
+  it("does not expose owner numbers in the identity line when using fingerprint", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "owner-secret-anon",
+      ownerNumbers: ["+123456789"],
+      ownerDisplay: "hash",
+    });
+
+    const firstLine = prompt.split("\n", 1)[0] ?? "";
+    expect(firstLine).not.toContain("+123456789");
+    expect(firstLine).toMatch(/Installation: [a-f0-9]{12}\./);
+  });
+
+  it("keeps identity line deterministic regardless of other prompt sections", () => {
+    const promptA = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "stable-secret",
+      toolNames: ["exec"],
+      skillsPrompt: "<available_skills></available_skills>",
+    });
+    const promptB = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "stable-secret",
+      toolNames: ["exec", "read", "write"],
+      skillsPrompt: "<available_skills><skill></skill></available_skills>",
+    });
+
+    const firstLineA = promptA.split("\n", 1)[0];
+    const firstLineB = promptB.split("\n", 1)[0];
+    expect(firstLineA).toBe(firstLineB);
+  });
+
+  it("uses lowercase hex fingerprint format", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "hex-format-secret",
+    });
+
+    const firstLine = prompt.split("\n", 1)[0] ?? "";
+    const match = firstLine.match(/Installation: ([a-f0-9]{12})\./);
+    expect(match).toBeTruthy();
+    expect(match?.[1]).toBe(match?.[1]?.toLowerCase());
+  });
+
+  it("does not include installation fingerprint when runtime agent id is present in none mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      runtimeInfo: { agentId: "agent:none-priority" },
+      ownerDisplaySecret: "secret-ignored",
+    });
+
+    expect(prompt).toBe(
+      "You are agent:none-priority, a personal assistant running inside OpenClaw.",
+    );
+    expect(prompt).not.toContain("Installation:");
+  });
+
+  it("keeps identity line unchanged between full and minimal mode for same identifiers", () => {
+    const fullPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "mode-stable-secret",
+      promptMode: "full",
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      ownerDisplaySecret: "mode-stable-secret",
+      promptMode: "minimal",
+    });
+
+    const fullFirst = fullPrompt.split("\n", 1)[0];
+    const minimalFirst = minimalPrompt.split("\n", 1)[0];
+    expect(fullFirst).toBe(minimalFirst);
+  });
   it("formats owner section for plain, hash, and missing owner lists", () => {
     const cases = typedCases<{
       name: string;
