@@ -47,7 +47,22 @@ const probeGateway = vi.fn<
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.fn(() => ({}));
+const resolveMainSessionKeyFromConfig = vi.fn(() => "agent:main:main");
+const extractDeliveryInfo = vi.fn(() => ({
+  deliveryContext: { channel: "telegram", to: "7174833131" },
+  threadId: undefined,
+}));
+const writeRestartSentinel = vi.fn();
 
+vi.mock("../../config/sessions.js", () => ({
+  resolveMainSessionKeyFromConfig,
+  extractDeliveryInfo,
+}));
+
+vi.mock("../../infra/restart-sentinel.js", () => ({
+  formatDoctorNonInteractiveHint: () => "doctor-hint",
+  writeRestartSentinel,
+}));
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
@@ -225,6 +240,24 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
+  it("writes restart sentinel only after successful restart when --notify is set", async () => {
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    const result = await runDaemonRestart({ json: true, notify: true, note: "hello" });
+
+    expect(result).toBe(true);
+    expect(writeRestartSentinel).toHaveBeenCalledTimes(1);
+
+    // Ensure sentinel write happens after the service restart call.
+    const restartOrder = runServiceRestart.mock.invocationCallOrder[0];
+    const sentinelOrder = writeRestartSentinel.mock.invocationCallOrder[0];
+    expect(sentinelOrder).toBeGreaterThan(restartOrder);
+  });
   it("fails restart when gateway remains unhealthy", async () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
