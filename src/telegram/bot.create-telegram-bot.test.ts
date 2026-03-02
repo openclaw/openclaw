@@ -1742,10 +1742,20 @@ describe("createTelegramBot", () => {
       });
 
       expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-      for (const call of sendMessageSpy.mock.calls) {
-        expect((call[2] as { reply_to_message_id?: number } | undefined)?.reply_to_message_id).toBe(
-          messageId,
-        );
+      for (let i = 0; i < sendMessageSpy.mock.calls.length; i++) {
+        const call = sendMessageSpy.mock.calls[i];
+        const opts = call[2] as { reply_to_message_id?: number } | undefined;
+        if (mode === "all") {
+          // Every chunk carries the reply reference.
+          expect(opts?.reply_to_message_id).toBe(messageId);
+        } else {
+          // "first" mode: only the first chunk carries reply_to_message_id.
+          if (i === 0) {
+            expect(opts?.reply_to_message_id).toBe(messageId);
+          } else {
+            expect(opts?.reply_to_message_id).toBeUndefined();
+          }
+        }
       }
     }
   });
