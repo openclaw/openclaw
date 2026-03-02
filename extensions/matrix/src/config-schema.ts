@@ -37,6 +37,8 @@ const matrixRoomSchema = z
 export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  defaultAccount: z.string().optional(),
+  accounts: z.record(z.string(), z.unknown()).optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   userId: z.string().optional(),
