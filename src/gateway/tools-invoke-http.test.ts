@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 
 let cfg: Record<string, unknown> = {};
+let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -78,7 +79,13 @@ vi.mock("../agents/openclaw-tools.js", () => {
     {
       name: "sessions_spawn",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true }),
+      execute: async () => ({
+        ok: true,
+        route: {
+          agentTo: lastCreateOpenClawToolsContext?.agentTo,
+          agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
+        },
+      }),
     },
     {
       name: "sessions_send",
@@ -116,10 +123,32 @@ vi.mock("../agents/openclaw-tools.js", () => {
         return { ok: true };
       },
     },
+    {
+      name: "diffs_compat_test",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          fileFormat: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, args: unknown) => {
+        const input = (args ?? {}) as Record<string, unknown>;
+        return {
+          ok: true,
+          observedFormat: input.format,
+          observedFileFormat: input.fileFormat,
+        };
+      },
+    },
   ];
 
   return {
-    createOpenClawTools: () => tools,
+    createOpenClawTools: (ctx: Record<string, unknown>) => {
+      lastCreateOpenClawToolsContext = ctx;
+      return tools;
+    },
   };
 });
 
@@ -176,6 +205,7 @@ beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
   cfg = {};
+  lastCreateOpenClawToolsContext = undefined;
 });
 
 const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
@@ -365,6 +395,35 @@ describe("POST /tools/invoke", () => {
     expect(body.error.type).toBe("not_found");
   });
 
+  it("propagates message target/thread headers into tools context for sessions_spawn", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["sessions_spawn"] } }],
+      },
+      gateway: { tools: { allow: ["sessions_spawn"] } },
+    };
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        ...gatewayAuthHeaders(),
+        "x-openclaw-message-to": "channel:24514",
+        "x-openclaw-thread-id": "thread-24514",
+      },
+      tool: "sessions_spawn",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.route).toEqual({
+      agentTo: "channel:24514",
+      agentThreadId: "thread-24514",
+    });
+  });
+
   it("denies sessions_send via HTTP gateway", async () => {
     cfg = {
       ...cfg,
@@ -505,5 +564,26 @@ describe("POST /tools/invoke", () => {
     expect(crashBody.ok).toBe(false);
     expect(crashBody.error?.type).toBe("tool_error");
     expect(crashBody.error?.message).toBe("tool execution failed");
+  });
+
+  it("passes deprecated format alias through invoke payloads even when schema omits it", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["diffs_compat_test"] } }],
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "diffs_compat_test",
+      args: { mode: "file", format: "pdf" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.result?.observedFormat).toBe("pdf");
+    expect(body.result?.observedFileFormat).toBeUndefined();
   });
 });

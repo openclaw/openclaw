@@ -486,6 +486,10 @@ private final class ChatComposerNSTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
         if isReturn {
+            if self.hasMarkedText() {
+                super.keyDown(with: event)
+                return
+            }
             if event.modifierFlags.contains(.shift) {
                 super.insertNewline(nil)
                 return

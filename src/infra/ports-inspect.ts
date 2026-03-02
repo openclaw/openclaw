@@ -75,6 +75,16 @@ async function resolveUnixUser(pid: number): Promise<string | undefined> {
   return line || undefined;
 }
 
+async function resolveUnixParentPid(pid: number): Promise<number | undefined> {
+  const res = await runCommandSafe(["ps", "-p", String(pid), "-o", "ppid="]);
+  if (res.code !== 0) {
+    return undefined;
+  }
+  const line = res.stdout.trim();
+  const parentPid = Number.parseInt(line, 10);
+  return Number.isFinite(parentPid) && parentPid > 0 ? parentPid : undefined;
+}
+
 async function readUnixListeners(
   port: number,
 ): Promise<{ listeners: PortListener[]; detail?: string; errors: string[] }> {
@@ -88,15 +98,19 @@ async function readUnixListeners(
         if (!listener.pid) {
           return;
         }
-        const [commandLine, user] = await Promise.all([
+        const [commandLine, user, parentPid] = await Promise.all([
           resolveUnixCommandLine(listener.pid),
           resolveUnixUser(listener.pid),
+          resolveUnixParentPid(listener.pid),
         ]);
         if (commandLine) {
           listener.commandLine = commandLine;
         }
         if (user) {
           listener.user = user;
+        }
+        if (parentPid !== undefined) {
+          listener.ppid = parentPid;
         }
       }),
     );

@@ -43,4 +43,35 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.sanitizeToolCallIds).toBe(false);
     expect(policy.toolCallIdMode).toBeUndefined();
   });
+
+  it("enables user-turn merge for strict OpenAI-compatible providers", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      modelApi: "openai-completions",
+    });
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("enables Anthropic-compatible policies for Bedrock provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.allowSyntheticToolResults).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.sanitizeMode).toBe("full");
+  });
+
+  it("keeps OpenRouter on its existing turn-validation path", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openrouter",
+      modelId: "openai/gpt-4.1",
+      modelApi: "openai-completions",
+    });
+    expect(policy.validateAnthropicTurns).toBe(false);
+  });
 });

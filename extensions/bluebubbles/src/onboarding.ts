@@ -176,6 +176,28 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
 
     let next = cfg;
     const resolvedAccount = resolveBlueBubblesAccount({ cfg: next, accountId });
+    const validateServerUrlInput = (value: unknown): string | undefined => {
+      const trimmed = String(value ?? "").trim();
+      if (!trimmed) {
+        return "Required";
+      }
+      try {
+        const normalized = normalizeBlueBubblesServerUrl(trimmed);
+        new URL(normalized);
+        return undefined;
+      } catch {
+        return "Invalid URL format";
+      }
+    };
+    const promptServerUrl = async (initialValue?: string): Promise<string> => {
+      const entered = await prompter.text({
+        message: "BlueBubbles server URL",
+        placeholder: "http://192.168.1.100:1234",
+        initialValue,
+        validate: validateServerUrlInput,
+      });
+      return String(entered).trim();
+    };
 
     // Prompt for server URL
     let serverUrl = resolvedAccount.config.serverUrl?.trim();
@@ -188,49 +210,14 @@ export const blueBubblesOnboardingAdapter: ChannelOnboardingAdapter = {
         ].join("\n"),
         "BlueBubbles server URL",
       );
-      const entered = await prompter.text({
-        message: "BlueBubbles server URL",
-        placeholder: "http://192.168.1.100:1234",
-        validate: (value) => {
-          const trimmed = String(value ?? "").trim();
-          if (!trimmed) {
-            return "Required";
-          }
-          try {
-            const normalized = normalizeBlueBubblesServerUrl(trimmed);
-            new URL(normalized);
-            return undefined;
-          } catch {
-            return "Invalid URL format";
-          }
-        },
-      });
-      serverUrl = String(entered).trim();
+      serverUrl = await promptServerUrl();
     } else {
       const keepUrl = await prompter.confirm({
         message: `BlueBubbles server URL already set (${serverUrl}). Keep it?`,
         initialValue: true,
       });
       if (!keepUrl) {
-        const entered = await prompter.text({
-          message: "BlueBubbles server URL",
-          placeholder: "http://192.168.1.100:1234",
-          initialValue: serverUrl,
-          validate: (value) => {
-            const trimmed = String(value ?? "").trim();
-            if (!trimmed) {
-              return "Required";
-            }
-            try {
-              const normalized = normalizeBlueBubblesServerUrl(trimmed);
-              new URL(normalized);
-              return undefined;
-            } catch {
-              return "Invalid URL format";
-            }
-          },
-        });
-        serverUrl = String(entered).trim();
+        serverUrl = await promptServerUrl(serverUrl);
       }
     }
 

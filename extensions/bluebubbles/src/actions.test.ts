@@ -47,6 +47,22 @@ describe("bluebubblesMessageActions", () => {
   const handleAction = bluebubblesMessageActions.handleAction!;
   const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
     handleAction({ channel: "bluebubbles", ...ctx });
+  const blueBubblesConfig = (): OpenClawConfig => ({
+    channels: {
+      bluebubbles: {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      },
+    },
+  });
+  const runReactAction = async (params: Record<string, unknown>) => {
+    return await callHandleAction({
+      action: "react",
+      params,
+      cfg: blueBubblesConfig(),
+      accountId: null,
+    });
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -285,23 +301,10 @@ describe("bluebubblesMessageActions", () => {
     it("sends reaction successfully with chatGuid", async () => {
       const { sendBlueBubblesReaction } = await import("./reactions.js");
 
-      const cfg: OpenClawConfig = {
-        channels: {
-          bluebubbles: {
-            serverUrl: "http://localhost:1234",
-            password: "test-password",
-          },
-        },
-      };
-      const result = await callHandleAction({
-        action: "react",
-        params: {
-          emoji: "❤️",
-          messageId: "msg-123",
-          chatGuid: "iMessage;-;+15551234567",
-        },
-        cfg,
-        accountId: null,
+      const result = await runReactAction({
+        emoji: "❤️",
+        messageId: "msg-123",
+        chatGuid: "iMessage;-;+15551234567",
       });
 
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
@@ -320,24 +323,11 @@ describe("bluebubblesMessageActions", () => {
     it("sends reaction removal successfully", async () => {
       const { sendBlueBubblesReaction } = await import("./reactions.js");
 
-      const cfg: OpenClawConfig = {
-        channels: {
-          bluebubbles: {
-            serverUrl: "http://localhost:1234",
-            password: "test-password",
-          },
-        },
-      };
-      const result = await callHandleAction({
-        action: "react",
-        params: {
-          emoji: "❤️",
-          messageId: "msg-123",
-          chatGuid: "iMessage;-;+15551234567",
-          remove: true,
-        },
-        cfg,
-        accountId: null,
+      const result = await runReactAction({
+        emoji: "❤️",
+        messageId: "msg-123",
+        chatGuid: "iMessage;-;+15551234567",
+        remove: true,
       });
 
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(

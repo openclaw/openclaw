@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import {
@@ -87,7 +88,9 @@ describe("applyAuthChoiceHuggingface", () => {
       provider: "huggingface",
       mode: "api_key",
     });
-    expect(result?.config.agents?.defaults?.model?.primary).toMatch(/^huggingface\/.+/);
+    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toMatch(
+      /^huggingface\/.+/,
+    );
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Hugging Face") }),
     );
@@ -173,7 +176,9 @@ describe("applyAuthChoiceHuggingface", () => {
     });
 
     expect(result).not.toBeNull();
-    expect(String(result?.config.agents?.defaults?.model?.primary)).toContain(":cheapest");
+    expect(String(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model))).toContain(
+      ":cheapest",
+    );
     expect(note).toHaveBeenCalledWith(
       "Provider locked — router will choose backend by cost or speed.",
       "Hugging Face",

@@ -16,51 +16,58 @@ function makeFetch(map: Record<string, { status: number; body?: unknown }>) {
 }
 
 describe("detectZaiEndpoint", () => {
-  it("prefers global glm-5 when it works", async () => {
-    const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions": { status: 200 },
-    });
-
-    const detected = await detectZaiEndpoint({ apiKey: "sk-test", fetchFn });
-    expect(detected?.endpoint).toBe("global");
-    expect(detected?.modelId).toBe("glm-5");
-  });
-
-  it("falls back to cn glm-5 when global fails", async () => {
-    const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions": {
-        status: 404,
-        body: { error: { message: "not found" } },
+  it("resolves preferred/fallback endpoints and null when probes fail", async () => {
+    const scenarios: Array<{
+      responses: Record<string, { status: number; body?: unknown }>;
+      expected: { endpoint: string; modelId: string } | null;
+    }> = [
+      {
+        responses: {
+          "https://api.z.ai/api/paas/v4/chat/completions": { status: 200 },
+        },
+        expected: { endpoint: "global", modelId: "glm-5" },
       },
-      "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 200 },
-    });
+      {
+        responses: {
+          "https://api.z.ai/api/paas/v4/chat/completions": {
+            status: 404,
+            body: { error: { message: "not found" } },
+          },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 200 },
+        },
+        expected: { endpoint: "cn", modelId: "glm-5" },
+      },
+      {
+        responses: {
+          "https://api.z.ai/api/paas/v4/chat/completions": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 404 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions": { status: 200 },
+        },
+        expected: { endpoint: "coding-global", modelId: "glm-4.7" },
+      },
+      {
+        responses: {
+          "https://api.z.ai/api/paas/v4/chat/completions": { status: 401 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 401 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions": { status: 401 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions": { status: 401 },
+        },
+        expected: null,
+      },
+    ];
 
-    const detected = await detectZaiEndpoint({ apiKey: "sk-test", fetchFn });
-    expect(detected?.endpoint).toBe("cn");
-    expect(detected?.modelId).toBe("glm-5");
-  });
+    for (const scenario of scenarios) {
+      const detected = await detectZaiEndpoint({
+        apiKey: "sk-test",
+        fetchFn: makeFetch(scenario.responses),
+      });
 
-  it("falls back to coding endpoint with glm-4.7", async () => {
-    const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions": { status: 404 },
-      "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 404 },
-      "https://api.z.ai/api/coding/paas/v4/chat/completions": { status: 200 },
-    });
-
-    const detected = await detectZaiEndpoint({ apiKey: "sk-test", fetchFn });
-    expect(detected?.endpoint).toBe("coding-global");
-    expect(detected?.modelId).toBe("glm-4.7");
-  });
-
-  it("returns null when nothing works", async () => {
-    const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions": { status: 401 },
-      "https://open.bigmodel.cn/api/paas/v4/chat/completions": { status: 401 },
-      "https://api.z.ai/api/coding/paas/v4/chat/completions": { status: 401 },
-      "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions": { status: 401 },
-    });
-
-    const detected = await detectZaiEndpoint({ apiKey: "sk-test", fetchFn });
-    expect(detected).toBe(null);
+      if (scenario.expected === null) {
+        expect(detected).toBeNull();
+      } else {
+        expect(detected?.endpoint).toBe(scenario.expected.endpoint);
+        expect(detected?.modelId).toBe(scenario.expected.modelId);
+      }
+    }
   });
 });

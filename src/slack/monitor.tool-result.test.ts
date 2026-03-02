@@ -6,7 +6,9 @@ import {
   defaultSlackTestConfig,
   getSlackTestState,
   getSlackClient,
+  getSlackHandlers,
   getSlackHandlerOrThrow,
+  flush,
   resetSlackTestState,
   runSlackMessageOnce,
   startSlackMonitor,
@@ -67,6 +69,25 @@ describe("monitorSlackProvider tool results", () => {
     return (replyMock.mock.calls[0]?.[0] ?? {}) as { WasMentioned?: boolean };
   }
 
+  function setRequireMentionChannelConfig(mentionPatterns?: string[]) {
+    slackTestState.config = {
+      ...(mentionPatterns
+        ? {
+            messages: {
+              responsePrefix: "PFX",
+              groupChat: { mentionPatterns },
+            },
+          }
+        : {}),
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    };
+  }
+
   async function runDirectMessageEvent(ts: string, extraEvent: Record<string, unknown> = {}) {
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent({ ts, ...extraEvent }),
@@ -99,6 +120,32 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
   }
+
+  it("skips socket startup when Slack channel is disabled", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          enabled: false,
+          mode: "socket",
+          botToken: "xoxb-config",
+          appToken: "xapp-config",
+        },
+      },
+    };
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    client.auth.test.mockClear();
+
+    const { controller, run } = startSlackMonitor(monitorSlackProvider);
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(client.auth.test).not.toHaveBeenCalled();
+    expect(getSlackHandlers()?.size ?? 0).toBe(0);
+  });
 
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
@@ -325,18 +372,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
-    slackTestState.config = {
-      messages: {
-        responsePrefix: "PFX",
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
-      },
-      channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: true } },
-        },
-      },
-    };
+    setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
@@ -359,14 +395,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("treats replies to bot threads as implicit mentions", async () => {
-    slackTestState.config = {
-      channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: true } },
-        },
-      },
-    };
+    setRequireMentionChannelConfig();
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {

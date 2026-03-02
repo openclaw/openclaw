@@ -2,6 +2,7 @@
 
 export * from "./types.agent-defaults.js";
 export * from "./types.agents.js";
+export * from "./types.acp.js";
 export * from "./types.approvals.js";
 export * from "./types.auth.js";
 export * from "./types.base.js";
@@ -22,6 +23,7 @@ export * from "./types.msteams.js";
 export * from "./types.plugins.js";
 export * from "./types.queue.js";
 export * from "./types.sandbox.js";
+export * from "./types.secrets.js";
 export * from "./types.signal.js";
 export * from "./types.skills.js";
 export * from "./types.slack.js";

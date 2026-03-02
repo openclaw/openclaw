@@ -24,6 +24,7 @@ import type {
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { compileSafeRegex } from "../../security/safe-regex.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -212,6 +213,9 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   if (request.request.host) {
     lines.push(`- Host: ${request.request.host}`);
   }
+  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
+    lines.push(`- Env Overrides: ${request.request.envKeys.join(", ")}`);
+  }
   if (request.request.agentId) {
     lines.push(`- Agent: ${request.request.agentId}`);
   }
@@ -364,11 +368,11 @@ export class DiscordExecApprovalHandler {
         return false;
       }
       const matches = config.sessionFilter.some((p) => {
-        try {
-          return session.includes(p) || new RegExp(p).test(session);
-        } catch {
-          return session.includes(p);
+        if (session.includes(p)) {
+          return true;
         }
+        const regex = compileSafeRegex(p);
+        return regex ? regex.test(session) : false;
       });
       if (!matches) {
         return false;

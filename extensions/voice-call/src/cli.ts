@@ -81,6 +81,27 @@ function summarizeSeries(values: number[]): {
   };
 }
 
+function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
+  return mode === "notify" || mode === "conversation" ? mode : undefined;
+}
+
+async function initiateCallAndPrintId(params: {
+  runtime: VoiceCallRuntime;
+  to: string;
+  message?: string;
+  mode?: string;
+}) {
+  const result = await params.runtime.manager.initiateCall(params.to, undefined, {
+    message: params.message,
+    mode: resolveCallMode(params.mode),
+  });
+  if (!result.success) {
+    throw new Error(result.error || "initiate failed");
+  }
+  // eslint-disable-next-line no-console
+  console.log(JSON.stringify({ callId: result.callId }, null, 2));
+}
+
 export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
@@ -112,16 +133,12 @@ export function registerVoiceCallCli(params: {
       if (!to) {
         throw new Error("Missing --to and no toNumber configured");
       }
-      const result = await rt.manager.initiateCall(to, undefined, {
+      await initiateCallAndPrintId({
+        runtime: rt,
+        to,
         message: options.message,
-        mode:
-          options.mode === "notify" || options.mode === "conversation" ? options.mode : undefined,
+        mode: options.mode,
       });
-      if (!result.success) {
-        throw new Error(result.error || "initiate failed");
-      }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ callId: result.callId }, null, 2));
     });
 
   root
@@ -136,16 +153,12 @@ export function registerVoiceCallCli(params: {
     )
     .action(async (options: { to: string; message?: string; mode?: string }) => {
       const rt = await ensureRuntime();
-      const result = await rt.manager.initiateCall(options.to, undefined, {
+      await initiateCallAndPrintId({
+        runtime: rt,
+        to: options.to,
         message: options.message,
-        mode:
-          options.mode === "notify" || options.mode === "conversation" ? options.mode : undefined,
+        mode: options.mode,
       });
-      if (!result.success) {
-        throw new Error(result.error || "initiate failed");
-      }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ callId: result.callId }, null, 2));
     });
 
   root

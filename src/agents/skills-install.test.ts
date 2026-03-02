@@ -12,13 +12,10 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
-  return {
-    ...actual,
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  };
-});
+vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+}));
 
 async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);

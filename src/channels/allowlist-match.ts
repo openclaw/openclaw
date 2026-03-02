@@ -22,10 +22,30 @@ export function formatAllowlistMatchMeta(
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
+export function resolveAllowlistMatchByCandidates<TSource extends string>(params: {
+  allowList: string[];
+  candidates: Array<{ value?: string; source: TSource }>;
+}): AllowlistMatch<TSource> {
+  for (const candidate of params.candidates) {
+    if (!candidate.value) {
+      continue;
+    }
+    if (params.allowList.includes(candidate.value)) {
+      return {
+        allowed: true,
+        matchKey: candidate.value,
+        matchSource: candidate.source,
+      };
+    }
+  }
+  return { allowed: false };
+}
+
 export function resolveAllowlistMatchSimple(params: {
   allowFrom: Array<string | number>;
   senderId: string;
   senderName?: string | null;
+  allowNameMatching?: boolean;
 }): AllowlistMatch<"wildcard" | "id" | "name"> {
   const allowFrom = params.allowFrom
     .map((entry) => String(entry).trim().toLowerCase())
@@ -44,7 +64,7 @@ export function resolveAllowlistMatchSimple(params: {
   }
 
   const senderName = params.senderName?.toLowerCase();
-  if (senderName && allowFrom.includes(senderName)) {
+  if (params.allowNameMatching === true && senderName && allowFrom.includes(senderName)) {
     return { allowed: true, matchKey: senderName, matchSource: "name" };
   }
 

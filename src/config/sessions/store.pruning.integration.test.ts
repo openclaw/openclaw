@@ -159,6 +159,40 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(bakArchived)).resolves.toBeDefined();
   });
 
+  it("cleans up reset archives using resetArchiveRetention", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          resetArchiveRetention: "3d",
+          maxEntries: 500,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldReset = path.join(
+      testDir,
+      `old-reset.jsonl.reset.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    const freshReset = path.join(
+      testDir,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldReset, "old", "utf-8");
+    await fs.writeFile(freshReset, "fresh", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(oldReset)).rejects.toThrow();
+    await expect(fs.stat(freshReset)).resolves.toBeDefined();
+  });
+
   it("saveSessionStore skips enforcement when maintenance mode is warn", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
@@ -179,5 +213,182 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded.stale).toBeDefined();
     expect(loaded.fresh).toBeDefined();
     expect(Object.keys(loaded)).toHaveLength(2);
+  });
+
+  it("archives transcript files for entries evicted by maxEntries capping", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const oldestSessionId = "oldest-session";
+    const newestSessionId = "newest-session";
+    const store: Record<string, SessionEntry> = {
+      oldest: { sessionId: oldestSessionId, updatedAt: now - DAY_MS },
+      newest: { sessionId: newestSessionId, updatedAt: now },
+    };
+    const oldestTranscript = path.join(testDir, `${oldestSessionId}.jsonl`);
+    const newestTranscript = path.join(testDir, `${newestSessionId}.jsonl`);
+    await fs.writeFile(oldestTranscript, '{"type":"session"}\n', "utf-8");
+    await fs.writeFile(newestTranscript, '{"type":"session"}\n', "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded.oldest).toBeUndefined();
+    expect(loaded.newest).toBeDefined();
+    await expect(fs.stat(oldestTranscript)).rejects.toThrow();
+    await expect(fs.stat(newestTranscript)).resolves.toBeDefined();
+    const files = await fs.readdir(testDir);
+    expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
+  });
+
+  it("does not archive external transcript paths when capping entries", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 1,
+          rotateBytes: 10_485_760,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-cap-"));
+    const externalTranscript = path.join(externalDir, "outside.jsonl");
+    await fs.writeFile(externalTranscript, "external", "utf-8");
+    const store: Record<string, SessionEntry> = {
+      oldest: {
+        sessionId: "outside",
+        sessionFile: externalTranscript,
+        updatedAt: now - DAY_MS,
+      },
+      newest: { sessionId: "inside", updatedAt: now },
+    };
+    await fs.writeFile(path.join(testDir, "inside.jsonl"), '{"type":"session"}\n', "utf-8");
+
+    try {
+      await saveSessionStore(storePath, store);
+      const loaded = loadSessionStore(storePath);
+      expect(loaded.oldest).toBeUndefined();
+      expect(loaded.newest).toBeDefined();
+      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+    } finally {
+      await fs.rm(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces maxDiskBytes with oldest-first session eviction", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          rotateBytes: 10_485_760,
+          maxDiskBytes: 900,
+          highWaterBytes: 700,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const oldSessionId = "old-disk-session";
+    const newSessionId = "new-disk-session";
+    const store: Record<string, SessionEntry> = {
+      old: { sessionId: oldSessionId, updatedAt: now - DAY_MS },
+      recent: { sessionId: newSessionId, updatedAt: now },
+    };
+    await fs.writeFile(path.join(testDir, `${oldSessionId}.jsonl`), "x".repeat(500), "utf-8");
+    await fs.writeFile(path.join(testDir, `${newSessionId}.jsonl`), "y".repeat(500), "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath);
+    expect(Object.keys(loaded).length).toBe(1);
+    expect(loaded.recent).toBeDefined();
+    await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
+    await expect(fs.stat(path.join(testDir, `${newSessionId}.jsonl`))).resolves.toBeDefined();
+  });
+
+  it("uses projected sessions.json size to avoid over-eviction", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          rotateBytes: 10_485_760,
+          maxDiskBytes: 900,
+          highWaterBytes: 700,
+        },
+      },
+    });
+
+    // Simulate a stale oversized on-disk sessions.json from a previous write.
+    await fs.writeFile(storePath, JSON.stringify({ noisy: "x".repeat(10_000) }), "utf-8");
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      older: { sessionId: "older", updatedAt: now - DAY_MS },
+      newer: { sessionId: "newer", updatedAt: now },
+    };
+    await fs.writeFile(path.join(testDir, "older.jsonl"), "x".repeat(80), "utf-8");
+    await fs.writeFile(path.join(testDir, "newer.jsonl"), "y".repeat(80), "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    const loaded = loadSessionStore(storePath);
+    expect(loaded.older).toBeDefined();
+    expect(loaded.newer).toBeDefined();
+  });
+
+  it("never deletes transcripts outside the agent sessions directory during budget cleanup", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 100,
+          rotateBytes: 10_485_760,
+          maxDiskBytes: 500,
+          highWaterBytes: 300,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-external-session-"));
+    const externalTranscript = path.join(externalDir, "outside.jsonl");
+    await fs.writeFile(externalTranscript, "z".repeat(400), "utf-8");
+
+    const store: Record<string, SessionEntry> = {
+      older: {
+        sessionId: "outside",
+        sessionFile: externalTranscript,
+        updatedAt: now - DAY_MS,
+      },
+      newer: {
+        sessionId: "inside",
+        updatedAt: now,
+      },
+    };
+    await fs.writeFile(path.join(testDir, "inside.jsonl"), "i".repeat(400), "utf-8");
+
+    try {
+      await saveSessionStore(storePath, store);
+      await expect(fs.stat(externalTranscript)).resolves.toBeDefined();
+    } finally {
+      await fs.rm(externalDir, { recursive: true, force: true });
+    }
   });
 });

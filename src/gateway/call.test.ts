@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-
-const loadConfig = vi.fn();
-const resolveGatewayPort = vi.fn();
-const pickPrimaryTailnetIPv4 = vi.fn();
-const pickPrimaryLanIPv4 = vi.fn();
+import {
+  loadConfigMock as loadConfig,
+  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
+  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  resolveGatewayPortMock as resolveGatewayPort,
+} from "./gateway-connection.test-mocks.js";
 
 let lastClientOptions: {
   url?: string;
@@ -18,27 +19,6 @@ type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveGatewayPort,
-  };
-});
-
-vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4,
-}));
-
-vi.mock("./net.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./net.js")>();
-  return {
-    ...actual,
-    pickPrimaryLanIPv4,
-  };
-});
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -110,8 +90,15 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+
   beforeEach(() => {
+    envSnapshot.restore();
     resetGatewayCallMocks();
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
   });
 
   it.each([
@@ -336,6 +323,23 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
+  });
+
+  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://10.0.0.8:18789" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://10.0.0.8:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {

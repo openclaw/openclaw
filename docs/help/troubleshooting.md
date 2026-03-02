@@ -34,6 +34,12 @@ Good output in one line:
 - `openclaw channels status --probe` → channels report `connected` or `ready`.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## Anthropic long context 429
+
+If you see:
+`HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
+go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
+
 ## Decision tree
 
 ```mermaid
@@ -62,7 +68,7 @@ flowchart TD
     openclaw status
     openclaw gateway status
     openclaw channels status --probe
-    openclaw pairing list <channel>
+    openclaw pairing list --channel <channel> [--account <id>]
     openclaw logs --follow
     ```
 
