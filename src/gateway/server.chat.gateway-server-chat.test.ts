@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -290,23 +291,8 @@ describe("gateway server chat", () => {
       });
       expect(defaultRes.ok).toBe(true);
       const defaultMsgs = defaultRes.payload?.messages ?? [];
-      const firstContentText = (msg: unknown): string | undefined => {
-        if (!msg || typeof msg !== "object") {
-          return undefined;
-        }
-        const content = (msg as { content?: unknown }).content;
-        if (!Array.isArray(content) || content.length === 0) {
-          return undefined;
-        }
-        const first = content[0];
-        if (!first || typeof first !== "object") {
-          return undefined;
-        }
-        const text = (first as { text?: unknown }).text;
-        return typeof text === "string" ? text : undefined;
-      };
       expect(defaultMsgs.length).toBe(200);
-      expect(firstContentText(defaultMsgs[0])).toBe("m100");
+      expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m100");
     } finally {
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -315,6 +301,77 @@ describe("gateway server chat", () => {
         webchatWs.close();
       }
       await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
+  test("chat.history hides assistant NO_REPLY-only entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const messages = [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "real reply" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: 5,
+        },
+      ];
+      const lines = messages.map((message) => JSON.stringify({ message }));
+      await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+
+      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(res.ok).toBe(true);
+      const historyMessages = res.payload?.messages ?? [];
+      const textValues = historyMessages
+        .map((message) => {
+          if (message && typeof message === "object") {
+            const entry = message as { text?: unknown };
+            if (typeof entry.text === "string") {
+              return entry.text;
+            }
+          }
+          return extractFirstTextBlock(message);
+        })
+        .filter((value): value is string => typeof value === "string");
+      // The NO_REPLY assistant message (content block) should be dropped.
+      // The assistant with text="real text field reply" + content="NO_REPLY" stays
+      // because entry.text takes precedence over entry.content for the silent check.
+      // The user message with NO_REPLY text is preserved (only assistant filtered).
+      expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -350,6 +407,94 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const messages = [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "real reply" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "NO_REPLY" }],
+          timestamp: 5,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "NO_REPLY" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+          ],
+          timestamp: 6,
+        },
+      ];
+      const lines = messages.map((message) => JSON.stringify({ message }));
+      await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
+
+      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(res.ok).toBe(true);
+      const historyMessages = res.payload?.messages ?? [];
+      const roleAndText = historyMessages
+        .map((message) => {
+          const role =
+            message &&
+            typeof message === "object" &&
+            typeof (message as { role?: unknown }).role === "string"
+              ? (message as { role: string }).role
+              : "unknown";
+          const text =
+            message &&
+            typeof message === "object" &&
+            typeof (message as { text?: unknown }).text === "string"
+              ? (message as { text: string }).text
+              : (extractFirstTextBlock(message) ?? "");
+          return `${role}:${text}`;
+        })
+        .filter((entry) => entry !== "unknown:");
+
+      expect(roleAndText).toEqual([
+        "user:hello",
+        "assistant:real reply",
+        "assistant:real text field reply",
+        "user:NO_REPLY",
+        "assistant:NO_REPLY",
+      ]);
     } finally {
       testState.sessionStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });

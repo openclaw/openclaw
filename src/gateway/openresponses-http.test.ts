@@ -163,6 +163,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
+      expect((optsHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
+        "webchat",
+      );
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
@@ -173,6 +176,19 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resChannelHeader = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-message-channel": "custom-client-channel" },
+      );
+      expect(resChannelHeader.status).toBe(200);
+      const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
+        "webchat",
+      );
+      await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {

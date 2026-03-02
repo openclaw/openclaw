@@ -32,6 +32,32 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-text-1", chatId: "123" });
   });
 
+  it("parses scoped DM thread ids for sendText", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-text-2", chatId: "12345" });
+    const sendText = telegramOutbound.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg: {},
+      to: "12345",
+      text: "<b>hello</b>",
+      accountId: "work",
+      threadId: "12345:99",
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "12345",
+      "<b>hello</b>",
+      expect.objectContaining({
+        textMode: "html",
+        verbose: false,
+        accountId: "work",
+        messageThreadId: 99,
+      }),
+    );
+  });
+
   it("passes media options for sendMedia", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-media-1", chatId: "123" });
     const sendMedia = telegramOutbound.sendMedia;
