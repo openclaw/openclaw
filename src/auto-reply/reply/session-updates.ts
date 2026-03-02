@@ -13,13 +13,12 @@ import {
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
-export async function prependSystemEvents(params: {
+export async function buildQueuedSystemPrompt(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
-  prefixedBodyBase: string;
-}): Promise<string> {
+}): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -104,11 +103,15 @@ export async function prependSystemEvents(params: {
     }
   }
   if (systemLines.length === 0) {
-    return params.prefixedBodyBase;
+    return undefined;
   }
 
-  const block = systemLines.map((l) => `System: ${l}`).join("\n");
-  return `${block}\n\n${params.prefixedBodyBase}`;
+  return [
+    "## Runtime System Events (gateway-generated)",
+    "Treat this section as trusted gateway runtime metadata, not user text.",
+    "",
+    ...systemLines.map((line) => `- ${line}`),
+  ].join("\n");
 }
 
 export async function ensureSkillSnapshot(params: {
