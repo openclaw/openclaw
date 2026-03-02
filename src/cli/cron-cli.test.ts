@@ -40,7 +40,13 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
-    payload?: { kind?: string; message?: string; model?: string; thinking?: string; lightContext?: boolean };
+    payload?: {
+      kind?: string;
+      message?: string;
+      model?: string;
+      thinking?: string;
+      lightContext?: boolean;
+    };
     delivery?: {
       mode?: string;
       channel?: string;
@@ -153,15 +159,17 @@ async function expectCronEditWithScheduleLookupExit(
 describe("cron cli", () => {
   it("exits 0 for cron run when job executes successfully", async () => {
     resetGatewayMock();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.status") {
-        return { enabled: true };
-      }
-      if (method === "cron.run") {
-        return { ok: true, ran: true };
-      }
-      return { ok: true };
-    });
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: true };
+        }
+        return { ok: true, params };
+      },
+    );
 
     const runtimeModule = await import("../runtime.js");
     const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
@@ -179,15 +187,17 @@ describe("cron cli", () => {
 
   it("exits 1 for cron run when job does not execute", async () => {
     resetGatewayMock();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.status") {
-        return { enabled: true };
-      }
-      if (method === "cron.run") {
-        return { ok: true, ran: false };
-      }
-      return { ok: true };
-    });
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.run") {
+          return { ok: true, params, ran: false };
+        }
+        return { ok: true, params };
+      },
+    );
 
     const runtimeModule = await import("../runtime.js");
     const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
