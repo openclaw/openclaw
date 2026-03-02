@@ -1,9 +1,10 @@
-import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { getDefaultLocalRoots, loadWebMedia } from "../../web/media.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { resolveModel } from "../pi-embedded-runner/model.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -14,8 +15,6 @@ import {
 import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
-  discoverAuthStorage,
-  discoverModels,
   ensureOpenClawModelsJson,
   getApiKeyForModel,
   normalizeWorkspaceDir,
@@ -216,16 +215,15 @@ async function runImagePrompt(params: {
     : undefined;
 
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+      const resolved = resolveModel(provider, modelId, params.agentDir, effectiveCfg);
+      const model = resolved.model;
       if (!model) {
-        throw new Error(`Unknown model: ${provider}/${modelId}`);
+        throw new Error(resolved.error ?? `Unknown model: ${provider}/${modelId}`);
       }
       if (!model.input?.includes("image")) {
         throw new Error(`Model does not support images: ${provider}/${modelId}`);
@@ -236,7 +234,7 @@ async function runImagePrompt(params: {
         agentDir: params.agentDir,
       });
       const apiKey = requireApiKey(apiKeyInfo, model.provider);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
+      resolved.authStorage.setRuntimeApiKey(model.provider, apiKey);
 
       // MiniMax VLM only supports a single image; use the first one.
       if (model.provider === "minimax") {

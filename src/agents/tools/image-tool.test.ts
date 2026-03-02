@@ -381,6 +381,53 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("resolves custom image models from config when provider apiKey uses SecretInput", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "bailian:default": { type: "api_key", provider: "bailian", key: "bailian-test" },
+        },
+      });
+      const fetch = stubOpenAiCompletionsOkFetch("ok bailian");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "bailian/qwen3.5-plus" },
+            imageModel: { primary: "bailian/qwen3.5-plus" },
+          },
+        },
+        models: {
+          providers: {
+            bailian: {
+              api: "openai-completions",
+              baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "BAILIAN_API_KEY",
+              },
+              models: [makeModelDefinition("qwen3.5-plus", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image in one word.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url] = fetch.mock.calls[0] as [unknown];
+      expect(String(url)).toBe("https://coding.dashscope.aliyuncs.com/v1/chat/completions");
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok bailian" })]),
+      );
+    });
+  });
+
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
     try {
