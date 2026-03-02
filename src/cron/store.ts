@@ -50,13 +50,51 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 export async function saveCronStore(storePath: string, store: CronStoreFile) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const { randomBytes } = await import("node:crypto");
-  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   const json = JSON.stringify(store, null, 2);
-  await fs.promises.writeFile(tmp, json, "utf-8");
-  await fs.promises.rename(tmp, storePath);
+  let previous: string | null = null;
   try {
-    await fs.promises.copyFile(storePath, `${storePath}.bak`);
-  } catch {
-    // best-effort
+    previous = await fs.promises.readFile(storePath, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown }).code !== "ENOENT") {
+      throw err;
+    }
+  }
+  if (previous === json) {
+    return;
+  }
+  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  await fs.promises.writeFile(tmp, json, "utf-8");
+  if (previous !== null) {
+    try {
+      await fs.promises.copyFile(storePath, `${storePath}.bak`);
+    } catch {
+      // best-effort
+    }
+  }
+  await renameWithRetry(tmp, storePath);
+}
+
+const RENAME_MAX_RETRIES = 3;
+const RENAME_BASE_DELAY_MS = 50;
+
+async function renameWithRetry(src: string, dest: string): Promise<void> {
+  for (let attempt = 0; attempt <= RENAME_MAX_RETRIES; attempt++) {
+    try {
+      await fs.promises.rename(src, dest);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EBUSY" && attempt < RENAME_MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_BASE_DELAY_MS * 2 ** attempt));
+        continue;
+      }
+      // Windows doesn't reliably support atomic replace via rename when dest exists.
+      if (code === "EPERM" || code === "EEXIST") {
+        await fs.promises.copyFile(src, dest);
+        await fs.promises.unlink(src).catch(() => {});
+        return;
+      }
+      throw err;
+    }
   }
 }

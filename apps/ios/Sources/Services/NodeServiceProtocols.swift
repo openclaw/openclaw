@@ -39,6 +39,7 @@ protocol LocationServicing: Sendable {
     func stopMonitoringSignificantLocationChanges()
 }
 
+@MainActor
 protocol DeviceStatusServicing: Sendable {
     func status() async throws -> OpenClawDeviceStatusPayload
     func info() -> OpenClawDeviceInfoPayload

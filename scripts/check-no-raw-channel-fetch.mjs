@@ -2,10 +2,16 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  collectTypeScriptFiles,
+  resolveRepoRoot,
+  runAsScript,
+  toLine,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [
   path.join(repoRoot, "src", "telegram"),
   path.join(repoRoot, "src", "discord"),
@@ -22,7 +28,7 @@ const sourceRoots = [
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  "extensions/bluebubbles/src/types.ts:131",
+  "extensions/bluebubbles/src/types.ts:133",
   "extensions/feishu/src/streaming-card.ts:31",
   "extensions/feishu/src/streaming-card.ts:101",
   "extensions/feishu/src/streaming-card.ts:143",
@@ -35,7 +41,7 @@ const allowedRawFetchCallsites = new Set([
   "extensions/googlechat/src/api.ts:22",
   "extensions/googlechat/src/api.ts:43",
   "extensions/googlechat/src/api.ts:63",
-  "extensions/googlechat/src/api.ts:184",
+  "extensions/googlechat/src/api.ts:188",
   "extensions/googlechat/src/auth.ts:82",
   "extensions/matrix/src/directory-live.ts:41",
   "extensions/matrix/src/matrix/client/config.ts:171",
@@ -65,69 +71,6 @@ const allowedRawFetchCallsites = new Set([
   "src/slack/monitor/media.ts:108",
 ]);
 
-function isTestLikeFile(filePath) {
-  return (
-    filePath.endsWith(".test.ts") ||
-    filePath.endsWith(".test-utils.ts") ||
-    filePath.endsWith(".test-harness.ts") ||
-    filePath.endsWith(".e2e-harness.ts") ||
-    filePath.endsWith(".browser.test.ts") ||
-    filePath.endsWith(".node.test.ts")
-  );
-}
-
-async function collectTypeScriptFiles(targetPath) {
-  const stat = await fs.stat(targetPath);
-  if (stat.isFile()) {
-    if (!targetPath.endsWith(".ts") || isTestLikeFile(targetPath)) {
-      return [];
-    }
-    return [targetPath];
-  }
-  const entries = await fs.readdir(targetPath, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(targetPath, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules") {
-        continue;
-      }
-      files.push(...(await collectTypeScriptFiles(entryPath)));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!entryPath.endsWith(".ts")) {
-      continue;
-    }
-    if (isTestLikeFile(entryPath)) {
-      continue;
-    }
-    files.push(entryPath);
-  }
-  return files;
-}
-
-function unwrapExpression(expression) {
-  let current = expression;
-  while (true) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    return current;
-  }
-}
-
 function isRawFetchCall(expression) {
   const callee = unwrapExpression(expression);
   if (ts.isIdentifier(callee)) {
@@ -148,9 +91,7 @@ export function findRawFetchCallLines(content, fileName = "source.ts") {
   const lines = [];
   const visit = (node) => {
     if (ts.isCallExpression(node) && isRawFetchCall(node.expression)) {
-      const line =
-        sourceFile.getLineAndCharacterOfPosition(node.expression.getStart(sourceFile)).line + 1;
-      lines.push(line);
+      lines.push(toLine(sourceFile, node.expression));
     }
     ts.forEachChild(node, visit);
   };
@@ -161,13 +102,13 @@ export function findRawFetchCallLines(content, fileName = "source.ts") {
 export async function main() {
   const files = (
     await Promise.all(
-      sourceRoots.map(async (sourceRoot) => {
-        try {
-          return await collectTypeScriptFiles(sourceRoot);
-        } catch {
-          return [];
-        }
-      }),
+      sourceRoots.map(
+        async (sourceRoot) =>
+          await collectTypeScriptFiles(sourceRoot, {
+            extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],
+            ignoreMissing: true,
+          }),
+      ),
     )
   ).flat();
 
@@ -198,17 +139,4 @@ export async function main() {
   process.exit(1);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
-}
+runAsScript(import.meta.url, main);

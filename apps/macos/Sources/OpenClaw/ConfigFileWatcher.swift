@@ -1,11 +1,11 @@
 import Foundation
 
-final class ConfigFileWatcher: @unchecked Sendable {
+final class ConfigFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
     private let url: URL
     private let watchedDir: URL
     private let targetPath: String
     private let targetName: String
-    private let watcher: CoalescingFSEventsWatcher
+    let watcher: SimpleFileWatcher
 
     init(url: URL, onChange: @escaping () -> Void) {
         self.url = url
@@ -15,7 +15,7 @@ final class ConfigFileWatcher: @unchecked Sendable {
         let watchedDirPath = self.watchedDir.path
         let targetPath = self.targetPath
         let targetName = self.targetName
-        self.watcher = CoalescingFSEventsWatcher(
+        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
             paths: [watchedDirPath],
             queueLabel: "ai.openclaw.configwatcher",
             shouldNotify: { _, eventPaths in
@@ -28,18 +28,7 @@ final class ConfigFileWatcher: @unchecked Sendable {
                 }
                 return false
             },
-            onChange: onChange)
+            onChange: onChange))
     }
 
-    deinit {
-        self.stop()
-    }
-
-    func start() {
-        self.watcher.start()
-    }
-
-    func stop() {
-        self.watcher.stop()
-    }
 }
