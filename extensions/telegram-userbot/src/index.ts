@@ -72,7 +72,11 @@ export { telegramUserbotAgentPromptAdapter } from "./adapters/agent-prompt.js";
 export { telegramUserbotStreamingAdapter, sendTypingIndicator } from "./adapters/streaming.js";
 export { telegramUserbotDirectoryAdapter } from "./adapters/directory.js";
 export { telegramUserbotThreadingAdapter } from "./adapters/threading.js";
-export { telegramUserbotOnboardingAdapter } from "./onboarding.js";
+export {
+  telegramUserbotOnboardingAdapter,
+  buildTelegramUserbotOnboardingAdapter,
+} from "./onboarding.js";
+export type { CreateClientFn } from "./onboarding.js";
 
 // Monitor
 export { incrementMetric, getMetrics, resetMetrics, probeConnection } from "./monitor.js";
