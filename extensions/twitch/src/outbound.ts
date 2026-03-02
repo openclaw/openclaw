@@ -126,7 +126,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return twitchOutbound.sendText!({ ...ctx });
+    return twitchOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
 
   sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {

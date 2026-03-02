@@ -268,12 +268,23 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
-      // Nextcloud Talk has no native media — append URLs to text
-      const parts: string[] = [];
-      if (ctx.payload.text) parts.push(ctx.payload.text);
-      for (const url of urls) parts.push(url);
-      const combined = parts.join("\n");
-      return nextcloudTalkPlugin.outbound!.sendText!({ ...ctx, text: combined });
+      if (urls.length > 0) {
+        // Delegate to sendMedia to preserve "Attachment: <url>" formatting
+        let lastResult = await nextcloudTalkPlugin.outbound!.sendMedia!({
+          ...ctx,
+          text: ctx.payload.text ?? "",
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
+          lastResult = await nextcloudTalkPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult;
+      }
+      return nextcloudTalkPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {

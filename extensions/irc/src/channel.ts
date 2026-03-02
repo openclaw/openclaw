@@ -302,12 +302,23 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
         : ctx.payload.mediaUrl
           ? [ctx.payload.mediaUrl]
           : [];
-      // IRC has no native media — append URLs to text
-      const parts: string[] = [];
-      if (ctx.payload.text) parts.push(ctx.payload.text);
-      for (const url of urls) parts.push(url);
-      const combined = parts.join("\n");
-      return ircPlugin.outbound!.sendText!({ ...ctx, text: combined });
+      if (urls.length > 0) {
+        // Delegate to sendMedia to preserve "Attachment: <url>" formatting
+        let lastResult = await ircPlugin.outbound!.sendMedia!({
+          ...ctx,
+          text: ctx.payload.text ?? "",
+          mediaUrl: urls[0],
+        });
+        for (let i = 1; i < urls.length; i++) {
+          lastResult = await ircPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult;
+      }
+      return ircPlugin.outbound!.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
     },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageIrc(to, text, {

@@ -190,7 +190,7 @@ const tlonOutbound: ChannelOutboundAdapter = {
       }
       return lastResult;
     }
-    return tlonOutbound.sendText!({ ...ctx });
+    return tlonOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const account = resolveTlonAccount(cfg, accountId ?? undefined);

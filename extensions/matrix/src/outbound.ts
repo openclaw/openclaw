@@ -14,14 +14,22 @@ export const matrixOutbound: ChannelOutboundAdapter = {
         ? [ctx.payload.mediaUrl]
         : [];
     if (urls.length > 0) {
-      // Matrix API supports only one media attachment per message
-      return matrixOutbound.sendMedia!({
+      // Matrix API supports one media attachment per event — send one event per URL
+      let lastResult = await matrixOutbound.sendMedia!({
         ...ctx,
         text: ctx.payload.text ?? "",
         mediaUrl: urls[0],
       });
+      for (let i = 1; i < urls.length; i++) {
+        lastResult = await matrixOutbound.sendMedia!({
+          ...ctx,
+          text: "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult;
     }
-    return matrixOutbound.sendText!({ ...ctx });
+    return matrixOutbound.sendText!({ ...ctx, text: ctx.payload.text ?? "" });
   },
   sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;
