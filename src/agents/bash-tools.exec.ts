@@ -77,6 +77,176 @@ function extractScriptTargetFromCommand(
   return null;
 }
 
+type InlineExecControlName = "pty" | "background" | "elevated" | "workdir";
+const INLINE_EXEC_SHELL_LAUNCHERS = new Set(["bash", "sh", "zsh"]);
+
+function splitShellWords(input: string | undefined, maxWords = 48): string[] {
+  if (!input) {
+    return [];
+  }
+
+  const words: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (!current) {
+        continue;
+      }
+      words.push(current);
+      if (words.length >= maxWords) {
+        return words;
+      }
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  if (current) {
+    words.push(current);
+  }
+  return words;
+}
+
+function stripOuterQuotes(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function binaryName(token: string | undefined): string | undefined {
+  if (!token) {
+    return undefined;
+  }
+  const cleaned = stripOuterQuotes(token) ?? token;
+  const segment = cleaned.split(/[\\/]/).at(-1) ?? cleaned;
+  return segment
+    .trim()
+    .toLowerCase()
+    .replace(/\.exe$/i, "");
+}
+
+function parseInlineExecControlToken(
+  token: string | undefined,
+): { name: InlineExecControlName; value: boolean | string } | null {
+  const trimmed = token?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(pty|background|elevated|workdir):(.*)$/i);
+  if (!match) {
+    return null;
+  }
+  const name = match[1].toLowerCase() as InlineExecControlName;
+  const rawValue = match[2]?.trim() ?? "";
+  const normalizedValue = rawValue.toLowerCase();
+  if (name === "workdir") {
+    return rawValue ? { name, value: rawValue } : null;
+  }
+  if (normalizedValue === "true") {
+    return { name, value: true };
+  }
+  if (normalizedValue === "false") {
+    return { name, value: false };
+  }
+  return null;
+}
+
+function detectInlineExecControlLeak(command: string): {
+  controls: string[];
+  location: "prefix" | "shell-argv";
+} | null {
+  const words = splitShellWords(command, 12);
+  if (words.length === 0) {
+    return null;
+  }
+
+  const prefixControls: string[] = [];
+  let index = 0;
+  while (index < words.length) {
+    const parsed = parseInlineExecControlToken(words[index]);
+    if (!parsed) {
+      break;
+    }
+    prefixControls.push(words[index]);
+    index += 1;
+  }
+  if (prefixControls.length > 0) {
+    return { controls: prefixControls, location: "prefix" };
+  }
+
+  const launcher = binaryName(words[0]);
+  if (!launcher || !INLINE_EXEC_SHELL_LAUNCHERS.has(launcher)) {
+    return null;
+  }
+  const shellArgControls: string[] = [];
+  for (let i = 1; i < Math.min(words.length, 5); i += 1) {
+    const parsed = parseInlineExecControlToken(words[i]);
+    if (!parsed) {
+      break;
+    }
+    shellArgControls.push(words[i]);
+  }
+  if (shellArgControls.length > 0) {
+    return { controls: shellArgControls, location: "shell-argv" };
+  }
+  return null;
+}
+
+function assertNoInlineExecControlLeak(command: string): void {
+  const leak = detectInlineExecControlLeak(command);
+  if (!leak) {
+    return;
+  }
+  const controls = leak.controls.join(", ");
+  const location =
+    leak.location === "prefix"
+      ? "before the executable"
+      : "inside shell argv immediately after the executable";
+  throw new Error(
+    [
+      `exec preflight: detected leaked exec control metadata in command text (${controls}) ${location}.`,
+      "Keep exec controls structured and separate from the shell command.",
+      "Use tool parameters for pty/background/elevated/workdir instead of embedding them in command text.",
+    ].join("\n"),
+  );
+}
+
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
@@ -398,6 +568,11 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      // Preflight: catch malformed exec control metadata before any approval or
+      // deferred gateway execution path can handle the command asynchronously.
+      assertNoInlineExecControlLeak(params.command);
+      await validateScriptFileForShellBleed({ command: params.command, workdir });
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
@@ -463,10 +638,6 @@ export function createExecTool(
         : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
-
-      // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
-      // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
 
       const run = await runExecProcess({
         command: params.command,
