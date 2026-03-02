@@ -612,3 +612,22 @@ export async function monitorZalouserProvider(
 
   return { stop };
 }
+
+export const __testing = {
+  processMessage: async (params: {
+    message: ZcaMessage;
+    account: ResolvedZalouserAccount;
+    config: OpenClawConfig;
+    runtime: RuntimeEnv;
+    statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  }) => {
+    await processMessage(
+      params.message,
+      params.account,
+      params.config,
+      getZalouserRuntime(),
+      params.runtime,
+      params.statusSink,
+    );
+  },
+};
