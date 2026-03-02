@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -11,6 +12,7 @@ import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
@@ -196,6 +198,35 @@ describe("parseSystemdExecStart", () => {
       "--name",
       "My Bot",
     ]);
+  });
+});
+
+describe("readSystemdServiceExecStart", () => {
+  it("parses multiline spaced ExecStart assignments", async () => {
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockResolvedValue(
+        [
+          "[Service]",
+          "ExecStart = /usr/bin/env OPENCLAW_MODE=prod \\",
+          "  /usr/bin/openclaw gateway run",
+          "WorkingDirectory=/home/test/work",
+        ].join("\n"),
+      );
+
+    try {
+      const result = await readSystemdServiceExecStart({ HOME: "/home/test" });
+      expect(result?.programArguments).toEqual([
+        "/usr/bin/env",
+        "OPENCLAW_MODE=prod",
+        "/usr/bin/openclaw",
+        "gateway",
+        "run",
+      ]);
+      expect(result?.workingDirectory).toBe("/home/test/work");
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 });
 

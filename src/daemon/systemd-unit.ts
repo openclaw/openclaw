@@ -78,6 +78,80 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
+function stripSystemdExecPrefix(token: string): string {
+  let out = token;
+  while (out && /^[-@:+!]/.test(out)) {
+    out = out.slice(1);
+  }
+  return out;
+}
+
+export function collectSystemdExecStartValues(contents: string): string[] {
+  const logicalLines: string[] = [];
+  let currentLine = "";
+
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const trimmedLine = rawLine.trim();
+    if (!trimmedLine && !currentLine) {
+      continue;
+    }
+    const hasContinuation = /\\\s*$/.test(trimmedLine);
+    const linePart = trimmedLine.replace(/\\\s*$/, "").trim();
+    currentLine = currentLine ? `${currentLine} ${linePart}`.trim() : linePart;
+    if (hasContinuation) {
+      continue;
+    }
+    logicalLines.push(currentLine);
+    currentLine = "";
+  }
+
+  if (currentLine) {
+    logicalLines.push(currentLine);
+  }
+
+  const values: string[] = [];
+  for (const line of logicalLines) {
+    const match = line.match(/^execstart\s*=(.*)$/i);
+    if (match) {
+      values.push(match[1]?.trim() ?? "");
+    }
+  }
+  return values;
+}
+
+export function extractSystemdExecStartCommandToken(execStartValue: string): string | null {
+  const tokens = parseSystemdExecStart(execStartValue);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  let index = 0;
+  while (index < tokens.length) {
+    const token = stripSystemdExecPrefix(tokens[index] ?? "");
+    if (!token) {
+      index += 1;
+      continue;
+    }
+
+    if (token.toLowerCase().endsWith("/env") || token.toLowerCase() === "env") {
+      index += 1;
+      while (index < tokens.length) {
+        const envToken = tokens[index] ?? "";
+        if (!envToken || envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
+          index += 1;
+          continue;
+        }
+        return stripSystemdExecPrefix(envToken);
+      }
+      return null;
+    }
+
+    return token;
+  }
+
+  return null;
+}
+
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) {

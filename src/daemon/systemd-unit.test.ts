@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemdUnit } from "./systemd-unit.js";
+import {
+  buildSystemdUnit,
+  collectSystemdExecStartValues,
+  extractSystemdExecStartCommandToken,
+} from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
   it("quotes arguments with whitespace", () => {
@@ -22,5 +26,45 @@ describe("buildSystemdUnit", () => {
         },
       }),
     ).toThrow(/CR or LF/);
+  });
+});
+
+describe("collectSystemdExecStartValues", () => {
+  it("collects spaced ExecStart assignments", () => {
+    const content = ["[Service]", "ExecStart = /usr/bin/openclaw gateway run"].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual(["/usr/bin/openclaw gateway run"]);
+  });
+
+  it("folds backslash-continued ExecStart lines", () => {
+    const content = [
+      "[Service]",
+      "ExecStart=/usr/bin/env FOO=bar \\",
+      "  /snap/bin/chromium --headless --remote-debugging-port=18800",
+    ].join("\n");
+    expect(collectSystemdExecStartValues(content)).toEqual([
+      "/usr/bin/env FOO=bar /snap/bin/chromium --headless --remote-debugging-port=18800",
+    ]);
+  });
+});
+
+describe("extractSystemdExecStartCommandToken", () => {
+  it("extracts direct executable command tokens", () => {
+    expect(extractSystemdExecStartCommandToken("/usr/bin/openclaw gateway run")).toBe(
+      "/usr/bin/openclaw",
+    );
+  });
+
+  it("extracts executable token when systemd prefix operators are attached", () => {
+    expect(extractSystemdExecStartCommandToken("-/snap/bin/chromium --headless")).toBe(
+      "/snap/bin/chromium",
+    );
+  });
+
+  it("extracts executable token when wrapped by env", () => {
+    expect(
+      extractSystemdExecStartCommandToken(
+        "/usr/bin/env CHROME_USER_DATA=/tmp/chrome /snap/bin/chromium --headless",
+      ),
+    ).toBe("/snap/bin/chromium");
   });
 });

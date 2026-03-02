@@ -8,6 +8,10 @@ import {
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import {
+  collectSystemdExecStartValues,
+  extractSystemdExecStartCommandToken,
+} from "./systemd-unit.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
@@ -106,90 +110,14 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
   return contents.toLowerCase().includes("gateway");
 }
 
-function collectSystemdExecStartLines(contents: string): string[] {
-  const logicalLines: string[] = [];
-  let currentLine = "";
-
-  for (const rawLine of contents.split(/\r?\n/)) {
-    const trimmedLine = rawLine.trim();
-    if (!trimmedLine && !currentLine) {
-      continue;
-    }
-    const hasContinuation = /\\\s*$/.test(trimmedLine);
-    const linePart = trimmedLine.replace(/\\\s*$/, "").trim();
-    currentLine = currentLine ? `${currentLine} ${linePart}`.trim() : linePart;
-    if (hasContinuation) {
-      continue;
-    }
-    logicalLines.push(currentLine);
-    currentLine = "";
-  }
-
-  if (currentLine) {
-    logicalLines.push(currentLine);
-  }
-
-  return logicalLines.filter((line) => /^execstart\s*=/i.test(line));
-}
-
-function stripShellQuotes(token: string): string {
-  if (
-    (token.startsWith('"') && token.endsWith('"')) ||
-    (token.startsWith("'") && token.endsWith("'"))
-  ) {
-    return token.slice(1, -1);
-  }
-  return token;
-}
-
 function isBrowserExecutableToken(token: string): boolean {
-  const unquoted = stripShellQuotes(token).toLowerCase();
-  const base = unquoted.split("/").pop() ?? unquoted;
+  const base = token.toLowerCase().split("/").pop() ?? token.toLowerCase();
   return (
     base === "chromium" ||
     base === "chromium-browser" ||
     base === "google-chrome" ||
     base === "chrome"
   );
-}
-
-function extractExecStartCommandToken(execStartLine: string): string | null {
-  const value = execStartLine.replace(/^execstart\s*=/i, "").trim();
-  if (!value) {
-    return null;
-  }
-
-  const tokens = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-  if (tokens.length === 0) {
-    return null;
-  }
-
-  let index = 0;
-  while (index < tokens.length && /^[-@:+!]/.test(tokens[index])) {
-    index += 1;
-  }
-
-  if (index >= tokens.length) {
-    return null;
-  }
-
-  if (
-    stripShellQuotes(tokens[index]).toLowerCase().endsWith("/env") ||
-    stripShellQuotes(tokens[index]).toLowerCase() === "env"
-  ) {
-    index += 1;
-    while (index < tokens.length) {
-      const token = stripShellQuotes(tokens[index]);
-      if (token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) {
-        index += 1;
-        continue;
-      }
-      return tokens[index];
-    }
-    return null;
-  }
-
-  return tokens[index];
 }
 
 /**
@@ -204,13 +132,13 @@ function extractExecStartCommandToken(execStartLine: string): string | null {
  *   2. ExecStart references a chromium or chrome binary
  */
 function isBrowserCdpService(contents: string): boolean {
-  const execStartLines = collectSystemdExecStartLines(contents);
-  for (const line of execStartLines) {
-    const lower = line.toLowerCase();
+  const execStartValues = collectSystemdExecStartValues(contents);
+  for (const value of execStartValues) {
+    const lower = value.toLowerCase();
     if (lower.includes("--remote-debugging-port")) {
       return true;
     }
-    const commandToken = extractExecStartCommandToken(line);
+    const commandToken = extractSystemdExecStartCommandToken(value);
     if (commandToken && isBrowserExecutableToken(commandToken)) {
       return true;
     }

@@ -25,6 +25,7 @@ import {
 } from "./systemd-linger.js";
 import {
   buildSystemdUnit,
+  collectSystemdExecStartValues,
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
 } from "./systemd-unit.js";
@@ -61,7 +62,8 @@ export async function readSystemdServiceExecStart(
   const unitPath = resolveSystemdUnitPath(env);
   try {
     const content = await fs.readFile(unitPath, "utf8");
-    let execStart = "";
+    const execStartValues = collectSystemdExecStartValues(content);
+    const execStart = execStartValues.at(-1) ?? "";
     let workingDirectory = "";
     const environment: Record<string, string> = {};
     for (const rawLine of content.split("\n")) {
@@ -69,9 +71,7 @@ export async function readSystemdServiceExecStart(
       if (!line || line.startsWith("#")) {
         continue;
       }
-      if (line.startsWith("ExecStart=")) {
-        execStart = line.slice("ExecStart=".length).trim();
-      } else if (line.startsWith("WorkingDirectory=")) {
+      if (line.startsWith("WorkingDirectory=")) {
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
       } else if (line.startsWith("Environment=")) {
         const raw = line.slice("Environment=".length).trim();
