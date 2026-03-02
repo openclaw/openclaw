@@ -164,4 +164,21 @@ describe("findExtraGatewayServices (linux)", () => {
 
     expect(result).toEqual([]);
   });
+
+  it("skips browser/CDP services when ExecStart uses multiline continuation", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["chromium-multiline.service"] as unknown as Awaited<
+      ReturnType<typeof fs.readdir>
+    >);
+    vi.spyOn(fs, "readFile").mockResolvedValue(
+      [
+        "[Service]",
+        "ExecStart=/usr/bin/env CHROME_USER_DATA=/home/test/snap/chromium/common/openclaw/user-data \\",
+        "  /snap/bin/chromium --headless --remote-debugging-port=18800",
+      ].join("\n"),
+    );
+
+    const result = await findExtraGatewayServices({ HOME: "/home/test" });
+
+    expect(result).toEqual([]);
+  });
 });

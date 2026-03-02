@@ -107,10 +107,29 @@ function isOpenClawGatewaySystemdService(name: string, contents: string): boolea
 }
 
 function collectSystemdExecStartLines(contents: string): string[] {
-  return contents
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => /^execstart\s*=/i.test(line));
+  const logicalLines: string[] = [];
+  let currentLine = "";
+
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const trimmedLine = rawLine.trim();
+    if (!trimmedLine && !currentLine) {
+      continue;
+    }
+    const hasContinuation = /\\\s*$/.test(trimmedLine);
+    const linePart = trimmedLine.replace(/\\\s*$/, "").trim();
+    currentLine = currentLine ? `${currentLine} ${linePart}`.trim() : linePart;
+    if (hasContinuation) {
+      continue;
+    }
+    logicalLines.push(currentLine);
+    currentLine = "";
+  }
+
+  if (currentLine) {
+    logicalLines.push(currentLine);
+  }
+
+  return logicalLines.filter((line) => /^execstart\s*=/i.test(line));
 }
 
 /**
