@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - **BREAKING:** Zalo Personal plugin (`@openclaw/zalouser`) no longer depends on external `zca`-compatible CLI binaries (`openzca`, `zca-cli`) for runtime send/listen/login; operators should use `openclaw channels login --channel zalouser` after upgrade to refresh sessions in the new JS-native path.
+- **BREAKING:** Onboarding now defaults `tools.profile` to `messaging` for new local installs (interactive + non-interactive). New setups no longer start with broad coding/system tools unless explicitly configured.
 - **BREAKING:** Node exec approval payloads now require `systemRunPlan`. `host=node` approval requests without that plan are rejected.
 - **BREAKING:** Node `system.run` execution now pins path-token commands to the canonical executable path (`realpath`) in both allowlist and approval execution flows. Integrations/tests that asserted token-form argv (for example `tr`) must now accept canonical paths (for example `/usr/bin/tr`).
 - **BREAKING:** Plugin SDK removed `api.registerHttpHandler(...)`. Plugins must register explicit HTTP routes via `api.registerHttpRoute({ path, auth, match, handler })`, and dynamic webhook lifecycles should use `registerPluginHttpRoute(...)`.
