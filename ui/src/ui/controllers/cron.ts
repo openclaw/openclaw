@@ -608,8 +608,8 @@ function buildFailureAlert(form: CronFormState) {
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
     ...(accountId ? { accountId } : {}),
   };
-  // Only include mode if explicitly set to non-default value
-  if (deliveryMode && deliveryMode !== "announce") {
+  // Always include mode so users can switch between webhook/announce
+  if (deliveryMode) {
     patch.mode = deliveryMode;
   }
   return patch;

@@ -154,6 +154,9 @@ export function resolveFailureDestination(
     const jobAccountId = normalizeAccountId(jobFailureDest.accountId);
     const jobMode = normalizeFailureMode(jobFailureDest.mode);
 
+    // Track if 'to' was explicitly set at job level
+    const jobToExplicit = "to" in jobFailureDest && jobFailureDest.to !== undefined;
+
     // Only override if explicitly set (not undefined)
     if (jobChannel !== undefined) {
       channel = jobChannel;
@@ -167,7 +170,8 @@ export function resolveFailureDestination(
     if (jobMode !== undefined) {
       // Mode was explicitly overridden - clear inherited 'to' since URL semantics differ
       // between announce (channel recipient) and webhook (HTTP endpoint)
-      if (globalConfig?.mode !== jobMode) {
+      // But preserve explicit 'to' that was set at job level
+      if (!jobToExplicit && globalConfig?.mode !== jobMode) {
         to = undefined;
       }
       mode = jobMode;
