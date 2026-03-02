@@ -471,22 +471,44 @@ export function recordAllowlistUse(
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
-  const existing = agents[target] ?? {};
-  const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];
-  const nextAllowlist = allowlist.map((item) =>
-    item.pattern === entry.pattern
-      ? {
+  let found = false;
+
+  const updateIn = (key: string) => {
+    const existing = agents[key];
+    if (!existing || !Array.isArray(existing.allowlist)) {
+      return false;
+    }
+    let localFound = false;
+    const nextAllowlist = existing.allowlist.map((item) => {
+      if (item.pattern === entry.pattern) {
+        localFound = true;
+        return {
           ...item,
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
-      : item,
-  );
-  agents[target] = { ...existing, allowlist: nextAllowlist };
-  approvals.agents = agents;
-  saveExecApprovals(approvals);
+        };
+      }
+      return item;
+    });
+    if (localFound) {
+      agents[key] = { ...existing, allowlist: nextAllowlist };
+      return true;
+    }
+    return false;
+  };
+
+  if (updateIn(target)) {
+    found = true;
+  } else if (target !== "*" && updateIn("*")) {
+    found = true;
+  }
+
+  if (found) {
+    approvals.agents = agents;
+    saveExecApprovals(approvals);
+  }
 }
 
 export function addAllowlistEntry(
