@@ -14,6 +14,7 @@ export async function waitForDiscordGatewayStop(params: {
   abortSignal?: AbortSignal;
   onGatewayError?: (err: unknown) => void;
   shouldStopOnError?: (err: unknown) => boolean;
+  registerForceStop?: (forceStop: (err: unknown) => void) => void;
 }): Promise<void> {
   const { gateway, abortSignal, onGatewayError, shouldStopOnError } = params;
   const emitter = gateway?.emitter;
@@ -57,6 +58,9 @@ export async function waitForDiscordGatewayStop(params: {
         finishReject(err);
       }
     };
+    const onForceStop = (err: unknown) => {
+      finishReject(err);
+    };
 
     if (abortSignal?.aborted) {
       onAbort();
@@ -65,5 +69,6 @@ export async function waitForDiscordGatewayStop(params: {
 
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     emitter?.on("error", onGatewayErrorEvent);
+    params.registerForceStop?.(onForceStop);
   });
 }
