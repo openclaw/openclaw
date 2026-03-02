@@ -34,6 +34,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.auto.betaCheckIntervalHours": "Auto Update Beta Check Interval (hours)",
   "diagnostics.enabled": "Diagnostics Enabled",
   "diagnostics.flags": "Diagnostics Flags",
+  "diagnostics.stuckSessionWarnMs": "Stuck Session Warning Threshold (ms)",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.protocol": "OpenTelemetry Protocol",
@@ -421,6 +422,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
+  "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
+    "Compaction Memory Flush Transcript Size Threshold",
   "agents.defaults.compaction.memoryFlush.prompt": "Compaction Memory Flush Prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt": "Compaction Memory Flush System Prompt",
   "agents.defaults.embeddedPi": "Embedded Pi",
