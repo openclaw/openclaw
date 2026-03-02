@@ -299,16 +299,15 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 
-  // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > model/global defaults
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
     : undefined;
-  const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn" ? params.job.payload.thinking : undefined) ??
       undefined,
   );
-  let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
+  let thinkLevel = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
@@ -463,7 +462,14 @@ export async function runCronIsolatedAgentTurn(params: {
           throw new Error(abortReason());
         }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
+          // Fresh isolated cron sessions must not reuse a stored CLI session ID.
+          // Passing an existing ID activates the resume watchdog profile
+          // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
+          // (ratio 0.8, maxMs 600 s), causing jobs to time out at roughly 1/3 of
+          // the configured timeoutSeconds. See: https://github.com/openclaw/openclaw/issues/29774
+          const cliSessionId = cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
@@ -500,6 +506,8 @@ export async function runCronIsolatedAgentTurn(params: {
           thinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
+          bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
+          bootstrapContextRunKind: "cron",
           runId: cronSession.sessionEntry.sessionId,
           // Only enforce an explicit message target when the cron delivery target
           // was successfully resolved. When resolution fails the agent should not

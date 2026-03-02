@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
 
 export type RegisteredWebhookTarget<T> = {
@@ -6,21 +7,89 @@ export type RegisteredWebhookTarget<T> = {
   unregister: () => void;
 };
 
+export type RegisterWebhookTargetOptions<T extends { path: string }> = {
+  onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
+  onLastPathTargetRemoved?: (params: { path: string }) => void;
+};
+
+type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
+
+export type RegisterWebhookPluginRouteOptions = Omit<
+  RegisterPluginHttpRouteParams,
+  "path" | "fallbackPath"
+>;
+
+export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
+  targetsByPath: Map<string, T[]>;
+  target: T;
+  route: RegisterWebhookPluginRouteOptions;
+  onLastPathTargetRemoved?: RegisterWebhookTargetOptions<T>["onLastPathTargetRemoved"];
+}): RegisteredWebhookTarget<T> {
+  return registerWebhookTarget(params.targetsByPath, params.target, {
+    onFirstPathTarget: ({ path }) =>
+      registerPluginHttpRoute({
+        ...params.route,
+        path,
+        replaceExisting: params.route.replaceExisting ?? true,
+      }),
+    onLastPathTargetRemoved: params.onLastPathTargetRemoved,
+  });
+}
+
+const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
+
+function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
+  const mapKey = targetsByPath as unknown as Map<string, unknown[]>;
+  const existing = pathTeardownByTargetMap.get(mapKey);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, () => void>();
+  pathTeardownByTargetMap.set(mapKey, created);
+  return created;
+}
+
 export function registerWebhookTarget<T extends { path: string }>(
   targetsByPath: Map<string, T[]>,
   target: T,
+  opts?: RegisterWebhookTargetOptions<T>,
 ): RegisteredWebhookTarget<T> {
   const key = normalizeWebhookPath(target.path);
   const normalizedTarget = { ...target, path: key };
   const existing = targetsByPath.get(key) ?? [];
+
+  if (existing.length === 0) {
+    const onFirstPathResult = opts?.onFirstPathTarget?.({
+      path: key,
+      target: normalizedTarget,
+    });
+    if (typeof onFirstPathResult === "function") {
+      getPathTeardownMap(targetsByPath).set(key, onFirstPathResult);
+    }
+  }
+
   targetsByPath.set(key, [...existing, normalizedTarget]);
+
+  let isActive = true;
   const unregister = () => {
+    if (!isActive) {
+      return;
+    }
+    isActive = false;
+
     const updated = (targetsByPath.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
     if (updated.length > 0) {
       targetsByPath.set(key, updated);
       return;
     }
     targetsByPath.delete(key);
+
+    const teardown = getPathTeardownMap(targetsByPath).get(key);
+    if (teardown) {
+      getPathTeardownMap(targetsByPath).delete(key);
+      teardown();
+    }
+    opts?.onLastPathTargetRemoved?.({ path: key });
   };
   return { target: normalizedTarget, unregister };
 }
@@ -81,6 +150,57 @@ export async function resolveSingleWebhookTargetAsync<T>(
     return { kind: "none" };
   }
   return { kind: "single", target: matched };
+}
+
+export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean | Promise<boolean>;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): Promise<T | null> {
+  const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
+    Boolean(await params.isMatch(target)),
+  );
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+export function resolveWebhookTargetWithAuthOrRejectSync<T>(params: {
+  targets: readonly T[];
+  res: ServerResponse;
+  isMatch: (target: T) => boolean;
+  unauthorizedStatusCode?: number;
+  unauthorizedMessage?: string;
+  ambiguousStatusCode?: number;
+  ambiguousMessage?: string;
+}): T | null {
+  const match = resolveSingleWebhookTarget(params.targets, params.isMatch);
+  return resolveWebhookTargetMatchOrReject(params, match);
+}
+
+function resolveWebhookTargetMatchOrReject<T>(
+  params: {
+    res: ServerResponse;
+    unauthorizedStatusCode?: number;
+    unauthorizedMessage?: string;
+    ambiguousStatusCode?: number;
+    ambiguousMessage?: string;
+  },
+  match: WebhookTargetMatchResult<T>,
+): T | null {
+  if (match.kind === "single") {
+    return match.target;
+  }
+  if (match.kind === "ambiguous") {
+    params.res.statusCode = params.ambiguousStatusCode ?? 401;
+    params.res.end(params.ambiguousMessage ?? "ambiguous webhook target");
+    return null;
+  }
+  params.res.statusCode = params.unauthorizedStatusCode ?? 401;
+  params.res.end(params.unauthorizedMessage ?? "unauthorized");
+  return null;
 }
 
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {

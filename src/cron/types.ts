@@ -25,6 +25,15 @@ export type CronDelivery = {
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
+  /** Separate destination for failure notifications. */
+  failureDestination?: CronFailureDestination;
+};
+
+export type CronFailureDestination = {
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
@@ -61,6 +70,10 @@ export type CronFailureAlert = {
   channel?: CronMessageChannel;
   to?: string;
   cooldownMs?: number;
+  /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
+  mode?: "announce" | "webhook";
+  /** Account ID for multi-account channel configurations. */
+  accountId?: string;
 };
 
 export type CronPayload =
@@ -75,6 +88,8 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
+      /** If true, run with lightweight bootstrap context. */
+      lightContext?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;
@@ -91,6 +106,8 @@ export type CronPayloadPatch =
       thinking?: string;
       timeoutSeconds?: number;
       allowUnsafeExternalContent?: boolean;
+      /** If true, run with lightweight bootstrap context. */
+      lightContext?: boolean;
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;

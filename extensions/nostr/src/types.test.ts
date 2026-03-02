@@ -22,6 +22,15 @@ describe("listNostrAccountIds", () => {
     };
     expect(listNostrAccountIds(cfg)).toEqual(["default"]);
   });
+
+  it("returns configured defaultAccount when privateKey is configured", () => {
+    const cfg = {
+      channels: {
+        nostr: { privateKey: TEST_PRIVATE_KEY, defaultAccount: "work" },
+      },
+    };
+    expect(listNostrAccountIds(cfg)).toEqual(["work"]);
+  });
 });
 
 describe("resolveDefaultNostrAccountId", () => {
@@ -37,6 +46,15 @@ describe("resolveDefaultNostrAccountId", () => {
   it("returns default when not configured", () => {
     const cfg = { channels: {} };
     expect(resolveDefaultNostrAccountId(cfg)).toBe("default");
+  });
+
+  it("prefers configured defaultAccount when present", () => {
+    const cfg = {
+      channels: {
+        nostr: { privateKey: TEST_PRIVATE_KEY, defaultAccount: "work" },
+      },
+    };
+    expect(resolveDefaultNostrAccountId(cfg)).toBe("work");
   });
 });
 

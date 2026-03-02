@@ -24,6 +24,7 @@ export type AcpxPluginConfig = {
   cwd?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
+  strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
 };
@@ -36,6 +37,7 @@ export type ResolvedAcpxPluginConfig = {
   cwd: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
+  strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
 };
@@ -43,6 +45,7 @@ export type ResolvedAcpxPluginConfig = {
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
 const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
+const DEFAULT_STRICT_WINDOWS_CMD_WRAPPER = true;
 
 type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
@@ -75,6 +78,7 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     "cwd",
     "permissionMode",
     "nonInteractivePermissions",
+    "strictWindowsCmdWrapper",
     "timeoutSeconds",
     "queueOwnerTtlSeconds",
   ]);
@@ -133,6 +137,11 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
     return { ok: false, message: "timeoutSeconds must be a positive number" };
   }
 
+  const strictWindowsCmdWrapper = value.strictWindowsCmdWrapper;
+  if (strictWindowsCmdWrapper !== undefined && typeof strictWindowsCmdWrapper !== "boolean") {
+    return { ok: false, message: "strictWindowsCmdWrapper must be a boolean" };
+  }
+
   const queueOwnerTtlSeconds = value.queueOwnerTtlSeconds;
   if (
     queueOwnerTtlSeconds !== undefined &&
@@ -152,6 +161,8 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
       permissionMode: typeof permissionMode === "string" ? permissionMode : undefined,
       nonInteractivePermissions:
         typeof nonInteractivePermissions === "string" ? nonInteractivePermissions : undefined,
+      strictWindowsCmdWrapper:
+        typeof strictWindowsCmdWrapper === "boolean" ? strictWindowsCmdWrapper : undefined,
       timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
       queueOwnerTtlSeconds:
         typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
@@ -205,6 +216,7 @@ export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
           type: "string",
           enum: [...ACPX_NON_INTERACTIVE_POLICIES],
         },
+        strictWindowsCmdWrapper: { type: "boolean" },
         timeoutSeconds: { type: "number", minimum: 0.001 },
         queueOwnerTtlSeconds: { type: "number", minimum: 0 },
       },
@@ -244,6 +256,8 @@ export function resolveAcpxPluginConfig(params: {
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
+    strictWindowsCmdWrapper:
+      normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
   };

@@ -16,6 +16,10 @@ vi.mock("./runtime.js", () => ({
 import { slackPlugin } from "./channel.js";
 
 describe("slackPlugin actions", () => {
+  it("prefers session lookup for announce target routing", () => {
+    expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+
   it("forwards read threadId to Slack action handler", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
     const handleAction = slackPlugin.actions?.handleAction;

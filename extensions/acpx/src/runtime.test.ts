@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -10,7 +10,7 @@ import {
 } from "./runtime-internals/test-fixtures.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 
-afterEach(async () => {
+afterAll(async () => {
   await cleanupMockRuntimeFixtures();
 });
 
@@ -102,6 +102,7 @@ describe("AcpxRuntime", () => {
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
     expect(prompt).toBeDefined();
+    expect(prompt?.openclawShell).toBe("acp");
     expect(Array.isArray(prompt?.args)).toBe(true);
     const promptArgs = (prompt?.args as string[]) ?? [];
     expect(promptArgs).toContain("--ttl");
@@ -325,6 +326,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
+        strictWindowsCmdWrapper: true,
         queueOwnerTtlSeconds: 0.1,
       },
       { logger: NOOP_LOGGER },
@@ -334,10 +336,29 @@ describe("AcpxRuntime", () => {
     expect(runtime.isHealthy()).toBe(false);
   });
 
-  it("marks runtime healthy when command is available", async () => {
-    const { runtime } = await createMockRuntimeFixture();
+  it("logs ACPX spawn resolution once per command policy", async () => {
+    const { config } = await createMockRuntimeFixture();
+    const debugLogs: string[] = [];
+    const runtime = new AcpxRuntime(
+      {
+        ...config,
+        strictWindowsCmdWrapper: true,
+      },
+      {
+        logger: {
+          ...NOOP_LOGGER,
+          debug: (message: string) => {
+            debugLogs.push(message);
+          },
+        },
+      },
+    );
+
     await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(true);
+
+    const spawnLogs = debugLogs.filter((entry) => entry.startsWith("acpx spawn resolver:"));
+    expect(spawnLogs.length).toBe(1);
+    expect(spawnLogs[0]).toContain("mode=strict");
   });
 
   it("returns doctor report for missing command", async () => {
@@ -349,6 +370,7 @@ describe("AcpxRuntime", () => {
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
+        strictWindowsCmdWrapper: true,
         queueOwnerTtlSeconds: 0.1,
       },
       { logger: NOOP_LOGGER },

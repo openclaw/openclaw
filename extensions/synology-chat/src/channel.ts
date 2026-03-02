@@ -178,8 +178,8 @@ export function createSynologyChatPlugin() {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
 
-      sendText: async ({ to, text, accountId, account: ctxAccount }: any) => {
-        const account: ResolvedSynologyChatAccount = ctxAccount ?? resolveAccount({}, accountId);
+      sendText: async ({ to, text, accountId, cfg }: any) => {
+        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -192,8 +192,8 @@ export function createSynologyChatPlugin() {
         return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
       },
 
-      sendMedia: async ({ to, mediaUrl, accountId, account: ctxAccount }: any) => {
-        const account: ResolvedSynologyChatAccount = ctxAccount ?? resolveAccount({}, accountId);
+      sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
+        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -243,18 +243,26 @@ export function createSynologyChatPlugin() {
             const rt = getSynologyRuntime();
             const currentCfg = await rt.config.loadConfig();
 
-            // Build MsgContext (same format as LINE/Signal/etc.)
-            const msgCtx = {
+            // Build MsgContext using SDK's finalizeInboundContext for proper normalization
+            const msgCtx = rt.channel.reply.finalizeInboundContext({
               Body: msg.body,
-              From: msg.from,
-              To: account.botName,
+              RawBody: msg.body,
+              CommandBody: msg.body,
+              From: `synology-chat:${msg.from}`,
+              To: `synology-chat:${msg.from}`,
               SessionKey: msg.sessionKey,
               AccountId: account.accountId,
-              OriginatingChannel: CHANNEL_ID as any,
-              OriginatingTo: msg.from,
+              OriginatingChannel: CHANNEL_ID,
+              OriginatingTo: `synology-chat:${msg.from}`,
               ChatType: msg.chatType,
               SenderName: msg.senderName,
-            };
+              SenderId: msg.from,
+              Provider: CHANNEL_ID,
+              Surface: CHANNEL_ID,
+              ConversationLabel: msg.senderName || msg.from,
+              Timestamp: Date.now(),
+              CommandAuthorized: true,
+            });
 
             // Dispatch via the SDK's buffered block dispatcher
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
@@ -295,6 +303,8 @@ export function createSynologyChatPlugin() {
 
         const unregister = registerPluginHttpRoute({
           path: account.webhookPath,
+          auth: "plugin",
+          replaceExisting: true,
           pluginId: CHANNEL_ID,
           accountId: account.accountId,
           log: (msg: string) => log?.info?.(msg),

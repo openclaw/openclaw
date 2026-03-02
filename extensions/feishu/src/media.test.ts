@@ -108,7 +108,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
   });
 
-  it("uses msg_type=media for mp4", async () => {
+  it("uses msg_type=file for mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -124,7 +124,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
   });
@@ -171,7 +171,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media when replying with mp4", async () => {
+  it("uses msg_type=file when replying with mp4", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -183,7 +183,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "file" }),
       }),
     );
 
@@ -203,7 +203,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "media", reply_in_thread: true }),
+        data: expect.objectContaining({ msg_type: "file", reply_in_thread: true }),
       }),
     );
   });
