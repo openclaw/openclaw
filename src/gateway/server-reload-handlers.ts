@@ -1,5 +1,6 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import type { ChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { isRestartEnabled } from "../config/commands.js";
@@ -17,7 +18,7 @@ import {
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
@@ -35,8 +36,8 @@ export function createGatewayReloadHandlers(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
+  startChannel: (name: ChannelId) => Promise<void>;
+  stopChannel: (name: ChannelId) => Promise<void>;
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -119,7 +120,7 @@ export function createGatewayReloadHandlers(params: {
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        const restartChannel = async (name: ChannelKind) => {
+        const restartChannel = async (name: ChannelId) => {
           params.logChannels.info(`restarting ${name} channel`);
           await params.stopChannel(name);
           await params.startChannel(name);
