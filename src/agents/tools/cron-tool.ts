@@ -259,7 +259,7 @@ DELIVERY (top-level):
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
-- sessionTarget="main" REQUIRES payload.kind="systemEvent"
+- sessionTarget="main" supports both payload.kind="systemEvent" and payload.kind="agentTurn"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
