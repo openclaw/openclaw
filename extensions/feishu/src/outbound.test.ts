@@ -138,6 +138,51 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   });
 });
 
+describe("feishuOutbound.sendMedia local path fallback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
+    sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
+    sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
+  });
+
+  it("does not expose absolute file path in fallback text", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("path not allowed"));
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: undefined,
+      mediaUrl: "/Users/test/Desktop/screenshot.png",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "⚠️ Failed to send image: screenshot.png",
+      }),
+    );
+    const sentText = sendMessageFeishuMock.mock.calls[0]?.[0]?.text ?? "";
+    expect(sentText).not.toContain("/Users/test/Desktop");
+  });
+
+  it("keeps URL in fallback text for remote media", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("download failed"));
+    await feishuOutbound.sendMedia?.({
+      cfg: {} as any,
+      to: "chat_1",
+      text: undefined,
+      mediaUrl: "https://example.com/image.png",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "📎 https://example.com/image.png",
+      }),
+    );
+  });
+});
+
 describe("feishuOutbound.sendMedia renderMode", () => {
   beforeEach(() => {
     vi.clearAllMocks();

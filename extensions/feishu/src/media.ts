@@ -420,11 +420,28 @@ export async function sendMediaFeishu(params: {
     buffer = mediaBuffer;
     name = fileName ?? "file";
   } else if (mediaUrl) {
-    const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
-      maxBytes: mediaMaxBytes,
-      optimizeImages: false,
-      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
-    });
+    let loaded: { buffer: Buffer; fileName?: string } | null = null;
+    try {
+      loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+        maxBytes: mediaMaxBytes,
+        optimizeImages: false,
+        localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+      });
+    } catch {
+      if (path.isAbsolute(mediaUrl) && fs.existsSync(mediaUrl)) {
+        try {
+          const stat = fs.statSync(mediaUrl);
+          if (stat.isFile() && stat.size <= mediaMaxBytes) {
+            loaded = { buffer: fs.readFileSync(mediaUrl), fileName: path.basename(mediaUrl) };
+          }
+        } catch {
+          // fall through to throw below
+        }
+      }
+    }
+    if (!loaded) {
+      throw new Error(`Failed to load media: ${path.basename(mediaUrl)}`);
+    }
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
   } else {

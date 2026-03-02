@@ -116,10 +116,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        // Log the error for debugging
         console.error(`[feishu] sendMediaFeishu failed:`, err);
-        // Fallback to URL link if upload fails
-        const fallbackText = `📎 ${mediaUrl}`;
+        const isLocal = path.isAbsolute(mediaUrl);
+        const fallbackText = isLocal
+          ? `⚠️ Failed to send image: ${path.basename(mediaUrl)}`
+          : `📎 ${mediaUrl}`;
         const result = await sendOutboundText({
           cfg,
           to,
