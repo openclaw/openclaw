@@ -16,15 +16,15 @@ export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 
 export const feishuWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS?.windowMs ?? 60_000,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS?.maxRequests ?? 120,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS?.maxTrackedKeys ?? 4_096,
 });
 
 const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
-  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
-  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
-  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
+  maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS?.maxTrackedKeys ?? 4_096,
+  ttlMs: WEBHOOK_ANOMALY_COUNTER_DEFAULTS?.ttlMs ?? 21_600_000,
+  logEvery: WEBHOOK_ANOMALY_COUNTER_DEFAULTS?.logEvery ?? 25,
 });
 
 export function clearFeishuWebhookRateLimitStateForTest(): void {
