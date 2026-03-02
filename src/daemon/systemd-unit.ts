@@ -186,59 +186,86 @@ export function collectSystemdExecStartValues(contents: string): string[] {
   return values;
 }
 
-export function extractSystemdExecStartCommandToken(execStartValue: string): string | null {
+export type ResolvedExecStart = {
+  /** The effective executable token (systemd prefix-stripped, quote-stripped), or null. */
+  command: string | null;
+  /** Remaining runtime tokens after the command (quote-stripped). */
+  args: string[];
+};
+
+/**
+ * Resolves an ExecStart value into its effective command and arguments,
+ * unwrapping `env` wrappers, option flags, KEY=VALUE assignments, and
+ * `--split-string` / `-S` payloads.
+ */
+export function resolveExecStartCommand(execStartValue: string): ResolvedExecStart {
   const tokens = parseSystemdExecStart(execStartValue);
   if (tokens.length === 0) {
-    return null;
+    return { command: null, args: [] };
   }
 
-  let index = 0;
-  while (index < tokens.length) {
-    const token = stripSurroundingQuotes(stripSystemdExecPrefix(tokens[index] ?? ""));
-    if (!token) {
-      index += 1;
+  const firstToken = stripSurroundingQuotes(stripSystemdExecPrefix(tokens[0] ?? ""));
+  if (!firstToken) {
+    return { command: null, args: [] };
+  }
+
+  // Non-env path: first token is the command, rest are args.
+  if (!isEnvCommandToken(firstToken)) {
+    return { command: firstToken, args: tokens.slice(1).map(stripSurroundingQuotes) };
+  }
+
+  // Env wrapper path: walk past env options/assignments to find the real command.
+  const pending = tokens.slice(1);
+  while (pending.length > 0) {
+    const envToken = stripSurroundingQuotes(pending.shift() ?? "");
+    if (!envToken) {
       continue;
     }
 
-    if (token.toLowerCase().endsWith("/env") || token.toLowerCase() === "env") {
-      const pending = tokens.slice(index + 1);
-      while (pending.length > 0) {
-        const envToken = stripSurroundingQuotes(pending.shift() ?? "");
-        if (!envToken) {
-          continue;
-        }
-        const inlineSplitValue = extractEnvInlineSplitStringValue(envToken);
-        if (inlineSplitValue) {
-          const splitStringValue = consumePossiblyQuotedValue(inlineSplitValue, pending);
-          const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
-          if (expanded.length > 0) {
-            pending.unshift(...expanded);
-          }
-          continue;
-        }
-        if (envOptionConsumesNextValue(envToken)) {
-          const optionValue = pending.shift();
-          if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
-            const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
-            const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
-            if (expanded.length > 0) {
-              pending.unshift(...expanded);
-            }
-          }
-          continue;
-        }
-        if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
-          continue;
-        }
-        return stripSystemdExecPrefix(envToken);
+    const inlineSplitValue = extractEnvInlineSplitStringValue(envToken);
+    if (inlineSplitValue) {
+      const splitStringValue = consumePossiblyQuotedValue(inlineSplitValue, pending);
+      const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+      if (expanded.length > 0) {
+        pending.unshift(...expanded);
       }
-      return null;
+      continue;
     }
 
-    return token;
+    if (envOptionConsumesNextValue(envToken)) {
+      const optionValue = pending.shift();
+      if ((envToken === "-S" || envToken === "--split-string") && optionValue) {
+        const splitStringValue = consumePossiblyQuotedValue(optionValue, pending);
+        const expanded = parseSystemdExecStart(stripSurroundingQuotes(splitStringValue));
+        if (expanded.length > 0) {
+          pending.unshift(...expanded);
+        }
+      }
+      continue;
+    }
+
+    if (envToken.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envToken)) {
+      continue;
+    }
+
+    // Found the real command.
+    const command = stripSystemdExecPrefix(envToken);
+    return {
+      command: command || null,
+      args: pending.map(stripSurroundingQuotes),
+    };
   }
 
-  return null;
+  return { command: null, args: [] };
+}
+
+function isEnvCommandToken(token: string): boolean {
+  const lower = token.toLowerCase();
+  return lower === "env" || lower.endsWith("/env");
+}
+
+export function extractSystemdExecStartCommandToken(execStartValue: string): string | null {
+  return resolveExecStartCommand(execStartValue).command;
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
