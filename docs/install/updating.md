@@ -201,6 +201,38 @@ If you’re supervised:
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` only work if the service is installed; otherwise run `openclaw gateway install`.
 
+### macOS launchd restart modes
+
+Use the service **label** with `kickstart`, and the LaunchAgent **plist path** with `bootstrap`.
+
+When to use each:
+
+- `launchctl kickstart -k gui/$UID/<label>`:
+  - the job is already loaded (`launchctl print gui/$UID/<label>` succeeds)
+  - you want a quick restart without reloading plist metadata
+- `launchctl bootout ...` + `launchctl bootstrap ...`:
+  - the job is not loaded yet (common with manual-start `.nop` profiles)
+  - plist content changed (env, args, ports, paths)
+  - you want a full reload after upgrades or launchd state drift
+
+Examples:
+
+```bash
+# Quick restart of a loaded job by label.
+launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+
+# Full reload: unload by label, then load by plist path.
+launchctl bootout gui/$UID/ai.openclaw.gateway
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+```
+
+For manual-start profiles, replace the label/path with the `.nop` variant:
+
+```bash
+launchctl bootout gui/$UID/ai.openclaw.gateway.nop
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.nop.plist
+```
+
 Runbook + exact service labels: [Gateway runbook](/gateway)
 
 ## Rollback / pinning (when something breaks)

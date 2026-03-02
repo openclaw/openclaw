@@ -44,6 +44,17 @@ launchctl bootout gui/$UID/ai.openclaw.gateway
 
 Replace the label with `ai.openclaw.<profile>` when running a named profile.
 
+`kickstart -k` restarts an already loaded job by label.
+If the job is unloaded, or after plist edits, run `bootout` + `bootstrap`:
+
+```bash
+launchctl bootout gui/$UID/ai.openclaw.gateway
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+```
+
+For manual-start profiles, use `ai.openclaw.gateway.nop` and
+`~/Library/LaunchAgents/ai.openclaw.gateway.nop.plist`.
+
 If the LaunchAgent isn’t installed, enable it from the app or run
 `openclaw gateway install`.
 
