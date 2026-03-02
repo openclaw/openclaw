@@ -155,6 +155,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("keeps memory guidance compatible with AGENTS direct-read instructions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(prompt).toContain("## Memory Recall");
+    expect(prompt).toContain(
+      "If AGENTS.md or injected workspace instructions explicitly require direct file reads first, follow those higher-priority instructions.",
+    );
+  });
+
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
