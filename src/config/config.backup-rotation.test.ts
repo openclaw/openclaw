@@ -10,31 +10,7 @@ import {
 import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
-const NON_ENFORCED_PERMISSION_MODES = [0o600, 0o644, 0o666, 0o777] as const;
-
-async function canEnforceOwnerOnlyPermissions(configPath: string): Promise<boolean> {
-  const probePath = `${configPath}.permissions-probe-${process.pid}-${Date.now()}`;
-  try {
-    await fs.writeFile(probePath, "probe", { mode: 0o666 });
-    await fs.chmod(probePath, 0o600);
-    const stat = await fs.stat(probePath);
-    return (stat.mode & 0o777) === 0o600;
-  } catch {
-    return false;
-  } finally {
-    await fs.unlink(probePath).catch(() => {
-      // best-effort
-    });
-  }
-}
-
-function expectHardenedMode(mode: number, shouldEnforce: boolean) {
-  if (shouldEnforce) {
-    expect(mode).toBe(0o600);
-    return;
-  }
-  expect(NON_ENFORCED_PERMISSION_MODES).toContain(mode);
-}
+const IS_WINDOWS = process.platform === "win32";
 
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
@@ -81,7 +57,8 @@ describe("config backup rotation", () => {
     });
   });
 
-  it("hardenBackupPermissions sets 0o600 on all backup files", async () => {
+  // chmod is a no-op on Windows — 0o600 can never be observed there.
+  it.skipIf(IS_WINDOWS)("hardenBackupPermissions sets 0o600 on all backup files", async () => {
     await withTempHome(async () => {
       const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
       if (!stateDir) {
@@ -99,8 +76,8 @@ describe("config backup rotation", () => {
       const bakStat = await fs.stat(`${configPath}.bak`);
       const bak1Stat = await fs.stat(`${configPath}.bak.1`);
 
-      expectHardenedMode(bakStat.mode & 0o777, canEnforce);
-      expectHardenedMode(bak1Stat.mode & 0o777, canEnforce);
+      expect(bakStat.mode & 0o777).toBe(0o600);
+      expect(bak1Stat.mode & 0o777).toBe(0o600);
     });
   });
 
@@ -160,9 +137,12 @@ describe("config backup rotation", () => {
       );
       // Prior primary backup gets rotated into ring slot 1.
       await expect(fs.readFile(`${configPath}.bak.1`, "utf-8")).resolves.toBe("previous");
-      // Mode hardening still applies when the filesystem honors chmod.
-      const primaryBackupStat = await fs.stat(`${configPath}.bak`);
-      expectHardenedMode(primaryBackupStat.mode & 0o777, canEnforce);
+      // Windows cannot validate POSIX chmod bits, but all other compose assertions
+      // should still run there.
+      if (!IS_WINDOWS) {
+        const primaryBackupStat = await fs.stat(`${configPath}.bak`);
+        expect(primaryBackupStat.mode & 0o777).toBe(0o600);
+      }
       // Out-of-ring orphan gets pruned.
       await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
     });
