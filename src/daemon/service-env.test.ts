@@ -329,58 +329,6 @@ describe("buildServiceEnvironment", () => {
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
   });
-  it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user" },
-      port: 18789,
-      platform: "darwin",
-    });
-    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
-  });
-
-  it("does not default NODE_EXTRA_CA_CERTS on non-macOS", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user" },
-      port: 18789,
-      platform: "linux",
-    });
-    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-  });
-
-  it("respects user-provided NODE_EXTRA_CA_CERTS over the default", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" },
-      port: 18789,
-    });
-    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
-  });
-
-  it("defaults NODE_USE_SYSTEM_CA=1 on macOS", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user" },
-      port: 18789,
-      platform: "darwin",
-    });
-    expect(env.NODE_USE_SYSTEM_CA).toBe("1");
-  });
-
-  it("does not default NODE_USE_SYSTEM_CA on non-macOS", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user" },
-      port: 18789,
-      platform: "linux",
-    });
-    expect(env.NODE_USE_SYSTEM_CA).toBeUndefined();
-  });
-
-  it("respects user-provided NODE_USE_SYSTEM_CA over the default", () => {
-    const env = buildServiceEnvironment({
-      env: { HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" },
-      port: 18789,
-      platform: "darwin",
-    });
-    expect(env.NODE_USE_SYSTEM_CA).toBe("0");
-  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -453,51 +401,49 @@ describe("buildNodeServiceEnvironment", () => {
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
+});
 
-  it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user" },
-      platform: "darwin",
-    });
+describe("shared Node TLS env defaults", () => {
+  const builders = [
+    {
+      name: "gateway service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildServiceEnvironment({ env, port: 18789, platform }),
+    },
+    {
+      name: "node service env",
+      build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
+        buildNodeServiceEnvironment({ env, platform }),
+    },
+  ] as const;
+
+  it.each(builders)("$name defaults NODE_EXTRA_CA_CERTS on macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "darwin");
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
   });
 
-  it("does not default NODE_EXTRA_CA_CERTS on non-macOS for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user" },
-      platform: "linux",
-    });
+  it.each(builders)("$name does not default NODE_EXTRA_CA_CERTS on non-macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "linux");
     expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
-  it("respects user-provided NODE_EXTRA_CA_CERTS for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" },
-    });
+  it.each(builders)("$name respects user-provided NODE_EXTRA_CA_CERTS", ({ build }) => {
+    const env = build({ HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
   });
 
-  it("defaults NODE_USE_SYSTEM_CA=1 on macOS for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user" },
-      platform: "darwin",
-    });
+  it.each(builders)("$name defaults NODE_USE_SYSTEM_CA=1 on macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "darwin");
     expect(env.NODE_USE_SYSTEM_CA).toBe("1");
   });
 
-  it("does not default NODE_USE_SYSTEM_CA on non-macOS for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user" },
-      platform: "linux",
-    });
+  it.each(builders)("$name does not default NODE_USE_SYSTEM_CA on non-macOS", ({ build }) => {
+    const env = build({ HOME: "/home/user" }, "linux");
     expect(env.NODE_USE_SYSTEM_CA).toBeUndefined();
   });
 
-  it("respects user-provided NODE_USE_SYSTEM_CA for node services", () => {
-    const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" },
-      platform: "darwin",
-    });
+  it.each(builders)("$name respects user-provided NODE_USE_SYSTEM_CA", ({ build }) => {
+    const env = build({ HOME: "/home/user", NODE_USE_SYSTEM_CA: "0" }, "darwin");
     expect(env.NODE_USE_SYSTEM_CA).toBe("0");
   });
 });
