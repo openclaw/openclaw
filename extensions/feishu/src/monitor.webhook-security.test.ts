@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { probeFeishuMock } from "./monitor.test-mocks.js";
+import { getProbeFeishuMock } from "./monitor.test-mocks.js";
 
 vi.mock("@larksuiteoapi/node-sdk", () => ({
   adaptDefault: vi.fn(
@@ -20,6 +20,8 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+
+const probeFeishuMock = getProbeFeishuMock();
 
 async function getFreePort(): Promise<number> {
   const server = createServer();

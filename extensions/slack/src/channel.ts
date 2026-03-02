@@ -67,7 +67,7 @@ type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendM
 
 function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
-  accountId?: string;
+  accountId?: string | null;
   deps?: { sendSlack?: SlackSendFn };
   replyToId?: string | number | null;
   threadId?: string | number | null;

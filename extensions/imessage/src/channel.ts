@@ -24,6 +24,7 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
+  type ChannelSetupInput,
   type ChannelPlugin,
   type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk";
@@ -31,12 +32,9 @@ import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");
 
-function buildIMessageSetupPatch(input: {
-  cliPath?: string;
-  dbPath?: string;
-  service?: string;
-  region?: string;
-}) {
+function buildIMessageSetupPatch(
+  input: Pick<ChannelSetupInput, "cliPath" | "dbPath" | "service" | "region">,
+) {
   return {
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
     ...(input.dbPath ? { dbPath: input.dbPath } : {}),
@@ -54,9 +52,9 @@ async function sendIMessageOutbound(params: {
   to: string;
   text: string;
   mediaUrl?: string;
-  accountId?: string;
+  accountId?: string | null;
   deps?: { sendIMessage?: IMessageSendFn };
-  replyToId?: string;
+  replyToId?: string | null;
 }) {
   const send =
     params.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;

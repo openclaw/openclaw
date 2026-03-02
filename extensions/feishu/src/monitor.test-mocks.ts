@@ -1,6 +1,12 @@
 import { vi } from "vitest";
 
-export const probeFeishuMock: ReturnType<typeof vi.fn> = vi.hoisted(() => vi.fn());
+type TestMock = ReturnType<typeof vi.fn>;
+
+const probeFeishuMock: TestMock = vi.hoisted(() => vi.fn());
+
+export function getProbeFeishuMock(): TestMock {
+  return probeFeishuMock;
+}
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,

@@ -433,7 +433,7 @@ function resolveAgentBindings(config: Record<string, unknown> | null): {
     return { defaultBinding, agents: [fallbackAgent] };
   }
 
-  const agents = resolveConfigAgents(config).map((entry) => {
+  const agents: BindingAgent[] = resolveConfigAgents(config).map((entry) => {
     const toolsEntry = (entry.record.tools ?? {}) as Record<string, unknown>;
     const execEntry = (toolsEntry.exec ?? {}) as Record<string, unknown>;
     const binding =
