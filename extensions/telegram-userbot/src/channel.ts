@@ -7,6 +7,7 @@
  */
 
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
+import { telegramUserbotAgentPromptAdapter } from "./adapters/agent-prompt.js";
 import { telegramUserbotAuthAdapter } from "./adapters/auth.js";
 import {
   telegramUserbotConfigAdapter,
@@ -62,6 +63,7 @@ export const telegramUserbotPlugin: ChannelPlugin<
   security: telegramUserbotSecurityAdapter,
   outbound: telegramUserbotOutboundAdapter,
   actions: telegramUserbotMessageActions,
+  agentPrompt: telegramUserbotAgentPromptAdapter,
 
   // -------------------------------------------------------------------------
   // Gateway — manages the MTProto connection lifecycle
