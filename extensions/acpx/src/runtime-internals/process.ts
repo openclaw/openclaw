@@ -1,7 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { WindowsSpawnProgram } from "openclaw/plugin-sdk";
-import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "openclaw/plugin-sdk";
+import type {
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
+} from "openclaw/plugin-sdk";
+import {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "openclaw/plugin-sdk";
 
 export type SpawnExit = {
   code: number | null;
@@ -24,12 +32,21 @@ type SpawnRuntime = {
 
 export type SpawnCommandCache = {
   key?: string;
-  program?: WindowsSpawnProgram;
+  candidate?: WindowsSpawnProgramCandidate;
+};
+
+export type SpawnResolution = WindowsSpawnResolution | "unresolved-wrapper";
+export type SpawnResolutionEvent = {
+  command: string;
+  cacheHit: boolean;
+  strictWindowsCmdWrapper: boolean;
+  resolution: SpawnResolution;
 };
 
 export type SpawnCommandOptions = {
   strictWindowsCmdWrapper?: boolean;
   cache?: SpawnCommandCache;
+  onResolved?: (event: SpawnResolutionEvent) => void;
 };
 
 const DEFAULT_RUNTIME: SpawnRuntime = {
@@ -44,27 +61,51 @@ export function resolveSpawnCommand(
   runtime: SpawnRuntime = DEFAULT_RUNTIME,
 ): ResolvedSpawnCommand {
   const strictWindowsCmdWrapper = options?.strictWindowsCmdWrapper === true;
-  const cacheKey = `${params.command}::${strictWindowsCmdWrapper ? "strict" : "compat"}`;
+  const cacheKey = params.command;
   const cachedProgram = options?.cache;
 
-  let program =
-    cachedProgram?.key === cacheKey && cachedProgram.program ? cachedProgram.program : undefined;
-  if (!program) {
-    program = resolveWindowsSpawnProgram({
+  const cacheHit = cachedProgram?.key === cacheKey && cachedProgram.candidate != null;
+  let candidate =
+    cachedProgram?.key === cacheKey && cachedProgram.candidate
+      ? cachedProgram.candidate
+      : undefined;
+  if (!candidate) {
+    candidate = resolveWindowsSpawnProgramCandidate({
       command: params.command,
       platform: runtime.platform,
       env: runtime.env,
       execPath: runtime.execPath,
       packageName: "acpx",
-      allowShellFallback: !strictWindowsCmdWrapper,
     });
     if (cachedProgram) {
       cachedProgram.key = cacheKey;
-      cachedProgram.program = program;
+      cachedProgram.candidate = candidate;
     }
   }
 
+  let program: WindowsSpawnProgram;
+  try {
+    program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      allowShellFallback: !strictWindowsCmdWrapper,
+    });
+  } catch (error) {
+    options?.onResolved?.({
+      command: params.command,
+      cacheHit,
+      strictWindowsCmdWrapper,
+      resolution: candidate.resolution,
+    });
+    throw error;
+  }
+
   const resolved = materializeWindowsSpawnProgram(program, params.args);
+  options?.onResolved?.({
+    command: params.command,
+    cacheHit,
+    strictWindowsCmdWrapper,
+    resolution: resolved.resolution,
+  });
   return {
     command: resolved.command,
     args: resolved.argv,

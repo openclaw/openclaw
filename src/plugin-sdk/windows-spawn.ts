@@ -7,6 +7,14 @@ export type WindowsSpawnResolution =
   | "exe-entrypoint"
   | "shell-fallback";
 
+export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
+export type WindowsSpawnProgramCandidate = {
+  command: string;
+  leadingArgv: string[];
+  resolution: WindowsSpawnCandidateResolution | "unresolved-wrapper";
+  windowsHide?: boolean;
+};
+
 export type WindowsSpawnProgram = {
   command: string;
   leadingArgv: string[];
@@ -31,6 +39,10 @@ export type ResolveWindowsSpawnProgramParams = {
   packageName?: string;
   allowShellFallback?: boolean;
 };
+export type ResolveWindowsSpawnProgramCandidateParams = Omit<
+  ResolveWindowsSpawnProgramParams,
+  "allowShellFallback"
+>;
 
 function isFilePath(candidate: string): boolean {
   try {
@@ -176,9 +188,9 @@ function resolveEntrypointFromPackageJson(
   return null;
 }
 
-export function resolveWindowsSpawnProgram(
-  params: ResolveWindowsSpawnProgramParams,
-): WindowsSpawnProgram {
+export function resolveWindowsSpawnProgramCandidate(
+  params: ResolveWindowsSpawnProgramCandidateParams,
+): WindowsSpawnProgramCandidate {
   const platform = params.platform ?? process.platform;
   const env = params.env ?? process.env;
   const execPath = params.execPath ?? process.execPath;
@@ -224,18 +236,11 @@ export function resolveWindowsSpawnProgram(
       };
     }
 
-    if (params.allowShellFallback !== false) {
-      return {
-        command: resolvedCommand,
-        leadingArgv: [],
-        resolution: "shell-fallback",
-        shell: true,
-      };
-    }
-
-    throw new Error(
-      `${path.basename(resolvedCommand)} wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution.`,
-    );
+    return {
+      command: resolvedCommand,
+      leadingArgv: [],
+      resolution: "unresolved-wrapper",
+    };
   }
 
   return {
@@ -243,6 +248,41 @@ export function resolveWindowsSpawnProgram(
     leadingArgv: [],
     resolution: "direct",
   };
+}
+
+export function applyWindowsSpawnProgramPolicy(params: {
+  candidate: WindowsSpawnProgramCandidate;
+  allowShellFallback?: boolean;
+}): WindowsSpawnProgram {
+  if (params.candidate.resolution !== "unresolved-wrapper") {
+    return {
+      command: params.candidate.command,
+      leadingArgv: params.candidate.leadingArgv,
+      resolution: params.candidate.resolution,
+      windowsHide: params.candidate.windowsHide,
+    };
+  }
+  if (params.allowShellFallback !== false) {
+    return {
+      command: params.candidate.command,
+      leadingArgv: [],
+      resolution: "shell-fallback",
+      shell: true,
+    };
+  }
+  throw new Error(
+    `${path.basename(params.candidate.command)} wrapper resolved, but no executable/Node entrypoint could be resolved without shell execution.`,
+  );
+}
+
+export function resolveWindowsSpawnProgram(
+  params: ResolveWindowsSpawnProgramParams,
+): WindowsSpawnProgram {
+  const candidate = resolveWindowsSpawnProgramCandidate(params);
+  return applyWindowsSpawnProgramPolicy({
+    candidate,
+    allowShellFallback: params.allowShellFallback,
+  });
 }
 
 export function materializeWindowsSpawnProgram(
