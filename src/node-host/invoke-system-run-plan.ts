@@ -53,9 +53,20 @@ function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
   return false;
 }
 
+function shouldPinExecutableForApproval(params: {
+  shellCommand: string | null;
+  wrapperChain: string[] | undefined;
+}): boolean {
+  if (params.shellCommand !== null) {
+    return false;
+  }
+  return (params.wrapperChain?.length ?? 0) === 0;
+}
+
 export function hardenApprovedExecutionPaths(params: {
   approvedByAsk: boolean;
   argv: string[];
+  shellCommand: string | null;
   cwd: string | undefined;
 }): { ok: true; argv: string[]; cwd: string | undefined } | { ok: false; message: string } {
   if (!params.approvedByAsk) {
@@ -116,6 +127,18 @@ export function hardenApprovedExecutionPaths(params: {
   }
 
   const resolution = resolveCommandResolutionFromArgv(params.argv, hardenedCwd);
+  if (
+    !shouldPinExecutableForApproval({
+      shellCommand: params.shellCommand,
+      wrapperChain: resolution?.wrapperChain,
+    })
+  ) {
+    // Preserve wrapper semantics for approval-based execution. Pinning the
+    // effective executable while keeping wrapper argv shape can shift positional
+    // arguments and execute a different command than approved.
+    return { ok: true, argv: params.argv, cwd: hardenedCwd };
+  }
+
   const pinnedExecutable = resolution?.resolvedRealPath ?? resolution?.resolvedPath;
   if (!pinnedExecutable) {
     return {
@@ -149,6 +172,7 @@ export function buildSystemRunApprovalPlan(params: {
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
+    shellCommand: command.shellCommand,
     cwd: normalizeString(params.cwd) ?? undefined,
   });
   if (!hardening.ok) {

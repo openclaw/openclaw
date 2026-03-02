@@ -300,6 +300,81 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  const approvedEnvShellWrapperCases = [
+    {
+      name: "preserves wrapper argv for approved env shell commands in local execution",
+      preferMacAppExecHost: false,
+    },
+    {
+      name: "preserves wrapper argv for approved env shell commands in mac app exec host forwarding",
+      preferMacAppExecHost: true,
+    },
+  ] as const;
+
+  for (const testCase of approvedEnvShellWrapperCases) {
+    it.runIf(process.platform !== "win32")(testCase.name, async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approved-wrapper-"));
+      const marker = path.join(tmp, "marker");
+      const attackerScript = path.join(tmp, "sh");
+      fs.writeFileSync(attackerScript, "#!/bin/sh\necho exploited > marker\n");
+      fs.chmodSync(attackerScript, 0o755);
+      const runCommand = vi.fn(async (argv: string[]) => {
+        if (argv[0] === "/bin/sh" && argv[1] === "sh" && argv[2] === "-c") {
+          fs.writeFileSync(marker, "rewritten");
+        }
+        return createLocalRunResult();
+      });
+      const sendInvokeResult = vi.fn(async () => {});
+      try {
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: testCase.preferMacAppExecHost,
+          command: ["env", "sh", "-c", "echo SAFE"],
+          cwd: tmp,
+          approved: true,
+          security: "allowlist",
+          ask: "on-miss",
+          runCommand,
+          sendInvokeResult,
+          runViaResponse: testCase.preferMacAppExecHost
+            ? {
+                ok: true,
+                payload: {
+                  success: true,
+                  stdout: "app-ok",
+                  stderr: "",
+                  timedOut: false,
+                  exitCode: 0,
+                  error: null,
+                },
+              }
+            : undefined,
+        });
+
+        if (testCase.preferMacAppExecHost) {
+          const canonicalCwd = fs.realpathSync(tmp);
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expect(invoke.runViaMacAppExecHost).toHaveBeenCalledWith({
+            approvals: expect.anything(),
+            request: expect.objectContaining({
+              command: ["env", "sh", "-c", "echo SAFE"],
+              rawCommand: "echo SAFE",
+              cwd: canonicalCwd,
+            }),
+          });
+          expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
+          return;
+        }
+
+        const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
+        expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
+        expect(fs.existsSync(marker)).toBe(false);
+        expectInvokeOk(invoke.sendInvokeResult);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("handles transparent env wrappers in allowlist mode", async () => {
     const { runCommand, sendInvokeResult } = await runSystemInvoke({
       preferMacAppExecHost: false,
@@ -478,6 +553,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
     const runCommand = vi.fn(async () => {

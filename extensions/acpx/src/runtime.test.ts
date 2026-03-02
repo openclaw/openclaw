@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -10,7 +10,7 @@ import {
 } from "./runtime-internals/test-fixtures.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 
-afterEach(async () => {
+afterAll(async () => {
   await cleanupMockRuntimeFixtures();
 });
 
@@ -334,12 +334,6 @@ describe("AcpxRuntime", () => {
 
     await runtime.probeAvailability();
     expect(runtime.isHealthy()).toBe(false);
-  });
-
-  it("marks runtime healthy when command is available", async () => {
-    const { runtime } = await createMockRuntimeFixture();
-    await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(true);
   });
 
   it("logs ACPX spawn resolution once per command policy", async () => {

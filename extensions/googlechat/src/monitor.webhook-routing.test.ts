@@ -21,6 +21,7 @@ function createWebhookRequest(params: {
   const req = new EventEmitter() as IncomingMessage & {
     destroyed?: boolean;
     destroy: (error?: Error) => IncomingMessage;
+    on: (event: string, listener: (...args: unknown[]) => void) => IncomingMessage;
   };
   req.method = "POST";
   req.url = params.path ?? "/googlechat";
@@ -29,18 +30,47 @@ function createWebhookRequest(params: {
     "content-type": "application/json",
   };
   req.destroyed = false;
+  (req as unknown as { socket: { remoteAddress: string } }).socket = {
+    remoteAddress: "127.0.0.1",
+  };
   req.destroy = () => {
     req.destroyed = true;
     return req;
   };
 
-  void Promise.resolve().then(() => {
-    req.emit("data", Buffer.from(JSON.stringify(params.payload), "utf-8"));
-    if (!req.destroyed) {
-      req.emit("end");
+  const originalOn = req.on.bind(req);
+  let bodyScheduled = false;
+  req.on = ((event: string, listener: (...args: unknown[]) => void) => {
+    const result = originalOn(event, listener);
+    if (!bodyScheduled && event === "data") {
+      bodyScheduled = true;
+      void Promise.resolve().then(() => {
+        req.emit("data", Buffer.from(JSON.stringify(params.payload), "utf-8"));
+        if (!req.destroyed) {
+          req.emit("end");
+        }
+      });
     }
-  });
+    return result;
+  }) as IncomingMessage["on"];
 
+  return req;
+}
+
+function createHeaderOnlyWebhookRequest(params: {
+  authorization?: string;
+  path?: string;
+}): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage;
+  req.method = "POST";
+  req.url = params.path ?? "/googlechat";
+  req.headers = {
+    authorization: params.authorization ?? "",
+    "content-type": "application/json",
+  };
+  (req as unknown as { socket: { remoteAddress: string } }).socket = {
+    remoteAddress: "127.0.0.1",
+  };
   return req;
 }
 
@@ -166,6 +196,61 @@ describe("Google Chat webhook routing", () => {
         createWebhookRequest({
           authorization: "Bearer test-token",
           payload: { type: "ADDED_TO_SPACE", space: { name: "spaces/BBB" } },
+        }),
+        res,
+      );
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(sinkA).not.toHaveBeenCalled();
+      expect(sinkB).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("rejects invalid bearer before attempting to read the body", async () => {
+    vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: false, reason: "invalid" });
+    const { unregister } = registerTwoTargets();
+
+    try {
+      const req = createHeaderOnlyWebhookRequest({
+        authorization: "Bearer invalid-token",
+      });
+      const onSpy = vi.spyOn(req, "on");
+      const res = createMockServerResponse();
+      const handled = await handleGoogleChatWebhookRequest(req, res);
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(401);
+      expect(onSpy).not.toHaveBeenCalledWith("data", expect.any(Function));
+    } finally {
+      unregister();
+    }
+  });
+
+  it("supports add-on requests that provide systemIdToken in the body", async () => {
+    vi.mocked(verifyGoogleChatRequest)
+      .mockResolvedValueOnce({ ok: false, reason: "invalid" })
+      .mockResolvedValueOnce({ ok: true });
+    const { sinkA, sinkB, unregister } = registerTwoTargets();
+
+    try {
+      const res = createMockServerResponse();
+      const handled = await handleGoogleChatWebhookRequest(
+        createWebhookRequest({
+          payload: {
+            commonEventObject: { hostApp: "CHAT" },
+            authorizationEventObject: { systemIdToken: "addon-token" },
+            chat: {
+              eventTime: "2026-03-02T00:00:00.000Z",
+              user: { name: "users/12345", displayName: "Test User" },
+              messagePayload: {
+                space: { name: "spaces/AAA" },
+                message: { text: "Hello from add-on" },
+              },
+            },
+          },
         }),
         res,
       );
