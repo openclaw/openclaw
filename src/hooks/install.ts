@@ -8,16 +8,16 @@ import {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
-import {
-  assertCanonicalPathWithinBase,
-  resolveSafeInstallDir,
-  unscopedPackageName,
-} from "../infra/install-safe-path.js";
+import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
   resolveArchiveSourcePath,
 } from "../infra/install-source-utils.js";
+import {
+  ensureInstallTargetAvailable,
+  resolveCanonicalInstallTarget,
+} from "../infra/install-target.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -106,26 +106,12 @@ async function resolveInstallTargetDir(
   hooksDir?: string,
 ): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
   const baseHooksDir = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
-  await fs.mkdir(baseHooksDir, { recursive: true });
-
-  const targetDirResult = resolveSafeInstallDir({
+  return await resolveCanonicalInstallTarget({
     baseDir: baseHooksDir,
     id,
     invalidNameMessage: "invalid hook name: path traversal detected",
+    boundaryLabel: "hooks directory",
   });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
-  }
-  try {
-    await assertCanonicalPathWithinBase({
-      baseDir: baseHooksDir,
-      candidatePath: targetDirResult.path,
-      boundaryLabel: "hooks directory",
-    });
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-  return { ok: true, targetDir: targetDirResult.path };
 }
 
 async function resolveHookNameFromDir(hookDir: string): Promise<string> {
@@ -202,8 +188,13 @@ async function installHookPackageFromDir(params: {
     return { ok: false, error: targetDirResult.error };
   }
   const targetDir = targetDirResult.targetDir;
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return { ok: false, error: `hook pack already exists: ${targetDir} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `hook pack already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   const resolvedHooks = [] as string[];
@@ -294,8 +285,13 @@ async function installHookFromDir(params: {
     return { ok: false, error: targetDirResult.error };
   }
   const targetDir = targetDirResult.targetDir;
-  if (mode === "install" && (await fileExists(targetDir))) {
-    return { ok: false, error: `hook already exists: ${targetDir} (delete it first)` };
+  const availability = await ensureInstallTargetAvailable({
+    mode,
+    targetDir,
+    alreadyExistsError: `hook already exists: ${targetDir} (delete it first)`,
+  });
+  if (!availability.ok) {
+    return availability;
   }
 
   if (dryRun) {
