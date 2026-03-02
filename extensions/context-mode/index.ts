@@ -51,7 +51,8 @@ function asAgentTool(def: PluginToolDef): AnyAgentTool {
 }
 
 type PluginState = {
-  kb: KnowledgeBase | null;
+  /** Per-directory KB registry — prevents cross-agent contamination. */
+  kbs: Map<string, KnowledgeBase>;
   config: ContextModeConfig;
 };
 
@@ -103,8 +104,9 @@ function parseConfig(raw: Record<string, unknown> | undefined): ContextModeConfi
 }
 
 /**
- * Get or lazily open the knowledge base.
- * Returns null if no suitable directory is available or if node:sqlite fails.
+ * Get or lazily open a knowledge base for the resolved directory.
+ * Each unique directory gets its own KnowledgeBase instance to ensure
+ * per-agent isolation in multi-agent deployments.
  */
 function getOrOpenKb(
   state: PluginState,
@@ -112,16 +114,18 @@ function getOrOpenKb(
   agentDir?: string,
   agentId?: string,
 ): KnowledgeBase | null {
-  if (state.kb) {
-    return state.kb;
-  }
   const dir = resolveKbDir(agentDir, agentId);
   if (!dir) {
     return null;
   }
+  const existing = state.kbs.get(dir);
+  if (existing) {
+    return existing;
+  }
   try {
-    state.kb = openKnowledgeBase(dir);
-    return state.kb;
+    const kb = openKnowledgeBase(dir);
+    state.kbs.set(dir, kb);
+    return kb;
   } catch (err) {
     api.logger.warn(`[context-mode] Failed to open knowledge base: ${String(err)}`);
     return null;
@@ -184,7 +188,7 @@ const contextModePlugin = {
 
   register(api: OpenClawPluginApi) {
     const state: PluginState = {
-      kb: null,
+      kbs: new Map(),
       config: parseConfig(api.pluginConfig),
     };
 
@@ -233,22 +237,22 @@ const contextModePlugin = {
 
         const result = compressToolResult(text, toolName, state.config);
 
-        // Defer the SQLite write off the hot path (best-effort persistence)
-        queueMicrotask(() => {
-          try {
-            kb.store({
-              refId: result.refId,
-              toolName,
-              toolCallId: event.toolCallId ?? "unknown",
-              originalChars: result.originalChars,
-              compressedChars: result.summary.length,
-              fullText: text,
-              timestamp: Date.now(),
-            });
-          } catch (err) {
-            api.logger.warn(`[context-mode] Failed to store entry: ${String(err)}`);
-          }
-        });
+        // Synchronous write — node:sqlite is sync and ~0.1ms overhead is
+        // negligible; this avoids a race where the agent tries to retrieve
+        // the ref before the microtask writes it.
+        try {
+          kb.store({
+            refId: result.refId,
+            toolName,
+            toolCallId: event.toolCallId ?? "unknown",
+            originalChars: result.originalChars,
+            compressedChars: result.summary.length,
+            fullText: text,
+            timestamp: Date.now(),
+          });
+        } catch (err) {
+          api.logger.warn(`[context-mode] Failed to store entry: ${String(err)}`);
+        }
 
         api.logger.info(
           `[context-mode] Compressed ${toolName} result: ` +
