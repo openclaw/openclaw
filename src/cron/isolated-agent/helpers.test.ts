@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isHeartbeatOnlyResponse,
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
@@ -82,5 +83,22 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+});
+
+describe("isHeartbeatOnlyResponse", () => {
+  it("suppresses mixed narration when any payload contains HEARTBEAT_OK", () => {
+    const payloads = [{ text: "Quiet hours check: no urgent activity." }, { text: "HEARTBEAT_OK" }];
+    expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(true);
+  });
+
+  it("does not suppress when there is no HEARTBEAT_OK token", () => {
+    const payloads = [{ text: "Daily digest complete." }];
+    expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(false);
+  });
+
+  it("does not suppress when payload includes media", () => {
+    const payloads = [{ text: "HEARTBEAT_OK" }, { mediaUrl: "https://example.com/report.png" }];
+    expect(isHeartbeatOnlyResponse(payloads, 300)).toBe(false);
   });
 });

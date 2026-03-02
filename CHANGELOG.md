@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/Heartbeat announce suppression: treat isolated cron outputs as heartbeat-only when any payload includes `HEARTBEAT_OK` (while still delivering media payloads), preventing multi-payload heartbeat narration from being pushed to end users. Fixes #32130.
 - Synology Chat/webhook compatibility: accept JSON and alias payload fields, allow token resolution from body/query/header sources, and ACK webhook requests with `204` to avoid persistent `Processing...` states in Synology Chat clients. (#26635) Thanks @memphislee09-source.
 - Synology Chat/webhook ingress hardening: enforce bounded body reads (size + timeout) via shared request-body guards to prevent unauthenticated slow-body hangs before token validation. (#25831) Thanks @bmendonca3.
 - Auto-reply/followup queue: avoid stale callback reuse across idle-window restarts by caching the followup runner only when a drain actually starts, preserving enqueue ordering after empty-finalize paths. (#31902) Thanks @Lanfei.

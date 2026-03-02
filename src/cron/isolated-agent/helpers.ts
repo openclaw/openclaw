@@ -87,26 +87,46 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
 }
 
 /**
- * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
- * Returns true if delivery should be skipped because there's no real content.
+ * Check if payloads should be treated as heartbeat acknowledgements.
+ * Returns true when at least one payload is a heartbeat ack token and no media
+ * payloads are present. This suppresses noisy narration blocks that may appear
+ * before a final HEARTBEAT_OK.
  */
 export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
   if (payloads.length === 0) {
     return true;
   }
-  return payloads.every((payload) => {
-    // If there's media, we should deliver regardless of text content.
-    const hasMedia = (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
-    if (hasMedia) {
-      return false;
-    }
-    // Use heartbeat mode to check if text is just HEARTBEAT_OK or short ack.
+
+  // If there's media, we should deliver regardless of text content.
+  if (
+    payloads.some((payload) => (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl))
+  ) {
+    return false;
+  }
+
+  let hasHeartbeatAck = false;
+  for (const payload of payloads) {
     const result = stripHeartbeatToken(payload.text, {
       mode: "heartbeat",
       maxAckChars: ackMaxChars,
     });
-    return result.shouldSkip;
-  });
+    if (result.didStrip && result.shouldSkip) {
+      hasHeartbeatAck = true;
+      break;
+    }
+  }
+  if (hasHeartbeatAck) {
+    return true;
+  }
+
+  // Preserve existing behavior for empty/whitespace-only payload batches.
+  return payloads.every(
+    (payload) =>
+      stripHeartbeatToken(payload.text, {
+        mode: "heartbeat",
+        maxAckChars: ackMaxChars,
+      }).shouldSkip,
+  );
 }
 
 export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
