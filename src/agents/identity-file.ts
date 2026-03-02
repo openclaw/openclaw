@@ -19,6 +19,30 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "workspace-relative path, http(s) url, or data uri",
 ]);
 
+function resolveIdentityLabel(raw: string): keyof AgentIdentityFile | null {
+  const normalized = raw.replace(/[*_]/g, "").trim().toLowerCase();
+  switch (normalized) {
+    case "name":
+    case "名字":
+    case "名称":
+      return "name";
+    case "emoji":
+    case "表情":
+      return "emoji";
+    case "creature":
+      return "creature";
+    case "vibe":
+      return "vibe";
+    case "theme":
+      return "theme";
+    case "avatar":
+    case "头像":
+      return "avatar";
+    default:
+      return null;
+  }
+}
+
 function normalizeIdentityValue(value: string): string {
   let normalized = value.trim();
   normalized = normalized.replace(/^[*_]+|[*_]+$/g, "").trim();
@@ -40,39 +64,22 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const lines = content.split(/\r?\n/);
   for (const line of lines) {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
-    const colonIndex = cleaned.indexOf(":");
-    if (colonIndex === -1) {
+    const match = cleaned.match(/^([^:：]+)\s*[:：]\s*(.+)$/);
+    if (!match) {
       continue;
     }
-    const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
-    const value = cleaned
-      .slice(colonIndex + 1)
-      .replace(/^[*_]+|[*_]+$/g, "")
-      .trim();
+    const label = resolveIdentityLabel(match[1] ?? "");
+    if (!label) {
+      continue;
+    }
+    const value = (match[2] ?? "").replace(/^[*_]+|[*_]+$/g, "").trim();
     if (!value) {
       continue;
     }
     if (isIdentityPlaceholder(value)) {
       continue;
     }
-    if (label === "name") {
-      identity.name = value;
-    }
-    if (label === "emoji") {
-      identity.emoji = value;
-    }
-    if (label === "creature") {
-      identity.creature = value;
-    }
-    if (label === "vibe") {
-      identity.vibe = value;
-    }
-    if (label === "theme") {
-      identity.theme = value;
-    }
-    if (label === "avatar") {
-      identity.avatar = value;
-    }
+    identity[label] = value;
   }
   return identity;
 }
