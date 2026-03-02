@@ -11,6 +11,13 @@ import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import type { DiagnosticEventPayload, OpenClawPluginService } from "openclaw/plugin-sdk";
 import { onDiagnosticEvent, redactSensitiveText, registerLogTransport } from "openclaw/plugin-sdk";
+import {
+  SEVERITY_ORDER,
+  checkTokenAnomaly,
+  runSecurityChecks,
+  tokenAnomalyTracker,
+} from "./security.js";
+import type { SecuritySeverity } from "./security.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 
@@ -232,6 +239,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Run attempts",
       });
+      const securityEventsCounter = meter.createCounter("openclaw.security.events", {
+        unit: "1",
+        description: "Security events by category and severity",
+      });
+      const sensitiveFileAccessCounter = meter.createCounter(
+        "openclaw.security.sensitive_file_access",
+        {
+          unit: "1",
+          description: "Sensitive file access detections",
+        },
+      );
+      const promptInjectionCounter = meter.createCounter("openclaw.security.prompt_injection", {
+        unit: "1",
+        description: "Prompt injection indicator detections",
+      });
+      const dangerousCommandCounter = meter.createCounter("openclaw.security.dangerous_command", {
+        unit: "1",
+        description: "Dangerous command detections",
+      });
 
       if (logsEnabled) {
         const logExporter = new OTLPLogExporter({
@@ -418,6 +444,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         }
 
+        // Check for token usage anomalies
+        const totalTokens = usage.total ?? 0;
+        if (totalTokens > 0) {
+          const anomaly = checkTokenAnomaly(totalTokens, evt.model);
+          if (anomaly.detected) {
+            securityEventsCounter.add(1, {
+              "security.category": anomaly.category,
+              "security.severity": anomaly.severity,
+            });
+          }
+        }
+
         if (!tracesEnabled) {
           return;
         }
@@ -529,6 +567,27 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (typeof evt.durationMs === "number") {
           messageDurationHistogram.record(evt.durationMs, attrs);
         }
+
+        // Run security checks against the event content
+        const securityResults = runSecurityChecks(evt);
+        for (const detection of securityResults) {
+          securityEventsCounter.add(1, {
+            "security.category": detection.category,
+            "security.severity": detection.severity,
+          });
+          switch (detection.category) {
+            case "sensitive_file_access":
+              sensitiveFileAccessCounter.add(1);
+              break;
+            case "prompt_injection":
+              promptInjectionCounter.add(1);
+              break;
+            case "dangerous_command":
+              dangerousCommandCounter.add(1);
+              break;
+          }
+        }
+
         if (!tracesEnabled) {
           return;
         }
@@ -543,9 +602,30 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.reason) {
           spanAttrs["openclaw.reason"] = redactSensitiveText(evt.reason);
         }
+
+        // Enrich span with security context
+        if (securityResults.length > 0) {
+          spanAttrs["security.detected"] = 1;
+          spanAttrs["security.category"] = securityResults.map((r) => r.category).join(",");
+          spanAttrs["security.severity"] = securityResults.reduce<SecuritySeverity>(
+            (max, r) => (SEVERITY_ORDER[r.severity] > SEVERITY_ORDER[max] ? r.severity : max),
+            "low",
+          );
+          spanAttrs["security.detail"] = securityResults.map((r) => r.detail).join("; ");
+        }
+
         const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
         if (evt.outcome === "error" && evt.error) {
           span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
+        }
+        // Set span to ERROR for critical security findings, preserving any original error
+        if (securityResults.some((r) => r.severity === "critical")) {
+          const originalMsg =
+            evt.outcome === "error" && evt.error ? redactSensitiveText(evt.error) + "; " : "";
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: originalMsg + "critical security detection",
+          });
         }
         span.end();
       };
@@ -665,6 +745,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       unsubscribe = null;
       stopLogTransport?.();
       stopLogTransport = null;
+      tokenAnomalyTracker.reset();
       if (logProvider) {
         await logProvider.shutdown().catch(() => undefined);
         logProvider = null;
