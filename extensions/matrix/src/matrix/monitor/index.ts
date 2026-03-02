@@ -36,6 +36,11 @@ export type MonitorMatrixOpts = {
 };
 
 const DEFAULT_MEDIA_MAX_MB = 20;
+export const DEFAULT_STARTUP_GRACE_MS = 5000;
+
+export function isConfiguredMatrixRoomEntry(entry: string): boolean {
+  return entry.startsWith("!") || (entry.startsWith("#") && entry.includes(":"));
+}
 
 export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promise<void> {
   if (isBunRuntime()) {
@@ -153,7 +158,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         continue;
       }
       const cleaned = normalizeRoomEntry(trimmed);
-      if (cleaned.startsWith("!") || (cleaned.startsWith("#") && cleaned.includes(":"))) {
+      if (isConfiguredMatrixRoomEntry(cleaned)) {
         if (!nextRooms[cleaned]) {
           nextRooms[cleaned] = roomConfig;
         }
@@ -268,7 +273,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
-  const startupGraceMs = 5000; // 5s grace for slow homeservers (e.g. Conduit filter M_NOT_FOUND retry)
+  const startupGraceMs = DEFAULT_STARTUP_GRACE_MS;
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, cfg, runtime });
   const warnedEncryptedRooms = new Set<string>();
