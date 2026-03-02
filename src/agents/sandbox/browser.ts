@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -6,8 +7,8 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "../../browser/constants.js";
-import { defaultRuntime } from "../../runtime.js";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -35,7 +36,6 @@ import {
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
 import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
-import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
