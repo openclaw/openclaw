@@ -170,6 +170,18 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "alt");
   });
 
+  it("deduplicates MEMORY.md and memory.md on case-sensitive filesystems", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "primary" });
+    await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "duplicate" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const memoryEntries = getMemoryEntries(files);
+    expect(memoryEntries).toHaveLength(1);
+    // MEMORY.md (uppercase) takes priority since it's listed first in candidates
+    expect(memoryEntries[0]?.content).toBe("primary");
+  });
+
   it("omits memory entries when no memory files exist", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
