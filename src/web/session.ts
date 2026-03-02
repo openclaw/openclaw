@@ -122,10 +122,14 @@ export async function createWaSocket(
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
   
-  // Create proxy agent if proxy URL is provided
+  // Create proxy agent if proxy URL is provided (needed for version fetch too)
   const agent = opts.proxy ? createProxyAgent(opts.proxy) : undefined;
+  
+  // Fetch Baileys version with proxy if configured
+  const { version } = await fetchLatestBaileysVersion({
+    dispatcher: agent,
+  });
   
   const sock = makeWASocket({
     auth: {
