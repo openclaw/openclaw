@@ -113,6 +113,59 @@ export function countActiveDescendantRunsFromRuns(
   return count;
 }
 
+function countPendingDescendantRunsInternal(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+  excludeRunId?: string,
+): number {
+  const root = rootSessionKey.trim();
+  if (!root) {
+    return 0;
+  }
+  const excludedRunId = excludeRunId?.trim();
+  const pending = [root];
+  const visited = new Set<string>([root]);
+  let count = 0;
+  for (let index = 0; index < pending.length; index += 1) {
+    const requester = pending[index];
+    if (!requester) {
+      continue;
+    }
+    for (const [runId, entry] of runs.entries()) {
+      if (entry.requesterSessionKey !== requester) {
+        continue;
+      }
+      const runEnded = typeof entry.endedAt === "number";
+      const cleanupCompleted = typeof entry.cleanupCompletedAt === "number";
+      if ((!runEnded || !cleanupCompleted) && runId !== excludedRunId) {
+        count += 1;
+      }
+      const childKey = entry.childSessionKey.trim();
+      if (!childKey || visited.has(childKey)) {
+        continue;
+      }
+      visited.add(childKey);
+      pending.push(childKey);
+    }
+  }
+  return count;
+}
+
+export function countPendingDescendantRunsFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+): number {
+  return countPendingDescendantRunsInternal(runs, rootSessionKey);
+}
+
+export function countPendingDescendantRunsExcludingRunFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countPendingDescendantRunsInternal(runs, rootSessionKey, excludeRunId);
+}
+
 export function listDescendantRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,

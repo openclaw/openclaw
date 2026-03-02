@@ -30,6 +30,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How long does install and onboarding usually take?](#how-long-does-install-and-onboarding-usually-take)
   - [Installer stuck? How do I get more feedback?](#installer-stuck-how-do-i-get-more-feedback)
   - [Windows install says git not found or openclaw not recognized](#windows-install-says-git-not-found-or-openclaw-not-recognized)
+  - [Windows exec output shows garbled Chinese text what should I do](#windows-exec-output-shows-garbled-chinese-text-what-should-i-do)
   - [The docs didn't answer my question - how do I get a better answer?](#the-docs-didnt-answer-my-question-how-do-i-get-a-better-answer)
   - [How do I install OpenClaw on Linux?](#how-do-i-install-openclaw-on-linux)
   - [How do I install OpenClaw on a VPS?](#how-do-i-install-openclaw-on-a-vps)
@@ -578,11 +579,37 @@ Two common Windows issues:
   npm config get prefix
   ```
 
-- Ensure `<prefix>\\bin` is on PATH (on most systems it is `%AppData%\\npm`).
+- Add that directory to your user PATH (no `\bin` suffix needed on Windows; on most systems it is `%AppData%\npm`).
 - Close and reopen PowerShell after updating PATH.
 
 If you want the smoothest Windows setup, use **WSL2** instead of native Windows.
 Docs: [Windows](/platforms/windows).
+
+### Windows exec output shows garbled Chinese text what should I do
+
+This is usually a console code page mismatch on native Windows shells.
+
+Symptoms:
+- `system.run`/`exec` output renders Chinese as mojibake
+- The same command looks fine in another terminal profile
+
+Quick workaround in PowerShell:
+
+```powershell
+chcp 65001
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+```
+
+Then restart the Gateway and retry your command:
+
+```powershell
+openclaw gateway restart
+```
+
+If you still reproduce this on latest OpenClaw, track/report it in:
+- [Issue #30640](https://github.com/openclaw/openclaw/issues/30640)
 
 ### The docs didn't answer my question how do I get a better answer
 
@@ -714,8 +741,15 @@ use a **Claude subscription** (setup-token or Claude Code OAuth), wait for the w
 reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
 for usage/billing and raise limits as needed.
 
+If the message is specifically:
+`Extra usage is required for long context requests`, the request is trying to use
+Anthropic's 1M context beta (`context1m: true`). That only works when your
+credential is eligible for long-context billing (API key billing or subscription
+with Extra Usage enabled).
+
 Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
-See [Models](/cli/models) and [OAuth](/concepts/oauth).
+See [Models](/cli/models), [OAuth](/concepts/oauth), and
+[/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
 ### Is AWS Bedrock supported
 
@@ -1520,8 +1554,8 @@ Typical setup:
 5. Approve the node on the Gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 No separate TCP bridge is required; nodes connect over the Gateway WebSocket.
@@ -1690,8 +1724,8 @@ Recommended setup:
 3. **Approve the node** on the gateway:
 
    ```bash
-   openclaw nodes pending
-   openclaw nodes approve <requestId>
+   openclaw devices list
+   openclaw devices approve <requestId>
    ```
 
 Docs: [Gateway protocol](/gateway/protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).

@@ -63,6 +63,10 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted sender id from inbound context (runtime-provided, not tool args). */
+  requesterSenderId?: string;
+  /** Whether the trusted sender is an owner. */
+  senderIsOwner?: boolean;
   sandboxed?: boolean;
 };
 
@@ -190,15 +194,21 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type OpenClawPluginHttpHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<boolean> | boolean;
+export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
+export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
 
 export type OpenClawPluginHttpRouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,
-) => Promise<void> | void;
+) => Promise<boolean | void> | boolean | void;
+
+export type OpenClawPluginHttpRouteParams = {
+  path: string;
+  handler: OpenClawPluginHttpRouteHandler;
+  auth: OpenClawPluginHttpRouteAuth;
+  match?: OpenClawPluginHttpRouteMatch;
+  replaceExisting?: boolean;
+};
 
 export type OpenClawPluginCliContext = {
   program: Command;
@@ -261,8 +271,7 @@ export type OpenClawPluginApi = {
     handler: InternalHookHandler,
     opts?: OpenClawPluginHookOptions,
   ) => void;
-  registerHttpHandler: (handler: OpenClawPluginHttpHandler) => void;
-  registerHttpRoute: (params: { path: string; handler: OpenClawPluginHttpRouteHandler }) => void;
+  registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;

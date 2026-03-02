@@ -534,6 +534,7 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
     public let label: String?
@@ -561,6 +562,7 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
         label: String?,
@@ -587,6 +589,7 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
         self.label = label
@@ -615,6 +618,7 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
         case label
@@ -2383,6 +2387,7 @@ public struct CronJob: Codable, Sendable {
     public let wakemode: AnyCodable
     public let payload: AnyCodable
     public let delivery: AnyCodable?
+    public let failurealert: AnyCodable?
     public let state: [String: AnyCodable]
 
     public init(
@@ -2400,6 +2405,7 @@ public struct CronJob: Codable, Sendable {
         wakemode: AnyCodable,
         payload: AnyCodable,
         delivery: AnyCodable?,
+        failurealert: AnyCodable?,
         state: [String: AnyCodable])
     {
         self.id = id
@@ -2416,6 +2422,7 @@ public struct CronJob: Codable, Sendable {
         self.wakemode = wakemode
         self.payload = payload
         self.delivery = delivery
+        self.failurealert = failurealert
         self.state = state
     }
 
@@ -2434,6 +2441,7 @@ public struct CronJob: Codable, Sendable {
         case wakemode = "wakeMode"
         case payload
         case delivery
+        case failurealert = "failureAlert"
         case state
     }
 }
@@ -2490,6 +2498,7 @@ public struct CronAddParams: Codable, Sendable {
     public let wakemode: AnyCodable
     public let payload: AnyCodable
     public let delivery: AnyCodable?
+    public let failurealert: AnyCodable?
 
     public init(
         name: String,
@@ -2502,7 +2511,8 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        delivery: AnyCodable?)
+        delivery: AnyCodable?,
+        failurealert: AnyCodable?)
     {
         self.name = name
         self.agentid = agentid
@@ -2515,6 +2525,7 @@ public struct CronAddParams: Codable, Sendable {
         self.wakemode = wakemode
         self.payload = payload
         self.delivery = delivery
+        self.failurealert = failurealert
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2529,6 +2540,7 @@ public struct CronAddParams: Codable, Sendable {
         case wakemode = "wakeMode"
         case payload
         case delivery
+        case failurealert = "failureAlert"
     }
 }
 
@@ -2810,7 +2822,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
     public let commandargv: [String]?
-    public let systemrunplanv2: [String: AnyCodable]?
+    public let systemrunplan: [String: AnyCodable]?
     public let env: [String: AnyCodable]?
     public let cwd: AnyCodable?
     public let nodeid: AnyCodable?
@@ -2831,7 +2843,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         id: String?,
         command: String,
         commandargv: [String]?,
-        systemrunplanv2: [String: AnyCodable]?,
+        systemrunplan: [String: AnyCodable]?,
         env: [String: AnyCodable]?,
         cwd: AnyCodable?,
         nodeid: AnyCodable?,
@@ -2851,7 +2863,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.id = id
         self.command = command
         self.commandargv = commandargv
-        self.systemrunplanv2 = systemrunplanv2
+        self.systemrunplan = systemrunplan
         self.env = env
         self.cwd = cwd
         self.nodeid = nodeid
@@ -2873,7 +2885,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case id
         case command
         case commandargv = "commandArgv"
-        case systemrunplanv2 = "systemRunPlanV2"
+        case systemrunplan = "systemRunPlan"
         case env
         case cwd
         case nodeid = "nodeId"

@@ -720,7 +720,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loggedInvalidConfigs.add(configPath);
           deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
-        const error = new Error("Invalid config");
+        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
@@ -925,7 +925,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
+      // Detect legacy keys on resolved config, but only mark source-literal legacy
+      // entries (for auto-migration) when they are present in the parsed source.
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
