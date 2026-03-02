@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import {
@@ -9,6 +10,7 @@ import {
 import type {
   CronDelivery,
   CronDeliveryPatch,
+  CronFailureAlert,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -63,15 +65,22 @@ function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {
   return undefined;
 }
 
+function isFiniteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
   fallbackAnchorMs: number;
 }) {
   const raw = params.schedule.anchorMs;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
+  if (isFiniteTimestamp(raw)) {
     return Math.max(0, Math.floor(raw));
   }
-  return Math.max(0, Math.floor(params.fallbackAnchorMs));
+  if (isFiniteTimestamp(params.fallbackAnchorMs)) {
+    return Math.max(0, Math.floor(params.fallbackAnchorMs));
+  }
+  return 0;
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
@@ -80,6 +89,25 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  }
+}
+
+function assertMainSessionAgentId(
+  job: Pick<CronJob, "sessionTarget" | "agentId">,
+  defaultAgentId: string | undefined,
+) {
+  if (job.sessionTarget !== "main") {
+    return;
+  }
+  if (!job.agentId) {
+    return;
+  }
+  const normalized = normalizeAgentId(job.agentId);
+  const normalizedDefault = normalizeAgentId(defaultAgentId);
+  if (normalized !== normalizedDefault) {
+    throw new Error(
+      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
+    );
   }
 }
 
@@ -144,17 +172,15 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
         return nextFromLastRun;
       }
     }
+    const fallbackAnchorMs = isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs;
     const anchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
-      fallbackAnchorMs: job.createdAtMs,
+      fallbackAnchorMs,
     });
-    return computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
+    const next = computeNextRunAtMs({ ...job.schedule, everyMs, anchorMs }, nowMs);
+    return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
-      return undefined;
-    }
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
     // the migration hasn't run yet or was bypassed.
@@ -167,14 +193,22 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
           : typeof schedule.at === "string"
             ? parseAbsoluteTimeMs(schedule.at)
             : null;
-    return atMs !== null ? atMs : undefined;
+    // One-shot jobs stay due until they successfully finish, but if the
+    // schedule was updated to a time after the last run, re-arm the job.
+    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
+      if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
+        return atMs;
+      }
+      return undefined;
+    }
+    return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
   }
   const next = computeStaggeredCronNextRunAtMs(job, nowMs);
   if (next === undefined && job.schedule.kind === "cron") {
     const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
     return computeStaggeredCronNextRunAtMs(job, nextSecondMs);
   }
-  return next;
+  return isFiniteTimestamp(next) ? next : undefined;
 }
 
 /** Maximum consecutive schedule errors before auto-disabling a job. */
@@ -199,6 +233,19 @@ function recordScheduleComputeError(params: {
       { jobId: job.id, name: job.name, errorCount, err: errText },
       "cron: auto-disabled job after repeated schedule errors",
     );
+
+    // Notify the user so the auto-disable is not silent (#28861).
+    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    state.deps.enqueueSystemEvent(notifyText, {
+      agentId: job.agentId,
+      sessionKey: job.sessionKey,
+      contextKey: `cron:${job.id}:auto-disabled`,
+    });
+    state.deps.requestHeartbeatNow({
+      reason: `cron:${job.id}:auto-disabled`,
+      agentId: job.agentId,
+      sessionKey: job.sessionKey,
+    });
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -231,6 +278,11 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       changed = true;
     }
     return { changed, skip: true };
+  }
+
+  if (!isFiniteTimestamp(job.state.nextRunAtMs) && job.state.nextRunAtMs !== undefined) {
+    job.state.nextRunAtMs = undefined;
+    changed = true;
   }
 
   const runningAt = job.state.runningAtMs;
@@ -298,7 +350,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
+    const isDueOrMissing = !isFiniteTimestamp(nextRun) || now >= nextRun;
     if (isDueOrMissing) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
@@ -321,7 +373,7 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
     // Only compute missing nextRunAtMs, do NOT recompute existing ones.
     // If a job was past-due but not found by findDueJobs, recomputing would
     // cause it to be silently skipped.
-    if (job.state.nextRunAtMs === undefined) {
+    if (!isFiniteTimestamp(job.state.nextRunAtMs)) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
@@ -332,14 +384,18 @@ export function recomputeNextRunsForMaintenance(state: CronServiceState): boolea
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
+  const enabled = jobs.filter((j) => j.enabled && isFiniteTimestamp(j.state.nextRunAtMs));
   if (enabled.length === 0) {
     return undefined;
   }
-  return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs as number),
-    enabled[0].state.nextRunAtMs as number,
-  );
+  const first = enabled[0]?.state.nextRunAtMs;
+  if (!isFiniteTimestamp(first)) {
+    return undefined;
+  }
+  return enabled.reduce((min, j) => {
+    const next = j.state.nextRunAtMs;
+    return isFiniteTimestamp(next) ? Math.min(min, next) : min;
+  }, first);
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
@@ -388,17 +444,23 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
+    failureAlert: input.failureAlert,
     state: {
       ...input.state,
     },
   };
   assertSupportedJobSpec(job);
+  assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
 
-export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
+export function applyJobPatch(
+  job: CronJob,
+  patch: CronJobPatch,
+  opts?: { defaultAgentId?: string },
+) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -452,6 +514,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
+  if ("failureAlert" in patch) {
+    job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     job.delivery = undefined;
   }
@@ -465,6 +530,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
 }
 
@@ -591,6 +657,7 @@ function mergeCronDelivery(
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
     to: existing?.to,
+    accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
   };
 
@@ -605,8 +672,48 @@ function mergeCronDelivery(
     const to = typeof patch.to === "string" ? patch.to.trim() : "";
     next.to = to ? to : undefined;
   }
+  if ("accountId" in patch) {
+    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
+    next.accountId = accountId ? accountId : undefined;
+  }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+
+  return next;
+}
+
+function mergeCronFailureAlert(
+  existing: CronFailureAlert | false | undefined,
+  patch: CronFailureAlert | false | undefined,
+): CronFailureAlert | false | undefined {
+  if (patch === false) {
+    return false;
+  }
+  if (patch === undefined) {
+    return existing;
+  }
+  const base = existing === false || existing === undefined ? {} : existing;
+  const next: CronFailureAlert = { ...base };
+
+  if ("after" in patch) {
+    const after = typeof patch.after === "number" && Number.isFinite(patch.after) ? patch.after : 0;
+    next.after = after > 0 ? Math.floor(after) : undefined;
+  }
+  if ("channel" in patch) {
+    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
+    next.channel = channel ? channel : undefined;
+  }
+  if ("to" in patch) {
+    const to = typeof patch.to === "string" ? patch.to.trim() : "";
+    next.to = to ? to : undefined;
+  }
+  if ("cooldownMs" in patch) {
+    const cooldownMs =
+      typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)
+        ? patch.cooldownMs
+        : -1;
+    next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
   }
 
   return next;

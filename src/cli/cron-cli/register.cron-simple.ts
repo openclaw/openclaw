@@ -100,6 +100,8 @@ export function registerCronSimpleCommands(cron: Command) {
             mode: opts.due ? "due" : "force",
           });
           defaultRuntime.log(JSON.stringify(res, null, 2));
+          const result = res as { ok?: boolean; ran?: boolean } | undefined;
+          defaultRuntime.exit(result?.ok && result?.ran ? 0 : 1);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
