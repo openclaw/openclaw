@@ -1,6 +1,7 @@
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
+  isCliProvider,
   modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
@@ -34,6 +35,7 @@ function buildSelectionFromExplicit(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  cfg?: OpenClawConfig;
 }): ModelDirectiveSelection | undefined {
   const resolved = resolveModelRefFromString({
     raw: params.raw,
@@ -44,7 +46,11 @@ function buildSelectionFromExplicit(params: {
     return undefined;
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) {
+  if (
+    params.allowedModelKeys.size > 0 &&
+    !params.allowedModelKeys.has(key) &&
+    !(params.cfg && isCliProvider(resolved.ref.provider, params.cfg))
+  ) {
     return undefined;
   }
   const isDefault =
@@ -140,6 +146,7 @@ export async function applyResetModelOverride(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      cfg: params.cfg,
     });
 
   let selection: ModelDirectiveSelection | undefined;
@@ -161,6 +168,7 @@ export async function applyResetModelOverride(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      cfg: params.cfg,
     });
     if (selection) {
       consumed = 1;

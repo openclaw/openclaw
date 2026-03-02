@@ -7,6 +7,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
   type ModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
@@ -146,7 +147,11 @@ export async function persistInlineDirectives(params: {
       });
       if (resolved) {
         const key = modelKey(resolved.ref.provider, resolved.ref.model);
-        if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+        if (
+          allowedModelKeys.size === 0 ||
+          allowedModelKeys.has(key) ||
+          isCliProvider(resolved.ref.provider, cfg)
+        ) {
           let profileOverride: string | undefined;
           if (directives.rawModelProfile) {
             const profileResolved = resolveProfileOverride({

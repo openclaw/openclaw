@@ -1,5 +1,6 @@
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import {
+  isCliProvider,
   type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
@@ -396,7 +397,11 @@ export function resolveModelSelectionFromDirective(params: {
   });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
+    if (
+      params.allowedModelKeys.size === 0 ||
+      params.allowedModelKeys.has(explicitKey) ||
+      isCliProvider(explicit.ref.provider, params.cfg)
+    ) {
       modelSelection = {
         provider: explicit.ref.provider,
         model: explicit.ref.model,
@@ -415,6 +420,7 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      cfg: params.cfg,
     });
 
     if (resolved.error) {

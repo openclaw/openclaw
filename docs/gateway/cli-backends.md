@@ -2,7 +2,7 @@
 summary: "CLI backends: text-only fallback via local AI CLIs"
 read_when:
   - You want a reliable fallback when API providers fail
-  - You are running Claude Code CLI or other local AI CLIs and want to reuse them
+  - You are running Claude Code CLI, Cursor CLI, or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
 title: "CLI Backends"
 ---
@@ -32,6 +32,12 @@ Codex CLI also works out of the box:
 
 ```bash
 openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
+```
+
+Cursor CLI (headless mode) works out of the box too:
+
+```bash
+openclaw agent --message "hi" --model cursor-cli/default
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -203,6 +209,19 @@ OpenClaw also ships a default for `codex-cli`:
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
+
+OpenClaw also ships a default for `cursor-cli` (Cursor Headless CLI):
+
+- `command: "agent"`
+- `args: ["-p","--output-format","json","--force","--trust"]`
+- `resumeArgs: ["-p","--output-format","json","--force","--trust","--resume","{sessionId}"]`
+- `output: "json"`
+- `modelArg: "--model"`
+- `sessionMode: "always"`
+
+Cursor CLI reads `AGENTS.md` and `CLAUDE.md` from the workspace root
+automatically, so no `systemPromptArg` is configured. Authentication uses
+`CURSOR_API_KEY` env var or prior `agent login`.
 
 Override only if needed (common: absolute `command` path).
 
