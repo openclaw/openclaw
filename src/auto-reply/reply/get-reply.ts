@@ -277,11 +277,28 @@ export async function getReplyFromConfig(
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
-    if (!resetMatch) {
-      return;
-    }
-    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+
+    const resolveAction = (): ResetCommandAction | null => {
+      const candidates = [
+        command.commandBodyNormalized,
+        command.rawBodyNormalized,
+        triggerBodyNormalized,
+        sessionCtx.CommandBody,
+        sessionCtx.RawBody,
+        ctx.CommandBody,
+        ctx.RawBody,
+      ];
+      for (const candidate of candidates) {
+        const match = candidate?.trim().match(/^\/(new|reset)(?:\s|$)/i);
+        if (!match) {
+          continue;
+        }
+        return match[1].toLowerCase() === "reset" ? "reset" : "new";
+      }
+      return null;
+    };
+
+    const action = resolveAction() ?? "new";
     await emitResetCommandHooks({
       action,
       ctx,

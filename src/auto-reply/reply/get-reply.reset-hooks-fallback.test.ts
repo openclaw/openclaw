@@ -194,6 +194,67 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     );
   });
 
+  it("emits fallback hooks for /new when commandBodyNormalized is empty", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    mocks.resolveReplyDirectives.mockResolvedValue({
+      kind: "continue",
+      result: {
+        commandSource: "/new",
+        command: {
+          surface: "telegram",
+          channel: "telegram",
+          channelId: "telegram",
+          ownerList: [],
+          senderIsOwner: true,
+          isAuthorizedSender: true,
+          senderId: "123",
+          abortKey: "telegram:slash:123",
+          rawBodyNormalized: "",
+          commandBodyNormalized: "",
+          from: "telegram:123",
+          to: "slash:123",
+          resetHookTriggered: false,
+        },
+        allowTextCommands: true,
+        skillCommands: [],
+        directives: {},
+        cleanedBody: "/new",
+        elevatedEnabled: false,
+        elevatedAllowed: false,
+        elevatedFailures: [],
+        defaultActivation: "always",
+        resolvedThinkLevel: undefined,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolvedElevatedLevel: "off",
+        execOverrides: undefined,
+        blockStreamingEnabled: false,
+        blockReplyChunking: undefined,
+        resolvedBlockStreamingBreak: undefined,
+        provider: "openai",
+        model: "gpt-4o-mini",
+        modelState: {
+          resolveDefaultThinkingLevel: async () => undefined,
+        },
+        contextTokens: 0,
+        inlineStatusRequested: false,
+        directiveAck: undefined,
+        perMessageQueueMode: undefined,
+        perMessageQueueOptions: undefined,
+      },
+    });
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "new",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+  });
+
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
     mocks.resolveReplyDirectives.mockResolvedValue({
