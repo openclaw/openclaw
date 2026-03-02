@@ -23,6 +23,11 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   pinDns?: boolean;
   proxy?: "env";
+  /**
+   * Env proxies can break destination binding between SSRF pre-check and connect-time target.
+   * Keep this off for untrusted URLs; enable only for trusted/operator-controlled endpoints.
+   */
+  dangerouslyAllowEnvProxyWithoutPinnedDns?: boolean;
   auditContext?: string;
 };
 
@@ -157,7 +162,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.proxy === "env" && hasEnvProxyConfigured()) {
+      const hasEnvProxy = params.proxy === "env" && hasEnvProxyConfigured();
+      if (hasEnvProxy && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) {
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);

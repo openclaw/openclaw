@@ -32,9 +32,9 @@ describe("web_search redirect resolution hardening", () => {
         url: "https://example.com/start",
         timeoutMs: 5000,
         init: { method: "HEAD" },
-        proxy: "env",
       }),
     );
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.proxy).toBeUndefined();
     expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy).toBeUndefined();
     expect(release).toHaveBeenCalledTimes(1);
   });

@@ -220,6 +220,7 @@ async function uploadSlackFile(params: {
     },
     policy: SLACK_UPLOAD_SSRF_POLICY,
     proxy: "env",
+    dangerouslyAllowEnvProxyWithoutPinnedDns: true,
     auditContext: "slack-upload-file",
   });
   try {
