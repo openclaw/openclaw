@@ -33,8 +33,6 @@ function createMessageHandlers(overrides?: SlackSystemEventTestOverrides) {
   });
   return {
     handler: harness.getHandler("message") as MessageHandler | null,
-    channelHandler: harness.getHandler("message.channels") as MessageHandler | null,
-    groupHandler: harness.getHandler("message.groups") as MessageHandler | null,
     handleSlackMessage,
   };
 }
@@ -159,17 +157,17 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("registers and forwards message.channels and message.groups events", async () => {
+  it("handles channel and group messages via the unified message handler", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { channelHandler, groupHandler, handleSlackMessage } = createMessageHandlers({
+    const { handler, handleSlackMessage } = createMessageHandlers({
       dmPolicy: "open",
       channelType: "channel",
     });
 
-    expect(channelHandler).toBeTruthy();
-    expect(groupHandler).toBeTruthy();
+    expect(handler).toBeTruthy();
 
+    // channel_type distinguishes the source; all arrive as event type "message"
     const channelMessage = {
       type: "message",
       channel: "C1",
@@ -178,8 +176,8 @@ describe("registerSlackMessageEvents", () => {
       text: "hello channel",
       ts: "123.100",
     };
-    await channelHandler!({ event: channelMessage, body: {} });
-    await groupHandler!({
+    await handler!({ event: channelMessage, body: {} });
+    await handler!({
       event: {
         ...channelMessage,
         channel_type: "group",
@@ -193,17 +191,19 @@ describe("registerSlackMessageEvents", () => {
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
-  it("applies subtype system-event handling for message.channels events", async () => {
+  it("applies subtype system-event handling for channel messages", async () => {
     messageQueueMock.mockClear();
     messageAllowMock.mockReset().mockResolvedValue([]);
-    const { channelHandler, handleSlackMessage } = createMessageHandlers({
+    const { handler, handleSlackMessage } = createMessageHandlers({
       dmPolicy: "open",
       channelType: "channel",
     });
 
-    expect(channelHandler).toBeTruthy();
+    expect(handler).toBeTruthy();
 
-    await channelHandler!({
+    // message_changed events from channels arrive via the generic "message"
+    // handler with channel_type:"channel" — not a separate event type.
+    await handler!({
       event: {
         ...makeChangedEvent({ channel: "C1", user: "U1" }),
         channel_type: "channel",

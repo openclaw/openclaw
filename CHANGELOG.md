@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/Bolt startup compatibility: remove invalid `message.channels` and `message.groups` event registrations so Slack providers no longer crash on startup with Bolt 4.6+; channel/group traffic continues through the unified `message` handler (`channel_type`). (#32033) Thanks @mahopan.
 - Sandbox/Docker setup command parsing: accept `agents.*.sandbox.docker.setupCommand` as either a string or a string array, and normalize arrays to newline-delimited shell scripts so multi-step setup commands no longer concatenate without separators. (#31953) Thanks @liuxiaopai-ai.
 - Gateway/Plugin HTTP route precedence: run explicit plugin HTTP routes before the Control UI SPA catch-all so registered plugin webhook/custom paths remain reachable, while unmatched paths still fall through to Control UI handling. (#31885) Thanks @Sid-Qin.
 - Security/Node exec approvals: preserve shell/dispatch-wrapper argv semantics during approval hardening so approved wrapper commands (for example `env sh -c ...`) cannot drift into a different runtime command shape, and add regression coverage for both approval-plan generation and approved runtime execution paths. Thanks @tdjackey for reporting.

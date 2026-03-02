@@ -46,23 +46,15 @@ export function registerSlackMessageEvents(params: {
     }
   };
 
+  // NOTE: Slack Event Subscriptions use names like "message.channels" and
+  // "message.groups" to control *which* message events are delivered, but the
+  // actual event payload always arrives with `type: "message"`.  The
+  // `channel_type` field ("channel" | "group" | "im" | "mpim") distinguishes
+  // the source.  Bolt rejects `app.event("message.channels")` since v4.6
+  // because it is a subscription label, not a valid event type.
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     await handleIncomingMessageEvent({ event, body });
   });
-  // Slack may dispatch channel/group message subscriptions under typed event
-  // names. Register explicit handlers so both delivery styles are supported.
-  ctx.app.event(
-    "message.channels",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.channels">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
-  ctx.app.event(
-    "message.groups",
-    async ({ event, body }: SlackEventMiddlewareArgs<"message.groups">) => {
-      await handleIncomingMessageEvent({ event, body });
-    },
-  );
 
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
