@@ -65,6 +65,22 @@ struct MacNodeRuntimeTests {
         #expect(payload.plan.rawCommand == nil)
     }
 
+    @Test func handleInvokeSystemRunPrepareRejectsMissingCwd() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["echo", "hello"],
+            cwd: "/tmp/openclaw-missing-cwd-\(UUID().uuidString)")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-2prepare-missing-cwd",
+                command: OpenClawSystemCommand.runPrepare.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(
+            response.error?.message == "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd")
+    }
+
     @Test func handleInvokeRejectsEmptySystemWhich() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemWhichParams(bins: [])
