@@ -21,6 +21,8 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
 }
 
 const BACKSPACE_CHAR = "\u0008";
+const mentionRegexCompileCache = new Map<string, RegExp[]>();
+const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
 
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
@@ -54,7 +56,15 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
 
 export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
-  return patterns
+  if (patterns.length === 0) {
+    return [];
+  }
+  const cacheKey = patterns.join("\u001f");
+  const cached = mentionRegexCompileCache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+  const compiled = patterns
     .map((pattern) => {
       try {
         return new RegExp(pattern, "i");
@@ -63,6 +73,12 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
       }
     })
     .filter((value): value is RegExp => Boolean(value));
+  mentionRegexCompileCache.set(cacheKey, compiled);
+  if (mentionRegexCompileCache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
+    mentionRegexCompileCache.clear();
+    mentionRegexCompileCache.set(cacheKey, compiled);
+  }
+  return [...compiled];
 }
 
 export function normalizeMentionText(text: string): string {
