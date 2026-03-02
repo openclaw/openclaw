@@ -47,10 +47,48 @@ const tryImport = async (specifier) => {
   }
 };
 
+const buildAndRetry = async () => {
+  // Check if package.json exists (indicates we're in a project directory, not an installed package)
+  try {
+    await import("./package.json");
+  } catch {
+    // Not a project directory, re-throw the original error
+    throw new Error("openclaw: missing dist/entry.(m)js (build output). Run 'pnpm build' to build the project.");
+  }
+
+  // We're in a project directory - try to build
+  console.error("openclaw: dist/ not found, building...");
+  const { spawn } = await import("node:child_process");
+  
+  return new Promise((resolve, reject) => {
+    const build = spawn("pnpm", ["build"], { 
+      stdio: "inherit",
+      shell: true 
+    });
+    build.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`openclaw: build failed with code ${code}`));
+        return;
+      }
+      resolve(true);
+    });
+  });
+};
+
 if (await tryImport("./dist/entry.js")) {
   // OK
 } else if (await tryImport("./dist/entry.mjs")) {
   // OK
 } else {
-  throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  // Try to build and retry
+  await buildAndRetry();
+  
+  // Retry after build
+  if (await tryImport("./dist/entry.js")) {
+    // OK
+  } else if (await tryImport("./dist/entry.mjs")) {
+    // OK
+  } else {
+    throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  }
 }
