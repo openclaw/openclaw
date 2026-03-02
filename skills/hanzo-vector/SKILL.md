@@ -11,7 +11,7 @@ Direct vector operations on Hanzo's managed Qdrant instance. Store embeddings, s
 
 ## Endpoint
 
-Qdrant REST API at `https://vector.hanzo.ai:6333` (or internal at `vector.hanzo.svc:6333`).
+Qdrant REST API at `https://vector.hanzo.ai` (standard HTTPS port 443 via K8s ingress, or internal at `vector.hanzo.svc:6333`).
 
 ## Authentication
 
@@ -177,7 +177,7 @@ All commands accept:
 
 ```
 --host       Qdrant host (default: $HANZO_VECTOR_HOST or https://vector.hanzo.ai)
---port       Qdrant port (default: $HANZO_VECTOR_PORT or 6333)
+--port       Qdrant port (only for non-standard ports; HTTPS uses standard 443)
 --api-key    API key (default: $HANZO_API_KEY)
 --format     Output: text, json (default: text)
 ```
@@ -209,6 +209,6 @@ Vector operations are billed per query (search) and per batch (upsert). Collecti
 
 ```bash
 HANZO_API_KEY=...                             # API key for authentication
-HANZO_VECTOR_HOST=https://vector.hanzo.ai     # Qdrant host
-HANZO_VECTOR_PORT=6333                        # Qdrant port
+HANZO_VECTOR_HOST=https://vector.hanzo.ai     # Qdrant host (standard HTTPS, no port needed)
+HANZO_VECTOR_PORT=                            # Only set for non-standard ports (e.g. 6333 for direct access)
 ```

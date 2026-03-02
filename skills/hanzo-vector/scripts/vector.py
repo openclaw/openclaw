@@ -17,7 +17,7 @@ Commands:
 
 Common Options:
     --host       Qdrant host (default: $HANZO_VECTOR_HOST or https://vector.hanzo.ai)
-    --port       Qdrant port (default: $HANZO_VECTOR_PORT or 6333)
+    --port       Qdrant port (only needed for non-standard ports; HTTPS uses 443 by default)
     --api-key    API key (default: $HANZO_API_KEY)
     --format     Output format: text, json (default: text)
 """
@@ -32,10 +32,16 @@ import urllib.error
 
 def resolve_base_url(args: argparse.Namespace) -> str:
     host = args.host or os.environ.get("HANZO_VECTOR_HOST", "https://vector.hanzo.ai")
-    port = args.port or os.environ.get("HANZO_VECTOR_PORT", "6333")
+    port = args.port or os.environ.get("HANZO_VECTOR_PORT", "")
     host = host.rstrip("/")
-    if ":" not in host.split("//")[-1]:
+
+    # Only append a port if explicitly provided. HTTPS uses standard port 443
+    # via K8s ingress, so no port suffix is needed by default.
+    hostname_part = host.split("//")[-1]
+    has_explicit_port = ":" in hostname_part
+    if port and not has_explicit_port:
         host = f"{host}:{port}"
+
     return host
 
 
@@ -58,6 +64,7 @@ def qdrant_request(base_url: str, api_key: str, method: str, path: str,
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": "hanzo-bot/1.0",
             "api-key": api_key,
         },
         method=method,
@@ -310,7 +317,8 @@ def cmd_count(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hanzo Vector CLI")
     parser.add_argument("--host", default=None, help="Qdrant host")
-    parser.add_argument("--port", default=None, help="Qdrant port")
+    parser.add_argument("--port", default=None,
+                        help="Qdrant port (only for non-standard ports; HTTPS uses 443)")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--format", default="text", choices=["text", "json"],
                         help="Output format")
