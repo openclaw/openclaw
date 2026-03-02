@@ -40,6 +40,8 @@ const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
+// Reject lock acquisition if existing lock is older than this (prevents stuck locks blocking system)
+const LOCK_ACQUISITION_REJECT_THRESHOLD_MS = 5 * 60 * 1000;
 
 type CleanupState = {
   registered: boolean;
@@ -481,6 +483,16 @@ export async function acquireSessionWriteLock(params: {
       const payload = await readLockPayload(lockPath);
       const nowMs = Date.now();
       const inspected = inspectLockPayload(payload, staleMs, nowMs);
+
+      // Check if lock is too old to even attempt acquisition - prevent deadlock
+      if (inspected.ageMs !== null && inspected.ageMs > LOCK_ACQUISITION_REJECT_THRESHOLD_MS) {
+        const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
+        throw new Error(
+          `session file locked by ${owner} for ${Math.round(inspected.ageMs / 1000)}s (rejecting acquisition, threshold: ${LOCK_ACQUISITION_REJECT_THRESHOLD_MS}ms): ${lockPath}`,
+          { cause: err },
+        );
+      }
+
       if (await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs)) {
         await fs.rm(lockPath, { force: true });
         continue;

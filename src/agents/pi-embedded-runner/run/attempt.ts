@@ -1548,7 +1548,13 @@ export async function runEmbeddedAttempt(
         sessionManager,
       });
       session?.dispose();
-      await sessionLock.release();
+      // CRITICAL: Always release the session lock to prevent orphaned locks
+      try {
+        await sessionLock.release();
+        log.debug?.(`session lock released for ${params.sessionFile}`);
+      } catch (releaseErr) {
+        log.error?.(`session lock release failed for ${params.sessionFile}: ${String(releaseErr)}`);
+      }
     }
   } finally {
     restoreSkillEnv?.();

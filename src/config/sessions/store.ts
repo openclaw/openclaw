@@ -936,18 +936,35 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
       let result: unknown;
       let failed: unknown;
       let hasFailure = false;
+      const lockAcquiredAt = Date.now();
       try {
         lock = await acquireSessionWriteLock({
           sessionFile: storePath,
           timeoutMs: remainingTimeoutMs,
           staleMs: task.staleMs,
         });
+        log.debug?.(
+          `session lock acquired for ${storePath} after ${Date.now() - lockAcquiredAt}ms`,
+        );
         result = await task.fn();
       } catch (err) {
         hasFailure = true;
         failed = err;
+        log.warn?.(`session lock task failed for ${storePath}: ${String(err)}`);
       } finally {
-        await lock?.release().catch(() => undefined);
+        // ALWAYS release lock - this is critical to prevent orphaned locks
+        if (lock) {
+          try {
+            await lock.release();
+            log.debug?.(
+              `session lock released for ${storePath} (held for ${Date.now() - lockAcquiredAt}ms)`,
+            );
+          } catch (releaseErr) {
+            log.error?.(`session lock release failed for ${storePath}: ${String(releaseErr)}`);
+          }
+        } else {
+          log.warn?.(`session lock was never acquired for ${storePath}, skipping release`);
+        }
       }
       if (hasFailure) {
         task.reject(failed);

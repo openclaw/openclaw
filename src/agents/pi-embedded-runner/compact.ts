@@ -732,7 +732,13 @@ export async function compactEmbeddedPiSessionDirect(
         session.dispose();
       }
     } finally {
-      await sessionLock.release();
+      // CRITICAL: Always release the session lock to prevent orphaned locks
+      try {
+        await sessionLock.release();
+        log.debug?.(`session lock released after compaction`);
+      } catch (releaseErr) {
+        log.error?.(`session lock release failed during compaction: ${String(releaseErr)}`);
+      }
     }
   } catch (err) {
     const reason = describeUnknownError(err);
