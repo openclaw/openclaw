@@ -374,7 +374,7 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
-    const ingressAccess = await authorizeDiscordReactionIngress({
+    const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
       isDirectMessage,
@@ -391,7 +391,8 @@ async function handleDiscordReactionEvent(params: {
       groupPolicy: params.groupPolicy,
       allowNameMatching: params.allowNameMatching,
       guildInfo,
-    });
+    };
+    const ingressAccess = await authorizeDiscordReactionIngress(reactionIngressBase);
     if (!ingressAccess.allowed) {
       logVerbose(`discord reaction blocked sender=${user.id} (reason=${ingressAccess.reason})`);
       return;
@@ -486,22 +487,7 @@ async function handleDiscordReactionEvent(params: {
       channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
     ) =>
       await authorizeDiscordReactionIngress({
-        accountId: params.accountId,
-        user,
-        isDirectMessage,
-        isGroupDm,
-        isGuildMessage,
-        channelId: data.channel_id,
-        channelName,
-        channelSlug,
-        dmEnabled: params.dmEnabled,
-        groupDmEnabled: params.groupDmEnabled,
-        groupDmChannels: params.groupDmChannels,
-        dmPolicy: params.dmPolicy,
-        allowFrom: params.allowFrom,
-        groupPolicy: params.groupPolicy,
-        allowNameMatching: params.allowNameMatching,
-        guildInfo,
+        ...reactionIngressBase,
         channelConfig,
       });
     const authorizeThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {

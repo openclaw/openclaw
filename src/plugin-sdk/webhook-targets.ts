@@ -112,6 +112,23 @@ export type WebhookTargetMatchResult<T> =
   | { kind: "single"; target: T }
   | { kind: "ambiguous" };
 
+function updateMatchedWebhookTarget<T>(
+  matched: T | undefined,
+  target: T,
+): { ok: true; matched: T } | { ok: false; result: WebhookTargetMatchResult<T> } {
+  if (matched) {
+    return { ok: false, result: { kind: "ambiguous" } };
+  }
+  return { ok: true, matched: target };
+}
+
+function finalizeMatchedWebhookTarget<T>(matched: T | undefined): WebhookTargetMatchResult<T> {
+  if (!matched) {
+    return { kind: "none" };
+  }
+  return { kind: "single", target: matched };
+}
+
 export function resolveSingleWebhookTarget<T>(
   targets: readonly T[],
   isMatch: (target: T) => boolean,
@@ -121,15 +138,13 @@ export function resolveSingleWebhookTarget<T>(
     if (!isMatch(target)) {
       continue;
     }
-    if (matched) {
-      return { kind: "ambiguous" };
+    const updated = updateMatchedWebhookTarget(matched, target);
+    if (!updated.ok) {
+      return updated.result;
     }
-    matched = target;
+    matched = updated.matched;
   }
-  if (!matched) {
-    return { kind: "none" };
-  }
-  return { kind: "single", target: matched };
+  return finalizeMatchedWebhookTarget(matched);
 }
 
 export async function resolveSingleWebhookTargetAsync<T>(
@@ -141,15 +156,13 @@ export async function resolveSingleWebhookTargetAsync<T>(
     if (!(await isMatch(target))) {
       continue;
     }
-    if (matched) {
-      return { kind: "ambiguous" };
+    const updated = updateMatchedWebhookTarget(matched, target);
+    if (!updated.ok) {
+      return updated.result;
     }
-    matched = target;
+    matched = updated.matched;
   }
-  if (!matched) {
-    return { kind: "none" };
-  }
-  return { kind: "single", target: matched };
+  return finalizeMatchedWebhookTarget(matched);
 }
 
 export async function resolveWebhookTargetWithAuthOrReject<T>(params: {

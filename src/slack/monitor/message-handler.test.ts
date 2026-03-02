@@ -36,6 +36,18 @@ function createContext(overrides?: {
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
+function createHandlerWithTracker(overrides?: {
+  markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+}) {
+  const trackEvent = vi.fn();
+  const handler = createSlackMessageHandler({
+    ctx: createContext(overrides),
+    account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
+    trackEvent,
+  });
+  return { handler, trackEvent };
+}
+
 describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
@@ -68,14 +80,7 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("does not track duplicate messages that are already seen", async () => {
-    const trackEvent = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext({ markMessageSeen: () => true }),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-      trackEvent,
-    });
+    const { handler, trackEvent } = createHandlerWithTracker({ markMessageSeen: () => true });
 
     await handler(
       {
@@ -93,14 +98,7 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("tracks accepted non-duplicate messages", async () => {
-    const trackEvent = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      account: { accountId: "default" } as Parameters<
-        typeof createSlackMessageHandler
-      >[0]["account"],
-      trackEvent,
-    });
+    const { handler, trackEvent } = createHandlerWithTracker();
 
     await handler(
       {

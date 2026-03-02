@@ -3,7 +3,10 @@ import { inboundCtxCapture as capture } from "../../../test/helpers/inbound-cont
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import {
+  createBaseDiscordMessageContext,
+  createDiscordDirectMessageContextOverrides,
+} from "./message-handler.test-harness.js";
 
 describe("discord processDiscordMessage inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
@@ -11,26 +14,7 @@ describe("discord processDiscordMessage inbound contract", () => {
     const messageCtx = await createBaseDiscordMessageContext({
       cfg: { messages: {} },
       ackReactionScope: "direct",
-      data: { guild: null },
-      channelInfo: null,
-      channelName: undefined,
-      isGuildMessage: false,
-      isDirectMessage: true,
-      isGroupDm: false,
-      shouldRequireMention: false,
-      canDetectMention: false,
-      effectiveWasMentioned: false,
-      displayChannelSlug: "",
-      guildInfo: null,
-      guildSlug: "",
-      baseSessionKey: "agent:main:discord:direct:u1",
-      route: {
-        agentId: "main",
-        channel: "discord",
-        accountId: "default",
-        sessionKey: "agent:main:discord:direct:u1",
-        mainSessionKey: "agent:main:main",
-      },
+      ...createDiscordDirectMessageContextOverrides(),
     });
 
     await processDiscordMessage(messageCtx);

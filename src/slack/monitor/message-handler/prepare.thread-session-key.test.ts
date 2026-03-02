@@ -1,64 +1,26 @@
 import type { App } from "@slack/bolt";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { RuntimeEnv } from "../../../runtime.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
+import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
-  return createSlackMonitorContext({
+  const replyToMode = overrides?.replyToMode ?? "all";
+  return createInboundSlackTestContext({
     cfg: {
       channels: {
-        slack: { enabled: true, replyToMode: overrides?.replyToMode ?? "all" },
+        slack: { enabled: true, replyToMode },
       },
     } as OpenClawConfig,
-    accountId: "default",
-    botToken: "token",
-    app: { client: {} } as App,
-    runtime: {} as RuntimeEnv,
-    botUserId: "B1",
-    teamId: "T1",
-    apiAppId: "A1",
-    historyLimit: 0,
-    sessionScope: "per-sender",
-    mainKey: "main",
-    dmEnabled: true,
-    dmPolicy: "open",
-    allowFrom: [],
-    groupDmEnabled: true,
-    groupDmChannels: [],
+    appClient: {} as App["client"],
     defaultRequireMention: false,
-    groupPolicy: "open",
-    allowNameMatching: false,
-    useAccessGroups: false,
-    reactionMode: "off",
-    reactionAllowlist: [],
-    replyToMode: overrides?.replyToMode ?? "all",
-    threadHistoryScope: "thread",
-    threadInheritParent: false,
-    slashCommand: {
-      enabled: false,
-      name: "openclaw",
-      sessionPrefix: "slack:slash",
-      ephemeral: true,
-    },
-    textLimit: 4000,
-    ackReactionScope: "group-mentions",
-    mediaMaxBytes: 1024,
-    removeAckAfterReply: false,
+    replyToMode,
   });
 }
 
-const account: ResolvedSlackAccount = {
-  accountId: "default",
-  enabled: true,
-  botTokenSource: "config",
-  appTokenSource: "config",
-  userTokenSource: "none",
-  config: {},
-};
+const account: ResolvedSlackAccount = createSlackTestAccount();
 
 describe("thread-level session keys", () => {
   it("uses thread-level session key for channel messages", async () => {

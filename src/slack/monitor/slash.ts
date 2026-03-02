@@ -510,11 +510,11 @@ export async function registerSlackMonitorSlashCommands(params: {
       const [
         { resolveConversationLabel },
         { createReplyPrefixOptions },
-        { recordSessionMetaFromInbound, resolveStorePath },
+        { recordInboundSessionMetaSafe },
       ] = await Promise.all([
         import("../../channels/conversation-label.js"),
         import("../../channels/reply-prefix.js"),
-        import("../../config/sessions.js"),
+        import("../../channels/session-meta.js"),
       ]);
 
       const route = resolveAgentRoute({
@@ -578,18 +578,14 @@ export async function registerSlackMonitorSlashCommands(params: {
         OriginatingTo: `user:${command.user_id}`,
       });
 
-      const storePath = resolveStorePath(cfg.session?.store, {
+      await recordInboundSessionMetaSafe({
+        cfg,
         agentId: route.agentId,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+        onError: (err) =>
+          runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`)),
       });
-      try {
-        await recordSessionMetaFromInbound({
-          storePath,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-          ctx: ctxPayload,
-        });
-      } catch (err) {
-        runtime.error?.(danger(`slack slash: failed updating session meta: ${String(err)}`));
-      }
 
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,

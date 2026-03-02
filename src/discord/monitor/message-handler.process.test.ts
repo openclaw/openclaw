@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
-import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import {
+  createBaseDiscordMessageContext,
+  createDiscordDirectMessageContextOverrides,
+} from "./message-handler.test-harness.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -295,18 +298,7 @@ describe("processDiscordMessage ack reactions", () => {
 describe("processDiscordMessage session routing", () => {
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
-      data: { guild: null },
-      channelInfo: null,
-      channelName: undefined,
-      isGuildMessage: false,
-      isDirectMessage: true,
-      isGroupDm: false,
-      shouldRequireMention: false,
-      canDetectMention: false,
-      effectiveWasMentioned: false,
-      displayChannelSlug: "",
-      guildInfo: null,
-      guildSlug: "",
+      ...createDiscordDirectMessageContextOverrides(),
       message: {
         id: "m1",
         channelId: "dm1",
@@ -314,14 +306,6 @@ describe("processDiscordMessage session routing", () => {
         attachments: [],
       },
       messageChannelId: "dm1",
-      baseSessionKey: "agent:main:discord:direct:u1",
-      route: {
-        agentId: "main",
-        channel: "discord",
-        accountId: "default",
-        sessionKey: "agent:main:discord:direct:u1",
-        mainSessionKey: "agent:main:main",
-      },
     });
 
     // oxlint-disable-next-line typescript/no-explicit-any

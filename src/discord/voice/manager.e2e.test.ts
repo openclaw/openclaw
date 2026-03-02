@@ -124,6 +124,44 @@ describe("DiscordVoiceManager", () => {
     resolveAgentRouteMock.mockClear();
   });
 
+  const createManager = (
+    discordConfig: ConstructorParameters<
+      typeof managerModule.DiscordVoiceManager
+    >[0]["discordConfig"] = {},
+  ) =>
+    new managerModule.DiscordVoiceManager({
+      client: createClient() as never,
+      cfg: {},
+      discordConfig,
+      accountId: "default",
+      runtime: createRuntime(),
+    });
+
+  const expectConnectedStatus = (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    channelId: string,
+  ) => {
+    expect(manager.status()).toEqual([
+      {
+        ok: true,
+        message: `connected: guild g1 channel ${channelId}`,
+        guildId: "g1",
+        channelId,
+      },
+    ]);
+  };
+
+  const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
+    expect(entry).toBeDefined();
+    (
+      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
+    ).handleReceiveError(
+      entry,
+      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
+    );
+  };
+
   it("keeps the new session when an old disconnected handler fires", async () => {
     const oldConnection = createConnectionMock();
     const newConnection = createConnectionMock();
@@ -135,13 +173,7 @@ describe("DiscordVoiceManager", () => {
       return undefined;
     });
 
-    const manager = new managerModule.DiscordVoiceManager({
-      client: createClient() as never,
-      cfg: {},
-      discordConfig: {},
-      accountId: "default",
-      runtime: createRuntime(),
-    });
+    const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "c1" });
     await manager.join({ guildId: "g1", channelId: "c2" });
@@ -150,14 +182,7 @@ describe("DiscordVoiceManager", () => {
     expect(oldDisconnected).toBeTypeOf("function");
     await oldDisconnected?.();
 
-    expect(manager.status()).toEqual([
-      {
-        ok: true,
-        message: "connected: guild g1 channel c2",
-        guildId: "g1",
-        channelId: "c2",
-      },
-    ]);
+    expectConnectedStatus(manager, "c2");
   });
 
   it("keeps the new session when an old destroyed handler fires", async () => {
@@ -165,13 +190,7 @@ describe("DiscordVoiceManager", () => {
     const newConnection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
 
-    const manager = new managerModule.DiscordVoiceManager({
-      client: createClient() as never,
-      cfg: {},
-      discordConfig: {},
-      accountId: "default",
-      runtime: createRuntime(),
-    });
+    const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "c1" });
     await manager.join({ guildId: "g1", channelId: "c2" });
@@ -180,26 +199,13 @@ describe("DiscordVoiceManager", () => {
     expect(oldDestroyed).toBeTypeOf("function");
     oldDestroyed?.();
 
-    expect(manager.status()).toEqual([
-      {
-        ok: true,
-        message: "connected: guild g1 channel c2",
-        guildId: "g1",
-        channelId: "c2",
-      },
-    ]);
+    expectConnectedStatus(manager, "c2");
   });
 
   it("removes voice listeners on leave", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
-    const manager = new managerModule.DiscordVoiceManager({
-      client: createClient() as never,
-      cfg: {},
-      discordConfig: {},
-      accountId: "default",
-      runtime: createRuntime(),
-    });
+    const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "c1" });
     await manager.leave({ guildId: "g1" });
@@ -212,17 +218,11 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("passes DAVE options to joinVoiceChannel", async () => {
-    const manager = new managerModule.DiscordVoiceManager({
-      client: createClient() as never,
-      cfg: {},
-      discordConfig: {
-        voice: {
-          daveEncryption: false,
-          decryptionFailureTolerance: 8,
-        },
+    const manager = createManager({
+      voice: {
+        daveEncryption: false,
+        decryptionFailureTolerance: 8,
       },
-      accountId: "default",
-      runtime: createRuntime(),
     });
 
     await manager.join({ guildId: "g1", channelId: "c1" });
@@ -236,36 +236,13 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("attempts rejoin after repeated decrypt failures", async () => {
-    const manager = new managerModule.DiscordVoiceManager({
-      client: createClient() as never,
-      cfg: {},
-      discordConfig: {},
-      accountId: "default",
-      runtime: createRuntime(),
-    });
+    const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "c1" });
 
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
-    (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
-    ).handleReceiveError(
-      entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-    );
-    (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
-    ).handleReceiveError(
-      entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-    );
-    (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
-    ).handleReceiveError(
-      entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-    );
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
