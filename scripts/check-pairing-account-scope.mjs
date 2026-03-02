@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 
-import path from "node:path";
 import ts from "typescript";
+import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {
   collectFileViolations,
   getPropertyNameText,
-  resolveRepoRoot,
   runAsScript,
   toLine,
 } from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = resolveRepoRoot(import.meta.url);
-const sourceRoots = [path.join(repoRoot, "src"), path.join(repoRoot, "extensions")];
+const { repoRoot, sourceRoots } = createPairingGuardContext(import.meta.url);
 
 function isUndefinedLikeExpression(node) {
   if (ts.isIdentifier(node) && node.text === "undefined") {
