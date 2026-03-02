@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findExtraGatewayServices } from "./inspect.js";
 
@@ -125,7 +126,7 @@ describe("findExtraGatewayServices (linux)", () => {
       {
         platform: "linux",
         label: "rogue.service",
-        detail: "unit: /home/test/.config/systemd/user/rogue.service",
+        detail: `unit: ${path.join("/home/test", ".config", "systemd", "user", "rogue.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -212,7 +213,7 @@ describe("findExtraGatewayServices (linux)", () => {
       {
         platform: "linux",
         label: "openclaw-helper.service",
-        detail: "unit: /home/test/.config/systemd/user/openclaw-helper.service",
+        detail: `unit: ${path.join("/home/test", ".config", "systemd", "user", "openclaw-helper.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -301,7 +302,7 @@ describe("findExtraGatewayServices (linux)", () => {
       {
         platform: "linux",
         label: "openclaw-env-cdp-assignment.service",
-        detail: "unit: /home/test/.config/systemd/user/openclaw-env-cdp-assignment.service",
+        detail: `unit: ${path.join("/home/test", ".config", "systemd", "user", "openclaw-env-cdp-assignment.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -326,7 +327,7 @@ describe("findExtraGatewayServices (linux)", () => {
       {
         platform: "linux",
         label: "openclaw-python-split-string.service",
-        detail: "unit: /home/test/.config/systemd/user/openclaw-python-split-string.service",
+        detail: `unit: ${path.join("/home/test", ".config", "systemd", "user", "openclaw-python-split-string.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -417,7 +418,7 @@ describe("findExtraGatewayServices (linux)", () => {
       {
         platform: "linux",
         label: "openclaw-unit-section-execstart.service",
-        detail: "unit: /home/test/.config/systemd/user/openclaw-unit-section-execstart.service",
+        detail: `unit: ${path.join("/home/test", ".config", "systemd", "user", "openclaw-unit-section-execstart.service")}`,
         scope: "user",
         marker: "openclaw",
         legacy: false,
