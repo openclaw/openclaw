@@ -2,7 +2,7 @@
 
 Docs: https://docs.openclaw.ai
 
-## 2026.3.1
+## 2026.3.2 (Unreleased)
 
 ### Changes
 
@@ -200,7 +200,7 @@ Docs: https://docs.openclaw.ai
 - Security/Sandbox media reads: eliminate sandbox media TOCTOU symlink-retarget escapes by enforcing root-scoped boundary-safe reads at attachment/image load time and consolidating shared safe-read helpers across sandbox media callsites. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Node host/service auth env: include `OPENCLAW_GATEWAY_TOKEN` in `openclaw node install` service environments (with `CLAWDBOT_GATEWAY_TOKEN` compatibility fallback) so installed node services keep remote gateway token auth across restart/reboot. Fixes #31041. Thanks @OneStepAt4time for reporting, @byungsker, @liuxiaopai-ai, and @vincentkoc.
 - Security/Subagents sandbox inheritance: block sandboxed sessions from spawning cross-agent subagents that would run unsandboxed, preventing runtime sandbox downgrade via `sessions_spawn agentId`. Thanks @tdjackey for reporting.
-- Security/Workspace safe writes: harden `writeFileWithinRoot` against symlink-retarget TOCTOU races by opening existing files without truncation, creating missing files with exclusive create, deferring truncation until post-open identity+boundary validation, and removing out-of-root create artifacts on blocked races; added regression tests for truncate/create race paths. This ships in the next npm release (`2026.3.1`). Thanks @tdjackey for reporting.
+- Security/Workspace safe writes: harden `writeFileWithinRoot` against symlink-retarget TOCTOU races by opening existing files without truncation, creating missing files with exclusive create, deferring truncation until post-open identity+boundary validation, and removing out-of-root create artifacts on blocked races; added regression tests for truncate/create race paths. This ships in the next npm release (`2026.3.2`). Thanks @tdjackey for reporting.
 - Control UI/Cron editor: include `{ mode: "none" }` in `cron.update` patches when editing an existing job and selecting “Result delivery = None (internal)”, so saved jobs no longer keep stale announce delivery mode. Fixes #31075.
 - Telegram/Restart polling teardown: stop the Telegram bot instance when a polling cycle exits so in-process SIGUSR1 restarts fully tear down old long-poll loops before restart, reducing post-restart `getUpdates` 409 conflict storms. Fixes #31107. Landed from contributor PR #31141 by @liuxiaopai-ai. Thanks @liuxiaopai-ai.
 - Security/Node metadata policy: harden node platform classification against Unicode confusables and switch unknown platform defaults to a conservative allowlist that excludes `system.run`/`system.which` unless explicitly allowlisted, preventing metadata canonicalization drift from broadening node command permissions. Thanks @tdjackey for reporting.
