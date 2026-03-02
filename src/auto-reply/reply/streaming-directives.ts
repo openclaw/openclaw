@@ -1,6 +1,11 @@
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripSilentToken,
+} from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type PendingReplyState = {
@@ -51,6 +56,10 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
   if (isSilent) {
     text = "";
+  } else if (text.includes(silentToken)) {
+    // Strip trailing NO_REPLY from mixed-content streaming chunks so the
+    // token never leaks to end users via draft messages.
+    text = stripSilentToken(text, silentToken);
   }
 
   return {
