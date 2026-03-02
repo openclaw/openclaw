@@ -74,9 +74,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -152,9 +159,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -226,9 +240,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
@@ -288,9 +309,16 @@ describe("initSessionState thread forking", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "Parent prompt" },
     };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: "Parent reply" },
+    };
     await fs.writeFile(
       parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
       "utf-8",
     );
 
