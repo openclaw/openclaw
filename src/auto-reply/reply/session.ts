@@ -510,6 +510,7 @@ export async function initSessionState(params: {
     sessionKey,
     existing: sessionEntry,
     groupResolution,
+    allSessions: sessionStore,
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };

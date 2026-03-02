@@ -98,6 +98,8 @@ export function deriveGroupSessionPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  /** Optional map of all session keys to entries for label uniqueness validation */
+  allSessions?: Record<string, SessionEntry>;
 }): Partial<SessionEntry> | null {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
@@ -111,13 +113,13 @@ export function deriveGroupSessionPatch(params: {
   const normalizedChannel = normalizeChannelId(channel);
   const isChannelProvider = Boolean(
     normalizedChannel &&
-    getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+      getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
-    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
-      ? subject
-      : undefined);
+      ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
+        ? subject
+        : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;
 
   const patch: Partial<SessionEntry> = {
@@ -150,11 +152,29 @@ export function deriveGroupSessionPatch(params: {
   // Auto-label group/channel sessions with a human-friendly name when no
   // explicit label has been set yet. This surfaces the channel or group
   // subject in dashboard label columns (e.g. "#config" or "My Group Chat").
-  if (!params.existing?.label) {
+  // Only applies when existing label is undefined (never set), not null (explicitly cleared).
+  if (params.existing?.label === undefined) {
     const autoLabel =
       nextGroupChannel ?? params.existing?.groupChannel ?? nextSubject ?? params.existing?.subject;
     if (autoLabel) {
-      patch.label = autoLabel;
+      // Check for label uniqueness if we have access to all sessions
+      if (params.allSessions) {
+        const isUnique = Object.entries(params.allSessions).every(([key, entry]) => {
+          // Skip the current session
+          if (key === params.sessionKey) {
+            return true;
+          }
+          // Check if the label is already in use
+          return entry?.label !== autoLabel;
+        });
+        // Only set the label if it's unique
+        if (isUnique) {
+          patch.label = autoLabel;
+        }
+      } else {
+        // Fallback: set the label without uniqueness check (best-effort)
+        patch.label = autoLabel;
+      }
     }
   }
 
@@ -166,6 +186,7 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  allSessions?: Record<string, SessionEntry>;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
   const origin = deriveSessionOrigin(params.ctx);
