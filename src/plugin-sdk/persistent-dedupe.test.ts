@@ -70,4 +70,69 @@ describe("createPersistentDedupe", () => {
     expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
     expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
   });
+
+  it("warmup loads persisted entries into memory", async () => {
+    const root = await makeTmpRoot();
+    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
+
+    const writer = createPersistentDedupe({
+      ttlMs: 24 * 60 * 60 * 1000,
+      memoryMaxSize: 100,
+      fileMaxEntries: 1000,
+      resolveFilePath,
+    });
+    expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
+    expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
+
+    const reader = createPersistentDedupe({
+      ttlMs: 24 * 60 * 60 * 1000,
+      memoryMaxSize: 100,
+      fileMaxEntries: 1000,
+      resolveFilePath,
+    });
+    const loaded = await reader.warmup("acct");
+    expect(loaded).toBe(2);
+    expect(await reader.checkAndRecord("msg-1", { namespace: "acct" })).toBe(false);
+    expect(await reader.checkAndRecord("msg-2", { namespace: "acct" })).toBe(false);
+    expect(await reader.checkAndRecord("msg-3", { namespace: "acct" })).toBe(true);
+  });
+
+  it("warmup returns 0 when no disk file exists", async () => {
+    const root = await makeTmpRoot();
+    const dedupe = createPersistentDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+      fileMaxEntries: 1000,
+      resolveFilePath: (ns) => path.join(root, `${ns}.json`),
+    });
+    const loaded = await dedupe.warmup("nonexistent");
+    expect(loaded).toBe(0);
+  });
+
+  it("warmup skips expired entries", async () => {
+    const root = await makeTmpRoot();
+    const resolveFilePath = (namespace: string) => path.join(root, `${namespace}.json`);
+    const ttlMs = 1000;
+
+    const writer = createPersistentDedupe({
+      ttlMs,
+      memoryMaxSize: 100,
+      fileMaxEntries: 1000,
+      resolveFilePath,
+    });
+    const oldNow = Date.now() - 2000;
+    expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(true);
+    expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
+
+    const reader = createPersistentDedupe({
+      ttlMs,
+      memoryMaxSize: 100,
+      fileMaxEntries: 1000,
+      resolveFilePath,
+    });
+    const loaded = await reader.warmup("acct");
+    expect(loaded).toBe(1);
+    expect(await reader.checkAndRecord("old-msg", { namespace: "acct" })).toBe(true);
+    expect(await reader.checkAndRecord("new-msg", { namespace: "acct" })).toBe(false);
+  });
 });
