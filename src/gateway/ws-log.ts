@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { isVerbose } from "../globals.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
@@ -201,7 +202,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 
   if (stream === "assistant") {
     const text = typeof data.text === "string" ? data.text : undefined;
-    if (text?.trim()) {
+    if (text?.trim() && !isSilentReplyText(text)) {
       extra.text = compactPreview(text);
     }
     const mediaUrls = Array.isArray(data.mediaUrls) ? data.mediaUrls : undefined;

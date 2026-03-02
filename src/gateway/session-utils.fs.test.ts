@@ -305,6 +305,32 @@ describe("readLastMessagePreviewFromTranscript", () => {
     expect(result).toBe("Has content");
   });
 
+  test("skips NO_REPLY messages and returns previous non-silent message", () => {
+    const sessionId = "test-last-skip-no-reply";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ message: { role: "user", content: "What is the weather?" } }),
+      JSON.stringify({ message: { role: "assistant", content: "NO_REPLY" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+    expect(result).toBe("What is the weather?");
+  });
+
+  test("skips NO_REPLY with surrounding whitespace in last preview", () => {
+    const sessionId = "test-last-skip-no-reply-ws";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ message: { role: "assistant", content: "Real reply" } }),
+      JSON.stringify({ message: { role: "assistant", content: "  NO_REPLY  " } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+    expect(result).toBe("Real reply");
+  });
+
   test("reads from end of large file (16KB window)", () => {
     const sessionId = "test-last-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -628,6 +654,21 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
     expect(result[0]?.text.endsWith("...")).toBe(true);
+  });
+
+  test("suppresses NO_REPLY text in session preview items", () => {
+    const sessionId = "preview-no-reply";
+    const lines = [
+      JSON.stringify({ message: { role: "user", content: "Hello" } }),
+      JSON.stringify({ message: { role: "assistant", content: "NO_REPLY" } }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId, 5, 120);
+
+    // The NO_REPLY message should be suppressed; only the user message remains.
+    expect(result).toHaveLength(1);
+    expect(result[0]?.role).toBe("user");
+    expect(result[0]?.text).toBe("Hello");
   });
 
   test("strips inline directives from preview items", () => {

@@ -1,3 +1,4 @@
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
@@ -285,7 +286,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const lane = params.lanes[laneName];
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const canEditViaPreview =
-      !hasMedia && text.length > 0 && text.length <= params.draftMaxChars && !payload.isError;
+      !hasMedia &&
+      text.length > 0 &&
+      !isSilentReplyText(text) &&
+      text.length <= params.draftMaxChars &&
+      !payload.isError;
 
     if (infoKind === "final") {
       if (laneName === "answer") {

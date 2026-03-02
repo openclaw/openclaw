@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -495,7 +496,7 @@ function readLastMessagePreviewFromOpenTranscript(params: {
         continue;
       }
       const text = extractTextFromContent(msg.content);
-      if (text) {
+      if (text && !isSilentReplyText(text)) {
         return text;
       }
     } catch {
@@ -625,6 +626,9 @@ function buildPreviewItems(
     const toolCall = isToolCall(message);
     const role = normalizeRole(message.role, toolCall);
     let text = extractPreviewText(message);
+    if (text && isSilentReplyText(text)) {
+      text = null;
+    }
     if (!text) {
       const toolNames = extractToolNames(message);
       if (toolNames.length > 0) {

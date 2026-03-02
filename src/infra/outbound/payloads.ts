@@ -3,6 +3,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 
 export type NormalizedOutboundPayload = {
@@ -116,7 +117,7 @@ export function formatOutboundPayloadLog(
   },
 ): string {
   const lines: string[] = [];
-  if (payload.text) {
+  if (payload.text && !isSilentReplyText(payload.text)) {
     lines.push(payload.text.trimEnd());
   }
   for (const url of payload.mediaUrls) {
