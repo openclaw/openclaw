@@ -3,11 +3,13 @@ import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+import { recordInboundSession } from "../channels/session.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { recordSessionMetaFromInbound, updateLastRoute } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type { ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
@@ -288,26 +290,41 @@ async function finalizeLineInboundContext(params: {
     OriginatingTo: originatingTo,
   });
 
-  void recordSessionMetaFromInbound({
+  const pinnedMainDmOwner = !params.source.isGroup
+    ? resolvePinnedMainDmOwnerFromAllowlist({
+        dmScope: params.cfg.session?.dmScope,
+        allowFrom: params.account.config.allowFrom,
+        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+      })
+    : null;
+  await recordInboundSession({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? params.route.sessionKey,
     ctx: ctxPayload,
-  }).catch((err) => {
-    logVerbose(`line: failed updating session meta: ${String(err)}`);
+    updateLastRoute: !params.source.isGroup
+      ? {
+          sessionKey: params.route.mainSessionKey,
+          channel: "line",
+          to: params.source.userId ?? params.source.peerId,
+          accountId: params.route.accountId,
+          mainDmOwnerPin:
+            pinnedMainDmOwner && params.source.userId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: params.source.userId,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `line: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
+        }
+      : undefined,
+    onRecordError: (err) => {
+      logVerbose(`line: failed updating session meta: ${String(err)}`);
+    },
   });
-
-  if (!params.source.isGroup) {
-    await updateLastRoute({
-      storePath,
-      sessionKey: params.route.mainSessionKey,
-      deliveryContext: {
-        channel: "line",
-        to: params.source.userId ?? params.source.peerId,
-        accountId: params.route.accountId,
-      },
-      ctx: ctxPayload,
-    });
-  }
 
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
