@@ -8,7 +8,7 @@ description: >
 
 # M365 Skill
 
-Workflows for 1ES Agency MCP servers — **no source code needed**, `agency` handles auth + proxying.
+Workflows for 1ES Agency MCP servers — `agency` handles auth + proxying.
 
 ## Prerequisites
 
@@ -21,148 +21,198 @@ agency --version  # should print 2026.2.27.4 or later
 
 Installed at: `C:\Users\dchitoraga\AppData\Roaming\agency\CurrentVersion\agency.exe`
 
-Auth is automatic via EntraID (`az login` session). No tokens needed.
+Auth is via Windows credential broker (silent — no browser prompt needed). Tokens are acquired per-resource automatically.
 
 ---
 
 ## Available MCP Servers
 
-All proxy MCPs talk to HTTP endpoints — `agency` injects the EntraID Bearer token automatically.
+| Server             | Status      | Notes                                                    |
+| ------------------ | ----------- | -------------------------------------------------------- |
+| `icm`              | ✅ Working  | HTTP/SSE proxy to `icm-mcp-prod.azure-api.net`           |
+| `bluebird`         | ✅ Working  | HTTP/SSE proxy to `mcp.bluebird-ai.net` — code search    |
+| `workiq`           | ✅ Working  | stdio via `@microsoft/workiq` npm; EULA accepted         |
+| `kusto`            | ✅ Working  | Direct REST preferred — see CRP skill                    |
+| `ado`              | ❓ Untested | `npx @azure-devops/mcp` — same auth pattern, should work |
+| `es-chat`          | ❓ Untested | HTTP proxy                                               |
+| `msft-learn`       | ❓ Untested | HTTP proxy                                               |
+| `security-context` | ❓ Untested | HTTP proxy                                               |
 
-### ICM — Incident Manager
+---
+
+## ICM — Incident Manager
 
 ```powershell
 agency mcp icm
 ```
 
-Use for: looking up live incidents by team/severity, checking if a BVT failure correlates with a known outage, querying incident history.
+**Auth:** `az account get-access-token --resource api://icmmcpapi-prod` → scope `mcp.tools`
+**Endpoint:** `https://icm-mcp-prod.azure-api.net/v1/`
+**Protocol:** HTTP/SSE — `Accept: application/json, text/event-stream` (BOTH required)
 
-No extra args required — connects to `icm.ad.msft.net` REST API.
+### Tools (23 total)
 
-**Key questions to ask:**
+| Tool                                     | Args                                 | Description                               |
+| ---------------------------------------- | ------------------------------------ | ----------------------------------------- |
+| `get_incident_details_by_id`             | `incidentId: int`                    | Full incident metadata                    |
+| `get_incident_context`                   | `incidentId: str`                    | All original metadata for incident/outage |
+| `get_ai_summary`                         | `incidentId: str`                    | AI-generated summary                      |
+| `get_incident_location`                  | `incidentId: str`                    | Region, AZ, datacenter, cluster, node     |
+| `get_incident_customer_impact`           | `incidentId: int`                    | Overall impact                            |
+| `get_impacted_s500_customers`            | `incidentId: int`                    | S500 customer list                        |
+| `get_impacted_ace_customers`             | `incidentId: int`                    | ACE customer list                         |
+| `get_impacted_azure_priority0_customers` | `incidentId: int`                    | P0/Life & Safety customers                |
+| `get_impacted_subscription_count`        | `incidentId: int`                    | Subscription count                        |
+| `get_impacted_services_regions_clouds`   | `incidentId: int`                    | Affected services/regions/clouds          |
+| `get_outage_high_priority_events`        | `incidentId: int`                    | High priority events                      |
+| `get_similar_incidents`                  | `incidentId: int`                    | Similar past incidents                    |
+| `get_mitigation_hints`                   | `incidentId: int`                    | Mitigation suggestions                    |
+| `get_support_requests_crisit`            | `incidentId: int`                    | Linked SRs and CritSits                   |
+| `is_specific_customer_impacted`          | `incidentId: int, customerName: str` | Check if specific customer impacted       |
+| `search_incidents_by_owning_team_id`     | `teamId: int`                        | Search by owning team                     |
+| `get_teams_by_name`                      | `teamName: str`                      | Team lookup by name                       |
+| `get_teams_by_public_id`                 | `publicId: str`                      | Team lookup by `TenantName\TeamName`      |
+| `get_team_by_id`                         | `teamId: int`                        | Team lookup by ID                         |
+| `get_on_call_schedule_by_team_id`        | `teamIds: int[]`                     | On-call schedule                          |
+| `get_contact_by_alias`                   | `alias: str`                         | Contact details by alias                  |
+| `get_contact_by_id`                      | `contactId: int`                     | Contact details by ID                     |
+| `get_services_by_names`                  | `names: str[]`                       | Service details                           |
 
-- "Are there any active Sev1/Sev2 incidents for Azure Compute / CRP?"
-- "Show me recent incidents for team `Compute CRP`"
-- "Was there an incident on [date] affecting [region]?"
+### Raw REST Pattern (for direct queries without agency)
+
+```powershell
+$token = (az account get-access-token --resource "api://icmmcpapi-prod" | ConvertFrom-Json).accessToken
+
+Add-Type -AssemblyName System.Net.Http
+$client = New-Object System.Net.Http.HttpClient
+$client.Timeout = [TimeSpan]::FromSeconds(30)
+$client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer $token") | Out-Null
+$client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json, text/event-stream") | Out-Null
+
+function Send-Icm($client, $body) {
+    $content = New-Object System.Net.Http.StringContent($body, [System.Text.Encoding]::UTF8, "application/json")
+    $resp = $client.PostAsync("https://icm-mcp-prod.azure-api.net/v1/", $content).Result
+    $reader = New-Object System.IO.StreamReader($resp.Content.ReadAsStreamAsync().Result)
+    $deadline = (Get-Date).AddSeconds(20)
+    while (-not $reader.EndOfStream -and (Get-Date) -lt $deadline) {
+        $line = $reader.ReadLine()
+        if ($line -match '^data:') { return ($line -replace '^data:\s*', '') }
+    }
+}
+
+# Must initialize first, then send notifications/initialized before tool calls
+Send-Icm $client '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}'
+$client.PostAsync("https://icm-mcp-prod.azure-api.net/v1/", (New-Object System.Net.Http.StringContent('{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}', [System.Text.Encoding]::UTF8, "application/json"))).Result | Out-Null
+
+# Call a tool
+Send-Icm $client '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_incident_details_by_id","arguments":{"incidentId":754650885}}}'
+```
+
+**Key gotchas:**
+
+- `Invoke-WebRequest` / `Invoke-RestMethod` **do NOT work** — they block waiting for SSE stream to "complete" (it never does). Use `HttpClient` + `ReadAsStreamAsync`.
+- Must send `notifications/initialized` after `initialize` before tool calls work
+- `Accept` header must include BOTH `application/json` AND `text/event-stream` — either alone returns 406
 
 ---
 
-### Bluebird — Engineering Copilot Mini
+## Bluebird — Engineering Copilot (Code Search)
 
 ```powershell
 agency mcp bluebird --org msazure --project One --repo Compute-CPlat-Core
 ```
 
-Use for: engineering knowledge questions, 1ES docs, build/pipeline guidance.
+**Auth:** Windows broker → scope `499b84ac-1321-427f-aa17-267ca6975798/.default`
+**Endpoint:** `https://mcp.bluebird-ai.net/` (HTTP/SSE)
+**Server name:** `EngineeringCopilotMini`
 
-Options:
+**NOT a chat interface** — it's an indexed code search layer for the ADO repo.
 
-- `--org` / `--project` / `--repo` — auto-detected from git remote if omitted
-- `--branch` — defaults to repo default branch
-- `--mini` / `--full` — mode (mini = faster, less context)
-- `--local` — force local STDIO mode (downloads from NuGet instead of HTTP proxy)
+### Tools
 
----
+| Tool                  | Description                                                                      |
+| --------------------- | -------------------------------------------------------------------------------- |
+| `search_file_content` | Full-text search with AND/OR/NOT, `ext:`, `path:`, `class:`, `method:` operators |
+| `search_file_paths`   | Search by filename only (not directory paths)                                    |
+| `get_file_content`    | Get file content with optional `begin_line`/`end_line` range                     |
 
-### ES Chat
+### Search Query Syntax
 
-```powershell
-agency mcp es-chat
-```
-
-Use for: sending/reading ES Chat messages, channel interactions. Corp internal messaging proxy.
-
----
-
-### Microsoft Learn
-
-```powershell
-agency mcp msft-learn
-```
-
-Use for: querying Microsoft Learn docs, getting SDK reference, finding official guidance.
-Faster than web_fetch for corp/Azure docs.
+- Multiple keywords → ANDed: `validate revisit` matches files with BOTH
+- `OR`: `validate OR revisit`
+- `NOT`: `validate NOT revisit`
+- Exact phrase: `"Client not found"`
+- Extension filter: `validate ext:cs`
+- File filter: `QueueJobsNow file:queueRegister*`
+- Path filter: `validate path:/src/services`
+- Code element prefixes (C#/C/C++/Java/VB.NET only): `class:StakeholderLicense`, `method:ValidateToken`, `enum:FeatureAvailabilityState`
+- **IMPORTANT**: Prefixes only work for supported languages — don't use on PowerShell/Python/TypeScript
 
 ---
 
-### Azure Security Context
-
-```powershell
-agency mcp security-context
-```
-
-Use for: security posture queries, threat context, compliance checks.
-Docs: https://aka.ms/security-ai
-
----
-
-### WorkIQ — M365 Copilot Integration
+## WorkIQ — M365 Copilot
 
 ```powershell
 agency mcp workiq
 ```
 
-Use for: M365 Copilot integrations, work item / task management via natural language.
-Run via `npx @microsoft/workiq`.
+**Auth:** Microsoft account via `@microsoft/workiq` npm package
+**EULA:** Already accepted (2026-03-02) — `accept_eula` tool called with `https://github.com/microsoft/work-iq-mcp`
+
+### Tools
+
+| Tool          | Description                                                         |
+| ------------- | ------------------------------------------------------------------- |
+| `accept_eula` | One-time EULA acceptance (already done)                             |
+| `ask_work_iq` | Ask M365 Copilot questions about emails, meetings, files, M365 data |
+
+**Note:** Takes ~20s to initialize (npm startup). Don't assume it's broken if there's a delay.
 
 ---
 
 ## VS Code MCP Config
 
-To wire MCPs into VS Code Copilot, add to `.vscode/mcp.json` in the repo:
+Written to `Q:\src\Compute-CPlat-Core\.vscode\mcp.json`. Uses PowerShell wrapper to ensure PATH is refreshed:
 
 ```json
 {
   "servers": {
-    "kusto-crp": {
-      "command": "agency",
-      "args": [
-        "mcp",
-        "kusto",
-        "--service-uri",
-        "https://<cluster>.kusto.windows.net",
-        "--database",
-        "<db>"
-      ],
-      "type": "stdio"
-    },
     "icm": {
-      "command": "agency",
-      "args": ["mcp", "icm"],
-      "type": "stdio"
+      "type": "stdio",
+      "command": "powershell.exe",
+      "args": [
+        "-Command",
+        "$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); agency mcp icm"
+      ]
     },
     "bluebird": {
-      "command": "agency",
+      "type": "stdio",
+      "command": "powershell.exe",
       "args": [
-        "mcp",
-        "bluebird",
-        "--org",
-        "msazure",
-        "--project",
-        "One",
-        "--repo",
-        "Compute-CPlat-Core"
-      ],
-      "type": "stdio"
+        "-Command",
+        "$env:Path = ...; agency mcp bluebird --org msazure --project One --repo Compute-CPlat-Core"
+      ]
     },
-    "ado": {
-      "command": "agency",
-      "args": ["mcp", "ado"],
-      "type": "stdio"
+    "workiq": {
+      "type": "stdio",
+      "command": "powershell.exe",
+      "args": ["-Command", "$env:Path = ...; agency mcp workiq"]
     }
   }
 }
 ```
 
-Or globally at `~/.copilot/mcp-config.json` for all repos.
-
-⚠️ `agency` must be in PATH when VS Code starts — set it in system env vars, not just the PowerShell session.
+⚠️ `.vscode/` is NOT gitignored in Compute-CPlat-Core — OK to commit since `agency` is corp standard.
 
 ---
 
 ## Key Learnings
 
 - **WSL install fails** — `agency` install needs Windows PowerShell (tries to spawn `cmd.exe` for auth)
-- **PATH refresh required** — installed to user PATH; existing PowerShell sessions won't see it until `$env:Path` is refreshed or a new shell is opened
-- **Proxy MCPs = no local source** — ICM, Bluebird, ES Chat, Security Context are HTTP proxies; agency injects auth. No npm/PyPI packages.
-- **Kusto MCP = Python** — `azure-kusto-mcp` on PyPI, run via `uvx`. Source at `/tmp/azure_kusto_mcp-0.0.14/` (local copy from session 2026-02-27).
+- **PATH refresh required** — installed to user PATH; existing shells won't see it until `$env:Path` is refreshed
+- **Proxy MCPs = no local source** — ICM, Bluebird are HTTP proxies; agency injects auth. No npm/PyPI packages.
+- **Kusto MCP = Python** — `azure-kusto-mcp` on PyPI, run via `uvx`. Direct REST is faster — see CRP skill.
+- **ICM uses SSE streaming** — must use `HttpClient` + `ReadAsStreamAsync`; `Invoke-WebRequest` hangs
+- **ICM `notifications/initialized` is required** — tools return `-32603` if you skip this step after `initialize`
+- **WorkIQ is slow to start** (~20s npm init) — not broken, just slow
+- **Bluebird is code search, not chat** — query with identifiers, not natural language
