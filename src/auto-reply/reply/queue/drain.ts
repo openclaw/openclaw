@@ -13,6 +13,23 @@ import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
+// Persists the most recent runFollowup callback per queue key so that
+// enqueueFollowupRun can restart a drain that finished and deleted the queue.
+const FOLLOWUP_RUN_CALLBACKS = new Map<string, (run: FollowupRun) => Promise<void>>();
+
+export function clearFollowupDrainCallback(key: string): void {
+  FOLLOWUP_RUN_CALLBACKS.delete(key);
+}
+
+/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+export function kickFollowupDrainIfIdle(key: string): void {
+  const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
+  if (!cb) {
+    return;
+  }
+  scheduleFollowupDrain(key, cb);
+}
+
 type OriginRoutingMetadata = Pick<
   FollowupRun,
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
@@ -50,6 +67,9 @@ export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  // Cache the callback so enqueueFollowupRun can restart drain after the queue
+  // has been deleted and recreated (the post-drain idle window race condition).
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
