@@ -10,6 +10,28 @@ private func setupCode(from payload: String) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
+private func agentAction(
+    message: String,
+    sessionKey: String? = nil,
+    thinking: String? = nil,
+    deliver: Bool = false,
+    to: String? = nil,
+    channel: String? = nil,
+    timeoutSeconds: Int? = nil,
+    key: String? = nil) -> DeepLinkRoute
+{
+    .agent(
+        .init(
+            message: message,
+            sessionKey: sessionKey,
+            thinking: thinking,
+            deliver: deliver,
+            to: to,
+            channel: channel,
+            timeoutSeconds: timeoutSeconds,
+            key: key))
+}
+
 @Suite struct DeepLinkParserTests {
     @Test func parseRejectsUnknownHost() {
         let url = URL(string: "openclaw://nope?message=hi")!
@@ -18,15 +40,7 @@ private func setupCode(from payload: String) -> String {
 
     @Test func parseHostIsCaseInsensitive() {
         let url = URL(string: "openclaw://AGENT?message=Hello")!
-        #expect(DeepLinkParser.parse(url) == .agent(.init(
-            message: "Hello",
-            sessionKey: nil,
-            thinking: nil,
-            deliver: false,
-            to: nil,
-            channel: nil,
-            timeoutSeconds: nil,
-            key: nil)))
+        #expect(DeepLinkParser.parse(url) == agentAction(message: "Hello"))
     }
 
     @Test func parseRejectsNonOpenClawScheme() {
@@ -42,47 +56,29 @@ private func setupCode(from payload: String) -> String {
     @Test func parseAgentLinkParsesCommonFields() {
         let url =
             URL(string: "openclaw://agent?message=Hello&deliver=1&sessionKey=node-test&thinking=low&timeoutSeconds=30")!
-        #expect(
-            DeepLinkParser.parse(url) == .agent(
-                .init(
-                    message: "Hello",
-                    sessionKey: "node-test",
-                    thinking: "low",
-                    deliver: true,
-                    to: nil,
-                    channel: nil,
-                    timeoutSeconds: 30,
-                    key: nil)))
+        #expect(DeepLinkParser.parse(url) == agentAction(
+            message: "Hello",
+            sessionKey: "node-test",
+            thinking: "low",
+            deliver: true,
+            timeoutSeconds: 30))
     }
 
     @Test func parseAgentLinkParsesTargetRoutingFields() {
         let url =
             URL(
                 string: "openclaw://agent?message=Hello%20World&deliver=1&to=%2B15551234567&channel=whatsapp&key=secret")!
-        #expect(
-            DeepLinkParser.parse(url) == .agent(
-                .init(
-                    message: "Hello World",
-                    sessionKey: nil,
-                    thinking: nil,
-                    deliver: true,
-                    to: "+15551234567",
-                    channel: "whatsapp",
-                    timeoutSeconds: nil,
-                    key: "secret")))
+        #expect(DeepLinkParser.parse(url) == agentAction(
+            message: "Hello World",
+            deliver: true,
+            to: "+15551234567",
+            channel: "whatsapp",
+            key: "secret"))
     }
 
     @Test func parseRejectsNegativeTimeoutSeconds() {
         let url = URL(string: "openclaw://agent?message=Hello&timeoutSeconds=-1")!
-        #expect(DeepLinkParser.parse(url) == .agent(.init(
-            message: "Hello",
-            sessionKey: nil,
-            thinking: nil,
-            deliver: false,
-            to: nil,
-            channel: nil,
-            timeoutSeconds: nil,
-            key: nil)))
+        #expect(DeepLinkParser.parse(url) == agentAction(message: "Hello"))
     }
 
     @Test func parseGatewayLinkParsesCommonFields() {
