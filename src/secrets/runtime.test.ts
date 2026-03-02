@@ -299,7 +299,7 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
-  it("keeps provider-specific refs inactive in auto mode unless selected", async () => {
+  it("resolves provider-specific refs in web search auto mode", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
@@ -308,7 +308,7 @@ describe("secrets runtime snapshot", () => {
               enabled: true,
               apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
               gemini: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_GEMINI_API_KEY" },
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
               },
             },
           },
@@ -316,25 +316,45 @@ describe("secrets runtime snapshot", () => {
       }),
       env: {
         WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
     expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
-    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_GEMINI_API_KEY",
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.web.search.gemini.apiKey",
+    );
+  });
+
+  it("resolves selected web search provider ref even when provider config is disabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+              gemini: {
+                enabled: false,
+                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    expect(snapshot.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.search.gemini.apiKey",
-          message: expect.stringContaining("auto mode"),
-        }),
-      ]),
+
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "tools.web.search.gemini.apiKey",
     );
   });
 
@@ -629,7 +649,35 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
   });
 
-  it("treats gateway.remote refs as inactive in local mode without remote url", async () => {
+  it("treats gateway.auth.password ref as inactive when remote token is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          mode: "local",
+          auth: {
+            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
+          },
+          remote: {
+            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+          },
+        },
+      }),
+      env: {
+        REMOTE_GATEWAY_TOKEN: "remote-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.gateway?.auth?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GATEWAY_PASSWORD_REF",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
+  });
+
+  it("treats gateway.remote.token ref as active in local mode when no local credentials are configured", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         gateway: {
@@ -637,28 +685,175 @@ describe("secrets runtime snapshot", () => {
           auth: {},
           remote: {
             enabled: true,
-            token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-            password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
+            token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
+            password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
           },
         },
       }),
-      env: {},
+      env: {
+        REMOTE_TOKEN: "resolved-remote-token",
+        REMOTE_PASSWORD: "resolved-remote-password",
+      },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.gateway?.remote?.token).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_REMOTE_TOKEN",
+    expect(snapshot.config.gateway?.remote?.token).toBe("resolved-remote-token");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.remote.token");
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.remote.password");
+  });
+
+  it("treats gateway.remote.password ref as active in local mode when password can win", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        gateway: {
+          mode: "local",
+          auth: {},
+          remote: {
+            enabled: true,
+            password: { source: "env", provider: "default", id: "REMOTE_PASSWORD" },
+          },
+        },
+      }),
+      env: {
+        REMOTE_PASSWORD: "resolved-remote-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    expect(snapshot.config.gateway?.remote?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_REMOTE_PASSWORD",
+
+    expect(snapshot.config.gateway?.remote?.password).toBe("resolved-remote-password");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "gateway.remote.password",
+    );
+  });
+
+  it("treats top-level Zalo botToken refs as active even when tokenFile is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          zalo: {
+            botToken: { source: "env", provider: "default", id: "ZALO_BOT_TOKEN" },
+            tokenFile: "/tmp/missing-zalo-token-file",
+          },
+        },
+      }),
+      env: {
+        ZALO_BOT_TOKEN: "resolved-zalo-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining(["gateway.remote.token", "gateway.remote.password"]),
+
+    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-token");
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.zalo.botToken",
+    );
+  });
+
+  it("treats account-level Zalo botToken refs as active even when tokenFile is configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          zalo: {
+            accounts: {
+              work: {
+                botToken: { source: "env", provider: "default", id: "ZALO_WORK_BOT_TOKEN" },
+                tokenFile: "/tmp/missing-zalo-work-token-file",
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        ZALO_WORK_BOT_TOKEN: "resolved-zalo-work-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.zalo?.accounts?.work?.botToken).toBe(
+      "resolved-zalo-work-token",
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.zalo.accounts.work.botToken",
+    );
+  });
+
+  it("treats top-level Nextcloud Talk botSecret and apiPassword refs as active when file paths are configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          "nextcloud-talk": {
+            botSecret: { source: "env", provider: "default", id: "NEXTCLOUD_BOT_SECRET" },
+            botSecretFile: "/tmp/missing-nextcloud-bot-secret-file",
+            apiUser: "bot-user",
+            apiPassword: { source: "env", provider: "default", id: "NEXTCLOUD_API_PASSWORD" },
+            apiPasswordFile: "/tmp/missing-nextcloud-api-password-file",
+          },
+        },
+      }),
+      env: {
+        NEXTCLOUD_BOT_SECRET: "resolved-nextcloud-bot-secret",
+        NEXTCLOUD_API_PASSWORD: "resolved-nextcloud-api-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.["nextcloud-talk"]?.botSecret).toBe(
+      "resolved-nextcloud-bot-secret",
+    );
+    expect(snapshot.config.channels?.["nextcloud-talk"]?.apiPassword).toBe(
+      "resolved-nextcloud-api-password",
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.nextcloud-talk.botSecret",
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.nextcloud-talk.apiPassword",
+    );
+  });
+
+  it("treats account-level Nextcloud Talk botSecret and apiPassword refs as active when file paths are configured", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          "nextcloud-talk": {
+            accounts: {
+              work: {
+                botSecret: { source: "env", provider: "default", id: "NEXTCLOUD_WORK_BOT_SECRET" },
+                botSecretFile: "/tmp/missing-nextcloud-work-bot-secret-file",
+                apiPassword: {
+                  source: "env",
+                  provider: "default",
+                  id: "NEXTCLOUD_WORK_API_PASSWORD",
+                },
+                apiPasswordFile: "/tmp/missing-nextcloud-work-api-password-file",
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        NEXTCLOUD_WORK_BOT_SECRET: "resolved-nextcloud-work-bot-secret",
+        NEXTCLOUD_WORK_API_PASSWORD: "resolved-nextcloud-work-api-password",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.botSecret).toBe(
+      "resolved-nextcloud-work-bot-secret",
+    );
+    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.apiPassword).toBe(
+      "resolved-nextcloud-work-api-password",
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.nextcloud-talk.accounts.work.botSecret",
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+      "channels.nextcloud-talk.accounts.work.apiPassword",
     );
   });
 

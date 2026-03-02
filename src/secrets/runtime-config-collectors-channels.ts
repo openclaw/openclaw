@@ -635,18 +635,12 @@ function collectZaloAssignments(params: {
     return;
   }
   const surface = resolveChannelAccountSurface(zalo);
-  const baseTokenFile = normalizeSecretStringValue(zalo.tokenFile);
   const topLevelBotTokenActive = !surface.channelEnabled
     ? false
     : !surface.hasExplicitAccounts
-      ? baseTokenFile.length === 0
+      ? true
       : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "botToken") &&
-            (!hasOwnProperty(account, "tokenFile") ||
-              normalizeSecretStringValue(account.tokenFile).length === 0) &&
-            baseTokenFile.length === 0,
+          ({ account, enabled }) => enabled && !hasOwnProperty(account, "botToken"),
         );
   collectSecretInputAssignment({
     value: zalo.botToken,
@@ -655,8 +649,7 @@ function collectZaloAssignments(params: {
     defaults: params.defaults,
     context: params.context,
     active: topLevelBotTokenActive,
-    inactiveReason:
-      "no enabled Zalo surface inherits this top-level botToken (tokenFile is configured).",
+    inactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
     apply: (value) => {
       zalo.botToken = value;
     },
@@ -693,15 +686,14 @@ function collectZaloAssignments(params: {
   }
   for (const { accountId, account, enabled } of surface.accounts) {
     if (hasOwnProperty(account, "botToken")) {
-      const accountTokenFile = normalizeSecretStringValue(account.tokenFile);
       collectSecretInputAssignment({
         value: account.botToken,
         path: `channels.zalo.accounts.${accountId}.botToken`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
-        active: enabled && accountTokenFile.length === 0,
-        inactiveReason: "Zalo account is disabled or tokenFile is configured.",
+        active: enabled,
+        inactiveReason: "Zalo account is disabled.",
         apply: (value) => {
           account.botToken = value;
         },
@@ -818,18 +810,12 @@ function collectNextcloudTalkAssignments(params: {
     return;
   }
   const surface = resolveChannelAccountSurface(nextcloudTalk);
-  const baseSecretFile = normalizeSecretStringValue(nextcloudTalk.botSecretFile);
   const topLevelBotSecretActive = !surface.channelEnabled
     ? false
     : !surface.hasExplicitAccounts
-      ? baseSecretFile.length === 0
+      ? true
       : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "botSecret") &&
-            (!hasOwnProperty(account, "botSecretFile") ||
-              normalizeSecretStringValue(account.botSecretFile).length === 0) &&
-            baseSecretFile.length === 0,
+          ({ account, enabled }) => enabled && !hasOwnProperty(account, "botSecret"),
         );
   collectSecretInputAssignment({
     value: nextcloudTalk.botSecret,
@@ -838,24 +824,17 @@ function collectNextcloudTalkAssignments(params: {
     defaults: params.defaults,
     context: params.context,
     active: topLevelBotSecretActive,
-    inactiveReason:
-      "no enabled Nextcloud Talk surface inherits this top-level botSecret (botSecretFile is configured).",
+    inactiveReason: "no enabled Nextcloud Talk surface inherits this top-level botSecret.",
     apply: (value) => {
       nextcloudTalk.botSecret = value;
     },
   });
-  const baseApiPasswordFile = normalizeSecretStringValue(nextcloudTalk.apiPasswordFile);
   const topLevelApiPasswordActive = !surface.channelEnabled
     ? false
     : !surface.hasExplicitAccounts
-      ? baseApiPasswordFile.length === 0
+      ? true
       : surface.accounts.some(
-          ({ account, enabled }) =>
-            enabled &&
-            !hasOwnProperty(account, "apiPassword") &&
-            (!hasOwnProperty(account, "apiPasswordFile") ||
-              normalizeSecretStringValue(account.apiPasswordFile).length === 0) &&
-            baseApiPasswordFile.length === 0,
+          ({ account, enabled }) => enabled && !hasOwnProperty(account, "apiPassword"),
         );
   collectSecretInputAssignment({
     value: nextcloudTalk.apiPassword,
@@ -864,8 +843,7 @@ function collectNextcloudTalkAssignments(params: {
     defaults: params.defaults,
     context: params.context,
     active: topLevelApiPasswordActive,
-    inactiveReason:
-      "no enabled Nextcloud Talk surface inherits this top-level apiPassword (apiPasswordFile is configured).",
+    inactiveReason: "no enabled Nextcloud Talk surface inherits this top-level apiPassword.",
     apply: (value) => {
       nextcloudTalk.apiPassword = value;
     },
@@ -881,8 +859,8 @@ function collectNextcloudTalkAssignments(params: {
         expected: "string",
         defaults: params.defaults,
         context: params.context,
-        active: enabled && normalizeSecretStringValue(account.botSecretFile).length === 0,
-        inactiveReason: "Nextcloud Talk account is disabled or botSecretFile is configured.",
+        active: enabled,
+        inactiveReason: "Nextcloud Talk account is disabled.",
         apply: (value) => {
           account.botSecret = value;
         },
@@ -895,8 +873,8 @@ function collectNextcloudTalkAssignments(params: {
         expected: "string",
         defaults: params.defaults,
         context: params.context,
-        active: enabled && normalizeSecretStringValue(account.apiPasswordFile).length === 0,
-        inactiveReason: "Nextcloud Talk account is disabled or apiPasswordFile is configured.",
+        active: enabled,
+        inactiveReason: "Nextcloud Talk account is disabled.",
         apply: (value) => {
           account.apiPassword = value;
         },

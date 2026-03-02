@@ -195,40 +195,47 @@ function collectGatewayAssignments(params: {
     return;
   }
   const auth = isRecord(gateway.auth) ? gateway.auth : undefined;
+  const remote = isRecord(gateway.remote) ? gateway.remote : undefined;
+  const envToken =
+    typeof params.context.env.OPENCLAW_GATEWAY_TOKEN === "string" &&
+    params.context.env.OPENCLAW_GATEWAY_TOKEN.trim().length > 0
+      ? params.context.env.OPENCLAW_GATEWAY_TOKEN.trim()
+      : typeof params.context.env.CLAWDBOT_GATEWAY_TOKEN === "string" &&
+          params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim().length > 0
+        ? params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim()
+        : undefined;
+  const envPassword =
+    typeof params.context.env.OPENCLAW_GATEWAY_PASSWORD === "string" &&
+    params.context.env.OPENCLAW_GATEWAY_PASSWORD.trim().length > 0
+      ? params.context.env.OPENCLAW_GATEWAY_PASSWORD.trim()
+      : typeof params.context.env.CLAWDBOT_GATEWAY_PASSWORD === "string" &&
+          params.context.env.CLAWDBOT_GATEWAY_PASSWORD.trim().length > 0
+        ? params.context.env.CLAWDBOT_GATEWAY_PASSWORD.trim()
+        : undefined;
+  const authMode = auth && typeof auth.mode === "string" ? auth.mode : undefined;
+  const localTokenConfigured = hasConfiguredSecretInput(auth?.token, params.defaults);
+  const localPasswordConfigured = hasConfiguredSecretInput(auth?.password, params.defaults);
+  const remoteTokenConfigured = hasConfiguredSecretInput(remote?.token, params.defaults);
+  const tokenCanWin = Boolean(envToken || localTokenConfigured || remoteTokenConfigured);
+  const passwordCanWin =
+    authMode === "password" ||
+    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
   if (auth) {
-    const envToken =
-      typeof params.context.env.OPENCLAW_GATEWAY_TOKEN === "string" &&
-      params.context.env.OPENCLAW_GATEWAY_TOKEN.trim().length > 0
-        ? params.context.env.OPENCLAW_GATEWAY_TOKEN.trim()
-        : typeof params.context.env.CLAWDBOT_GATEWAY_TOKEN === "string" &&
-            params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim().length > 0
-          ? params.context.env.CLAWDBOT_GATEWAY_TOKEN.trim()
-          : undefined;
-    const authMode = typeof auth.mode === "string" ? auth.mode : undefined;
-    const tokenConfigured = hasConfiguredSecretInput(auth.token, params.defaults);
-    const passwordActive =
-      authMode === "password" ||
-      (authMode !== "token" &&
-        authMode !== "none" &&
-        authMode !== "trusted-proxy" &&
-        !envToken &&
-        !tokenConfigured);
     collectSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: passwordActive,
+      active: passwordCanWin,
       inactiveReason:
-        'gateway.auth.password is inactive unless password auth can win (gateway.auth.mode="password", or mode is unset with no token configured).',
+        'gateway.auth.password is inactive unless password auth can win (gateway.auth.mode="password", or mode is unset with no token configured from auth/remote/env).',
       apply: (value) => {
         auth.password = value;
       },
     });
   }
-  if (isRecord(gateway.remote)) {
-    const remote = gateway.remote;
+  if (remote) {
     const remoteMode = gateway.mode === "remote";
     const remoteUrlConfigured = typeof remote.url === "string" && remote.url.trim().length > 0;
     const tailscale =
@@ -238,8 +245,11 @@ function collectGatewayAssignments(params: {
     const tailscaleRemoteExposure = tailscale?.mode === "serve" || tailscale?.mode === "funnel";
     const remoteEnabled = remote.enabled !== false;
     const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
-    const remoteTokenActive = remoteEnabled && remoteConfiguredSurface;
-    const remotePasswordActive = remoteEnabled && remoteConfiguredSurface;
+    const remoteTokenActive =
+      remoteEnabled && (remoteConfiguredSurface || (!envToken && !localTokenConfigured));
+    const remotePasswordActive =
+      remoteEnabled &&
+      (remoteConfiguredSurface || (!envPassword && !localPasswordConfigured && passwordCanWin));
     collectSecretInputAssignment({
       value: remote.token,
       path: "gateway.remote.token",
@@ -249,7 +259,7 @@ function collectGatewayAssignments(params: {
       active: remoteTokenActive,
       inactiveReason: !remoteEnabled
         ? "gateway.remote is disabled."
-        : "gateway.remote.token is inactive unless gateway.mode=remote, gateway.remote.url is configured, or gateway.tailscale.mode is serve/funnel.",
+        : "gateway.remote.token is inactive unless remote mode/url/tailscale is active or local auth has no env/auth token configured.",
       apply: (value) => {
         remote.token = value;
       },
@@ -263,7 +273,7 @@ function collectGatewayAssignments(params: {
       active: remotePasswordActive,
       inactiveReason: !remoteEnabled
         ? "gateway.remote is disabled."
-        : "gateway.remote.password is inactive unless gateway.mode=remote, gateway.remote.url is configured, or gateway.tailscale.mode is serve/funnel.",
+        : "gateway.remote.password is inactive unless remote mode/url/tailscale is active or local auth password can win with no env/auth password configured.",
       apply: (value) => {
         remote.password = value;
       },
@@ -323,16 +333,14 @@ function collectToolsWebSearchAssignments(params: {
       continue;
     }
     const active = scope
-      ? searchEnabled && target.enabled !== false && selectedProvider === scope
+      ? searchEnabled && (selectedProvider === undefined || selectedProvider === scope)
       : searchEnabled && (selectedProvider === undefined || selectedProvider === "brave");
     const inactiveReason = !searchEnabled
       ? "tools.web.search is disabled."
       : scope
-        ? target.enabled === false
-          ? `tools.web.search.${scope} is disabled.`
-          : selectedProvider === undefined
-            ? "tools.web.search.provider is unset (auto mode); provider-specific key is inactive."
-            : `tools.web.search.provider is "${selectedProvider}".`
+        ? selectedProvider === undefined
+          ? undefined
+          : `tools.web.search.provider is "${selectedProvider}".`
         : selectedProvider === undefined
           ? undefined
           : `tools.web.search.provider is "${selectedProvider}".`;
