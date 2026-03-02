@@ -120,6 +120,7 @@ async function sendResetSessionNotice(params: {
     accountId: params.accountId,
     threadId: params.threadId,
     cfg: params.cfg,
+    kind: "final",
   });
 }
 

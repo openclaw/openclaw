@@ -52,6 +52,8 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /** Dispatch kind for outbox tracking and recovery filtering. */
+  kind?: "tool" | "block" | "final";
 };
 
 export type RouteReplyResult = {
@@ -154,6 +156,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       threadId: resolvedThreadId,
       session: outboundSession,
       abortSignal,
+      dispatchKind: params.kind,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {

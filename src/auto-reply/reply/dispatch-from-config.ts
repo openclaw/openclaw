@@ -233,6 +233,7 @@ export async function dispatchReplyFromConfig(params: {
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
+    kind?: "tool" | "block" | "final",
   ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
@@ -255,6 +256,7 @@ export async function dispatchReplyFromConfig(params: {
       mirror,
       isGroup,
       groupId,
+      kind,
     });
     if (!result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
@@ -285,6 +287,7 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
+          kind: "final",
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -397,7 +400,7 @@ export async function dispatchReplyFromConfig(params: {
               return;
             }
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              await sendPayloadAsync(deliveryPayload, undefined, false, "tool");
             } else {
               dispatcher.sendToolResult(deliveryPayload);
             }
@@ -429,7 +432,7 @@ export async function dispatchReplyFromConfig(params: {
               ttsAuto: sessionTtsAuto,
             });
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              await sendPayloadAsync(ttsPayload, context?.abortSignal, false, "block");
             } else {
               dispatcher.sendBlockReply(ttsPayload);
             }
@@ -499,6 +502,7 @@ export async function dispatchReplyFromConfig(params: {
           cfg,
           isGroup,
           groupId,
+          kind: "final",
         });
         if (!result.ok) {
           logVerbose(
@@ -554,6 +558,7 @@ export async function dispatchReplyFromConfig(params: {
               cfg,
               isGroup,
               groupId,
+              kind: "final",
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {

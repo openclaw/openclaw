@@ -157,6 +157,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         accountId: params.ctx.AccountId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
+        kind,
       });
       if (!result.ok) {
         logVerbose(
