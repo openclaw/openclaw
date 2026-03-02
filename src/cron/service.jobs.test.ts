@@ -96,6 +96,32 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("persists lightContext updates on agentTurn payload patches", () => {
+    const job = createIsolatedAgentTurnJob(
+      "job-light-context",
+      { mode: "announce" },
+      { payload: { kind: "agentTurn", message: "do it", lightContext: false } },
+    );
+
+    expect(() =>
+      applyJobPatch(job, { payload: { kind: "agentTurn", lightContext: true } }),
+    ).not.toThrow();
+    expect(job.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "do it",
+      lightContext: true,
+    });
+
+    expect(() =>
+      applyJobPatch(job, { payload: { kind: "agentTurn", lightContext: false } }),
+    ).not.toThrow();
+    expect(job.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "do it",
+      lightContext: false,
+    });
+  });
+
   it("treats legacy payload targets as announce requests", () => {
     const job = createIsolatedAgentTurnJob("job-3", {
       mode: "none",
