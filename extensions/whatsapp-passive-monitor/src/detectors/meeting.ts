@@ -19,6 +19,12 @@ export type MeetingDetectorResult = {
  * Meeting detector command.
  * Queries the message repository for the last 20 messages, classifies via Ollama,
  * and escalates positive detections to the main agent for confirmation.
+ *
+ * NOTE: There is no cooldown — the agent is re-notified every time the debounce fires
+ * and Ollama detects a meeting. This is intentional: subsequent messages may add context
+ * (time, location) that the agent should see. The trade-off is duplicate notifications
+ * when new messages are unrelated to the meeting. Debounce gating (only fires after
+ * conversation silence) keeps this manageable.
  */
 export const meetingDetector: Detector<MeetingDetectorDeps, MeetingDetectorResult> = (deps) => {
   // Structured output schema — Ollama guarantees the response matches this shape
