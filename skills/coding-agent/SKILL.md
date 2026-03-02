@@ -237,7 +237,7 @@ REVIEW_DIR=$(mktemp -d)
 git clone https://github.com/user/repo.git "$REVIEW_DIR"
 cd "$REVIEW_DIR" && gh pr checkout 130
 
-bash pty:true workdir:"$REVIEW_DIR" command:"cursor-agent --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
+bash pty:true workdir:"$REVIEW_DIR" command:"cursor-agent --trust --yolo --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
 ```
 
 ### Structured Output Example
