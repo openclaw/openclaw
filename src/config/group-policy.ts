@@ -7,7 +7,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
   type ToolsBySenderKeyType,
-} from "./types.tools.js"
+} from "./types.tools.js";
 
 export type GroupPolicyChannel = ChannelId;
 
