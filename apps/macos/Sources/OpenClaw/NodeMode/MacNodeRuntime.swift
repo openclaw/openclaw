@@ -58,6 +58,8 @@ actor MacNodeRuntime {
                 return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
+            case OpenClawSystemCommand.runPrepare.rawValue:
+                return try await self.handleSystemRunPrepare(req)
             case OpenClawSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
             case OpenClawSystemCommand.which.rawValue:
@@ -433,6 +435,37 @@ actor MacNodeRuntime {
             guard poll, Date() < deadline else { return false }
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
+    }
+
+    private func handleSystemRunPrepare(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
+        guard !params.command.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
+        }
+
+        let validation = ExecSystemRunCommandValidator.resolve(
+            command: params.command,
+            rawCommand: params.rawCommand)
+        let cmdText: String
+        switch validation {
+        case let .ok(resolved):
+            cmdText = resolved.displayCommand
+        case let .invalid(message):
+            return Self.errorResponse(req, code: .invalidRequest, message: message)
+        }
+
+        let normalizedCwd = params.cwd?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAgentId = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = OpenClawSystemRunPreparePayload(
+            cmdText: cmdText,
+            plan: OpenClawSystemRunApprovalPlan(
+                argv: params.command,
+                cwd: normalizedCwd?.isEmpty == false ? normalizedCwd : nil,
+                rawCommand: cmdText,
+                agentId: normalizedAgentId?.isEmpty == false ? normalizedAgentId : nil,
+                sessionKey: normalizedSessionKey?.isEmpty == false ? normalizedSessionKey : nil))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: try Self.encodePayload(payload))
     }
 
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {

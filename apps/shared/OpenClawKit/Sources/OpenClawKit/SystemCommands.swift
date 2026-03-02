@@ -1,6 +1,7 @@
 import Foundation
 
 public enum OpenClawSystemCommand: String, Codable, Sendable {
+    case runPrepare = "system.run.prepare"
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
@@ -54,6 +55,38 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.approved = approved
         self.approvalDecision = approvalDecision
+    }
+}
+
+public struct OpenClawSystemRunApprovalPlan: Codable, Sendable, Equatable {
+    public var argv: [String]
+    public var cwd: String?
+    public var rawCommand: String?
+    public var agentId: String?
+    public var sessionKey: String?
+
+    public init(
+        argv: [String],
+        cwd: String? = nil,
+        rawCommand: String? = nil,
+        agentId: String? = nil,
+        sessionKey: String? = nil)
+    {
+        self.argv = argv
+        self.cwd = cwd
+        self.rawCommand = rawCommand
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+    }
+}
+
+public struct OpenClawSystemRunPreparePayload: Codable, Sendable, Equatable {
+    public var cmdText: String
+    public var plan: OpenClawSystemRunApprovalPlan
+
+    public init(cmdText: String, plan: OpenClawSystemRunApprovalPlan) {
+        self.cmdText = cmdText
+        self.plan = plan
     }
 }
 
