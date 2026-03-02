@@ -4,6 +4,7 @@ import { zalouserPlugin } from "./channel.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
+  sendReactionZalouser: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("./accounts.js", async (importOriginal) => {
