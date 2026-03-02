@@ -33,6 +33,8 @@ import {
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
+import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
+import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { probeZalouser } from "./probe.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
@@ -122,18 +124,15 @@ function resolveZalouserGroupToolPolicy(
     accountId: params.accountId ?? undefined,
   });
   const groups = account.config.groups ?? {};
-  const groupId = params.groupId?.trim();
-  const groupChannel = params.groupChannel?.trim();
-  const candidates = [groupId, groupChannel, "*"].filter((value): value is string =>
-    Boolean(value),
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      includeWildcard: true,
+    }),
   );
-  for (const key of candidates) {
-    const entry = groups[key];
-    if (entry?.tools) {
-      return entry.tools;
-    }
-  }
-  return undefined;
+  return entry?.tools;
 }
 
 function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
@@ -142,50 +141,18 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
     accountId: params.accountId ?? undefined,
   });
   const groups = account.config.groups ?? {};
-  const candidates = [params.groupId?.trim(), params.groupChannel?.trim()].filter(
-    (value): value is string => Boolean(value),
+  const entry = findZalouserGroupEntry(
+    groups,
+    buildZalouserGroupCandidates({
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      includeWildcard: true,
+    }),
   );
-  for (const candidate of candidates) {
-    const entry = groups[candidate];
-    if (typeof entry?.requireMention === "boolean") {
-      return entry.requireMention;
-    }
-  }
-  if (typeof groups["*"]?.requireMention === "boolean") {
-    return groups["*"].requireMention;
+  if (typeof entry?.requireMention === "boolean") {
+    return entry.requireMention;
   }
   return true;
-}
-
-function resolveZalouserReactionMessageIds(params: {
-  messageId?: string;
-  cliMsgId?: string;
-  currentMessageId?: string | number;
-}): { msgId: string; cliMsgId: string } | null {
-  const explicitMessageId = params.messageId?.trim() ?? "";
-  const explicitCliMsgId = params.cliMsgId?.trim() ?? "";
-  if (explicitMessageId && explicitCliMsgId) {
-    return { msgId: explicitMessageId, cliMsgId: explicitCliMsgId };
-  }
-
-  const current =
-    typeof params.currentMessageId === "number" ? String(params.currentMessageId) : "";
-  const currentRaw =
-    typeof params.currentMessageId === "string" ? params.currentMessageId.trim() : current;
-  if (!currentRaw) {
-    return null;
-  }
-  const [msgIdPart, cliMsgIdPart] = currentRaw.split(":").map((value) => value.trim());
-  if (msgIdPart && cliMsgIdPart) {
-    return { msgId: msgIdPart, cliMsgId: cliMsgIdPart };
-  }
-  if (explicitMessageId && !explicitCliMsgId) {
-    return { msgId: explicitMessageId, cliMsgId: currentRaw };
-  }
-  if (!explicitMessageId && explicitCliMsgId) {
-    return { msgId: currentRaw, cliMsgId: explicitCliMsgId };
-  }
-  return { msgId: currentRaw, cliMsgId: currentRaw };
 }
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
