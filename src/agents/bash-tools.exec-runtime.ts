@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../config/config.js";
+import { resolveSessionStoreKey } from "../gateway/session-utils.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -208,15 +210,24 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
 }
 
 function requestExecEventWake(opts: { sessionKey: string; agentId?: string }) {
-  if (!isAgentScopedSessionKey(opts.sessionKey)) {
+  const rawSessionKey = opts.sessionKey.trim();
+  if (!rawSessionKey) {
+    return;
+  }
+
+  const canonicalSessionKey = resolveSessionStoreKey({
+    cfg: loadConfig(),
+    sessionKey: rawSessionKey,
+  });
+  if (!isAgentScopedSessionKey(canonicalSessionKey)) {
     logWarn(
-      `exec wakeOnExit: immediate wake is only supported for agent-scoped session keys; skipping session key=${opts.sessionKey}`,
+      `exec wakeOnExit: immediate wake is only supported for agent-scoped session keys; skipping session key=${rawSessionKey} canonicalKey=${canonicalSessionKey}`,
     );
     return;
   }
   requestSessionEventRun({
     source: "exec-event",
-    sessionKey: opts.sessionKey,
+    sessionKey: canonicalSessionKey,
     agentId: opts.agentId,
   });
 }

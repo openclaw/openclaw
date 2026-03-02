@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { enqueueSystemEventMock, requestSessionEventRunMock, requestHeartbeatNowMock, logWarnMock } =
-  vi.hoisted(() => ({
-    enqueueSystemEventMock: vi.fn(() => true),
-    requestSessionEventRunMock: vi.fn(),
-    requestHeartbeatNowMock: vi.fn(),
-    logWarnMock: vi.fn(),
-  }));
+const {
+  enqueueSystemEventMock,
+  requestSessionEventRunMock,
+  requestHeartbeatNowMock,
+  logWarnMock,
+  loadConfigMock,
+  resolveSessionStoreKeyMock,
+} = vi.hoisted(() => ({
+  enqueueSystemEventMock: vi.fn(() => true),
+  requestSessionEventRunMock: vi.fn(),
+  requestHeartbeatNowMock: vi.fn(),
+  logWarnMock: vi.fn(),
+  loadConfigMock: vi.fn(() => ({})),
+  resolveSessionStoreKeyMock: vi.fn(({ sessionKey }: { sessionKey: string }) =>
+    sessionKey.trim().toLowerCase(),
+  ),
+}));
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
@@ -19,6 +29,12 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 }));
 vi.mock("../logger.js", () => ({
   logWarn: logWarnMock,
+}));
+vi.mock("../config/config.js", () => ({
+  loadConfig: loadConfigMock,
+}));
+vi.mock("../gateway/session-utils.js", () => ({
+  resolveSessionStoreKey: resolveSessionStoreKeyMock,
 }));
 
 import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -69,6 +85,12 @@ describe("exec wakeOnExit", () => {
     requestSessionEventRunMock.mockReset();
     requestHeartbeatNowMock.mockReset();
     logWarnMock.mockReset();
+    loadConfigMock.mockReset();
+    loadConfigMock.mockReturnValue({});
+    resolveSessionStoreKeyMock.mockReset();
+    resolveSessionStoreKeyMock.mockImplementation(({ sessionKey }: { sessionKey: string }) =>
+      sessionKey.trim().toLowerCase(),
+    );
     resetProcessRegistryForTests();
   });
 
@@ -88,6 +110,21 @@ describe("exec wakeOnExit", () => {
     await runBackgroundExec(true);
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestSessionEventRunMock).toHaveBeenCalledWith({
+      source: "exec-event",
+      sessionKey: "agent:main:main",
+      agentId: undefined,
+    });
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes alias session keys before wakeOnExit dispatch", async () => {
+    resolveSessionStoreKeyMock.mockImplementation(({ sessionKey }: { sessionKey: string }) =>
+      sessionKey === "main" ? "agent:main:main" : sessionKey.trim().toLowerCase(),
+    );
+
+    await runBackgroundExec(true, "main");
+
     expect(requestSessionEventRunMock).toHaveBeenCalledWith({
       source: "exec-event",
       sessionKey: "agent:main:main",

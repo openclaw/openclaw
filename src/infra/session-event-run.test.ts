@@ -6,6 +6,7 @@ const {
   dispatchInboundMessageWithDispatcherMock,
   createReplyPrefixOptionsMock,
   loadSessionEntryMock,
+  routeReplyMock,
   hasSystemEventsMock,
   getQueueSizeMock,
 } = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ const {
       legacyKey: undefined,
     }),
   ),
+  routeReplyMock: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock("../auto-reply/dispatch.js", () => ({
@@ -47,6 +49,9 @@ vi.mock("../channels/reply-prefix.js", () => ({
 }));
 vi.mock("../gateway/session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
+}));
+vi.mock("../auto-reply/reply/route-reply.js", () => ({
+  routeReply: routeReplyMock,
 }));
 vi.mock("./system-events.js", () => ({
   hasSystemEvents: hasSystemEventsMock,
@@ -74,6 +79,8 @@ describe("triggerSessionEventRun", () => {
     hasSystemEventsMock.mockReturnValue(true);
     getQueueSizeMock.mockReset();
     getQueueSizeMock.mockReturnValue(0);
+    routeReplyMock.mockReset();
+    routeReplyMock.mockResolvedValue({ ok: true });
     resetSessionEventRunStateForTests();
     loadSessionEntryMock.mockImplementation(
       (sessionKey: string): ReturnType<typeof loadSessionEntryType> => ({
@@ -120,6 +127,40 @@ describe("triggerSessionEventRun", () => {
       suppressTyping: true,
       allowEmptyBodyForSystemEvent: true,
     });
+  });
+
+  it("routes dispatcher deliveries to the session origin", async () => {
+    dispatchInboundMessageWithDispatcherMock.mockImplementationOnce(async (raw) => {
+      const params = raw as {
+        dispatcherOptions?: {
+          deliver?: (payload: { text?: string }, info: { kind: "final" }) => Promise<void>;
+        };
+      };
+      await params.dispatcherOptions?.deliver?.(
+        { text: "exec completion acknowledged" },
+        { kind: "final" },
+      );
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    });
+
+    const triggered = await triggerSessionEventRun({
+      sessionKey: "agent:ops:main",
+      source: "exec-event",
+      agentId: "ops",
+    });
+
+    expect(triggered).toBe(true);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "exec completion acknowledged" },
+        channel: "telegram",
+        to: "123",
+        sessionKey: "agent:ops:main",
+      }),
+    );
   });
 
   it("uses canonical agent keys from session lookup", async () => {

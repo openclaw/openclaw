@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dispatchInboundMessageWithDispatcher } from "../auto-reply/dispatch.js";
+import { routeReply } from "../auto-reply/reply/route-reply.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { loadSessionEntry } from "../gateway/session-utils.js";
@@ -78,12 +79,15 @@ async function dispatchSessionEventWithTimeout(params: {
   agentId: string;
   delivery: ReturnType<typeof deliveryContextFromSession>;
 }) {
+  const normalizedOriginChannel = params.delivery?.channel
+    ? (normalizeChannelId(params.delivery.channel) ?? params.delivery.channel)
+    : undefined;
+  const normalizedOriginTo = params.delivery?.to?.trim() || undefined;
+
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: params.delivery?.channel
-      ? (normalizeChannelId(params.delivery.channel) ?? params.delivery.channel)
-      : undefined,
+    channel: normalizedOriginChannel,
     accountId: params.delivery?.accountId,
   });
 
@@ -101,10 +105,8 @@ async function dispatchSessionEventWithTimeout(params: {
           SessionKey: params.dispatchSessionKey,
           Provider: INTERNAL_MESSAGE_CHANNEL,
           Surface: INTERNAL_MESSAGE_CHANNEL,
-          OriginatingChannel: params.delivery?.channel
-            ? (normalizeChannelId(params.delivery.channel) ?? params.delivery.channel)
-            : undefined,
-          OriginatingTo: params.delivery?.to?.trim() || undefined,
+          OriginatingChannel: normalizedOriginChannel,
+          OriginatingTo: normalizedOriginTo,
           AccountId: params.delivery?.accountId,
           MessageThreadId: params.delivery?.threadId,
           MessageSid: `${params.source}:${randomUUID()}`,
@@ -112,7 +114,23 @@ async function dispatchSessionEventWithTimeout(params: {
         },
         dispatcherOptions: {
           ...prefixOptions,
-          deliver: async () => {},
+          deliver: async (payload) => {
+            if (!normalizedOriginChannel || !normalizedOriginTo) {
+              return;
+            }
+            const routed = await routeReply({
+              payload,
+              channel: normalizedOriginChannel,
+              to: normalizedOriginTo,
+              sessionKey: params.dispatchSessionKey,
+              accountId: params.delivery?.accountId,
+              threadId: params.delivery?.threadId,
+              cfg: params.cfg,
+            });
+            if (!routed.ok) {
+              logWarn(`session event dispatch delivery failed: ${routed.error ?? "unknown error"}`);
+            }
+          },
           onError: (err, info) => {
             logWarn(`session event dispatch ${info.kind} failed: ${String(err)}`);
           },
