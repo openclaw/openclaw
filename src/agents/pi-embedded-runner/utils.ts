@@ -1,7 +1,18 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ModelCompatConfig } from "../../config/types.models.js";
 
-export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
+export function mapThinkingLevel(
+  level?: ThinkLevel,
+  modelCompat?: ModelCompatConfig,
+): ThinkingLevel | undefined {
+  // When the model explicitly declares it does not support the reasoning_effort
+  // parameter, return undefined so pi-agent-core omits it entirely from the
+  // API payload. This prevents 400 errors on providers like xAI/Grok that
+  // reject unknown parameters.
+  if (modelCompat?.supportsReasoningEffort === false) {
+    return undefined;
+  }
   // pi-agent-core supports "xhigh"; OpenClaw enables it for specific models.
   if (!level) {
     return "off";
