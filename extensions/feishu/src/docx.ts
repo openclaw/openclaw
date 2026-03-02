@@ -751,8 +751,7 @@ async function createDoc(
   client: Lark.Client,
   title: string,
   folderToken?: string,
-  ownerOpenId?: string,
-  ownerPermType: "view" | "edit" | "full_access" = "full_access",
+  options?: { grantToRequester?: boolean; requesterOpenId?: string },
 ) {
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
@@ -765,23 +764,32 @@ async function createDoc(
   if (!docToken) {
     throw new Error("Document creation succeeded but no document_id was returned");
   }
-  let ownerPermissionAdded = false;
+  const shouldGrantToRequester = options?.grantToRequester !== false;
+  const requesterOpenId = options?.requesterOpenId?.trim();
+  const requesterPermType: "edit" = "edit";
 
-  // Auto add owner permission if ownerOpenId is provided
-  if (docToken && ownerOpenId) {
-    try {
-      await client.drive.permissionMember.create({
-        path: { token: docToken },
-        params: { type: "docx", need_notification: false },
-        data: {
-          member_type: "openid",
-          member_id: ownerOpenId,
-          perm: ownerPermType,
-        },
-      });
-      ownerPermissionAdded = true;
-    } catch (err) {
-      console.warn("Failed to add owner permission (non-critical):", err);
+  let requesterPermissionAdded = false;
+  let requesterPermissionSkippedReason: string | undefined;
+  let requesterPermissionError: string | undefined;
+
+  if (shouldGrantToRequester) {
+    if (!requesterOpenId) {
+      requesterPermissionSkippedReason = "trusted requester identity unavailable";
+    } else {
+      try {
+        await client.drive.permissionMember.create({
+          path: { token: docToken },
+          params: { type: "docx", need_notification: false },
+          data: {
+            member_type: "openid",
+            member_id: requesterOpenId,
+            perm: requesterPermType,
+          },
+        });
+        requesterPermissionAdded = true;
+      } catch (err) {
+        requesterPermissionError = err instanceof Error ? err.message : String(err);
+      }
     }
   }
 
@@ -789,12 +797,15 @@ async function createDoc(
     document_id: docToken,
     title: doc?.title,
     url: `https://feishu.cn/docx/${docToken}`,
-    ...(ownerOpenId &&
-      ownerPermissionAdded && {
-        owner_permission_added: true,
-        owner_open_id: ownerOpenId,
-        owner_perm_type: ownerPermType,
+    ...(shouldGrantToRequester && {
+      requester_permission_added: requesterPermissionAdded,
+      ...(requesterOpenId && { requester_open_id: requesterOpenId }),
+      requester_perm_type: requesterPermType,
+      ...(requesterPermissionSkippedReason && {
+        requester_permission_skipped_reason: requesterPermissionSkippedReason,
       }),
+      ...(requesterPermissionError && { requester_permission_error: requesterPermissionError }),
+    }),
   };
 }
 
@@ -1251,6 +1262,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => {
         const defaultAccountId = ctx.agentAccountId;
+        const trustedRequesterOpenId =
+          ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
@@ -1297,13 +1310,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   );
                 case "create":
                   return json(
-                    await createDoc(
-                      client,
-                      p.title,
-                      p.folder_token,
-                      p.owner_open_id,
-                      p.owner_perm_type,
-                    ),
+                    await createDoc(client, p.title, p.folder_token, {
+                      grantToRequester: p.grant_to_requester,
+                      requesterOpenId: trustedRequesterOpenId,
+                    }),
                   );
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));

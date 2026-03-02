@@ -278,6 +278,7 @@ function createProfileContext(
   const ensureBrowserAvailable = async (): Promise<void> => {
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
+    const attachOnly = profile.attachOnly;
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
@@ -291,32 +292,25 @@ function createProfileContext(
     if (isExtension) {
       if (!httpReachable) {
         await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
-        if (await isHttpReachable(1200)) {
-          // continue: we still need the extension to connect for CDP websocket.
-        } else {
+        if (!(await isHttpReachable(1200))) {
           throw new Error(
             `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
           );
         }
       }
-
-      if (await isReachable(600)) {
-        return;
-      }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
-      throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
-      );
+      // Browser startup should only ensure relay availability.
+      // Tab attachment is checked when a tab is actually required.
+      return;
     }
 
     if (!httpReachable) {
-      if ((current.resolved.attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
+      if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(1200)) {
           return;
         }
       }
-      if (current.resolved.attachOnly || remoteCdp) {
+      if (attachOnly || remoteCdp) {
         throw new Error(
           remoteCdp
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
@@ -333,16 +327,9 @@ function createProfileContext(
       return;
     }
 
-    // HTTP responds but WebSocket fails - port in use by something else
-    if (!profileState.running) {
-      throw new Error(
-        `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
-          `Run action=reset-profile profile=${profile.name} to kill the process.`,
-      );
-    }
-
-    // We own it but WebSocket failed - restart
-    if (current.resolved.attachOnly || remoteCdp) {
+    // HTTP responds but WebSocket fails. For attachOnly/remote profiles, never perform
+    // local ownership/restart handling; just run attach retries and surface attach errors.
+    if (attachOnly || remoteCdp) {
       if (opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isReachable(1200)) {
@@ -356,6 +343,23 @@ function createProfileContext(
       );
     }
 
+    // HTTP responds but WebSocket fails - port in use by something else.
+    if (!profileState.running) {
+      throw new Error(
+        `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
+          `Run action=reset-profile profile=${profile.name} to kill the process.`,
+      );
+    }
+
+    // We own it but WebSocket failed - restart
+    // At this point profileState.running is always non-null: the !remoteCdp guard
+    // above throws when running is null, and attachOnly/remoteCdp paths always
+    // exit via the block above. Add an explicit guard for TypeScript.
+    if (!profileState.running) {
+      throw new Error(
+        `Unexpected state for profile "${profile.name}": no running process to restart.`,
+      );
+    }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 

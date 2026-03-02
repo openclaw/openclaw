@@ -344,8 +344,11 @@ class NodeRuntime(context: Context) {
     MicCaptureManager(
       context = appContext,
       scope = scope,
-      sendToGateway = { message ->
+      sendToGateway = { message, onRunIdKnown ->
         val idempotencyKey = UUID.randomUUID().toString()
+        // Notify MicCaptureManager of the idempotency key *before* the network
+        // call so pendingRunId is set before any chat events can arrive.
+        onRunIdKnown(idempotencyKey)
         val params =
           buildJsonObject {
             put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
@@ -358,7 +361,11 @@ class NodeRuntime(context: Context) {
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        voiceReplySpeaker.speakAssistantReply(text)
+        // Skip if TalkModeManager is handling TTS (ttsOnAllResponses) to avoid
+        // double-speaking the same assistant reply from both pipelines.
+        if (!talkMode.ttsOnAllResponses) {
+          voiceReplySpeaker.speakAssistantReply(text)
+        }
       },
     )
   }
@@ -375,6 +382,9 @@ class NodeRuntime(context: Context) {
   val micEnabled: StateFlow<Boolean>
     get() = micCapture.micEnabled
 
+  val micCooldown: StateFlow<Boolean>
+    get() = micCapture.micCooldown
+
   val micQueuedMessages: StateFlow<List<String>>
     get() = micCapture.queuedMessages
 
@@ -387,11 +397,22 @@ class NodeRuntime(context: Context) {
   val micIsSending: StateFlow<Boolean>
     get() = micCapture.isSending
 
+  private val talkMode: TalkModeManager by lazy {
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = true,
+      isConnected = { operatorConnected },
+    )
+  }
+
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
+    talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -529,7 +550,14 @@ class NodeRuntime(context: Context) {
 
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
+        // MicCaptureManager handles STT + send to gateway.
+        // TalkModeManager plays TTS on assistant responses.
         micCapture.setMicEnabled(enabled)
+        if (enabled) {
+          // Mic on = user is on voice screen and wants TTS responses.
+          talkMode.ttsOnAllResponses = true
+          scope.launch { talkMode.ensureChatSubscribed() }
+        }
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -637,8 +665,25 @@ class NodeRuntime(context: Context) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setVoiceScreenActive(active: Boolean) {
+    if (!active) {
+      // User left voice screen — stop mic and TTS
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopTts()
+      micCapture.setMicEnabled(false)
+      prefs.setTalkEnabled(false)
+    }
+    // Don't re-enable on active=true; mic toggle drives that
+  }
+
   fun setMicEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+    if (value) {
+      // Tapping mic on interrupts any active TTS (barge-in)
+      talkMode.stopTts()
+      talkMode.ttsOnAllResponses = true
+      scope.launch { talkMode.ensureChatSubscribed() }
+    }
     micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
   }
@@ -651,6 +696,8 @@ class NodeRuntime(context: Context) {
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.setPlaybackEnabled(value)
     }
+    // Keep TalkMode in sync so speaker mute works when ttsOnAllResponses is active.
+    talkMode.setPlaybackEnabled(value)
   }
 
   fun refreshGatewayConnection() {
@@ -834,6 +881,7 @@ class NodeRuntime(context: Context) {
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
+    talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }
 

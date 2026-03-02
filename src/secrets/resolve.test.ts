@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
@@ -12,17 +12,69 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 }
 
 describe("secret ref resolver", () => {
-  const cleanupRoots: string[] = [];
+  let fixtureRoot = "";
+  let caseId = 0;
+  let execProtocolV1ScriptPath = "";
+  let execPlainScriptPath = "";
+  let execProtocolV2ScriptPath = "";
+  let execMissingIdScriptPath = "";
+  let execInvalidJsonScriptPath = "";
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    while (cleanupRoots.length > 0) {
-      const root = cleanupRoots.pop();
-      if (!root) {
-        continue;
-      }
-      await fs.rm(root, { recursive: true, force: true });
+  const createCaseDir = async (label: string): Promise<string> => {
+    const dir = path.join(fixtureRoot, `${label}-${caseId++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
+    const sharedExecDir = path.join(fixtureRoot, "shared-exec");
+    await fs.mkdir(sharedExecDir, { recursive: true });
+
+    execProtocolV1ScriptPath = path.join(sharedExecDir, "resolver-v1.sh");
+    await writeSecureFile(
+      execProtocolV1ScriptPath,
+      [
+        "#!/bin/sh",
+        'printf \'{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}\'',
+      ].join("\n"),
+      0o700,
+    );
+
+    execPlainScriptPath = path.join(sharedExecDir, "resolver-plain.sh");
+    await writeSecureFile(
+      execPlainScriptPath,
+      ["#!/bin/sh", "printf 'plain-secret'"].join("\n"),
+      0o700,
+    );
+
+    execProtocolV2ScriptPath = path.join(sharedExecDir, "resolver-v2.sh");
+    await writeSecureFile(
+      execProtocolV2ScriptPath,
+      ["#!/bin/sh", 'printf \'{"protocolVersion":2,"values":{"openai/api-key":"x"}}\''].join("\n"),
+      0o700,
+    );
+
+    execMissingIdScriptPath = path.join(sharedExecDir, "resolver-missing-id.sh");
+    await writeSecureFile(
+      execMissingIdScriptPath,
+      ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{}}\''].join("\n"),
+      0o700,
+    );
+
+    execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
+    await writeSecureFile(
+      execInvalidJsonScriptPath,
+      ["#!/bin/sh", "printf 'not-json'"].join("\n"),
+      0o700,
+    );
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
     }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("resolves env refs via implicit default env provider", async () => {
@@ -41,8 +93,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-file-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
@@ -78,20 +129,6 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver.mjs");
-    await writeSecureFile(
-      scriptPath,
-      [
-        "#!/usr/bin/env node",
-        "import fs from 'node:fs';",
-        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
-        "const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `value:${id}`]));",
-        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
-      ].join("\n"),
-      0o700,
-    );
 
     const value = await resolveSecretRefString(
       { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -101,7 +138,7 @@ describe("secret ref resolver", () => {
             providers: {
               execmain: {
                 source: "exec",
-                command: scriptPath,
+                command: execProtocolV1ScriptPath,
                 passEnv: ["PATH"],
               },
             },
@@ -116,14 +153,6 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-plain-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-plain.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
-    );
 
     const value = await resolveSecretRefString(
       { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -133,7 +162,7 @@ describe("secret ref resolver", () => {
             providers: {
               execmain: {
                 source: "exec",
-                command: scriptPath,
+                command: execPlainScriptPath,
                 passEnv: ["PATH"],
                 jsonOnly: false,
               },
@@ -149,16 +178,9 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-target.mjs");
+    const root = await createCaseDir("exec-link-reject");
     const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
-    );
-    await fs.symlink(scriptPath, symlinkPath);
+    await fs.symlink(execPlainScriptPath, symlinkPath);
 
     await expect(
       resolveSecretRefString(
@@ -185,17 +207,10 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-target.mjs");
+    const root = await createCaseDir("exec-link-allow");
     const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
-    );
-    await fs.symlink(scriptPath, symlinkPath);
-    const trustedRoot = await fs.realpath(root);
+    await fs.symlink(execPlainScriptPath, symlinkPath);
+    const trustedRoot = await fs.realpath(fixtureRoot);
 
     const value = await resolveSecretRefString(
       { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -224,8 +239,7 @@ describe("secret ref resolver", () => {
       return;
     }
 
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-homebrew-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("homebrew");
     const binDir = path.join(root, "opt", "homebrew", "bin");
     const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -236,12 +250,9 @@ describe("secret ref resolver", () => {
     await writeSecureFile(
       targetCommand,
       [
-        `#!${process.execPath}`,
-        "import fs from 'node:fs';",
-        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
-        "const suffix = process.argv[2] ?? 'missing';",
-        "const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `${suffix}:${id}`]));",
-        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+        "#!/bin/sh",
+        'suffix="${1:-missing}"',
+        'printf \'{"protocolVersion":1,"values":{"openai/api-key":"%s:openai/api-key"}}\' "$suffix"',
       ].join("\n"),
       0o700,
     );
@@ -293,18 +304,9 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
-    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-out-"));
-    cleanupRoots.push(root);
-    cleanupRoots.push(outside);
-    const scriptPath = path.join(outside, "resolver-target.mjs");
+    const root = await createCaseDir("exec-link-trusted");
     const symlinkPath = path.join(root, "resolver-link.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
-      0o700,
-    );
-    await fs.symlink(scriptPath, symlinkPath);
+    await fs.symlink(execPlainScriptPath, symlinkPath);
 
     await expect(
       resolveSecretRefString(
@@ -333,20 +335,6 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-protocol-"),
-    );
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-protocol.mjs");
-    await writeSecureFile(
-      scriptPath,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(JSON.stringify({ protocolVersion: 2, values: { 'openai/api-key': 'x' } }));",
-      ].join("\n"),
-      0o700,
-    );
-
     await expect(
       resolveSecretRefString(
         { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -356,7 +344,7 @@ describe("secret ref resolver", () => {
               providers: {
                 execmain: {
                   source: "exec",
-                  command: scriptPath,
+                  command: execProtocolV2ScriptPath,
                   passEnv: ["PATH"],
                 },
               },
@@ -371,18 +359,6 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-id-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-missing-id.mjs");
-    await writeSecureFile(
-      scriptPath,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: {} }));",
-      ].join("\n"),
-      0o700,
-    );
-
     await expect(
       resolveSecretRefString(
         { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -392,7 +368,7 @@ describe("secret ref resolver", () => {
               providers: {
                 execmain: {
                   source: "exec",
-                  command: scriptPath,
+                  command: execMissingIdScriptPath,
                   passEnv: ["PATH"],
                 },
               },
@@ -407,15 +383,6 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-json-"));
-    cleanupRoots.push(root);
-    const scriptPath = path.join(root, "resolver-invalid-json.mjs");
-    await writeSecureFile(
-      scriptPath,
-      ["#!/usr/bin/env node", "process.stdout.write('not-json');"].join("\n"),
-      0o700,
-    );
-
     await expect(
       resolveSecretRefString(
         { source: "exec", provider: "execmain", id: "openai/api-key" },
@@ -425,7 +392,7 @@ describe("secret ref resolver", () => {
               providers: {
                 execmain: {
                   source: "exec",
-                  command: scriptPath,
+                  command: execInvalidJsonScriptPath,
                   passEnv: ["PATH"],
                   jsonOnly: true,
                 },
@@ -441,8 +408,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-single-value-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file-single-value");
     const filePath = path.join(root, "token.txt");
     await writeSecureFile(filePath, "raw-token-value\n");
 
@@ -469,8 +435,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-timeout-"));
-    cleanupRoots.push(root);
+    const root = await createCaseDir("file-timeout");
     const filePath = path.join(root, "secrets.json");
     await writeSecureFile(
       filePath,
@@ -484,7 +449,7 @@ describe("secret ref resolver", () => {
     );
 
     const originalReadFile = fs.readFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation(((
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(((
       targetPath: Parameters<typeof fs.readFile>[0],
       options?: Parameters<typeof fs.readFile>[1],
     ) => {
@@ -494,25 +459,29 @@ describe("secret ref resolver", () => {
       return originalReadFile(targetPath, options);
     }) as typeof fs.readFile);
 
-    await expect(
-      resolveSecretRefString(
-        { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                filemain: {
-                  source: "file",
-                  path: filePath,
-                  mode: "json",
-                  timeoutMs: 5,
+    try {
+      await expect(
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: {
+                    source: "file",
+                    path: filePath,
+                    mode: "json",
+                    timeoutMs: 5,
+                  },
                 },
               },
             },
           },
-        },
-      ),
-    ).rejects.toThrow('File provider "filemain" timed out');
+        ),
+      ).rejects.toThrow('File provider "filemain" timed out');
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   it("rejects misconfigured provider source mismatches", async () => {
