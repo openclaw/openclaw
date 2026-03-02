@@ -98,6 +98,14 @@ function getFetchRequestBody(fetchMock: { mock: { calls: unknown[][] } }, callIn
   return JSON.parse(body) as Record<string, unknown>;
 }
 
+async function readReadable(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+  }
+  return Buffer.concat(chunks);
+}
+
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -847,17 +855,13 @@ describe("tts", () => {
     it("keeps timeout active after headers until stream lifecycle completes", async () => {
       vi.useFakeTimers();
       let aborted = false;
-      let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
       const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controllerRef = controller;
-        },
+        start() {},
       });
 
       const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
         init?.signal?.addEventListener("abort", () => {
           aborted = true;
-          controllerRef?.error(new Error("aborted"));
         });
         return {
           ok: true,
@@ -875,12 +879,164 @@ describe("tts", () => {
         responseFormat: "mp3",
         timeoutMs: 25,
       });
+      result.stream.on("error", () => {});
 
       expect(result.progressive).toBe(true);
       expect(aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(30);
       expect(aborted).toBe(true);
+    });
+
+    it("fails when stream byte signature mismatches requested format without relying on content-type", async () => {
+      const wavHeader = new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+      ]);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(wavHeader);
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+      await expect(readReadable(result.stream)).rejects.toThrow(
+        "returned wav but opus was requested",
+      );
+    });
+
+    it("accepts matching stream byte signature when content-type is missing", async () => {
+      const oggBytes = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0x01, 0x02, 0x03, 0x04]);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(oggBytes);
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+      expect(result.outputFormat).toBe("opus");
+      expect(result.progressive).toBe(true);
+      await expect(readReadable(result.stream)).resolves.toEqual(Buffer.from(oggBytes));
+    });
+
+    it("keeps stream consumable after prefix sniff without dropping bytes", async () => {
+      const chunk1 = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0xaa, 0xbb]);
+      const chunk2 = new Uint8Array([0xcc, 0xdd, 0xee]);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(chunk1);
+          controller.enqueue(chunk2);
+          controller.close();
+        },
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+
+      const consumed = await readReadable(result.stream);
+      expect(consumed).toEqual(Buffer.concat([Buffer.from(chunk1), Buffer.from(chunk2)]));
+    });
+
+    it("propagates upstream stream errors to consumers", async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0x4f, 0x67, 0x67, 0x53]));
+          controller.error(new Error("upstream stream exploded"));
+        },
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => "application/octet-stream" },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+
+      await expect(readReadable(result.stream)).rejects.toThrow("upstream stream exploded");
+    });
+
+    it("tears down upstream body when prefix sniff detects a mismatch", async () => {
+      const cancelSpy = vi.fn(async () => {});
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new Uint8Array([
+              0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+            ]),
+          );
+        },
+        cancel: cancelSpy,
+      });
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        body,
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await openaiTTSReadable({
+        text: "hello",
+        apiKey: "k",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "opus",
+        timeoutMs: 10_000,
+      });
+
+      await expect(readReadable(result.stream)).rejects.toThrow(
+        "returned wav but opus was requested",
+      );
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+      const reason = cancelSpy.mock.calls[0]?.[0];
+      expect(reason).toBeInstanceOf(Error);
+      expect((reason as Error).message).toContain("returned wav but opus was requested");
     });
   });
 

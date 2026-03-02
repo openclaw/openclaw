@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
@@ -20,6 +20,7 @@ import type {
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+const OPENAI_STREAM_FORMAT_SNIFF_BYTES = 64;
 
 export function isValidVoiceId(voiceId: string): boolean {
   return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
@@ -1128,7 +1129,50 @@ export async function openaiTTSReadable(params: {
       contentType: response.headers?.get?.("content-type") ?? null,
     });
 
-    const stream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+    const webBody = response.body as import("node:stream/web").ReadableStream;
+    const source = Readable.fromWeb(webBody);
+    let sniffed = Buffer.alloc(0);
+    let validated = responseFormat == null;
+    let upstreamTornDown = false;
+    const tearDownUpstream = (reason?: Error) => {
+      if (upstreamTornDown) {
+        return;
+      }
+      upstreamTornDown = true;
+      void webBody.cancel(reason).catch(() => {});
+      source.destroy(reason);
+    };
+    const transform = new Transform({
+      transform(chunk, _encoding, callback) {
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+        if (!validated && data.length > 0 && sniffed.length < OPENAI_STREAM_FORMAT_SNIFF_BYTES) {
+          const needed = OPENAI_STREAM_FORMAT_SNIFF_BYTES - sniffed.length;
+          const nextSlice = data.subarray(0, needed);
+          sniffed = Buffer.concat([sniffed, nextSlice], sniffed.length + nextSlice.length);
+
+          const detected = inferOpenAiFormatFromBytes(sniffed);
+          if (detected) {
+            validated = true;
+            if (detected !== responseFormat) {
+              const mismatchError = new Error(
+                `OpenAI TTS returned ${detected} but ${responseFormat} was requested. ` +
+                  `Align messages.tts.openai.responseFormat with upstream output or fix the upstream endpoint.`,
+              );
+              tearDownUpstream(mismatchError);
+              callback(mismatchError);
+              return;
+            }
+          } else if (sniffed.length >= OPENAI_STREAM_FORMAT_SNIFF_BYTES) {
+            validated = true;
+          }
+        }
+        callback(null, data);
+      },
+    });
+    source.on("error", (error) => {
+      transform.destroy(error);
+    });
+    const stream = source.pipe(transform);
     stream.once("end", clearAbortTimer);
     stream.once("error", clearAbortTimer);
     stream.once("close", clearAbortTimer);
