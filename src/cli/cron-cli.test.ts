@@ -40,7 +40,7 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
-    payload?: { kind?: string; message?: string; model?: string; thinking?: string };
+    payload?: { kind?: string; message?: string; model?: string; thinking?: string; lightContext?: boolean };
     delivery?: {
       mode?: string;
       channel?: string;
@@ -53,7 +53,7 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string };
+  payload?: { model?: string; thinking?: string; lightContext?: boolean };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -367,6 +367,22 @@ describe("cron cli", () => {
     expect(params?.agentId).toBe("ops");
   });
 
+  it("sets lightContext on cron add when --light-context is passed", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Light context",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--light-context",
+    ]);
+
+    expect(params?.payload?.lightContext).toBe(true);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -407,6 +423,14 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.payload?.model).toBe("opus");
     expect(patch?.patch?.payload?.thinking).toBe("low");
+  });
+
+  it("sets and clears lightContext on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
+    expect(setPatch?.patch?.payload?.lightContext).toBe(true);
+
+    const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
+    expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
   });
 
   it("updates delivery settings without requiring --message", async () => {
