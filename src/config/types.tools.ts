@@ -458,4 +458,15 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** Python Orchestrator (PTC-like) configuration. */
+  pythonOrchestrator?: {
+    /** Enable python_orchestrator tool (default: false). */
+    enabled?: boolean;
+    /** Maximum number of tool calls allowed per orchestration (default: 100). */
+    maxToolCalls?: number;
+    /** Timeout in seconds for Python script execution (default: 60). */
+    timeoutSeconds?: number;
+    /** Allowed tools that can be called from Python (default: all). */
+    allowedTools?: string[];
+  };
 };

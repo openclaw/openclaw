@@ -52,6 +52,7 @@ import {
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
+import { createPythonOrchestratorTool } from "./tools/python-orchestrator.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -363,6 +364,15 @@ export function createOpenClawCodingTools(options?: {
       requesterAgentIdOverride: agentId,
     }),
   ];
+
+  // Add Python Orchestrator after all other tools are built
+  // It needs access to the filtered tool list for the bridge server
+  const pythonOrchestratorTool = createPythonOrchestratorTool({
+    availableTools: tools,
+    maxToolCalls: options?.config?.tools?.pythonOrchestrator?.maxToolCalls ?? 100,
+  }) as unknown as AnyAgentTool;
+  tools.push(pythonOrchestratorTool);
+
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(tools, senderIsOwner);

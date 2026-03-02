@@ -559,6 +559,15 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    pythonOrchestrator: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxToolCalls: z.number().int().positive().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        allowedTools: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
